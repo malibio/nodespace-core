@@ -22,9 +22,9 @@ This guide covers setting up a complete NodeSpace development environment with a
 
 ```bash
 # Core development tools
-rustc 1.70.0+
-cargo 1.70.0+
-node.js 18.0.0+
+rustc 1.80.0+
+cargo 1.80.0+
+node.js 20.0.0+
 npm 9.0.0+
 
 # No additional database systems needed (LanceDB is embedded)
@@ -91,7 +91,7 @@ install_node() {
         if [[ "$OSTYPE" == "darwin"* ]]; then
             brew install node
         elif command -v apt-get &> /dev/null; then
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
             sudo apt-get install -y nodejs
         fi
     else
@@ -235,8 +235,8 @@ cargo install cargo-audit    # Security vulnerability scanning
 ```bash
 # Install Node.js (via Node Version Manager recommended)
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-nvm install 18
-nvm use 18
+nvm install 20
+nvm use 20
 
 # Verify installation
 node --version

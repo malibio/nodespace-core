@@ -35,13 +35,13 @@ NodeSpace's technology stack is carefully chosen to provide optimal performance,
 ```toml
 [dependencies]
 # Core async runtime
-tokio = { version = "1.46", features = ["full"] }
+tokio = { version = "1.39", features = ["full"] }
 
 # AI Integration
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", features = ["metal"] }
 
 # Database connectivity
-lance = "0.13"  # Vector database
+lance = "0.16"  # Vector database
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -88,13 +88,13 @@ tracing-subscriber = "0.3"
 ```json
 {
   "dependencies": {
-    "svelte": "^4.0.0",
-    "@sveltejs/kit": "^1.0.0",
-    "typescript": "^5.0.0",
-    "@types/node": "^20.0.0",
-    "vite": "^4.0.0",
-    "tailwindcss": "^3.0.0",
-    "lucide-svelte": "^0.294.0"
+    "svelte": "^4.2.0",
+    "@sveltejs/kit": "^2.0.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.14.0",
+    "vite": "^5.3.0",
+    "tailwindcss": "^3.4.0",
+    "lucide-svelte": "^0.400.0"
   }
 }
 ```
@@ -291,10 +291,10 @@ fn bench_query_processing(b: &mut Bencher) {
 **Required Tools:**
 ```bash
 # Core development
-rustc 1.70+
-cargo 1.70+
-node.js 18+
-npm 9+
+rustc 1.80+
+cargo 1.80+
+node.js 20+
+npm 10+
 
 # AI model management
 huggingface-hub (for model downloads)
