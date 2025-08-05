@@ -411,6 +411,36 @@ export const dataStore = getContext<DataStore>('dataStore');
 - [ ] Ready for real data integration
 ```
 
+### Mandatory Process Steps
+
+**CRITICAL: All developers (human and AI) MUST follow these steps:**
+
+**Status Updates (MANDATORY):**
+```bash
+# When starting work on an issue:
+gh issue edit <number> --add-assignee "@me"
+# Then manually update project status: Todo → In Progress (via GitHub web interface)
+
+# When blocked:
+# Manual update: In Progress → Waiting for Input (add comment explaining block)
+
+# When creating PR:
+gh pr create --title "..." --body "Closes #<number>..."
+# Then manually update: In Progress → Ready for Review (via GitHub web interface)
+```
+
+**PR Review and Merge (MANDATORY):**
+1. **Conduct comprehensive review** (use senior-architect-reviewer for complex changes)
+2. **If review shows ready to merge**: Immediately approve and merge the PR
+3. **If review shows issues**: Request changes with specific feedback
+4. **No additional approval required** unless explicitly stated in issue
+
+**Status Update Requirements:**
+- GitHub project status cannot be updated programmatically via CLI
+- Manual updates via GitHub web interface are REQUIRED at each transition
+- Status automation only works for GitHub PR review state changes
+- **Failure to update status blocks the development process**
+
 ### Code Review Guidelines
 
 **Architecture Review:**
