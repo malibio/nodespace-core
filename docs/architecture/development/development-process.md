@@ -466,12 +466,21 @@ cd nodespace-app && bun run quality:fix
 
 **PR Review and Merge (MANDATORY):**
 1. **Run code quality checks** (use `bun run quality:fix`)
-2. **Conduct comprehensive review** (use senior-architect-reviewer for complex changes)
-3. **If review shows ready to merge**: Immediately approve and merge the PR
-4. **If review shows issues**: Request changes with specific feedback
-5. **No additional approval required** unless explicitly stated in issue
+2. **Review against original issue requirements FIRST** - verify all acceptance criteria are met
+3. **Conduct comprehensive technical review** (use senior-architect-reviewer for complex changes)  
+4. **If review shows ready to merge**: Immediately approve and merge the PR
+5. **If review shows issues**: Request changes with specific feedback
+6. **No additional approval required** unless explicitly stated in issue
 
 ### Code Review Guidelines
+
+**CRITICAL: Issue Requirements Review (FIRST PRIORITY):**
+- [ ] **All acceptance criteria met**: Each checkbox in the original issue is verified and completed
+- [ ] **Original requirements satisfied**: Implementation addresses the specific goals stated in the issue
+- [ ] **Scope alignment**: No feature creep - implementation stays within defined scope
+- [ ] **User value delivered**: The implemented solution provides the intended user benefit
+- [ ] **Dependencies resolved**: Any stated dependencies are properly addressed
+- [ ] **Success criteria validated**: Implementation can be demonstrated to work as specified
 
 **Architecture Review:**
 - [ ] Follows established Svelte patterns
