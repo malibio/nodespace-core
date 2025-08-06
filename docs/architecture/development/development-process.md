@@ -564,4 +564,92 @@ export class TextNode implements NodeComponent {
 }
 ```
 
+## GitHub Issue Creation Best Practices
+
+### Enhanced Issue Template with Rich Rendering
+
+GitHub provides enhanced rendering for issue references when using specific section headers. This creates professional dependency tracking with visual indicators:
+
+```markdown
+# Issue Title (Descriptive, Action-Oriented)
+
+Brief description of what needs to be accomplished.
+
+## Dependencies
+- #15 (blocks this issue)
+- #16 (must be completed first)
+
+## Related Issues  
+- #4 (parent feature/epic)
+
+## Requirements
+- **Specific Feature**: Detailed technical requirement
+- **Implementation Detail**: Exact specifications with examples
+- **File Locations**: Specific paths where code should be created
+- **Technical Specs**: Precise technical details (SVG paths, CSS properties, etc.)
+
+## Acceptance Criteria
+- [ ] Specific, testable outcome
+- [ ] Measurable success criteria  
+- [ ] User-facing functionality verified
+- [ ] Technical implementation validated
+- [ ] No compilation errors or warnings
+```
+
+### Issue Reference Rendering
+
+**Rich GitHub Rendering Triggers:**
+- **Dependencies**: Shows checkboxes with issue status and titles
+- **Related Issues**: Shows checkboxes with issue status and titles  
+- **Issues** (generic): Shows checkboxes with issue status and titles
+
+**Simple References:**
+- `#4` in regular text → auto-expands with issue title
+- `Issue #4` in regular text → renders as basic hyperlink
+
+### Self-Contained Issue Requirements
+
+Every issue must include sufficient detail for independent implementation:
+
+**Technical Specifications:**
+- Exact file paths and structure
+- Specific code patterns to follow
+- Design tokens and CSS properties to use
+- Component interfaces and props
+- Testing requirements and approaches
+
+**Implementation Guidance:**
+- Reference existing similar implementations
+- Specify design system integration points
+- Include example code snippets for complex requirements
+- Define clear success criteria
+
+**Resource References:**
+- Link to relevant architecture documentation
+- Reference existing components to mimic
+- Include design system tokens and patterns
+- Specify testing utilities and patterns
+
+### Issue Dependency Management
+
+**True Dependencies (use "Dependencies" section):**
+- Issue cannot start without dependency completion
+- Blocks implementation progress
+- Creates sequential workflow
+
+**Feature Relationships (use "Related Issues" section):**
+- Part of same epic/feature
+- Provides context but doesn't block
+- Enables parallel development
+
+### Quality Gates for Issues
+
+Before creating an issue, verify:
+- [ ] **Self-contained**: Can be implemented independently
+- [ ] **Specific**: Clear technical requirements with examples
+- [ ] **Testable**: Measurable acceptance criteria
+- [ ] **Valuable**: Delivers user-facing functionality
+- [ ] **Scoped**: Focused on single responsibility
+- [ ] **Detailed**: Includes all necessary technical specifications
+
 This development process ensures engineers can create valuable, working features independently while maintaining architectural coherence for future integration.
