@@ -80,6 +80,7 @@
               title="Daily Notes"
               content="Today's thoughts and observations"
               compact={true}
+              hasChildren={true}
             />
             <BaseNode
               nodeType="text"
@@ -87,6 +88,7 @@
               title="Projects"
               content="Active project documentation"
               compact={true}
+              hasChildren={true}
             />
             <BaseNode
               nodeType="text"
@@ -94,6 +96,7 @@
               title="Ideas"
               content="Creative concepts and inspiration"
               compact={true}
+              hasChildren={false}
             />
           </div>
         </div>
@@ -108,6 +111,7 @@
               title="Templates"
               content="Reusable document templates"
               compact={true}
+              hasChildren={true}
             />
             <BaseNode
               nodeType="query"
@@ -115,6 +119,7 @@
               title="Saved Searches"
               content="Frequently used search queries"
               compact={true}
+              hasChildren={false}
             />
             <BaseNode
               nodeType="entity"
@@ -122,6 +127,7 @@
               title="Reports"
               content="Generated analytics and insights"
               compact={true}
+              hasChildren={true}
             />
           </div>
         </div>
@@ -139,25 +145,28 @@
               <BaseNode
                 nodeType="text"
                 nodeId="example-text"
-                title="TextNode Example"
-                subtitle="Rich markdown content"
-                content="This is an example of a text node with markdown support and rich formatting capabilities."
+                title="TextNode Example (Parent)"
+                subtitle="Rich markdown content - has child nodes"
+                content="This is an example of a text node with markdown support and rich formatting capabilities. Notice the layered circle indicator showing this node has children."
+                hasChildren={true}
               />
 
               <BaseNode
                 nodeType="task"
                 nodeId="example-task"
-                title="TaskNode Example"
-                subtitle="Todo management"
-                content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration"
+                title="TaskNode Example (Childless)"
+                subtitle="Todo management - no child nodes"
+                content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nNotice the solid circle indicator showing this is a childless node."
+                hasChildren={false}
               />
 
               <BaseNode
                 nodeType="ai-chat"
                 nodeId="example-ai-chat"
-                title="AIChatNode Example"
-                subtitle="AI conversations"
-                content="AI Assistant: How can I help you organize your knowledge today?"
+                title="AIChatNode Example (Parent)"
+                subtitle="AI conversations - has child messages"
+                content="AI Assistant: How can I help you organize your knowledge today?\n\nThis chat node contains multiple conversation messages, indicated by the layered circle."
+                hasChildren={true}
               />
             </div>
           </div>
@@ -175,6 +184,7 @@
               title="AI Conversation"
               content="How can I organize my notes effectively?"
               compact={true}
+              hasChildren={false}
             />
             <div class="chat-input-area">
               <input class="ns-input" type="text" placeholder="Ask AI anything..." disabled />

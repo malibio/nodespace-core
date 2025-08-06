@@ -29,6 +29,7 @@
   export let showActions: boolean = true;
   export let compact: boolean = false;
   export let className: string = '';
+  export let hasChildren: boolean = false; // Indicates if this node has child nodes
 
   // Interactive state
   let isDragging = false;
@@ -191,12 +192,14 @@
 
     <!-- Node header -->
     <header class="ns-node__header">
-      <!-- Node type indicator -->
-      <div class="ns-node__type-indicator">
-        <span class="ns-node__icon" role="img" aria-label={getNodeTypeLabel(nodeType)}>
-          {getNodeIcon(nodeType)}
-        </span>
-      </div>
+      <!-- Node hierarchy indicator -->
+      <div 
+        class="ns-node__hierarchy-indicator" 
+        class:ns-node__hierarchy-indicator--has-children={hasChildren}
+        data-node-type={nodeType}
+        role="img" 
+        aria-label="{hasChildren ? 'Parent node' : 'Childless node'} - {getNodeTypeLabel(nodeType)}"
+      ></div>
 
       <!-- Node title and subtitle -->
       <div class="ns-node__title-section">
@@ -277,12 +280,14 @@
 
     <!-- Node header -->
     <header class="ns-node__header">
-      <!-- Node type indicator -->
-      <div class="ns-node__type-indicator">
-        <span class="ns-node__icon" role="img" aria-label={getNodeTypeLabel(nodeType)}>
-          {getNodeIcon(nodeType)}
-        </span>
-      </div>
+      <!-- Node hierarchy indicator -->
+      <div 
+        class="ns-node__hierarchy-indicator" 
+        class:ns-node__hierarchy-indicator--has-children={hasChildren}
+        data-node-type={nodeType}
+        role="img" 
+        aria-label="{hasChildren ? 'Parent node' : 'Childless node'} - {getNodeTypeLabel(nodeType)}"
+      ></div>
 
       <!-- Node title and subtitle -->
       <div class="ns-node__title-section">
@@ -453,7 +458,7 @@
     border-left: 4px solid var(--ns-node-query-accent);
   }
 
-  /* Header layout */
+  /* Header layout - flex-start ensures consistent top-alignment */
   .ns-node__header {
     display: flex;
     align-items: flex-start;
@@ -461,20 +466,87 @@
     margin-bottom: var(--ns-spacing-3);
   }
 
-  .ns-node__type-indicator {
+  /* Layered Circle Hierarchy Indicator System */
+  .ns-node__hierarchy-indicator {
+    position: relative;
     flex-shrink: 0;
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-color: var(--ns-color-surface-panel);
-    border-radius: var(--ns-radius-base);
+    width: 16px;
+    height: 16px;
+    /* Size tied to app zoom level, not content font sizes */
+    font-size: var(--ns-font-size-base);
   }
 
-  .ns-node__icon {
-    font-size: var(--ns-font-size-sm);
-    line-height: 1;
+  /* Childless nodes: 10px solid circle centered in 16px container */
+  .ns-node__hierarchy-indicator::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    transition: all var(--ns-duration-fast) var(--ns-easing-easeInOut);
+  }
+
+  /* Parent nodes: 16px semi-transparent background circle */
+  .ns-node__hierarchy-indicator--has-children::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    opacity: 0.25;
+    transition: all var(--ns-duration-fast) var(--ns-easing-easeInOut);
+  }
+
+  /* Node type accent colors for circle indicators */
+  /* Text nodes - Green */
+  .ns-node__hierarchy-indicator[data-node-type="text"]::before {
+    background-color: var(--ns-node-text-accent);
+  }
+  .ns-node__hierarchy-indicator--has-children[data-node-type="text"]::after {
+    background-color: var(--ns-node-text-accent);
+  }
+
+  /* Task nodes - Orange */
+  .ns-node__hierarchy-indicator[data-node-type="task"]::before {
+    background-color: var(--ns-node-task-accent);
+  }
+  .ns-node__hierarchy-indicator--has-children[data-node-type="task"]::after {
+    background-color: var(--ns-node-task-accent);
+  }
+
+  /* AI Chat nodes - Blue */
+  .ns-node__hierarchy-indicator[data-node-type="ai-chat"]::before {
+    background-color: var(--ns-node-aiChat-accent);
+  }
+  .ns-node__hierarchy-indicator--has-children[data-node-type="ai-chat"]::after {
+    background-color: var(--ns-node-aiChat-accent);
+  }
+
+  /* Entity nodes - Purple */
+  .ns-node__hierarchy-indicator[data-node-type="entity"]::before {
+    background-color: var(--ns-node-entity-accent);
+  }
+  .ns-node__hierarchy-indicator--has-children[data-node-type="entity"]::after {
+    background-color: var(--ns-node-entity-accent);
+  }
+
+  /* Query nodes - Pink */
+  .ns-node__hierarchy-indicator[data-node-type="query"]::before {
+    background-color: var(--ns-node-query-accent);
+  }
+  .ns-node__hierarchy-indicator--has-children[data-node-type="query"]::after {
+    background-color: var(--ns-node-query-accent);
+  }
+
+  /* Enhanced visibility on hover/focus for better accessibility */
+  .ns-node:hover .ns-node__hierarchy-indicator--has-children::after,
+  .ns-node:focus .ns-node__hierarchy-indicator--has-children::after {
+    opacity: 0.75;
   }
 
   .ns-node__title-section {
