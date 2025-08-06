@@ -429,16 +429,29 @@ export const dataStore = getContext<DataStore>('dataStore');
 # When starting work on an issue:
 git checkout -b feature/issue-<number>-brief-description
 gh issue edit <number> --add-assignee "@me"
-gh project item-edit <item-id> --field-id <status-field-id> --single-select-option-id <in-progress-id>
+gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 
 # When blocked:
 gh issue comment <number> --body "Blocked: [explanation]"
-gh project item-edit <item-id> --field-id <status-field-id> --single-select-option-id <waiting-id>
+gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id db18cb7f
 
 # When creating PR:
 gh pr create --title "..." --body "Closes #<number>..."
-gh project item-edit <item-id> --field-id <status-field-id> --single-select-option-id <review-id>
+gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
 ```
+
+**GitHub Project Status Field IDs:**
+- **Project ID**: `PVT_kwHOADHu9M4A_nxN` (nodespace project)
+- **Status Field ID**: `PVTSSF_lAHOADHu9M4A_nxNzgyq13o`
+
+**Status Option IDs:**
+- **Todo**: `f75ad846`
+- **In Progress**: `47fc9ee4`
+- **Waiting for Input**: `db18cb7f`
+- **Ready for Review**: `b13f9084`
+- **In Review**: `bd055968`
+- **Done**: `98236657`
+- **Ready to Merge**: `414430c1`
 
 **Status Update Options:**
 - **GitHub CLI**: Use `gh project` commands for programmatic updates
