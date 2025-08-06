@@ -1,9 +1,9 @@
 /**
  * Mock Text Service
- * 
+ *
  * Provides simulated CRUD operations for TextNode components.
  * Includes auto-save functionality and realistic network delays.
- * 
+ *
  * This mock service enables independent TextNode development
  * and will be replaced with real data store integration later.
  */
@@ -48,7 +48,8 @@ export class MockTextService {
   private initializeSampleData(): void {
     const sampleNode: TextNodeData = {
       id: 'text-sample-1',
-      content: 'Welcome to NodeSpace! This is a sample text node with **markdown** support.\n\n## Features\n- Click to edit\n- Auto-save\n- Markdown rendering\n- Keyboard shortcuts',
+      content:
+        'Welcome to NodeSpace! This is a sample text node with **markdown** support.\n\n## Features\n- Click to edit\n- Auto-save\n- Markdown rendering\n- Keyboard shortcuts',
       title: 'Welcome Text Node',
       createdAt: new Date(Date.now() - 86400000), // 1 day ago
       updatedAt: new Date(Date.now() - 3600000), // 1 hour ago
@@ -58,25 +59,21 @@ export class MockTextService {
         version: 3
       }
     };
-    
+
     this.textNodes.set(sampleNode.id, sampleNode);
   }
 
   /**
    * Save text node content with auto-save simulation
    */
-  async saveTextNode(
-    id: string, 
-    content: string, 
-    title?: string
-  ): Promise<TextSaveResult> {
+  async saveTextNode(id: string, content: string, title?: string): Promise<TextSaveResult> {
     // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
+    await new Promise((resolve) => setTimeout(resolve, 200 + Math.random() * 300));
 
     try {
       const now = new Date();
       const existingNode = this.textNodes.get(id);
-      
+
       const nodeData: TextNodeData = {
         id,
         content,
@@ -97,7 +94,6 @@ export class MockTextService {
         id,
         timestamp: now
       };
-
     } catch (error) {
       return {
         success: false,
@@ -113,7 +109,7 @@ export class MockTextService {
    */
   async loadTextNode(id: string): Promise<TextNodeData | null> {
     // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
+    await new Promise((resolve) => setTimeout(resolve, 100 + Math.random() * 200));
 
     return this.textNodes.get(id) || null;
   }
@@ -122,14 +118,14 @@ export class MockTextService {
    * Create new text node
    */
   async createTextNode(
-    content: string = '', 
+    content: string = '',
     title: string = 'New Text Node'
   ): Promise<TextNodeData> {
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     const id = this.generateId();
     const now = new Date();
-    
+
     const nodeData: TextNodeData = {
       id,
       content,
@@ -151,15 +147,15 @@ export class MockTextService {
    * Delete text node
    */
   async deleteTextNode(id: string): Promise<boolean> {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     // Clear any pending auto-save
     const timeout = this.autoSaveTimeouts.get(id);
     if (timeout) {
       clearTimeout(timeout);
       this.autoSaveTimeouts.delete(id);
     }
-    
+
     return this.textNodes.delete(id);
   }
 
@@ -167,8 +163,8 @@ export class MockTextService {
    * Auto-save with debouncing
    */
   scheduleAutoSave(
-    id: string, 
-    content: string, 
+    id: string,
+    content: string,
     title?: string,
     delay: number = 2000
   ): Promise<TextSaveResult> {
@@ -205,28 +201,30 @@ export class MockTextService {
    * Get all text nodes (for listing/search)
    */
   async getAllTextNodes(): Promise<TextNodeData[]> {
-    await new Promise(resolve => setTimeout(resolve, 150));
-    
-    return Array.from(this.textNodes.values())
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    return Array.from(this.textNodes.values()).sort(
+      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+    );
   }
 
   /**
    * Search text nodes by content or title
    */
   async searchTextNodes(query: string): Promise<TextNodeData[]> {
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     if (!query.trim()) {
       return this.getAllTextNodes();
     }
 
     const searchLower = query.toLowerCase();
-    
+
     return Array.from(this.textNodes.values())
-      .filter(node => 
-        node.title.toLowerCase().includes(searchLower) ||
-        node.content.toLowerCase().includes(searchLower)
+      .filter(
+        (node) =>
+          node.title.toLowerCase().includes(searchLower) ||
+          node.content.toLowerCase().includes(searchLower)
       )
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
@@ -245,8 +243,7 @@ export class MockTextService {
     return content
       .trim()
       .split(/\s+/)
-      .filter(word => word.length > 0)
-      .length;
+      .filter((word) => word.length > 0).length;
   }
 
   /**
@@ -264,5 +261,4 @@ export class MockTextService {
 // Export singleton instance
 export const mockTextService = MockTextService.getInstance();
 
-// Export types for use by components
-export type { TextNodeData, TextSaveResult };
+// Types are already exported above - no need to re-export

@@ -46,24 +46,6 @@
     action: { nodeId: string; action: string };
   }>();
 
-  // Get node type icon
-  function getNodeIcon(type: NodeType): string {
-    switch (type) {
-      case 'text':
-        return '📝';
-      case 'task':
-        return '✅';
-      case 'ai-chat':
-        return '🤖';
-      case 'entity':
-        return '📊';
-      case 'query':
-        return '🔍';
-      default:
-        return '📄';
-    }
-  }
-
   // Get node type label
   function getNodeTypeLabel(type: NodeType): string {
     switch (type) {
@@ -193,11 +175,11 @@
     <!-- Node header -->
     <header class="ns-node__header">
       <!-- Node hierarchy indicator -->
-      <div 
-        class="ns-node__hierarchy-indicator" 
+      <div
+        class="ns-node__hierarchy-indicator"
         class:ns-node__hierarchy-indicator--has-children={hasChildren}
         data-node-type={nodeType}
-        role="img" 
+        role="img"
         aria-label="{hasChildren ? 'Parent node' : 'Childless node'} - {getNodeTypeLabel(nodeType)}"
       ></div>
 
@@ -281,11 +263,11 @@
     <!-- Node header -->
     <header class="ns-node__header">
       <!-- Node hierarchy indicator -->
-      <div 
-        class="ns-node__hierarchy-indicator" 
+      <div
+        class="ns-node__hierarchy-indicator"
         class:ns-node__hierarchy-indicator--has-children={hasChildren}
         data-node-type={nodeType}
-        role="img" 
+        role="img"
         aria-label="{hasChildren ? 'Parent node' : 'Childless node'} - {getNodeTypeLabel(nodeType)}"
       ></div>
 
@@ -504,42 +486,42 @@
 
   /* Node type accent colors for circle indicators */
   /* Text nodes - Green */
-  .ns-node__hierarchy-indicator[data-node-type="text"]::before {
+  .ns-node__hierarchy-indicator[data-node-type='text']::before {
     background-color: var(--ns-node-text-accent);
   }
-  .ns-node__hierarchy-indicator--has-children[data-node-type="text"]::after {
+  .ns-node__hierarchy-indicator--has-children[data-node-type='text']::after {
     background-color: var(--ns-node-text-accent);
   }
 
   /* Task nodes - Orange */
-  .ns-node__hierarchy-indicator[data-node-type="task"]::before {
+  .ns-node__hierarchy-indicator[data-node-type='task']::before {
     background-color: var(--ns-node-task-accent);
   }
-  .ns-node__hierarchy-indicator--has-children[data-node-type="task"]::after {
+  .ns-node__hierarchy-indicator--has-children[data-node-type='task']::after {
     background-color: var(--ns-node-task-accent);
   }
 
   /* AI Chat nodes - Blue */
-  .ns-node__hierarchy-indicator[data-node-type="ai-chat"]::before {
+  .ns-node__hierarchy-indicator[data-node-type='ai-chat']::before {
     background-color: var(--ns-node-aiChat-accent);
   }
-  .ns-node__hierarchy-indicator--has-children[data-node-type="ai-chat"]::after {
+  .ns-node__hierarchy-indicator--has-children[data-node-type='ai-chat']::after {
     background-color: var(--ns-node-aiChat-accent);
   }
 
   /* Entity nodes - Purple */
-  .ns-node__hierarchy-indicator[data-node-type="entity"]::before {
+  .ns-node__hierarchy-indicator[data-node-type='entity']::before {
     background-color: var(--ns-node-entity-accent);
   }
-  .ns-node__hierarchy-indicator--has-children[data-node-type="entity"]::after {
+  .ns-node__hierarchy-indicator--has-children[data-node-type='entity']::after {
     background-color: var(--ns-node-entity-accent);
   }
 
   /* Query nodes - Pink */
-  .ns-node__hierarchy-indicator[data-node-type="query"]::before {
+  .ns-node__hierarchy-indicator[data-node-type='query']::before {
     background-color: var(--ns-node-query-accent);
   }
-  .ns-node__hierarchy-indicator--has-children[data-node-type="query"]::after {
+  .ns-node__hierarchy-indicator--has-children[data-node-type='query']::after {
     background-color: var(--ns-node-query-accent);
   }
 

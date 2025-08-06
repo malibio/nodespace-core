@@ -8,7 +8,11 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, tick } from 'svelte';
   import BaseNode from '$lib/design/components/BaseNode.svelte';
-  import { mockTextService, type TextNodeData, type TextSaveResult } from '$lib/services/mockTextService';
+  import {
+    mockTextService,
+    type TextNodeData,
+    type TextSaveResult
+  } from '$lib/services/mockTextService';
   import { parseMarkdown, stripMarkdown, validateMarkdown } from '$lib/services/markdownUtils';
 
   // Props
@@ -65,10 +69,14 @@
 
   // Auto-save functionality
   let autoSaveTimeout: NodeJS.Timeout;
-  $: if (autoSave && isEditing && (editContent !== lastSavedContent || editTitle !== lastSavedTitle)) {
+  $: if (
+    autoSave &&
+    isEditing &&
+    (editContent !== lastSavedContent || editTitle !== lastSavedTitle)
+  ) {
     clearTimeout(autoSaveTimeout);
     saveStatus = 'unsaved';
-    
+
     autoSaveTimeout = setTimeout(async () => {
       await handleAutoSave();
     }, autoSaveDelay);
@@ -77,7 +85,7 @@
   // Handle click-to-edit
   async function handleClick() {
     if (!editable || isEditing) return;
-    
+
     await startEditing();
   }
 
@@ -87,7 +95,7 @@
     editContent = content;
     editTitle = title;
     saveStatus = content === lastSavedContent && title === lastSavedTitle ? 'saved' : 'unsaved';
-    
+
     // Focus the textarea after DOM update
     await tick();
     if (textareaElement) {
@@ -95,37 +103,37 @@
       // Auto-resize on focus
       autoResizeTextarea();
     }
-    
+
     dispatch('focus', { nodeId });
   }
 
   // Cancel editing
   function cancelEditing() {
     if (!isEditing) return;
-    
+
     // Clear auto-save timeout
     clearTimeout(autoSaveTimeout);
     if (autoSave && nodeId) {
       mockTextService.cancelAutoSave(nodeId);
     }
-    
+
     // Revert changes
     editContent = lastSavedContent;
     editTitle = lastSavedTitle;
     isEditing = false;
     saveStatus = 'saved';
     saveError = '';
-    
+
     dispatch('cancel', { nodeId });
   }
 
   // Save changes
   async function saveChanges(): Promise<void> {
     if (!isEditing) return;
-    
+
     saveStatus = 'saving';
     saveError = '';
-    
+
     try {
       // Validate markdown if enabled
       if (markdown) {
@@ -136,9 +144,9 @@
           return;
         }
       }
-      
+
       let result: TextSaveResult;
-      
+
       if (nodeId && nodeId !== 'new') {
         // Update existing node
         result = await mockTextService.saveTextNode(nodeId, editContent, editTitle);
@@ -148,7 +156,7 @@
         nodeId = newNodeData.id;
         result = { success: true, id: newNodeData.id, timestamp: new Date() };
       }
-      
+
       if (result.success) {
         // Update local state
         content = editContent;
@@ -157,10 +165,10 @@
         lastSavedTitle = editTitle;
         saveStatus = 'saved';
         isEditing = false;
-        
+
         // Update node data
         textNodeData = await mockTextService.loadTextNode(nodeId);
-        
+
         dispatch('save', { nodeId, content: editContent, title: editTitle });
       } else {
         saveError = result.error || 'Save failed';
@@ -177,17 +185,17 @@
   // Auto-save handler
   async function handleAutoSave() {
     if (!autoSave || !nodeId || nodeId === 'new') return;
-    
+
     saveStatus = 'saving';
-    
+
     try {
       const result = await mockTextService.scheduleAutoSave(nodeId, editContent, editTitle, 100);
-      
+
       if (result.success) {
         lastSavedContent = editContent;
         lastSavedTitle = editTitle;
         saveStatus = 'saved';
-        
+
         // Update displayed content
         content = editContent;
         title = editTitle;
@@ -204,21 +212,21 @@
   // Handle keyboard shortcuts
   function handleKeyDown(event: KeyboardEvent) {
     if (!isEditing) return;
-    
+
     // Ctrl+Enter or Cmd+Enter to save
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       saveChanges();
       return;
     }
-    
+
     // Escape to cancel
     if (event.key === 'Escape') {
       event.preventDefault();
       cancelEditing();
       return;
     }
-    
+
     // Auto-resize on input
     if (event.target === textareaElement) {
       // Use requestAnimationFrame to resize after content change
@@ -231,10 +239,10 @@
   // Auto-resize textarea to fit content
   function autoResizeTextarea() {
     if (!textareaElement) return;
-    
+
     // Reset height to get accurate scrollHeight
     textareaElement.style.height = 'auto';
-    
+
     // Set height to scrollHeight with some padding
     const newHeight = Math.max(textareaElement.scrollHeight + 4, 80); // minimum 80px
     textareaElement.style.height = `${newHeight}px`;
@@ -248,9 +256,9 @@
   // Handle blur (save on blur if auto-save is disabled)
   async function handleBlur() {
     if (!isEditing) return;
-    
+
     dispatch('blur', { nodeId });
-    
+
     // If auto-save is disabled, save on blur
     if (!autoSave) {
       await saveChanges();
@@ -261,14 +269,18 @@
   $: renderedContent = markdown && content ? parseMarkdown(content) : content;
 
   // Get display title (fallback to content preview)
-  $: displayTitle = title || (content ? stripMarkdown(content).substring(0, 50) + (content.length > 50 ? '...' : '') : 'Untitled');
+  $: displayTitle =
+    title ||
+    (content
+      ? stripMarkdown(content).substring(0, 50) + (content.length > 50 ? '...' : '')
+      : 'Untitled');
 
   // Save status indicator
   $: saveStatusClass = {
-    'saved': 'ns-text-node-status--saved',
-    'saving': 'ns-text-node-status--saving',
-    'unsaved': 'ns-text-node-status--unsaved',
-    'error': 'ns-text-node-status--error'
+    saved: 'ns-text-node-status--saved',
+    saving: 'ns-text-node-status--saving',
+    unsaved: 'ns-text-node-status--unsaved',
+    error: 'ns-text-node-status--error'
   }[saveStatus];
 </script>
 
@@ -282,8 +294,8 @@
   className="ns-text-node {isEditing ? 'ns-text-node--editing' : ''}"
   on:click={handleClick}
 >
-  <!-- Main content slot -->
-  <div class="ns-text-node__content" slot="content">
+  <!-- Main content in default slot -->
+  <div class="ns-text-node__content">
     {#if isEditing}
       <!-- Editing mode -->
       <div class="ns-text-node__editor">
@@ -297,12 +309,12 @@
             on:keydown={handleKeyDown}
           />
         {/if}
-        
+
         <!-- Content editor -->
         <textarea
           bind:this={textareaElement}
           bind:value={editContent}
-          placeholder={placeholder}
+          {placeholder}
           class="ns-text-node__textarea"
           on:keydown={handleKeyDown}
           on:input={handleInput}
@@ -310,7 +322,7 @@
           rows="3"
           aria-label="Edit text content"
         ></textarea>
-        
+
         <!-- Editor controls -->
         <div class="ns-text-node__controls">
           <button
@@ -321,7 +333,7 @@
           >
             {saveStatus === 'saving' ? 'Saving...' : 'Save'}
           </button>
-          
+
           <button
             type="button"
             class="ns-text-node__btn ns-text-node__btn--secondary"
@@ -330,11 +342,9 @@
           >
             Cancel
           </button>
-          
+
           {#if markdown}
-            <span class="ns-text-node__hint">
-              Tip: Use **bold**, *italic*, # headers
-            </span>
+            <span class="ns-text-node__hint"> Tip: Use **bold**, *italic*, # headers </span>
           {/if}
         </div>
       </div>
@@ -359,7 +369,7 @@
       </div>
     {/if}
   </div>
-  
+
   <!-- Footer with save status -->
   <div slot="footer" class="ns-text-node__footer">
     {#if saveStatus !== 'saved' || saveError}
@@ -525,12 +535,24 @@
     color: var(--ns-color-text-primary);
   }
 
-  :global(.ns-markdown-h1) { font-size: var(--ns-font-size-xl); }
-  :global(.ns-markdown-h2) { font-size: var(--ns-font-size-lg); }
-  :global(.ns-markdown-h3) { font-size: var(--ns-font-size-base); }
-  :global(.ns-markdown-h4) { font-size: var(--ns-font-size-sm); }
-  :global(.ns-markdown-h5) { font-size: var(--ns-font-size-sm); }
-  :global(.ns-markdown-h6) { font-size: var(--ns-font-size-xs); }
+  :global(.ns-markdown-h1) {
+    font-size: var(--ns-font-size-xl);
+  }
+  :global(.ns-markdown-h2) {
+    font-size: var(--ns-font-size-lg);
+  }
+  :global(.ns-markdown-h3) {
+    font-size: var(--ns-font-size-base);
+  }
+  :global(.ns-markdown-h4) {
+    font-size: var(--ns-font-size-sm);
+  }
+  :global(.ns-markdown-h5) {
+    font-size: var(--ns-font-size-sm);
+  }
+  :global(.ns-markdown-h6) {
+    font-size: var(--ns-font-size-xs);
+  }
 
   :global(.ns-markdown-paragraph) {
     margin: var(--ns-spacing-2) 0;
@@ -618,12 +640,12 @@
       flex-direction: column;
       align-items: stretch;
     }
-    
+
     .ns-text-node__hint {
       margin-left: 0;
       text-align: center;
     }
-    
+
     .ns-text-node__footer {
       flex-direction: column;
       align-items: flex-start;
