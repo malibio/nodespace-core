@@ -446,6 +446,12 @@ gh project item-edit <item-id> --field-id <status-field-id> --single-select-opti
 - **MCP Tools**: Use available MCP project management tools if configured
 - Choose the method that works best for your environment
 
+**Package Manager (MANDATORY):**
+- **ALWAYS use `bun` instead of `npm`** for all frontend/JavaScript package management and scripts
+- Commands: `bun install`, `bun run dev`, `bun run build`, `bun run quality:fix`, `bun run test`, etc.
+- **Rationale**: Bun provides faster package installation, script execution, and better TypeScript support
+- **Violation**: Using `npm` instead of `bun` is a process violation that can cause dependency and build issues
+
 **Code Quality Gates (MANDATORY):**
 ```bash
 # Before creating PR, ALL code must pass:
