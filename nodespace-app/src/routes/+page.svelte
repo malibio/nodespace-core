@@ -81,6 +81,7 @@
               title="Daily Notes"
               content="Today's thoughts and observations"
               compact={true}
+              hasChildren={true}
             />
             <TextNode
               nodeId="projects"
@@ -106,6 +107,7 @@
               title="Templates"
               content="Reusable document templates"
               compact={true}
+              hasChildren={true}
             />
             <TextNode
               nodeId="saved-searches"
@@ -118,6 +120,7 @@
               title="Reports"
               content="Generated analytics and insights"
               compact={true}
+              hasChildren={true}
             />
           </div>
         </div>
@@ -142,8 +145,14 @@
             <div class="node-examples">
               <TextNode
                 nodeId="example-text"
-                title="TextNode Example (Parent)"
+                title="TextNode Example (Childless)"
                 content="This is an example of a text node with **markdown support** and rich formatting capabilities. Notice the enhanced TextNode with inline editing functionality."
+              />
+
+              <TextNode
+                nodeId="example-text-parent"
+                title="TextNode Example (Parent)"
+                content="This is an example of a parent text node that contains child nodes with rich markdown support."
               />
 
               <TextNode
@@ -153,9 +162,27 @@
               />
 
               <TextNode
+                nodeId="example-task-parent"
+                title="TaskNode Example (Parent)" 
+                content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nThis is a parent task node with subtasks."
+              />
+
+              <TextNode
                 nodeId="example-ai-chat"
-                title="AIChatNode Example (Parent)"
+                title="AIChatNode Example (Childless)"
                 content="AI Assistant: How can I help you organize your knowledge today?\n\nThis enhanced TextNode supports inline editing with auto-save functionality."
+              />
+
+              <TextNode
+                nodeId="example-ai-chat-parent"
+                title="AIChatNode Example (Parent)"
+                content="AI Assistant: How can I help you organize your knowledge today?\n\nThis is a conversation with follow-ups and enhanced TextNode capabilities."
+              />
+
+              <TextNode
+                nodeId="example-icon-override"
+                title="Enhanced TextNode Features"
+                content="This TextNode demonstrates the enhanced inline editing capabilities with markdown support, auto-save functionality, and responsive panel behavior."
               />
             </div>
           </div>

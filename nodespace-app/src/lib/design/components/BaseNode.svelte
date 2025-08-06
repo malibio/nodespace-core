@@ -33,6 +33,7 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import Icon, { type IconName } from '../icons/index.js';
 
   // Props
   export let nodeType: NodeType = 'text';
@@ -49,8 +50,9 @@
   // export let focusable: boolean = true;
   export let showActions: boolean = true;
   export let compact: boolean = false;
+  export let hasChildren: boolean = false;
+  export let nodeIcon: IconName | undefined = undefined;
   export let className: string = '';
-  export let hasChildren: boolean = false; // Indicates if this node has child nodes
 
   // Interactive state
   let isDragging = false;
@@ -67,6 +69,26 @@
     action: { nodeId: string; action: string };
   }>();
 
+  // Get node type icon - auto-select based on nodeType, allow override with nodeIcon prop
+  function getNodeTypeIcon(type: NodeType): IconName {
+    switch (type) {
+      case 'text':
+        return 'text';
+      case 'task':
+        return 'text'; // Future: 'task' when icon added
+      case 'ai-chat':
+        return 'text'; // Future: 'ai' when icon added
+      case 'entity':
+        return 'text'; // Future: 'entity' when icon added
+      case 'query':
+        return 'text'; // Future: 'query' when icon added
+      default:
+        return 'text';
+    }
+  }
+
+  // Icon selection logic - nodeIcon prop overrides default
+  $: selectedIcon = nodeIcon || getNodeTypeIcon(nodeType);
   // Get node type label
   function getNodeTypeLabel(type: NodeType): string {
     switch (type) {
@@ -186,6 +208,7 @@
     loading && 'ns-node--loading',
     isDragging && 'ns-node--dragging',
     compact && 'ns-node--compact',
+    hasChildren && 'ns-node--has-children',
     className
   ]
     .filter(Boolean)
