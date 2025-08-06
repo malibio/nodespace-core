@@ -3,7 +3,7 @@
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { onMount } from 'svelte';
   import ThemeProvider from '$lib/design/components/ThemeProvider.svelte';
-  import BaseNode from '$lib/design/components/BaseNode.svelte';
+  import TextNode from '$lib/components/TextNode.svelte';
   import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
   import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
@@ -76,29 +76,23 @@
           <h3>JournalView</h3>
           <p>Hierarchical note organization panel</p>
           <div class="placeholder-content">
-            <BaseNode
-              nodeType="text"
+            <TextNode
               nodeId="daily-notes"
               title="Daily Notes"
               content="Today's thoughts and observations"
               compact={true}
-              hasChildren={true}
             />
-            <BaseNode
-              nodeType="text"
+            <TextNode
               nodeId="projects"
               title="Projects"
               content="Active project documentation"
               compact={true}
-              hasChildren={true}
             />
-            <BaseNode
-              nodeType="text"
+            <TextNode
               nodeId="ideas"
               title="Ideas"
               content="Creative concepts and inspiration"
               compact={true}
-              hasChildren={false}
             />
           </div>
         </div>
@@ -107,29 +101,23 @@
           <h3>LibraryView</h3>
           <p>Knowledge base and documents</p>
           <div class="placeholder-content">
-            <BaseNode
-              nodeType="entity"
+            <TextNode
               nodeId="templates"
               title="Templates"
               content="Reusable document templates"
               compact={true}
-              hasChildren={true}
             />
-            <BaseNode
-              nodeType="query"
+            <TextNode
               nodeId="saved-searches"
               title="Saved Searches"
               content="Frequently used search queries"
               compact={true}
-              hasChildren={false}
             />
-            <BaseNode
-              nodeType="entity"
+            <TextNode
               nodeId="reports"
               title="Reports"
               content="Generated analytics and insights"
               compact={true}
-              hasChildren={true}
             />
           </div>
         </div>
@@ -149,34 +137,25 @@
           <HierarchyDemo />
           
           <div class="editor-placeholder">
-            <p>Additional BaseNode examples showing circle indicator system:</p>
+            <p>TextNode examples with enhanced editing and markdown support:</p>
 
             <div class="node-examples">
-              <BaseNode
-                nodeType="text"
+              <TextNode
                 nodeId="example-text"
                 title="TextNode Example (Parent)"
-                subtitle="Rich markdown content - has child nodes"
-                content="This is an example of a text node with markdown support and rich formatting capabilities. Notice the layered circle indicator showing this node has children."
-                hasChildren={true}
+                content="This is an example of a text node with **markdown support** and rich formatting capabilities. Notice the enhanced TextNode with inline editing functionality."
               />
 
-              <BaseNode
-                nodeType="task"
+              <TextNode
                 nodeId="example-task"
                 title="TaskNode Example (Childless)"
-                subtitle="Todo management - no child nodes"
-                content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nNotice the solid circle indicator showing this is a childless node."
-                hasChildren={false}
+                content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nClick to edit and experience the enhanced TextNode functionality."
               />
 
-              <BaseNode
-                nodeType="ai-chat"
+              <TextNode
                 nodeId="example-ai-chat"
                 title="AIChatNode Example (Parent)"
-                subtitle="AI conversations - has child messages"
-                content="AI Assistant: How can I help you organize your knowledge today?\n\nThis chat node contains multiple conversation messages, indicated by the layered circle."
-                hasChildren={true}
+                content="AI Assistant: How can I help you organize your knowledge today?\n\nThis enhanced TextNode supports inline editing with auto-save functionality."
               />
             </div>
           </div>
@@ -188,13 +167,11 @@
           <h3>AIChatView</h3>
           <p>AI assistant interaction panel</p>
           <div class="chat-placeholder">
-            <BaseNode
-              nodeType="ai-chat"
+            <TextNode
               nodeId="chat-example"
               title="AI Conversation"
               content="How can I organize my notes effectively?"
               compact={true}
-              hasChildren={false}
             />
             <div class="chat-input-area">
               <input class="ns-input" type="text" placeholder="Ask AI anything..." disabled />
