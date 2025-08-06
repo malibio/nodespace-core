@@ -5,7 +5,7 @@
 
 /* Base style guide layout */
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--ns-font-family-ui, "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace);
   margin: 0;
   padding: 0;
   line-height: 1.6;
