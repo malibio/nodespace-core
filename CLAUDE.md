@@ -80,7 +80,63 @@ gh issue view <issue-number> --web
 4. **Is this about architecture review or complex system design?** → Use `senior-architect-reviewer`
 5. **Is this complex research or multi-step work?** → Use `general-purpose`
 
-### 5. Implementation Workflow
+### 5. Agent Scope Control Guidelines
+
+**CRITICAL: Prevent Scope Overreach**
+
+When delegating to subagents, you MUST explicitly define boundaries to prevent them from exceeding their intended responsibilities:
+
+#### Mandatory Scope Boundaries in Prompts:
+
+```markdown
+## IMPLEMENTATION SCOPE ONLY - DO NOT:
+- Create pull requests or merge requests  
+- Update GitHub project status or issue assignments
+- Make git commits (except implementation files)
+- Close or reassign GitHub issues
+- Update project management tools
+- Make architectural decisions beyond the specific task
+- Implement features not explicitly requested
+
+## YOUR ROLE IS LIMITED TO:
+- [Specific implementation tasks]
+- Creating code files and documentation
+- Testing your implementation locally
+- Reporting back with implementation summary
+- Providing recommendations for next steps
+```
+
+#### Agent Responsibility Matrix:
+
+| Responsibility | Main Agent | Specialized Subagent |
+|----------------|------------|---------------------|
+| **Git Workflow** | ✅ Branch creation, PR creation, merging | ❌ |
+| **Project Status** | ✅ GitHub status updates, issue assignment | ❌ |
+| **Implementation** | ❌ (delegate to specialist) | ✅ Code, docs, testing |
+| **Architecture Review** | ❌ (delegate to senior-architect-reviewer) | ❌ |
+| **Final Integration** | ✅ Integration, deployment, completion | ❌ |
+
+#### Scope Violation Recovery:
+
+If a subagent exceeds scope (like creating PRs when not requested):
+1. **Continue with proper process** - Don't abandon the workflow
+2. **Use senior-architect-reviewer** for comprehensive review
+3. **Follow remaining process steps** (review → merge → status updates)
+4. **Note the scope violation** for future improvement
+5. **Update agent prompts** to be more explicit about boundaries
+
+#### Quality Gate Checklist:
+
+Before delegating to any subagent, ensure your prompt includes:
+- [ ] Clear scope boundaries ("DO NOT" section)
+- [ ] Specific deliverables expected  
+- [ ] Implementation-only focus
+- [ ] No git/project management permissions
+- [ ] Explicit reporting requirements
+
+This prevents agents from taking over workflow management responsibilities that belong to the main coordinating agent.
+
+### 6. Implementation Workflow
 
 **CRITICAL**: Follow the complete development process in `/docs/architecture/development/development-process.md`
 
