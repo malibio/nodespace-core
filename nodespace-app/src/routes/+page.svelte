@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import ThemeProvider from '$lib/design/components/ThemeProvider.svelte';
   import BaseNode from '$lib/design/components/BaseNode.svelte';
+  import { NodeTreeDemo } from '$lib/components';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
 
   let appName = $state('NodeSpace');
@@ -135,40 +136,44 @@
 
       <main class="main-content">
         <div class="ns-panel node-viewer">
-          <h3>NodeViewer</h3>
-          <p>Main content editing and viewing area</p>
-          <div class="editor-placeholder">
-            <p>Select a node from the sidebar to begin editing...</p>
-            <p>This area will render different node types:</p>
+          <h3>NodeViewer & Hierarchical Display</h3>
+          <p>Main content editing and viewing area - now featuring NodeTree component</p>
+        </div>
 
-            <div class="node-examples">
-              <BaseNode
-                nodeType="text"
-                nodeId="example-text"
-                title="TextNode Example (Parent)"
-                subtitle="Rich markdown content - has child nodes"
-                content="This is an example of a text node with markdown support and rich formatting capabilities. Notice the layered circle indicator showing this node has children."
-                hasChildren={true}
-              />
+        <div class="ns-panel">
+          <NodeTreeDemo />
+        </div>
 
-              <BaseNode
-                nodeType="task"
-                nodeId="example-task"
-                title="TaskNode Example (Childless)"
-                subtitle="Todo management - no child nodes"
-                content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nNotice the solid circle indicator showing this is a childless node."
-                hasChildren={false}
-              />
+        <div class="ns-panel node-examples-section">
+          <h3>Node Type Examples</h3>
+          <p>Different node types with hierarchy indicators:</p>
+          <div class="node-examples">
+            <BaseNode
+              nodeType="text"
+              nodeId="example-text"
+              title="TextNode Example (Parent)"
+              subtitle="Rich markdown content - has child nodes"
+              content="This is an example of a text node with markdown support and rich formatting capabilities. Notice the layered circle indicator showing this node has children."
+              hasChildren={true}
+            />
 
-              <BaseNode
-                nodeType="ai-chat"
-                nodeId="example-ai-chat"
-                title="AIChatNode Example (Parent)"
-                subtitle="AI conversations - has child messages"
-                content="AI Assistant: How can I help you organize your knowledge today?\n\nThis chat node contains multiple conversation messages, indicated by the layered circle."
-                hasChildren={true}
-              />
-            </div>
+            <BaseNode
+              nodeType="task"
+              nodeId="example-task"
+              title="TaskNode Example (Childless)"
+              subtitle="Todo management - no child nodes"
+              content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nNotice the solid circle indicator showing this is a childless node."
+              hasChildren={false}
+            />
+
+            <BaseNode
+              nodeType="ai-chat"
+              nodeId="example-ai-chat"
+              title="AIChatNode Example (Parent)"
+              subtitle="AI conversations - has child messages"
+              content="AI Assistant: How can I help you organize your knowledge today?\n\nThis chat node contains multiple conversation messages, indicated by the layered circle."
+              hasChildren={true}
+            />
           </div>
         </div>
       </main>
@@ -317,15 +322,6 @@
     color: var(--ns-color-text-tertiary, #666666);
   }
 
-  .editor-placeholder {
-    text-align: center;
-    padding: var(--ns-spacing-10, 2.5rem) var(--ns-spacing-5, 1.25rem);
-  }
-
-  .editor-placeholder p {
-    margin: 0 0 var(--ns-spacing-4, 1rem) 0;
-    color: var(--ns-color-text-secondary, #333333);
-  }
 
   .node-examples {
     display: flex;
