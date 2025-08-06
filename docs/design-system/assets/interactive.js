@@ -60,7 +60,7 @@ async function loadDesignTokens() {
       },
       typography: {
         fontFamily: {
-          ui: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          ui: '"SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace',
           mono: '"SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace'
         },
         fontSize: {
@@ -121,7 +121,7 @@ async function loadDesignTokens() {
       },
       typography: {
         fontFamily: {
-          ui: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          ui: '"SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace',
           mono: '"SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace'
         },
         fontSize: {
