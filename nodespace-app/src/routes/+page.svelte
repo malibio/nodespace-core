@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import ThemeProvider from '$lib/design/components/ThemeProvider.svelte';
   import BaseNode from '$lib/design/components/BaseNode.svelte';
+  import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
 
   let appName = $state('NodeSpace');
@@ -136,10 +137,15 @@
       <main class="main-content">
         <div class="ns-panel node-viewer">
           <h3>NodeViewer</h3>
-          <p>Main content editing and viewing area</p>
+          <p>Main content editing and viewing area with hierarchical display patterns</p>
+          
+          <!-- Hierarchical Display Demo -->
+          <HierarchyDemo />
+          
+          <div class="divider"></div>
+          
           <div class="editor-placeholder">
-            <p>Select a node from the sidebar to begin editing...</p>
-            <p>This area will render different node types:</p>
+            <p>Additional BaseNode examples showing circle indicator system:</p>
 
             <div class="node-examples">
               <BaseNode
@@ -325,6 +331,12 @@
   .editor-placeholder p {
     margin: 0 0 var(--ns-spacing-4, 1rem) 0;
     color: var(--ns-color-text-secondary, #333333);
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--ns-color-border-default, #e1e5e9);
+    margin: var(--ns-spacing-6, 1.5rem) 0;
   }
 
   .node-examples {

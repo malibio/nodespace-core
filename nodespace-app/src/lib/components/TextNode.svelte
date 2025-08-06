@@ -288,7 +288,7 @@
   {nodeId}
   title={displayTitle}
   nodeType="text"
-  hasChildren={false}
+  hasChildren={textNodeData?.metadata.hasChildren || false}
   clickable={editable && !isEditing}
   loading={saveStatus === 'saving'}
   className="ns-text-node {isEditing ? 'ns-text-node--editing' : ''}"
