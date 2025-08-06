@@ -12,6 +12,7 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import Icon from '../icons/index.js';
 
   // Props
   export let nodeType: NodeType = 'text';
@@ -193,9 +194,13 @@
     <header class="ns-node__header">
       <!-- Node type indicator -->
       <div class="ns-node__type-indicator">
-        <span class="ns-node__icon" role="img" aria-label={getNodeTypeLabel(nodeType)}>
-          {getNodeIcon(nodeType)}
-        </span>
+        {#if nodeType === 'text'}
+          <Icon name="text" size={20} className="ns-node__icon" color="currentColor" />
+        {:else}
+          <span class="ns-node__icon" role="img" aria-label={getNodeTypeLabel(nodeType)}>
+            {getNodeIcon(nodeType)}
+          </span>
+        {/if}
       </div>
 
       <!-- Node title and subtitle -->
@@ -279,9 +284,13 @@
     <header class="ns-node__header">
       <!-- Node type indicator -->
       <div class="ns-node__type-indicator">
-        <span class="ns-node__icon" role="img" aria-label={getNodeTypeLabel(nodeType)}>
-          {getNodeIcon(nodeType)}
-        </span>
+        {#if nodeType === 'text'}
+          <Icon name="text" size={20} className="ns-node__icon" color="currentColor" />
+        {:else}
+          <span class="ns-node__icon" role="img" aria-label={getNodeTypeLabel(nodeType)}>
+            {getNodeIcon(nodeType)}
+          </span>
+        {/if}
       </div>
 
       <!-- Node title and subtitle -->
