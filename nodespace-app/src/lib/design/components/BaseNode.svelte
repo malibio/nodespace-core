@@ -490,9 +490,10 @@
     height: calc(var(--ns-font-size-base) * 1);
     background-color: transparent;
     border: none;
+    z-index: 0;
   }
 
-  /* Main circle - 10px solid circle */
+  /* Main circle - 10px solid circle centered in 16px container */
   .ns-node__type-indicator::after {
     width: calc(var(--ns-font-size-base) * 0.625);
     height: calc(var(--ns-font-size-base) * 0.625);
@@ -521,12 +522,7 @@
     background-color: var(--ns-node-query-accent);
   }
 
-  /* Parent node indicator - show semi-transparent background circle */
-  .ns-node--has-children .ns-node__type-indicator::before {
-    background-color: var(--ns-node-text-accent);
-    opacity: 0.25;
-  }
-
+  /* Parent node indicator - show semi-transparent background circle at 25% opacity */
   .ns-node--text.ns-node--has-children .ns-node__type-indicator::before {
     background-color: var(--ns-node-text-accent);
     opacity: 0.25;
