@@ -1,0 +1,427 @@
+/* NodeSpace Design System Style Guide CSS */
+
+/* Import the generated design system CSS */
+/* This will be dynamically loaded by the interactive.js script */
+
+/* Base style guide layout */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  line-height: 1.6;
+  background-color: var(--ns-color-surface-background, #ffffff);
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+/* Style guide container */
+.style-guide {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+/* Navigation */
+.style-guide-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--ns-color-border-default, #e1e5e9);
+}
+
+.style-guide-nav a {
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+  color: var(--ns-color-text-secondary, #333333);
+  border-radius: 0.5rem;
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.style-guide-nav a:hover,
+.style-guide-nav a.active {
+  background-color: var(--ns-color-primary-500, #007acc);
+  color: white;
+}
+
+/* Theme toggle */
+.theme-toggle {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.theme-toggle button {
+  padding: 0.5rem;
+  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+  background: var(--ns-color-surface-background, #ffffff);
+  color: var(--ns-color-text-primary, #1a1a1a);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  font-size: 1.2rem;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle button:hover {
+  background-color: var(--ns-color-surface-panel, #f8f9fa);
+}
+
+.theme-toggle button.active {
+  background-color: var(--ns-color-primary-500, #007acc);
+  color: white;
+  border-color: var(--ns-color-primary-500, #007acc);
+}
+
+/* Typography */
+h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+h2 {
+  font-size: 2rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+  border-bottom: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  padding-bottom: 0.5rem;
+}
+
+h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+h4 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  color: var(--ns-color-text-secondary, #333333);
+}
+
+p {
+  margin-bottom: 1rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+/* Code and documentation */
+code {
+  background-color: var(--ns-color-surface-panel, #f8f9fa);
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.875rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+pre {
+  background-color: var(--ns-color-surface-panel, #f8f9fa);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+}
+
+pre code {
+  background: none;
+  padding: 0;
+}
+
+/* Example sections */
+.example-section {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+  border-radius: 0.5rem;
+  background-color: var(--ns-color-surface-elevated, #ffffff);
+}
+
+.example-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+.example-demo {
+  padding: 1.5rem;
+  background-color: var(--ns-color-surface-panel, #f8f9fa);
+  border-radius: 0.5rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+}
+
+.example-code {
+  position: relative;
+}
+
+.example-code .copy-button {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--ns-color-surface-background, #ffffff);
+  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.example-code:hover .copy-button {
+  opacity: 1;
+}
+
+/* Color swatches */
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.color-swatch {
+  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: var(--ns-color-surface-background, #ffffff);
+}
+
+.color-preview {
+  height: 80px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  font-weight: 500;
+}
+
+.color-info {
+  padding: 0.75rem;
+}
+
+.color-name {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+.color-value {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.875rem;
+  color: var(--ns-color-text-secondary, #333333);
+  margin-bottom: 0.25rem;
+}
+
+.color-usage {
+  font-size: 0.75rem;
+  color: var(--ns-color-text-tertiary, #666666);
+  line-height: 1.4;
+}
+
+/* Typography specimens */
+.typography-specimen {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  border-radius: 0.5rem;
+}
+
+.specimen-preview {
+  margin-bottom: 0.5rem;
+}
+
+.specimen-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--ns-color-text-secondary, #333333);
+  border-top: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  padding-top: 0.5rem;
+}
+
+.specimen-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-label {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: var(--ns-color-text-tertiary, #666666);
+  margin-bottom: 0.125rem;
+}
+
+.detail-value {
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+/* Spacing examples */
+.spacing-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.spacing-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem;
+  background: var(--ns-color-surface-panel, #f8f9fa);
+  border-radius: 0.25rem;
+}
+
+.spacing-visual {
+  height: 24px;
+  background: var(--ns-color-primary-500, #007acc);
+  border-radius: 0.125rem;
+  min-width: 0;
+}
+
+.spacing-label {
+  font-weight: 600;
+  min-width: 80px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.875rem;
+}
+
+.spacing-value {
+  color: var(--ns-color-text-secondary, #333333);
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.875rem;
+}
+
+/* Component examples */
+.component-showcase {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  margin: 2rem 0;
+}
+
+.component-example {
+  padding: 1.5rem;
+  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+  border-radius: 0.5rem;
+  background: var(--ns-color-surface-elevated, #ffffff);
+}
+
+.component-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--ns-color-text-primary, #1a1a1a);
+}
+
+.component-demo {
+  margin-bottom: 1rem;
+}
+
+.component-code {
+  font-size: 0.75rem;
+  background: var(--ns-color-surface-panel, #f8f9fa);
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+}
+
+/* Interaction states */
+.state-examples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.state-example {
+  text-align: center;
+}
+
+.state-demo {
+  margin-bottom: 0.5rem;
+}
+
+.state-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ns-color-text-secondary, #333333);
+}
+
+/* Responsive behavior */
+@media (max-width: 768px) {
+  .style-guide {
+    padding: 1rem;
+  }
+  
+  .style-guide-nav {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .theme-toggle {
+    margin-left: 0;
+    justify-content: center;
+  }
+  
+  h1 {
+    font-size: 2rem;
+  }
+  
+  h2 {
+    font-size: 1.5rem;
+  }
+  
+  .color-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .component-showcase {
+    grid-template-columns: 1fr;
+  }
+  
+  .specimen-details {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Print styles */
+@media print {
+  .style-guide-nav,
+  .theme-toggle,
+  .copy-button {
+    display: none;
+  }
+  
+  .style-guide {
+    max-width: none;
+    padding: 0;
+  }
+  
+  .example-section {
+    break-inside: avoid;
+    border: 1px solid #ccc;
+    margin: 1rem 0;
+  }
+  
+  .color-preview {
+    border: 1px solid #ccc;
+  }
+}
