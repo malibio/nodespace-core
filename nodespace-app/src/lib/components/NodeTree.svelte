@@ -39,14 +39,6 @@
     nodeMove: { nodeId: string; newParentId: string | null; newDepth: number };
   }>();
 
-  // Recursive function to render node hierarchy
-  function renderNodeTree(nodeList: TreeNodeData[], currentDepth: number = 0): TreeNodeData[] {
-    return nodeList.filter(node => {
-      // Only show nodes at current depth or children of expanded parents
-      if (currentDepth === 0) return node.depth === 0;
-      return node.depth === currentDepth;
-    });
-  }
 
   // Toggle node expansion
   function toggleExpansion(nodeId: string) {
@@ -69,16 +61,6 @@
     return null;
   }
 
-  // Check if node should be visible (parent chain is expanded)
-  function isNodeVisible(node: TreeNodeData, nodeList: TreeNodeData[]): boolean {
-    if (node.depth === 0) return true;
-    
-    // Find parent and check if it's expanded
-    const parent = nodeList.find(n => n.children.some(child => child.id === node.id));
-    if (!parent) return true; // Orphaned nodes are visible
-    
-    return parent.expanded && isNodeVisible(parent, nodeList);
-  }
 
   // Get all visible nodes (flattened tree respecting expansion state)
   function getVisibleNodes(nodeList: TreeNodeData[]): TreeNodeData[] {

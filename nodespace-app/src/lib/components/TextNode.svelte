@@ -23,7 +23,6 @@
   export let markdown: boolean = true;
   export let placeholder: string = 'Click to add text...';
   export let autoSave: boolean = true;
-  export let autoSaveDelay: number = 2000;
 
   // Component state
   let isEditing = false;
@@ -31,7 +30,7 @@
   let editTitle = title;
   let saveStatus: 'saved' | 'saving' | 'unsaved' | 'error' = 'saved';
   let saveError = '';
-  let textareaElement: HTMLTextAreaElement;
+  let contentEditableElement: any;
   let textNodeData: TextNodeData | null = null;
   let lastSavedContent = content;
   let lastSavedTitle = title;
@@ -67,41 +66,89 @@
     }
   });
 
-  // Auto-save functionality
-  let autoSaveTimeout: NodeJS.Timeout;
-  $: if (
-    autoSave &&
-    isEditing &&
-    (editContent !== lastSavedContent || editTitle !== lastSavedTitle)
-  ) {
-    clearTimeout(autoSaveTimeout);
+  // Debounced auto-save functionality
+  let debounceTimeout: NodeJS.Timeout;
+  const DEBOUNCE_DELAY = 400; // 400ms debounce for better UX
+
+  function debounceAutoSave() {
+    if (!autoSave || !isEditing) return;
+    
+    clearTimeout(debounceTimeout);
     saveStatus = 'unsaved';
 
-    autoSaveTimeout = setTimeout(async () => {
-      await handleAutoSave();
-    }, autoSaveDelay);
+    debounceTimeout = setTimeout(async () => {
+      // Only save if content has actually changed
+      if (editContent !== lastSavedContent || editTitle !== lastSavedTitle) {
+        await handleAutoSave();
+      }
+    }, DEBOUNCE_DELAY);
   }
 
-  // Handle click-to-edit
-  async function handleClick() {
+  // Handle click-to-edit with cursor positioning
+  async function handleClick(event: MouseEvent) {
     if (!editable || isEditing) return;
 
-    await startEditing();
+    await startEditing(event);
   }
 
-  // Start editing mode
-  async function startEditing() {
+  // Start editing mode with cursor positioning
+  async function startEditing(clickEvent?: MouseEvent) {
     isEditing = true;
     editContent = content;
     editTitle = title;
     saveStatus = content === lastSavedContent && title === lastSavedTitle ? 'saved' : 'unsaved';
 
-    // Focus the textarea after DOM update
+    // Focus the contenteditable element after DOM update
     await tick();
-    if (textareaElement) {
-      textareaElement.focus();
-      // Auto-resize on focus
-      autoResizeTextarea();
+    if (contentEditableElement) {
+      contentEditableElement.focus();
+      
+      // Position cursor based on click location or default to start
+      if (clickEvent) {
+        try {
+          // Calculate approximate cursor position based on click
+          const rect = contentEditableElement.getBoundingClientRect();
+          const clickX = clickEvent.clientX - rect.left;
+          const clickY = clickEvent.clientY - rect.top;
+          
+          // Simple heuristic: if clicking in the right half, place cursor at end
+          const cursorAtEnd = clickX > rect.width / 2 || clickY > rect.height / 2;
+          
+          const range = document.createRange();
+          const selection = window.getSelection();
+          
+          if (contentEditableElement.firstChild) {
+            if (cursorAtEnd) {
+              range.setStart(contentEditableElement.firstChild, contentEditableElement.textContent?.length || 0);
+            } else {
+              range.setStart(contentEditableElement.firstChild, 0);
+            }
+            range.collapse(true);
+          } else {
+            range.selectNodeContents(contentEditableElement);
+            range.collapse(true);
+          }
+          
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        } catch {
+          // Fallback: place cursor at start
+          const range = document.createRange();
+          range.selectNodeContents(contentEditableElement);
+          range.collapse(true);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        }
+      } else {
+        // No click event, default to start
+        const range = document.createRange();
+        range.selectNodeContents(contentEditableElement);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
     }
 
     dispatch('focus', { nodeId });
@@ -111,8 +158,8 @@
   function cancelEditing() {
     if (!isEditing) return;
 
-    // Clear auto-save timeout
-    clearTimeout(autoSaveTimeout);
+    // Clear debounce timeout
+    clearTimeout(debounceTimeout);
     if (autoSave && nodeId) {
       mockTextService.cancelAutoSave(nodeId);
     }
@@ -182,6 +229,13 @@
     }
   }
 
+  // Handle contenteditable input with debounced saving
+  function handleContentInput(event: any) {
+    const target = event.target as any;
+    editContent = target.textContent || '';
+    debounceAutoSave();
+  }
+
   // Auto-save handler
   async function handleAutoSave() {
     if (!autoSave || !nodeId || nodeId === 'new') return;
@@ -213,7 +267,7 @@
   function handleKeyDown(event: KeyboardEvent) {
     if (!isEditing) return;
 
-    // Ctrl+Enter or Cmd+Enter to save
+    // Ctrl+Enter or Cmd+Enter to save and exit edit mode
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       saveChanges();
@@ -226,31 +280,6 @@
       cancelEditing();
       return;
     }
-
-    // Auto-resize on input
-    if (event.target === textareaElement) {
-      // Use requestAnimationFrame to resize after content change
-      requestAnimationFrame(() => {
-        autoResizeTextarea();
-      });
-    }
-  }
-
-  // Auto-resize textarea to fit content
-  function autoResizeTextarea() {
-    if (!textareaElement) return;
-
-    // Reset height to get accurate scrollHeight
-    textareaElement.style.height = 'auto';
-
-    // Set height to scrollHeight with some padding
-    const newHeight = Math.max(textareaElement.scrollHeight + 4, 80); // minimum 80px
-    textareaElement.style.height = `${newHeight}px`;
-  }
-
-  // Handle input events for auto-resize
-  function handleInput() {
-    autoResizeTextarea();
   }
 
   // Handle blur (save on blur if auto-save is disabled)
@@ -289,84 +318,105 @@
   title={displayTitle}
   nodeType="text"
   hasChildren={textNodeData?.metadata.hasChildren || false}
-  clickable={editable && !isEditing}
+  clickable={false}
   loading={saveStatus === 'saving'}
   className="ns-text-node {isEditing ? 'ns-text-node--editing' : ''}"
-  on:click={handleClick}
 >
   <!-- Main content in default slot -->
   <div class="ns-text-node__content">
     {#if isEditing}
-      <!-- Editing mode -->
+      <!-- Editing mode - contenteditable with raw markdown -->
       <div class="ns-text-node__editor">
-        <!-- Title editor (if title is separate from content) -->
-        {#if title !== content}
-          <input
-            type="text"
-            class="ns-text-node__title-input"
-            bind:value={editTitle}
-            placeholder="Node title..."
-            on:keydown={handleKeyDown}
-          />
-        {/if}
-
-        <!-- Content editor -->
-        <textarea
-          bind:this={textareaElement}
-          bind:value={editContent}
-          {placeholder}
-          class="ns-text-node__textarea"
+        <div
+          bind:this={contentEditableElement}
+          class="ns-text-node__contenteditable"
+          contenteditable="true"
+          role="textbox"
+          tabindex="0"
+          aria-multiline="true"
+          on:input={handleContentInput}
           on:keydown={handleKeyDown}
-          on:input={handleInput}
           on:blur={handleBlur}
-          rows="3"
           aria-label="Edit text content"
-        ></textarea>
-
-        <!-- Editor controls -->
-        <div class="ns-text-node__controls">
-          <button
-            type="button"
-            class="ns-text-node__btn ns-text-node__btn--primary"
-            on:click={saveChanges}
-            disabled={saveStatus === 'saving'}
-          >
-            {saveStatus === 'saving' ? 'Saving...' : 'Save'}
-          </button>
-
-          <button
-            type="button"
-            class="ns-text-node__btn ns-text-node__btn--secondary"
-            on:click={cancelEditing}
-            disabled={saveStatus === 'saving'}
-          >
-            Cancel
-          </button>
-
-          {#if markdown}
-            <span class="ns-text-node__hint"> Tip: Use **bold**, *italic*, # headers </span>
-          {/if}
+          data-placeholder={placeholder}
+        >
+          {editContent}
         </div>
-      </div>
-    {:else}
-      <!-- Display mode -->
-      <div class="ns-text-node__display">
-        {#if content}
-          {#if markdown}
-            <div class="ns-text-node__markdown">
-              {@html renderedContent}
-            </div>
-          {:else}
-            <div class="ns-text-node__plain">
-              {content}
-            </div>
-          {/if}
-        {:else}
-          <div class="ns-text-node__empty">
-            {placeholder}
+        
+        {#if markdown}
+          <div class="ns-text-node__hint">
+            Tip: Use **bold**, *italic*, # headers • Press Ctrl+Enter to save • Esc to cancel
           </div>
         {/if}
       </div>
+    {:else}
+      <!-- Display mode - rendered markdown or plain text -->
+      {#if editable}
+        <div 
+          class="ns-text-node__display ns-text-node__display--clickable" 
+          role="button"
+          tabindex="0"
+          on:click={handleClick}
+          on:keydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleClick(new MouseEvent('click'));
+            }
+          }}
+          aria-label="Click to edit text content"
+        >
+          {#if content}
+            {#if markdown}
+              <div class="ns-text-node__markdown">
+                <!-- 
+                  ESLint suppression approved: This is the ONLY exception in the codebase.
+                  Safe because: HTML is generated from controlled markdown parsing with HTML escaping.
+                  Follows industry standard: GitHub, React Markdown, etc. use same approach.
+                  See CLAUDE.md for lint suppression policy.
+                -->
+                <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                {@html renderedContent}
+              </div>
+            {:else}
+              <div class="ns-text-node__plain">
+                {content}
+              </div>
+            {/if}
+          {:else}
+            <div class="ns-text-node__empty">
+              {placeholder}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <div 
+          class="ns-text-node__display" 
+          role="region"
+        >
+          {#if content}
+            {#if markdown}
+              <div class="ns-text-node__markdown">
+                <!-- 
+                  ESLint suppression approved: This is the ONLY exception in the codebase.
+                  Safe because: HTML is generated from controlled markdown parsing with HTML escaping.
+                  Follows industry standard: GitHub, React Markdown, etc. use same approach.
+                  See CLAUDE.md for lint suppression policy.
+                -->
+                <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                {@html renderedContent}
+              </div>
+            {:else}
+              <div class="ns-text-node__plain">
+                {content}
+              </div>
+            {/if}
+          {:else}
+            <div class="ns-text-node__empty">
+              {placeholder}
+            </div>
+          {/if}
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -410,25 +460,7 @@
     width: 100%;
   }
 
-  .ns-text-node__title-input {
-    width: 100%;
-    padding: var(--ns-spacing-2) var(--ns-spacing-3);
-    margin-bottom: var(--ns-spacing-2);
-    border: 1px solid var(--ns-color-border-default);
-    border-radius: var(--ns-radius-md);
-    font-size: var(--ns-font-size-base);
-    font-weight: var(--ns-font-weight-semibold);
-    background: var(--ns-color-surface-default);
-    color: var(--ns-color-text-primary);
-    outline: none;
-    transition: border-color var(--ns-duration-fast) var(--ns-easing-easeInOut);
-  }
-
-  .ns-text-node__title-input:focus {
-    border-color: var(--ns-color-primary-500);
-  }
-
-  .ns-text-node__textarea {
+  .ns-text-node__contenteditable {
     width: 100%;
     min-height: 80px;
     padding: var(--ns-spacing-3);
@@ -439,72 +471,45 @@
     line-height: var(--ns-line-height-relaxed);
     background: var(--ns-color-surface-default);
     color: var(--ns-color-text-primary);
-    resize: none;
     outline: none;
+    white-space: pre-wrap;
+    word-break: break-word;
     transition: border-color var(--ns-duration-fast) var(--ns-easing-easeInOut);
   }
 
-  .ns-text-node__textarea:focus {
+  .ns-text-node__contenteditable:focus {
     border-color: var(--ns-color-primary-500);
   }
 
-  .ns-text-node__textarea::placeholder {
+  .ns-text-node__contenteditable:empty::before {
+    content: attr(data-placeholder);
     color: var(--ns-color-text-placeholder);
-  }
-
-  /* Editor controls */
-  .ns-text-node__controls {
-    display: flex;
-    align-items: center;
-    gap: var(--ns-spacing-2);
-    margin-top: var(--ns-spacing-2);
-    flex-wrap: wrap;
-  }
-
-  .ns-text-node__btn {
-    padding: var(--ns-spacing-1) var(--ns-spacing-3);
-    border: 1px solid var(--ns-color-border-default);
-    border-radius: var(--ns-radius-sm);
-    font-size: var(--ns-font-size-sm);
-    cursor: pointer;
-    transition: all var(--ns-duration-fast) var(--ns-easing-easeInOut);
-  }
-
-  .ns-text-node__btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .ns-text-node__btn--primary {
-    background: var(--ns-color-primary-500);
-    color: white;
-    border-color: var(--ns-color-primary-500);
-  }
-
-  .ns-text-node__btn--primary:not(:disabled):hover {
-    background: var(--ns-color-primary-600);
-    border-color: var(--ns-color-primary-600);
-  }
-
-  .ns-text-node__btn--secondary {
-    background: var(--ns-color-surface-default);
-    color: var(--ns-color-text-secondary);
-  }
-
-  .ns-text-node__btn--secondary:not(:disabled):hover {
-    background: var(--ns-color-surface-panel);
+    font-style: italic;
   }
 
   .ns-text-node__hint {
     font-size: var(--ns-font-size-xs);
     color: var(--ns-color-text-tertiary);
-    margin-left: auto;
+    margin-top: var(--ns-spacing-2);
+    text-align: center;
+    padding: var(--ns-spacing-1);
+    background: var(--ns-color-surface-panel);
+    border-radius: var(--ns-radius-sm);
   }
 
   /* Display mode styling */
   .ns-text-node__display {
     min-height: 40px;
+  }
+
+  .ns-text-node__display--clickable {
     cursor: pointer;
+  }
+
+  .ns-text-node__display--clickable:hover {
+    background: var(--ns-color-surface-panel);
+    border-radius: var(--ns-radius-sm);
+    transition: background-color var(--ns-duration-fast) var(--ns-easing-easeInOut);
   }
 
   .ns-text-node__plain {
@@ -636,16 +641,6 @@
 
   /* Responsive adjustments */
   @media (max-width: 640px) {
-    .ns-text-node__controls {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .ns-text-node__hint {
-      margin-left: 0;
-      text-align: center;
-    }
-
     .ns-text-node__footer {
       flex-direction: column;
       align-items: flex-start;

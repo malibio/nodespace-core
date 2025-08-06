@@ -5,6 +5,7 @@
   import ThemeProvider from '$lib/design/components/ThemeProvider.svelte';
   import BaseNode from '$lib/design/components/BaseNode.svelte';
   import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
+  import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
 
   let appName = $state('NodeSpace');
@@ -139,10 +140,13 @@
           <h3>NodeViewer</h3>
           <p>Main content editing and viewing area with hierarchical display patterns</p>
           
-          <!-- Hierarchical Display Demo -->
-          <HierarchyDemo />
+          <!-- TextNode Demo for Testing Refactored Component -->
+          <TextNodeDemo />
           
           <div class="divider"></div>
+          
+          <!-- Hierarchical Display Demo -->
+          <HierarchyDemo />
           
           <div class="editor-placeholder">
             <p>Additional BaseNode examples showing circle indicator system:</p>

@@ -8,6 +8,27 @@
 <script context="module" lang="ts">
   // Node type for styling variants
   export type NodeType = 'text' | 'task' | 'ai-chat' | 'entity' | 'query';
+
+  // Navigation interface for cross-node keyboard navigation
+  export interface NodeNavigationMethods {
+    // Can this node accept keyboard navigation?
+    canAcceptNavigation(): boolean;
+    
+    // Enter node from top (arrow down from previous node)
+    enterFromTop(): boolean;
+    
+    // Enter node from bottom (arrow up from next node)  
+    enterFromBottom(): boolean;
+    
+    // Exit node going up (cursor at first line, arrow up pressed)
+    exitToTop(): { canExit: boolean; columnPosition: number };
+    
+    // Exit node going down (cursor at last line, arrow down pressed)
+    exitToBottom(): { canExit: boolean; columnPosition: number };
+    
+    // Get current cursor column for cross-node consistency
+    getCurrentColumn(): number;
+  }
 </script>
 
 <script lang="ts">
@@ -128,6 +149,32 @@
   function handleAction(action: string) {
     if (disabled) return;
     dispatch('action', { nodeId, action });
+  }
+
+  // Default navigation methods (no-op implementations)
+  // Derived nodes can override these for custom navigation behavior
+  export function canAcceptNavigation(): boolean {
+    return false; // By default, nodes don't support navigation
+  }
+
+  export function enterFromTop(): boolean {
+    return false; // No-op: derived nodes should implement
+  }
+
+  export function enterFromBottom(): boolean {
+    return false; // No-op: derived nodes should implement
+  }
+
+  export function exitToTop(): { canExit: boolean; columnPosition: number } {
+    return { canExit: false, columnPosition: 0 }; // No-op: derived nodes should implement
+  }
+
+  export function exitToBottom(): { canExit: boolean; columnPosition: number } {
+    return { canExit: false, columnPosition: 0 }; // No-op: derived nodes should implement
+  }
+
+  export function getCurrentColumn(): number {
+    return 0; // No-op: derived nodes should implement
   }
 
   // CSS classes
