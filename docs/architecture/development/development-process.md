@@ -1,6 +1,15 @@
 # NodeSpace Development Process
 
-Guide for dependency-free development with vertical slicing and self-contained feature implementation. This process enables parallel development whether using AI agents or human developers.
+Guide for dependency-free development with vertical slicing and self-contained feature implementation. This process enables parallel development for all engineers.
+
+## ⚠️ MANDATORY STARTUP SEQUENCE ⚠️
+
+**EVERY ENGINEER MUST COMPLETE BEFORE ANY IMPLEMENTATION:**
+- [ ] Create feature branch: `feature/issue-<number>-brief-description`
+- [ ] Assign issue to self: `gh issue edit <number> --add-assignee "@me"`
+- [ ] Update project status: Todo → In Progress (CLI or web interface)
+- [ ] Read issue acceptance criteria and requirements
+- [ ] Plan self-contained implementation approach
 
 ## Core Principles
 
@@ -413,33 +422,35 @@ export const dataStore = getContext<DataStore>('dataStore');
 
 ### Mandatory Process Steps
 
-**CRITICAL: All developers (human and AI) MUST follow these steps:**
+**CRITICAL: All engineers MUST follow these steps:**
 
 **Status Updates (MANDATORY):**
 ```bash
 # When starting work on an issue:
+git checkout -b feature/issue-<number>-brief-description
 gh issue edit <number> --add-assignee "@me"
-# Then manually update project status: Todo → In Progress (via GitHub web interface)
+gh project item-edit <item-id> --field-id <status-field-id> --single-select-option-id <in-progress-id>
 
 # When blocked:
-# Manual update: In Progress → Waiting for Input (add comment explaining block)
+gh issue comment <number> --body "Blocked: [explanation]"
+gh project item-edit <item-id> --field-id <status-field-id> --single-select-option-id <waiting-id>
 
 # When creating PR:
 gh pr create --title "..." --body "Closes #<number>..."
-# Then manually update: In Progress → Ready for Review (via GitHub web interface)
+gh project item-edit <item-id> --field-id <status-field-id> --single-select-option-id <review-id>
 ```
+
+**Status Update Options:**
+- **GitHub CLI**: Use `gh project` commands for programmatic updates
+- **Web Interface**: Manual updates via GitHub project board
+- **MCP Tools**: Use available MCP project management tools if configured
+- Choose the method that works best for your environment
 
 **PR Review and Merge (MANDATORY):**
 1. **Conduct comprehensive review** (use senior-architect-reviewer for complex changes)
 2. **If review shows ready to merge**: Immediately approve and merge the PR
 3. **If review shows issues**: Request changes with specific feedback
 4. **No additional approval required** unless explicitly stated in issue
-
-**Status Update Requirements:**
-- GitHub project status cannot be updated programmatically via CLI
-- Manual updates via GitHub web interface are REQUIRED at each transition
-- Status automation only works for GitHub PR review state changes
-- **Failure to update status blocks the development process**
 
 ### Code Review Guidelines
 
@@ -523,4 +534,4 @@ export class TextNode implements NodeComponent {
 }
 ```
 
-This development process ensures AI agents can create valuable, working features independently while maintaining architectural coherence for future integration.
+This development process ensures engineers can create valuable, working features independently while maintaining architectural coherence for future integration.
