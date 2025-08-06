@@ -170,6 +170,14 @@ gh issue view <issue-number> --web
 - Implement comprehensive error handling with anyhow/thiserror
 - Write tests with mock services temporarily for independent development (transitioning to real services soon)
 
+**Linting Policy:**
+- **NO lint suppression allowed** - Fix issues properly, don't suppress warnings
+- **SINGLE EXCEPTION**: `TextNode.svelte` markdown rendering uses controlled HTML injection
+  - This follows industry standard (GitHub, React Markdown, etc.)
+  - HTML is safely escaped before parsing in `markdownUtils.ts`
+  - Suppression documented with detailed justification comment
+  - This is the ONLY approved suppression in the entire codebase
+
 **Git Workflow:**
 - Create feature branches: `feature/issue-<number>-brief-description`
 - Link commits to issues: `git commit -m "Add TextNode component (closes #4)"`
