@@ -13,19 +13,19 @@
   export interface NodeNavigationMethods {
     // Can this node accept keyboard navigation?
     canAcceptNavigation(): boolean;
-    
+
     // Enter node from top (arrow down from previous node)
     enterFromTop(): boolean;
-    
-    // Enter node from bottom (arrow up from next node)  
+
+    // Enter node from bottom (arrow up from next node)
     enterFromBottom(): boolean;
-    
+
     // Exit node going up (cursor at first line, arrow up pressed)
     exitToTop(): { canExit: boolean; columnPosition: number };
-    
+
     // Exit node going down (cursor at last line, arrow down pressed)
     exitToBottom(): { canExit: boolean; columnPosition: number };
-    
+
     // Get current cursor column for cross-node consistency
     getCurrentColumn(): number;
   }

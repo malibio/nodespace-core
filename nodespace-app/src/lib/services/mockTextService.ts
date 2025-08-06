@@ -72,7 +72,8 @@ export class MockTextService {
   private initializeSampleData(): void {
     const rootNode: TextNodeData = {
       id: 'text-root-1',
-      content: 'This is the **root node** of our hierarchical structure.\n\nIt contains several child nodes demonstrating tree patterns.',
+      content:
+        'This is the **root node** of our hierarchical structure.\n\nIt contains several child nodes demonstrating tree patterns.',
       title: 'Project Root',
       parentId: null,
       depth: 0,
@@ -90,7 +91,8 @@ export class MockTextService {
 
     const childNode1: TextNodeData = {
       id: 'text-child-1',
-      content: 'This is the **first child node**.\n\nIt has its own children to demonstrate multi-level hierarchy.',
+      content:
+        'This is the **first child node**.\n\nIt has its own children to demonstrate multi-level hierarchy.',
       title: 'Chapter 1: Introduction',
       parentId: 'text-root-1',
       depth: 1,
@@ -108,7 +110,7 @@ export class MockTextService {
 
     const childNode2: TextNodeData = {
       id: 'text-child-2',
-      content: 'This is the **second child node**.\n\nIt\'s a leaf node with no children.',
+      content: "This is the **second child node**.\n\nIt's a leaf node with no children.",
       title: 'Chapter 2: Conclusion',
       parentId: 'text-root-1',
       depth: 1,
@@ -126,7 +128,8 @@ export class MockTextService {
 
     const grandchildNode1: TextNodeData = {
       id: 'text-grandchild-1',
-      content: 'This is a **grandchild node** at depth 2.\n\n- Demonstrates deeper hierarchy\n- Shows indentation patterns',
+      content:
+        'This is a **grandchild node** at depth 2.\n\n- Demonstrates deeper hierarchy\n- Shows indentation patterns',
       title: 'Section 1.1: Core Concepts',
       parentId: 'text-child-1',
       depth: 2,
@@ -144,7 +147,8 @@ export class MockTextService {
 
     const grandchildNode2: TextNodeData = {
       id: 'text-grandchild-2',
-      content: 'Another **grandchild node** showing sibling relationships.\n\nThis completes our hierarchy example.',
+      content:
+        'Another **grandchild node** showing sibling relationships.\n\nThis completes our hierarchy example.',
       title: 'Section 1.2: Advanced Features',
       parentId: 'text-child-1',
       depth: 2,
@@ -366,10 +370,10 @@ export class MockTextService {
    */
   async getHierarchicalNodes(): Promise<HierarchicalTextNode[]> {
     await new Promise((resolve) => setTimeout(resolve, 100));
-    
+
     const allNodes = Array.from(this.textNodes.values());
     const nodeMap = new Map<string, HierarchicalTextNode>();
-    
+
     // Convert to hierarchical format
     for (const node of allNodes) {
       nodeMap.set(node.id, {
@@ -391,7 +395,7 @@ export class MockTextService {
         }
       });
     }
-    
+
     // Build tree structure
     const rootNodes: HierarchicalTextNode[] = [];
     for (const hierarchicalNode of nodeMap.values()) {
@@ -404,14 +408,14 @@ export class MockTextService {
         }
       }
     }
-    
+
     // Sort children by creation date
     function sortChildren(nodes: HierarchicalTextNode[]) {
       nodes.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-      nodes.forEach(node => sortChildren(node.children));
+      nodes.forEach((node) => sortChildren(node.children));
     }
     sortChildren(rootNodes);
-    
+
     return rootNodes;
   }
 
@@ -424,13 +428,13 @@ export class MockTextService {
     title: string = 'New Child Node'
   ): Promise<TextNodeData | null> {
     await new Promise((resolve) => setTimeout(resolve, 150));
-    
+
     const parent = this.textNodes.get(parentId);
     if (!parent) return null;
-    
+
     const id = this.generateId();
     const now = new Date();
-    
+
     const childNode: TextNodeData = {
       id,
       content,
@@ -448,15 +452,15 @@ export class MockTextService {
         childrenIds: []
       }
     };
-    
+
     // Update parent to show it has children
     parent.metadata.hasChildren = true;
     parent.metadata.childrenIds.push(id);
     parent.updatedAt = now;
-    
+
     this.textNodes.set(id, childNode);
     this.textNodes.set(parentId, parent);
-    
+
     return childNode;
   }
 
@@ -465,31 +469,33 @@ export class MockTextService {
    */
   async moveNode(nodeId: string, newParentId: string | null): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 200));
-    
+
     const node = this.textNodes.get(nodeId);
     if (!node) return false;
-    
+
     const oldParentId = node.parentId;
-    
+
     // Remove from old parent's children list
     if (oldParentId) {
       const oldParent = this.textNodes.get(oldParentId);
       if (oldParent) {
-        oldParent.metadata.childrenIds = oldParent.metadata.childrenIds.filter(id => id !== nodeId);
+        oldParent.metadata.childrenIds = oldParent.metadata.childrenIds.filter(
+          (id) => id !== nodeId
+        );
         oldParent.metadata.hasChildren = oldParent.metadata.childrenIds.length > 0;
         oldParent.updatedAt = new Date();
         this.textNodes.set(oldParentId, oldParent);
       }
     }
-    
+
     // Add to new parent or make root-level
     if (newParentId) {
       const newParent = this.textNodes.get(newParentId);
       if (!newParent) return false;
-      
+
       node.parentId = newParentId;
       node.depth = newParent.depth + 1;
-      
+
       newParent.metadata.hasChildren = true;
       newParent.metadata.childrenIds.push(nodeId);
       newParent.updatedAt = new Date();
@@ -498,13 +504,13 @@ export class MockTextService {
       node.parentId = null;
       node.depth = 0;
     }
-    
+
     // Update depths of all descendant nodes
     this.updateDescendantDepths(nodeId, node.depth);
-    
+
     node.updatedAt = new Date();
     this.textNodes.set(nodeId, node);
-    
+
     return true;
   }
 
@@ -513,14 +519,14 @@ export class MockTextService {
    */
   async toggleNodeExpansion(nodeId: string): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 50));
-    
+
     const node = this.textNodes.get(nodeId);
     if (!node || !node.metadata.hasChildren) return false;
-    
+
     node.expanded = !node.expanded;
     node.updatedAt = new Date();
     this.textNodes.set(nodeId, node);
-    
+
     return node.expanded;
   }
 
@@ -529,13 +535,13 @@ export class MockTextService {
    */
   async getChildren(parentId: string): Promise<TextNodeData[]> {
     await new Promise((resolve) => setTimeout(resolve, 75));
-    
+
     const parent = this.textNodes.get(parentId);
     if (!parent) return [];
-    
+
     return parent.metadata.childrenIds
-      .map(id => this.textNodes.get(id))
-      .filter(node => node !== undefined)
+      .map((id) => this.textNodes.get(id))
+      .filter((node) => node !== undefined)
       .sort((a, b) => a!.createdAt.getTime() - b!.createdAt.getTime()) as TextNodeData[];
   }
 
@@ -545,9 +551,9 @@ export class MockTextService {
   private updateDescendantDepths(nodeId: string, newDepth: number): void {
     const node = this.textNodes.get(nodeId);
     if (!node) return;
-    
+
     node.depth = newDepth;
-    
+
     for (const childId of node.metadata.childrenIds) {
       this.updateDescendantDepths(childId, newDepth + 1);
     }
@@ -558,14 +564,14 @@ export class MockTextService {
    */
   getStats() {
     const nodes = Array.from(this.textNodes.values());
-    const rootNodes = nodes.filter(node => node.parentId === null);
-    const maxDepth = Math.max(...nodes.map(node => node.depth), 0);
-    
+    const rootNodes = nodes.filter((node) => node.parentId === null);
+    const maxDepth = Math.max(...nodes.map((node) => node.depth), 0);
+
     return {
       totalNodes: this.textNodes.size,
       rootNodes: rootNodes.length,
       maxDepth,
-      nodesWithChildren: nodes.filter(node => node.metadata.hasChildren).length,
+      nodesWithChildren: nodes.filter((node) => node.metadata.hasChildren).length,
       pendingAutoSaves: this.autoSaveTimeouts.size,
       lastActivity: new Date()
     };

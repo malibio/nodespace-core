@@ -8,19 +8,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import TextNode from './TextNode.svelte';
-
-  // Tree node interface for hierarchical data
-  export interface TreeNodeData {
-    id: string;
-    title: string;
-    content: string;
-    nodeType: 'text' | 'task' | 'ai-chat' | 'entity' | 'query';
-    depth: number;
-    parentId: string | null;
-    children: TreeNodeData[];
-    expanded: boolean;
-    hasChildren: boolean;
-  }
+  import type { TreeNodeData } from '$lib/types/tree';
 
   // Props
   export let nodes: TreeNodeData[] = [];
@@ -38,7 +26,6 @@
     nodeDelete: { nodeId: string };
     nodeMove: { nodeId: string; newParentId: string | null; newDepth: number };
   }>();
-
 
   // Toggle node expansion
   function toggleExpansion(nodeId: string) {
@@ -61,11 +48,10 @@
     return null;
   }
 
-
   // Get all visible nodes (flattened tree respecting expansion state)
   function getVisibleNodes(nodeList: TreeNodeData[]): TreeNodeData[] {
     const result: TreeNodeData[] = [];
-    
+
     function addVisibleChildren(nodes: TreeNodeData[]) {
       for (const node of nodes) {
         result.push(node);
@@ -74,11 +60,11 @@
         }
       }
     }
-    
+
     // Start with root nodes (depth 0)
-    const rootNodes = nodeList.filter(node => node.depth === 0);
+    const rootNodes = nodeList.filter((node) => node.depth === 0);
     addVisibleChildren(rootNodes);
-    
+
     return result;
   }
 
@@ -106,7 +92,7 @@
 
 <div class="ns-node-tree" role="tree" aria-label="Node hierarchy">
   {#each visibleNodes as node (node.id)}
-    <div 
+    <div
       class="ns-node-tree__item"
       style="margin-left: calc(var(--ns-spacing-{indentSize}) * {node.depth})"
       role="treeitem"
@@ -254,7 +240,7 @@
     .ns-node-tree__item {
       transition: none;
     }
-    
+
     .ns-node-tree__expand-btn,
     .ns-node-tree__expand-icon {
       transition: none;
@@ -266,7 +252,7 @@
     .ns-node-tree__expand-btn {
       border: 1px solid var(--ns-color-border-strong);
     }
-    
+
     .ns-node-tree__placeholder {
       border-color: var(--ns-color-border-strong);
     }

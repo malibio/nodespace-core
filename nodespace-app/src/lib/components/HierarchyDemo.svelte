@@ -7,7 +7,8 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import NodeTree, { type TreeNodeData } from './NodeTree.svelte';
+  import NodeTree from './NodeTree.svelte';
+  import type { TreeNodeData } from '$lib/types/tree';
   import { mockTextService, type HierarchicalTextNode } from '$lib/services/mockTextService';
 
   let hierarchicalNodes: TreeNodeData[] = [];
@@ -17,7 +18,7 @@
   // Convert hierarchical nodes to tree node format
   function convertToTreeNodes(nodes: HierarchicalTextNode[]): TreeNodeData[] {
     const result: TreeNodeData[] = [];
-    
+
     function processNode(node: HierarchicalTextNode): TreeNodeData {
       return {
         id: node.id,
@@ -31,11 +32,11 @@
         hasChildren: node.hasChildren
       };
     }
-    
+
     for (const node of nodes) {
       result.push(processNode(node));
     }
-    
+
     return result;
   }
 
@@ -44,7 +45,7 @@
     try {
       loading = true;
       error = null;
-      
+
       const nodes = await mockTextService.getHierarchicalNodes();
       hierarchicalNodes = convertToTreeNodes(nodes);
     } catch (err) {
@@ -65,7 +66,7 @@
   async function handleNodeExpand(event: CustomEvent<{ nodeId: string; expanded: boolean }>) {
     const { nodeId, expanded } = event.detail;
     console.log(`Node ${nodeId} ${expanded ? 'expanded' : 'collapsed'}`);
-    
+
     try {
       await mockTextService.toggleNodeExpansion(nodeId);
     } catch (err) {
@@ -74,10 +75,12 @@
   }
 
   // Handle node updates
-  async function handleNodeUpdate(event: CustomEvent<{ nodeId: string; content: string; title: string }>) {
+  async function handleNodeUpdate(
+    event: CustomEvent<{ nodeId: string; content: string; title: string }>
+  ) {
     const { nodeId, content, title } = event.detail;
     console.log('Node updated:', { nodeId, content, title });
-    
+
     try {
       await mockTextService.saveTextNode(nodeId, content, title);
       // Reload data to reflect changes
@@ -94,13 +97,17 @@
 
   // Get demo statistics
   $: stats = {
-    totalNodes: hierarchicalNodes.length + hierarchicalNodes.reduce((sum, node) => sum + countDescendants(node), 0),
-    rootNodes: hierarchicalNodes.filter(node => node.depth === 0).length,
-    maxDepth: Math.max(...getAllNodes(hierarchicalNodes).map(node => node.depth), 0)
+    totalNodes:
+      hierarchicalNodes.length +
+      hierarchicalNodes.reduce((sum, node) => sum + countDescendants(node), 0),
+    rootNodes: hierarchicalNodes.filter((node) => node.depth === 0).length,
+    maxDepth: Math.max(...getAllNodes(hierarchicalNodes).map((node) => node.depth), 0)
   };
 
   function countDescendants(node: TreeNodeData): number {
-    return node.children.length + node.children.reduce((sum, child) => sum + countDescendants(child), 0);
+    return (
+      node.children.length + node.children.reduce((sum: number, child: TreeNodeData) => sum + countDescendants(child), 0)
+    );
   }
 
   function getAllNodes(nodes: TreeNodeData[]): TreeNodeData[] {
@@ -120,9 +127,10 @@
   <header class="hierarchy-demo__header">
     <h2 class="hierarchy-demo__title">Hierarchical Display Patterns</h2>
     <p class="hierarchy-demo__description">
-      Demonstrates tree indentation, expand/collapse functionality, and parent-child node relationships.
+      Demonstrates tree indentation, expand/collapse functionality, and parent-child node
+      relationships.
     </p>
-    
+
     {#if !loading && !error}
       <div class="hierarchy-demo__stats">
         <span class="stat">
@@ -134,11 +142,7 @@
         <span class="stat">
           <strong>{stats.maxDepth}</strong> max depth
         </span>
-        <button 
-          type="button" 
-          class="hierarchy-demo__refresh-btn"
-          on:click={loadHierarchicalData}
-        >
+        <button type="button" class="hierarchy-demo__refresh-btn" on:click={loadHierarchicalData}>
           Refresh Data
         </button>
       </div>
@@ -154,20 +158,16 @@
     {:else if error}
       <div class="hierarchy-demo__error">
         <p class="error-message">Error: {error}</p>
-        <button type="button" on:click={loadHierarchicalData}>
-          Try Again
-        </button>
+        <button type="button" on:click={loadHierarchicalData}> Try Again </button>
       </div>
     {:else if hierarchicalNodes.length === 0}
       <div class="hierarchy-demo__empty">
         <p>No hierarchical nodes found.</p>
-        <button type="button" on:click={loadHierarchicalData}>
-          Reload
-        </button>
+        <button type="button" on:click={loadHierarchicalData}> Reload </button>
       </div>
     {:else}
       <div class="hierarchy-demo__tree">
-        <NodeTree 
+        <NodeTree
           nodes={hierarchicalNodes}
           maxDepth={10}
           indentSize={4}
@@ -185,7 +185,10 @@
   <aside class="hierarchy-demo__info">
     <h3>Features Demonstrated:</h3>
     <ul>
-      <li><strong>Tree Indentation:</strong> CSS <code>margin-left: calc(var(--ns-spacing-4) * depth)</code></li>
+      <li>
+        <strong>Tree Indentation:</strong> CSS
+        <code>margin-left: calc(var(--ns-spacing-4) * depth)</code>
+      </li>
       <li><strong>Parent Indicators:</strong> Ring effects when nodes have children</li>
       <li><strong>Expand/Collapse:</strong> Toggle visibility of child nodes</li>
       <li><strong>Depth Tracking:</strong> Automatic depth calculation for proper nesting</li>
@@ -287,7 +290,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .hierarchy-demo__error,

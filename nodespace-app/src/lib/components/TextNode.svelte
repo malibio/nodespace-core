@@ -23,6 +23,7 @@
   export let markdown: boolean = true;
   export let placeholder: string = 'Click to add text...';
   export let autoSave: boolean = true;
+  export let compact: boolean = false; // New prop for responsive layout
 
   // Component state
   let isEditing = false;
@@ -72,7 +73,7 @@
 
   function debounceAutoSave() {
     if (!autoSave || !isEditing) return;
-    
+
     clearTimeout(debounceTimeout);
     saveStatus = 'unsaved';
 
@@ -102,7 +103,7 @@
     await tick();
     if (contentEditableElement) {
       contentEditableElement.focus();
-      
+
       // Position cursor based on click location or default to start
       if (clickEvent) {
         try {
@@ -110,16 +111,19 @@
           const rect = contentEditableElement.getBoundingClientRect();
           const clickX = clickEvent.clientX - rect.left;
           const clickY = clickEvent.clientY - rect.top;
-          
+
           // Simple heuristic: if clicking in the right half, place cursor at end
           const cursorAtEnd = clickX > rect.width / 2 || clickY > rect.height / 2;
-          
+
           const range = document.createRange();
           const selection = window.getSelection();
-          
+
           if (contentEditableElement.firstChild) {
             if (cursorAtEnd) {
-              range.setStart(contentEditableElement.firstChild, contentEditableElement.textContent?.length || 0);
+              range.setStart(
+                contentEditableElement.firstChild,
+                contentEditableElement.textContent?.length || 0
+              );
             } else {
               range.setStart(contentEditableElement.firstChild, 0);
             }
@@ -128,7 +132,7 @@
             range.selectNodeContents(contentEditableElement);
             range.collapse(true);
           }
-          
+
           selection?.removeAllRanges();
           selection?.addRange(range);
         } catch {
@@ -320,7 +324,8 @@
   hasChildren={textNodeData?.metadata.hasChildren || false}
   clickable={false}
   loading={saveStatus === 'saving'}
-  className="ns-text-node {isEditing ? 'ns-text-node--editing' : ''}"
+  {compact}
+  className="ns-text-node {isEditing ? 'ns-text-node--editing' : ''} {compact ? 'ns-text-node--compact' : ''}"
 >
   <!-- Main content in default slot -->
   <div class="ns-text-node__content">
@@ -342,7 +347,7 @@
         >
           {editContent}
         </div>
-        
+
         {#if markdown}
           <div class="ns-text-node__hint">
             Tip: Use **bold**, *italic*, # headers • Press Ctrl+Enter to save • Esc to cancel
@@ -352,8 +357,8 @@
     {:else}
       <!-- Display mode - rendered markdown or plain text -->
       {#if editable}
-        <div 
-          class="ns-text-node__display ns-text-node__display--clickable" 
+        <div
+          class="ns-text-node__display ns-text-node__display--clickable"
           role="button"
           tabindex="0"
           on:click={handleClick}
@@ -389,10 +394,7 @@
           {/if}
         </div>
       {:else}
-        <div 
-          class="ns-text-node__display" 
-          role="region"
-        >
+        <div class="ns-text-node__display" role="region">
           {#if content}
             {#if markdown}
               <div class="ns-text-node__markdown">
@@ -637,6 +639,20 @@
   :global(.ns-text-node--editing) {
     border-color: var(--ns-color-primary-500);
     box-shadow: 0 0 0 1px var(--ns-color-primary-500);
+  }
+
+  /* Compact mode modifier for responsive panels */
+  :global(.ns-text-node--compact) .ns-text-node__content {
+    font-size: var(--ns-font-size-xs);
+    line-height: var(--ns-line-height-normal);
+  }
+
+  :global(.ns-text-node--compact) .ns-text-node__hint {
+    display: none; /* Hide editing hints in compact mode */
+  }
+
+  :global(.ns-text-node--compact) .ns-text-node__markdown {
+    font-size: var(--ns-font-size-xs);
   }
 
   /* Responsive adjustments */

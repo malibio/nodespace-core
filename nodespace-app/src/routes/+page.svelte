@@ -127,15 +127,15 @@
         <div class="ns-panel node-viewer">
           <h3>NodeViewer</h3>
           <p>Main content editing and viewing area with hierarchical display patterns</p>
-          
+
           <!-- TextNode Demo for Testing Refactored Component -->
           <TextNodeDemo />
-          
+
           <div class="divider"></div>
-          
+
           <!-- Hierarchical Display Demo -->
           <HierarchyDemo />
-          
+
           <div class="editor-placeholder">
             <p>TextNode examples with enhanced editing and markdown support:</p>
 
