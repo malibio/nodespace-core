@@ -446,11 +446,30 @@ gh project item-edit <item-id> --field-id <status-field-id> --single-select-opti
 - **MCP Tools**: Use available MCP project management tools if configured
 - Choose the method that works best for your environment
 
+**Code Quality Gates (MANDATORY):**
+```bash
+# Before creating PR, ALL code must pass:
+cd nodespace-app && bun run quality:fix
+
+# This runs:
+# 1. ESLint with auto-fix
+# 2. Prettier formatting  
+# 3. TypeScript compilation check
+# 4. Svelte component validation
+```
+
+**Quality Requirements:**
+- [ ] **ESLint**: No errors, warnings acceptable in development
+- [ ] **Prettier**: Code consistently formatted
+- [ ] **TypeScript**: No compilation errors, strict type checking
+- [ ] **Svelte Check**: No component errors or accessibility violations
+
 **PR Review and Merge (MANDATORY):**
-1. **Conduct comprehensive review** (use senior-architect-reviewer for complex changes)
-2. **If review shows ready to merge**: Immediately approve and merge the PR
-3. **If review shows issues**: Request changes with specific feedback
-4. **No additional approval required** unless explicitly stated in issue
+1. **Run code quality checks** (use `bun run quality:fix`)
+2. **Conduct comprehensive review** (use senior-architect-reviewer for complex changes)
+3. **If review shows ready to merge**: Immediately approve and merge the PR
+4. **If review shows issues**: Request changes with specific feedback
+5. **No additional approval required** unless explicitly stated in issue
 
 ### Code Review Guidelines
 
@@ -461,10 +480,12 @@ gh project item-edit <item-id> --field-id <status-field-id> --single-select-opti
 - [ ] Component is appropriately sized and focused
 
 **Implementation Review:**
-- [ ] Svelte reactivity used correctly
-- [ ] TypeScript types are comprehensive
-- [ ] Error handling is comprehensive
-- [ ] Performance considerations addressed
+- [ ] **Code Quality**: All linting and formatting checks pass
+- [ ] **TypeScript**: Strict type checking with no compilation errors
+- [ ] **Svelte**: Reactivity used correctly, no component errors
+- [ ] **Accessibility**: WCAG compliance, proper ARIA attributes
+- [ ] **Error Handling**: Comprehensive error boundaries and validation
+- [ ] **Performance**: No obvious performance bottlenecks
 
 **Testing Review:**
 - [ ] Tests use @testing-library/svelte appropriately
