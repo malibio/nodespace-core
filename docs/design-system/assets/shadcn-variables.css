@@ -1,0 +1,96 @@
+/* NodeSpace Design System - shadcn-svelte Variables
+ * 
+ * This file mirrors the actual CSS variables from the NodeSpace application
+ * for use in the design system documentation.
+ */
+
+@layer base {
+  :root {
+    /* shadcn-svelte color variables (light theme) */
+    --primary: 210 100% 40%;           /* #007acc - Professional Blue */
+    --primary-foreground: 0 0% 100%;   /* White */
+    
+    --secondary: 210 40% 98%;          /* #f8f9fa - Light gray */
+    --secondary-foreground: 215 16% 47%; /* Medium gray */
+    
+    --accent: 210 40% 98%;             /* Same as secondary */
+    --accent-foreground: 215 16% 47%;
+    
+    --background: 0 0% 100%;           /* White */
+    --foreground: 220 13% 10%;         /* #1a1a1a - Dark text */
+    
+    --card: 0 0% 100%;                 /* White cards */
+    --card-foreground: 220 13% 10%;
+    
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 13% 10%;
+    
+    --muted: 210 40% 98%;              /* #f8f9fa - Light gray */
+    --muted-foreground: 215 16% 47%;   /* #737a83 - Medium gray */
+    
+    --border: 214 32% 91%;             /* #e1e5e9 - Light border */
+    --input: 214 32% 91%;
+    --ring: 210 100% 40%;              /* Focus ring matches primary */
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --radius: 0.5rem;                  /* Border radius */
+  }
+
+  .dark {
+    /* shadcn-svelte color variables (dark theme) */
+    --primary: 210 100% 50%;           /* Brighter blue for dark mode */
+    --primary-foreground: 220 13% 10%; /* Dark text on bright primary */
+    
+    --secondary: 223 47% 11%;          /* Dark gray */
+    --secondary-foreground: 215 20% 65%;
+    
+    --accent: 223 47% 11%;
+    --accent-foreground: 215 20% 65%;
+    
+    --background: 224 71% 4%;          /* Very dark blue-gray */
+    --foreground: 213 31% 91%;         /* Light text for dark mode */
+    
+    --card: 224 71% 4%;
+    --card-foreground: 213 31% 91%;
+    
+    --popover: 224 71% 4%;
+    --popover-foreground: 213 31% 91%;
+    
+    --muted: 223 47% 11%;              /* Dark muted background */
+    --muted-foreground: 215 20% 65%;   /* Light muted text */
+    
+    --border: 223 47% 11%;             /* Dark borders */
+    --input: 223 47% 11%;
+    --ring: 210 100% 50%;
+    
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 213 31% 91%;
+  }
+}
+
+/* NodeSpace Extensions - Node type colors */
+@layer base {
+  :root {
+    --node-text: 142 71% 45%;          /* Green for text nodes */
+    --node-task: 25 95% 53%;           /* Orange for task nodes */  
+    --node-ai-chat: 221 83% 53%;       /* Blue for AI chat nodes */
+    --node-entity: 271 81% 56%;        /* Purple for entity nodes */
+    --node-query: 330 81% 60%;         /* Pink for query nodes */
+    --processing-opacity: 0.7;
+  }
+}
+
+/* Apply base styling consistent with NodeSpace */
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  }
+}

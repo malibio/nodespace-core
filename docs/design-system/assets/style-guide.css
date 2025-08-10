@@ -65,13 +65,13 @@ body {
 }
 
 .theme-toggle button:hover {
-  background-color: var(--ns-color-surface-panel, #f8f9fa);
+  background-color: hsl(var(--muted, 210 40% 98%));
 }
 
 .theme-toggle button.active {
-  background-color: var(--ns-color-primary-500, #007acc);
-  color: white;
-  border-color: var(--ns-color-primary-500, #007acc);
+  background-color: hsl(var(--primary, 210 100% 40%));
+  color: hsl(var(--primary-foreground, 0 0% 100%));
+  border-color: hsl(var(--primary, 210 100% 40%));
 }
 
 /* Typography */
@@ -79,7 +79,7 @@ h1 {
   font-size: 2.5rem;
   font-weight: 700;
   margin-bottom: 1rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--foreground, 220 13% 10%));
 }
 
 h2 {
@@ -87,8 +87,8 @@ h2 {
   font-weight: 600;
   margin-top: 2rem;
   margin-bottom: 1rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
-  border-bottom: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  color: hsl(var(--foreground, 220 13% 10%));
+  border-bottom: 1px solid hsl(var(--border, 214 32% 91%));
   padding-bottom: 0.5rem;
 }
 
@@ -97,7 +97,7 @@ h3 {
   font-weight: 600;
   margin-top: 1.5rem;
   margin-bottom: 0.75rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--foreground, 220 13% 10%));
 }
 
 h4 {
@@ -105,31 +105,31 @@ h4 {
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
-  color: var(--ns-color-text-secondary, #333333);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
 }
 
 p {
   margin-bottom: 1rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--foreground, 220 13% 10%));
 }
 
 /* Code and documentation */
 code {
-  background-color: var(--ns-color-surface-panel, #f8f9fa);
+  background-color: hsl(var(--muted, 210 40% 98%));
   padding: 0.125rem 0.25rem;
-  border-radius: 0.25rem;
+  border-radius: var(--radius, 0.5rem);
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
   font-size: 0.875rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--foreground, 220 13% 10%));
 }
 
 pre {
-  background-color: var(--ns-color-surface-panel, #f8f9fa);
+  background-color: hsl(var(--muted, 210 40% 98%));
   padding: 1rem;
-  border-radius: 0.5rem;
+  border-radius: var(--radius, 0.5rem);
   overflow-x: auto;
   margin: 1rem 0;
-  border: 1px solid var(--ns-color-border-default, #e1e5e9);
+  border: 1px solid hsl(var(--border, 214 32% 91%));
 }
 
 pre code {
@@ -141,24 +141,24 @@ pre code {
 .example-section {
   margin: 2rem 0;
   padding: 1.5rem;
-  border: 1px solid var(--ns-color-border-default, #e1e5e9);
-  border-radius: 0.5rem;
-  background-color: var(--ns-color-surface-elevated, #ffffff);
+  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border-radius: var(--radius, 0.5rem);
+  background-color: hsl(var(--card, 0 0% 100%));
 }
 
 .example-title {
   font-size: 1.125rem;
   font-weight: 600;
   margin-bottom: 1rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--card-foreground, 220 13% 10%));
 }
 
 .example-demo {
   padding: 1.5rem;
-  background-color: var(--ns-color-surface-panel, #f8f9fa);
-  border-radius: 0.5rem;
+  background-color: hsl(var(--muted, 210 40% 98%));
+  border-radius: var(--radius, 0.5rem);
   margin-bottom: 1rem;
-  border: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  border: 1px solid hsl(var(--border, 214 32% 91%));
 }
 
 .example-code {
@@ -170,9 +170,9 @@ pre code {
   top: 0.5rem;
   right: 0.5rem;
   padding: 0.25rem 0.5rem;
-  background: var(--ns-color-surface-background, #ffffff);
-  border: 1px solid var(--ns-color-border-default, #e1e5e9);
-  border-radius: 0.25rem;
+  background: hsl(var(--background, 0 0% 100%));
+  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border-radius: var(--radius, 0.5rem);
   cursor: pointer;
   font-size: 0.75rem;
   opacity: 0;
@@ -192,10 +192,10 @@ pre code {
 }
 
 .color-swatch {
-  border: 1px solid var(--ns-color-border-default, #e1e5e9);
-  border-radius: 0.5rem;
+  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border-radius: var(--radius, 0.5rem);
   overflow: hidden;
-  background: var(--ns-color-surface-background, #ffffff);
+  background: hsl(var(--card, 0 0% 100%));
 }
 
 /* Architecture overview styles */
@@ -256,19 +256,19 @@ pre code {
 .color-name {
   font-weight: 600;
   margin-bottom: 0.25rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--card-foreground, 220 13% 10%));
 }
 
 .color-value {
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 0.875rem;
-  color: var(--ns-color-text-secondary, #333333);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
   margin-bottom: 0.25rem;
 }
 
 .color-usage {
   font-size: 0.75rem;
-  color: var(--ns-color-text-tertiary, #666666);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
   line-height: 1.4;
 }
 
@@ -276,8 +276,8 @@ pre code {
 .typography-specimen {
   margin: 1.5rem 0;
   padding: 1rem;
-  border: 1px solid var(--ns-color-border-subtle, #f3f4f6);
-  border-radius: 0.5rem;
+  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border-radius: var(--radius, 0.5rem);
 }
 
 .specimen-preview {
@@ -289,8 +289,8 @@ pre code {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: var(--ns-color-text-secondary, #333333);
-  border-top: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
+  border-top: 1px solid hsl(var(--border, 214 32% 91%));
   padding-top: 0.5rem;
 }
 
@@ -304,13 +304,13 @@ pre code {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
-  color: var(--ns-color-text-tertiary, #666666);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
   margin-bottom: 0.125rem;
 }
 
 .detail-value {
   font-family: 'SF Mono', Monaco, monospace;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--foreground, 220 13% 10%));
 }
 
 /* Spacing examples */
@@ -325,14 +325,14 @@ pre code {
   align-items: center;
   gap: 1rem;
   padding: 0.5rem;
-  background: var(--ns-color-surface-panel, #f8f9fa);
-  border-radius: 0.25rem;
+  background: hsl(var(--muted, 210 40% 98%));
+  border-radius: var(--radius, 0.5rem);
 }
 
 .spacing-visual {
   height: 24px;
-  background: var(--ns-color-primary-500, #007acc);
-  border-radius: 0.125rem;
+  background: hsl(var(--primary, 210 100% 40%));
+  border-radius: calc(var(--radius, 0.5rem) / 2);
   min-width: 0;
 }
 
@@ -344,7 +344,7 @@ pre code {
 }
 
 .spacing-value {
-  color: var(--ns-color-text-secondary, #333333);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 0.875rem;
 }
@@ -359,16 +359,16 @@ pre code {
 
 .component-example {
   padding: 1.5rem;
-  border: 1px solid var(--ns-color-border-default, #e1e5e9);
-  border-radius: 0.5rem;
-  background: var(--ns-color-surface-elevated, #ffffff);
+  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border-radius: var(--radius, 0.5rem);
+  background: hsl(var(--card, 0 0% 100%));
 }
 
 .component-title {
   font-size: 1rem;
   font-weight: 600;
   margin-bottom: 1rem;
-  color: var(--ns-color-text-primary, #1a1a1a);
+  color: hsl(var(--card-foreground, 220 13% 10%));
 }
 
 .component-demo {
@@ -377,10 +377,10 @@ pre code {
 
 .component-code {
   font-size: 0.75rem;
-  background: var(--ns-color-surface-panel, #f8f9fa);
+  background: hsl(var(--muted, 210 40% 98%));
   padding: 0.5rem;
-  border-radius: 0.25rem;
-  border: 1px solid var(--ns-color-border-subtle, #f3f4f6);
+  border-radius: var(--radius, 0.5rem);
+  border: 1px solid hsl(var(--border, 214 32% 91%));
 }
 
 /* Interaction states */
@@ -402,7 +402,7 @@ pre code {
 .state-label {
   font-size: 0.875rem;
   font-weight: 600;
-  color: var(--ns-color-text-secondary, #333333);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
 }
 
 /* Responsive behavior */
