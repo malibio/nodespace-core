@@ -221,28 +221,28 @@
       
       <div class="color-grid">
         <div class="color-swatch" data-color="text-primary">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-background, #ffffff); color: var(--ns-color-text-primary, #1a1a1a); padding: 1rem;">Primary Text</div>
+          <div class="color-preview" style="background-color: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); padding: 1rem;">Primary Text (#1a1a1a)</div>
           <div class="color-info">
             <div class="color-name">Primary</div>
-            <div class="color-value">var(--ns-color-text-primary)</div>
+            <div class="color-value">hsl(var(--foreground))</div>
             <div class="color-usage">Body text, headings, main content</div>
           </div>
         </div>
         
         <div class="color-swatch" data-color="text-secondary">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-background, #ffffff); color: var(--ns-color-text-secondary, #333333); padding: 1rem;">Secondary Text</div>
+          <div class="color-preview" style="background-color: hsl(var(--background, 0 0% 100%)); color: hsl(var(--muted-foreground, 215 16% 47%)); padding: 1rem;">Secondary Text (#737a83)</div>
           <div class="color-info">
             <div class="color-name">Secondary</div>
-            <div class="color-value">var(--ns-color-text-secondary)</div>
+            <div class="color-value">hsl(var(--muted-foreground))</div>
             <div class="color-usage">Subtitles, descriptions, less important text</div>
           </div>
         </div>
         
         <div class="color-swatch" data-color="text-tertiary">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-background, #ffffff); color: var(--ns-color-text-tertiary, #666666); padding: 1rem;">Tertiary Text</div>
+          <div class="color-preview" style="background-color: hsl(var(--background, 0 0% 100%)); color: hsl(var(--muted-foreground, 215 16% 47%)); padding: 1rem;">Tertiary Text (#737a83)</div>
           <div class="color-info">
             <div class="color-name">Tertiary</div>
-            <div class="color-value">var(--ns-color-text-tertiary)</div>
+            <div class="color-value">hsl(var(--muted-foreground))</div>
             <div class="color-usage">Captions, timestamps, metadata</div>
           </div>
         </div>
@@ -425,19 +425,19 @@
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 2rem 0;">
         <div>
           <h4>Light Theme</h4>
-          <div style="background: #ffffff; color: #1a1a1a; padding: 1rem; border: 1px solid #e1e5e9; border-radius: 0.5rem;">
-            <p>Primary text (#1a1a1a) on white background</p>
-            <p style="color: #333333;">Secondary text (#333333) provides visual hierarchy</p>
-            <p style="color: #666666;">Tertiary text (#666666) for supporting information</p>
+          <div style="background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); padding: 1rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.5rem;">
+            <p><strong>Primary text (#1a1a1a) on white background</strong></p>
+            <p style="color: hsl(var(--muted-foreground, 215 16% 47%));">Secondary text (#737a83) provides visual hierarchy</p>
+            <p style="color: hsl(var(--muted-foreground, 215 16% 47%));">Tertiary text (#737a83) for supporting information</p>
           </div>
         </div>
         
         <div>
           <h4>Dark Theme</h4>
-          <div style="background: #1a1a1a; color: #ffffff; padding: 1rem; border: 1px solid #4b5563; border-radius: 0.5rem;">
-            <p>Primary text (#ffffff) on dark background</p>
-            <p style="color: #e0e0e0;">Secondary text (#e0e0e0) maintains readability</p>
-            <p style="color: #888888;">Tertiary text (#888888) for metadata</p>
+          <div style="background: hsl(224 71% 4%); color: hsl(213 31% 91%); padding: 1rem; border: 1px solid hsl(223 47% 11%); border-radius: 0.5rem;">
+            <p><strong>Primary text (#ffffff) on dark background</strong></p>
+            <p style="color: hsl(215 20% 65%);">Secondary text (#e0e0e0) maintains readability</p>
+            <p style="color: hsl(215 20% 65%);">Tertiary text (#888888) for metadata</p>
           </div>
         </div>
       </div>
