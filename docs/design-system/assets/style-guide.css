@@ -198,6 +198,46 @@ pre code {
   background: var(--ns-color-surface-background, #ffffff);
 }
 
+/* Architecture overview styles */
+.architecture-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.tier-card {
+  background: hsl(var(--card, 0 0% 100%));
+  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border-radius: var(--radius, 0.5rem);
+  padding: 1.5rem;
+}
+
+.tier-card h3 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: hsl(var(--foreground, 220 13% 10%));
+}
+
+.tier-card p {
+  margin: 0 0 1rem 0;
+  color: hsl(var(--muted-foreground, 215 16% 47%));
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.tier-card ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: hsl(var(--muted-foreground, 215 16% 47%));
+  font-size: 0.875rem;
+}
+
+.tier-card li {
+  margin-bottom: 0.25rem;
+}
+
 .color-preview {
   height: 80px;
   width: 100%;

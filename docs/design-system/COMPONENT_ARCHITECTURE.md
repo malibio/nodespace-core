@@ -2,24 +2,54 @@
 
 ## Overview
 
-NodeSpace components follow consistent patterns for maintainability, accessibility, and developer experience. This document outlines the architectural standards for building components within the design system.
+NodeSpace uses a hybrid component architecture combining **shadcn-svelte** professional UI components with **custom NodeSpace-specific components**. This approach provides both industry-standard patterns and domain-specific functionality for AI-native knowledge management.
+
+## Architecture Strategy
+
+### **Two-Tier Component System**
+
+**Tier 1: shadcn-svelte Foundation Components**
+- Professional, battle-tested UI components (Button, Input, Card, Dialog, etc.)
+- Industry-standard design patterns and accessibility
+- Unified color system using shadcn-svelte variables
+- Copy-paste approach for full customization control
+
+**Tier 2: NodeSpace Domain Components**  
+- Custom components for knowledge management (BaseNode, TextNode, etc.)
+- AI-specific interaction patterns
+- Hierarchical node displays and navigation
+- Built on shadcn-svelte foundation but with domain expertise
 
 ## Core Principles
 
-### 1. Design Token First
-- All styling must use CSS custom properties from the design system
-- No hard-coded colors, spacing, or typography values
-- Support automatic theme switching
+### 1. Unified Color System (shadcn-svelte)
+- All components use **shadcn-svelte color variables** for consistency
+- Single source of truth for colors, spacing, and design tokens
+- Automatic theme switching support
+- NodeSpace colors mapped to shadcn-svelte variables
 
 ```svelte
-<!-- ✅ Good: Using design tokens -->
+<!-- ✅ Good: Using shadcn-svelte design tokens -->
 <style>
   .my-component {
-    background-color: var(--ns-color-surface-background);
-    padding: var(--ns-spacing-4);
-    color: var(--ns-color-text-primary);
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(var(--border));
+    padding: var(--ns-spacing-4); /* Legacy support during transition */
   }
 </style>
+
+<!-- ✅ Better: Use shadcn-svelte components directly -->
+<script>
+  import { Button } from "$lib/components/ui/button";
+  import { Card, CardContent } from "$lib/components/ui/card";
+</script>
+
+<Card>
+  <CardContent>
+    <Button variant="default">Professional UI</Button>
+  </CardContent>
+</Card>
 
 <!-- ❌ Bad: Hard-coded values -->
 <style>
@@ -88,120 +118,143 @@ function handleClick(event: MouseEvent) {
 
 ### File Organization
 ```
-src/lib/design/components/
-├── BaseNode.svelte              # Core node component
-├── ThemeProvider.svelte         # Theme context provider
-├── Button/
-│   ├── Button.svelte           # Main button component
-│   ├── ButtonGroup.svelte      # Button grouping
-│   └── index.ts                # Exports
-├── Input/
-│   ├── Input.svelte
-│   ├── TextArea.svelte
-│   └── index.ts
-└── index.ts                    # All component exports
+src/lib/components/
+├── ui/                          # shadcn-svelte components
+│   ├── button/
+│   │   ├── button.svelte       # Professional Button component
+│   │   └── index.ts
+│   ├── input/
+│   │   ├── input.svelte        # Professional Input component  
+│   │   └── index.ts
+│   ├── card/
+│   │   ├── card.svelte         # Card container
+│   │   ├── card-content.svelte # Card content area
+│   │   ├── card-header.svelte  # Card header
+│   │   └── index.ts
+│   └── textarea/
+│       ├── textarea.svelte     # Professional TextArea
+│       └── index.ts
+├── TextNode.svelte              # Custom NodeSpace component
+├── HierarchyDemo.svelte         # Domain-specific component
+└── index.ts                     # Component exports
+
+src/lib/design/                  # Design system foundation
+├── components/
+│   ├── BaseNode.svelte          # Core node architecture
+│   └── ThemeProvider.svelte     # Theme context provider
+├── theme.ts                     # Theme management
+└── tokens.ts                    # Legacy design tokens
+
+src/lib/utils.ts                 # shadcn-svelte utilities (cn, etc.)
 ```
 
-### Component Template
+### Component Development Patterns
+
+#### **Pattern 1: Use shadcn-svelte Components (Preferred)**
+For standard UI elements, use professional shadcn-svelte components:
+
+```svelte
+<script lang="ts">
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card";
+</script>
+
+<!-- Professional, accessible, consistent -->
+<Card>
+  <CardHeader>
+    <CardTitle>Settings</CardTitle>
+  </CardHeader>
+  <CardContent class="space-y-4">
+    <Input placeholder="Enter your name..." />
+    <Button variant="default">Save Changes</Button>
+  </CardContent>
+</Card>
+```
+
+#### **Pattern 2: Custom NodeSpace Components**
+For domain-specific functionality, build custom components using shadcn-svelte foundation:
+
 ```svelte
 <!--
-  ComponentName.svelte
+  TextNode.svelte - Custom NodeSpace Component
   
-  Brief description of what this component does and when to use it.
+  Domain-specific text node with AI integration and hierarchical display.
 -->
 
 <script lang="ts">
-  import { createEventDispatcher, getContext } from 'svelte';
-  import type { ThemeContext } from '../theme.js';
+  import { createEventDispatcher } from 'svelte';
+  import { Button } from "$lib/components/ui/button";
+  import { Card, CardContent } from "$lib/components/ui/card";
+  import { cn } from "$lib/utils.js";
   
-  // Props with defaults
-  export let variant: 'primary' | 'secondary' = 'primary';
-  export let size: 'small' | 'medium' | 'large' = 'medium';
-  export let disabled: boolean = false;
-  export let loading: boolean = false;
-  export let className: string = '';
+  // NodeSpace-specific props
+  export let nodeId: string = '';
+  export let title: string = '';
+  export let content: string = '';
+  export let hasChildren: boolean = false;
+  export let compact: boolean = false;
   
-  // Internal state
-  let isActive = false;
-  
-  // Theme context
-  const themeContext = getContext<ThemeContext>('theme');
-  
-  // Event dispatcher
+  // Event dispatcher for node interactions
   const dispatch = createEventDispatcher<{
-    click: { event: MouseEvent };
-    focus: { event: FocusEvent };
-    blur: { event: FocusEvent };
+    edit: { nodeId: string };
+    expand: { nodeId: string };
+    aiAssist: { nodeId: string; content: string };
   }>();
   
-  // Event handlers
-  function handleClick(event: MouseEvent) {
-    if (disabled || loading) return;
-    dispatch('click', { event });
-  }
-  
-  // CSS classes
-  $: componentClasses = [
-    'ns-component',
-    `ns-component--${variant}`,
-    `ns-component--${size}`,
-    disabled && 'ns-component--disabled',
-    loading && 'ns-component--loading',
-    className
-  ].filter(Boolean).join(' ');
+  // Use shadcn-svelte styling with custom logic
+  $: containerClasses = cn(
+    "text-node transition-all duration-200",
+    compact && "text-node--compact",
+    hasChildren && "text-node--parent"
+  );
 </script>
 
-<button
-  class={componentClasses}
-  type="button"
-  {disabled}
-  aria-disabled={disabled}
-  on:click={handleClick}
-  on:focus={(e) => dispatch('focus', { event: e })}
-  on:blur={(e) => dispatch('blur', { event: e })}
->
-  <slot />
-</button>
+<!-- Build on shadcn-svelte Card foundation -->
+<Card class={containerClasses}>
+  <CardContent class="p-4">
+    <div class="flex items-start gap-3">
+      <!-- Custom circle indicator for NodeSpace hierarchy -->
+      <div class="circle-indicator {hasChildren ? 'has-children' : 'childless'}"></div>
+      
+      <div class="flex-1">
+        <h3 class="font-semibold text-foreground">{title}</h3>
+        <p class="text-muted-foreground mt-1">{content}</p>
+      </div>
+      
+      <!-- Use shadcn-svelte Button for actions -->
+      <Button 
+        variant="ghost" 
+        size="sm" 
+        onclick={() => dispatch('aiAssist', { nodeId, content })}
+      >
+        AI Assist
+      </Button>
+    </div>
+  </CardContent>
+</Card>
 
 <style>
-  .ns-component {
-    /* Base component styles using design tokens */
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--ns-spacing-2);
-    padding: var(--ns-spacing-3) var(--ns-spacing-4);
-    font-family: var(--ns-font-family-ui);
-    font-size: var(--ns-font-size-sm);
-    font-weight: var(--ns-font-weight-medium);
-    line-height: var(--ns-line-height-tight);
-    border: 1px solid var(--ns-color-border-default);
-    border-radius: var(--ns-radius-base);
-    background-color: var(--ns-color-surface-background);
-    color: var(--ns-color-text-primary);
-    cursor: pointer;
-    transition: all var(--ns-duration-fast) var(--ns-easing-easeInOut);
-    outline: none;
+  /* Custom styles for NodeSpace-specific features */
+  .circle-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 6px;
   }
   
-  .ns-component:hover:not(.ns-component--disabled) {
-    border-color: var(--ns-color-border-strong);
-    background-color: var(--ns-color-surface-panel);
+  .circle-indicator.childless {
+    background-color: hsl(var(--muted-foreground));
   }
   
-  .ns-component:focus-visible {
-    outline: 2px solid var(--ns-color-primary-500);
-    outline-offset: 2px;
+  .circle-indicator.has-children {
+    background-color: hsl(var(--primary));
+    box-shadow: 0 0 8px hsl(var(--primary) / 0.3);
   }
   
-  .ns-component--disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-  
-  .ns-component--loading {
-    pointer-events: none;
+  .text-node--compact {
+    /* Custom compact styling using shadcn variables */
   }
 </style>
 ```

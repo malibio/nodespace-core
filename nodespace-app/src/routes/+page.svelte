@@ -7,6 +7,11 @@
   import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
   import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
+  
+  // Import shadcn-svelte components
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
 
   let appName = $state('NodeSpace');
   let appVersion = $state('0.1.0');
@@ -61,12 +66,12 @@
       <h1>{appName}</h1>
       <div class="app-info">
         <span class="version">v{appVersion}</span>
-        <button class="ns-button" onclick={toggleTheme} title="Toggle theme ({$themePreference})">
+        <Button variant="outline" size="sm" onclick={toggleTheme} title="Toggle theme ({$themePreference})">
           {getThemeIcon($themePreference)}
-        </button>
-        <button class="ns-button ns-button--primary" onclick={testConnection}
-          >Test Connection</button
-        >
+        </Button>
+        <Button variant="default" size="sm" onclick={testConnection}>
+          Test Connection
+        </Button>
       </div>
     </header>
 
@@ -130,6 +135,34 @@
         <div class="ns-panel node-viewer">
           <h3>NodeViewer</h3>
           <p>Main content editing and viewing area with hierarchical display patterns</p>
+
+          <!-- shadcn-svelte Components Showcase -->
+          <Card class="showcase-card">
+            <CardHeader>
+              <CardTitle>shadcn-svelte Components</CardTitle>
+              <CardDescription>
+                Professional UI components using your NodeSpace color scheme
+              </CardDescription>
+            </CardHeader>
+            <CardContent class="component-showcase">
+              <div class="showcase-section">
+                <h4>Buttons</h4>
+                <div class="showcase-row">
+                  <Button variant="default">Primary</Button>
+                  <Button variant="secondary">Secondary</Button>
+                  <Button variant="outline">Outline</Button>
+                  <Button variant="ghost">Ghost</Button>
+                </div>
+              </div>
+              <div class="showcase-section">
+                <h4>Form Controls</h4>
+                <div class="showcase-row">
+                  <Input placeholder="Enter text..." />
+                  <Button variant="default">Submit</Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <!-- TextNode Demo for Testing Refactored Component -->
           <TextNodeDemo />
@@ -201,8 +234,8 @@
               compact={true}
             />
             <div class="chat-input-area">
-              <input class="ns-input" type="text" placeholder="Ask AI anything..." disabled />
-              <button class="ns-button" disabled>Send</button>
+              <Input type="text" placeholder="Ask AI anything..." disabled />
+              <Button variant="default" size="sm" disabled>Send</Button>
             </div>
           </div>
         </div>
@@ -391,6 +424,31 @@
   .theme-indicator {
     color: var(--ns-color-text-tertiary, #666666);
     font-family: var(--ns-font-family-mono, 'SF Mono', Monaco, monospace);
+  }
+
+  /* Showcase styles */
+  :global(.showcase-card) {
+    margin: var(--ns-spacing-4, 1rem) 0;
+  }
+
+  :global(.component-showcase) {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ns-spacing-4, 1rem);
+  }
+
+  .showcase-section h4 {
+    margin: 0 0 var(--ns-spacing-2, 0.5rem) 0;
+    font-size: var(--ns-font-size-sm, 0.875rem);
+    font-weight: var(--ns-font-weight-medium, 500);
+    color: var(--ns-color-text-secondary, #333333);
+  }
+
+  .showcase-row {
+    display: flex;
+    gap: var(--ns-spacing-2, 0.5rem);
+    align-items: center;
+    flex-wrap: wrap;
   }
 
   /* Responsive adjustments */

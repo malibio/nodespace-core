@@ -33,7 +33,7 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import Icon, { type IconName } from '../icons/index.js';
+  import { type IconName } from '../icons/index.js';
 
   // Props
   export let nodeType: NodeType = 'text';
@@ -88,7 +88,8 @@
   }
 
   // Icon selection logic - nodeIcon prop overrides default
-  $: selectedIcon = nodeIcon || getNodeTypeIcon(nodeType);
+  // TODO: Use this when Icon component is integrated
+  // $: selectedIcon = nodeIcon || getNodeTypeIcon(nodeType);
   // Get node type label
   function getNodeTypeLabel(type: NodeType): string {
     switch (type) {
