@@ -1,10 +1,20 @@
 # NodeSpace Development Process
 
-Guide for dependency-free development with vertical slicing and self-contained feature implementation. This process enables parallel development for all engineers.
+**Universal guide for ALL development team members**: AI agents, human engineers, and architects. This process enables dependency-free development with vertical slicing and self-contained feature implementation for parallel development.
+
+> ## 🤖👨‍💻 **UNIVERSAL PROCESS NOTICE**
+> 
+> **This process applies EQUALLY to:**
+> - ✅ **AI Agents** (Claude, GPT, custom agents)
+> - ✅ **Human Engineers** (frontend, backend, full-stack)
+> - ✅ **Human Architects** (senior, principal, staff)
+> - ✅ **Human Reviewers** (tech leads, peer reviewers)
+> 
+> **NO EXCEPTIONS**: All quality gates, requirements, and procedures are identical for AI agents and human team members. This ensures consistent quality and process adherence regardless of who (or what) implements or reviews code.
 
 ## ⚠️ MANDATORY STARTUP SEQUENCE ⚠️
 
-**EVERY ENGINEER MUST COMPLETE BEFORE ANY IMPLEMENTATION:**
+**EVERY TEAM MEMBER (AI AGENTS & HUMANS) MUST COMPLETE BEFORE ANY IMPLEMENTATION:**
 - [ ] Create feature branch: `feature/issue-<number>-brief-description`
 - [ ] Assign issue to self: `gh issue edit <number> --add-assignee "@me"`
 - [ ] Update project status: Todo → In Progress (CLI or web interface)
@@ -424,7 +434,7 @@ export const dataStore = getContext<DataStore>('dataStore');
 
 ### Mandatory Process Steps
 
-**CRITICAL: All engineers MUST follow these steps:**
+**CRITICAL: All team members (AI agents & humans) MUST follow these steps:**
 
 **Status Updates (MANDATORY):**
 ```bash
@@ -516,10 +526,11 @@ bun run quality:fix
 - [ ] **TypeScript**: ZERO compilation errors, strict type checking passed
 - [ ] **Svelte Check**: ZERO component errors or accessibility violations
 
-**❌ PROCESS VIOLATION CONSEQUENCES:**
-- Creating PR with linting errors = immediate process violation
-- Merging PR with linting errors = critical process failure
-- Both engineer and reviewer are responsible for verification
+**❌ PROCESS VIOLATION CONSEQUENCES (APPLIES TO ALL TEAM MEMBERS):**
+- Creating PR with linting errors = immediate process violation (AI agents & humans)
+- Merging PR with linting errors = critical process failure (AI agents & human reviewers)
+- Both implementer and reviewer are responsible for verification regardless of human/AI status
+- **NO EXCEPTIONS**: AI agents and human team members follow identical quality standards
 
 **PR Review and Merge (MANDATORY WITH EXPLICIT VERIFICATION):**
 1. **🚨 FIRST - Verify Code Quality Gates (BLOCKING)**: Run `bun run quality:fix` and confirm ZERO errors
@@ -531,11 +542,12 @@ bun run quality:fix
 
 ### Code Review Guidelines
 
-**🚨 MANDATORY FIRST STEP - Linting Verification:**
+**🚨 MANDATORY FIRST STEP - Linting Verification (ALL REVIEWERS: AI AGENTS & HUMANS):**
 - [ ] **Reviewer MUST run**: `bun run quality:fix` before any other review steps
 - [ ] **Zero errors confirmed**: ESLint, Prettier, TypeScript, Svelte Check all pass
 - [ ] **Automatic rejection**: If any linting errors found, reject PR immediately with specific error list
-- [ ] **Engineer accountability**: Failed linting = process violation, require acknowledgment
+- [ ] **Implementer accountability**: Failed linting = process violation, require acknowledgment (AI agents & humans)
+- [ ] **Universal standards**: Same quality requirements for all team members regardless of human/AI status
 
 **CRITICAL: Issue Requirements Review (SECOND PRIORITY):**
 - [ ] **All acceptance criteria met**: Each checkbox in the original issue is verified and completed
