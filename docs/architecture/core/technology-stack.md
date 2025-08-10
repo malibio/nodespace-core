@@ -84,19 +84,56 @@ tracing-subscriber = "0.3"
 - **CSS-in-JS**: Scoped styling with dynamic theme support
 - **TypeScript Integration**: Type-safe frontend development
 
-**UI Libraries:**
+**UI Libraries & Design System:**
 ```json
 {
   "dependencies": {
-    "svelte": "^4.2.0",
-    "@sveltejs/kit": "^2.0.0",
-    "typescript": "^5.4.0",
+    "svelte": "^5.0.0",
+    "@sveltejs/kit": "^2.9.0", 
+    "typescript": "~5.6.2",
     "@types/node": "^20.14.0",
-    "vite": "^5.3.0",
-    "tailwindcss": "^3.4.0",
-    "lucide-svelte": "^0.400.0"
+    "vite": "^6.0.3",
+    "tailwindcss": "^4.1.11",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.3.1",
+    "tailwind-variants": "^1.0.0"
   }
 }
+```
+
+**Design System: shadcn-svelte Integration**
+- **shadcn-svelte**: Professional UI component library with copy-paste approach
+- **Unified Color System**: Single source of truth using shadcn-svelte variables
+- **Hybrid Architecture**: Industry-standard components + custom NodeSpace components
+- **Full Customization**: Components copied into codebase for complete control
+
+**Color System Architecture:**
+```css
+/* NodeSpace Professional Theme (mapped to shadcn-svelte variables) */
+:root {
+  --primary: 210 100% 40%;              /* NodeSpace Blue #007acc */
+  --background: 0 0% 100%;              /* Clean white backgrounds */
+  --foreground: 220 13% 10%;            /* Dark text #1a1a1a */
+  --muted: 210 40% 98%;                 /* Light gray panels */
+  --border: 214 32% 91%;                /* Subtle borders #e1e5e9 */
+  --radius: 0.5rem;                     /* Consistent border radius */
+}
+
+.dark {
+  --primary: 210 100% 50%;              /* Brighter blue for dark mode */
+  --background: 224 71% 4%;             /* Dark blue-gray background */
+  --foreground: 213 31% 91%;            /* Light text for readability */
+  /* ... additional dark mode mappings */
+}
+```
+
+**Component Hierarchy:**
+```
+Tier 1: shadcn-svelte Foundation (Button, Input, Card, Dialog, etc.)
+  ↓ Professional, accessible, industry-standard patterns
+  
+Tier 2: NodeSpace Domain Components (BaseNode, TextNode, etc.)
+  ↓ Built on Tier 1 foundation, adds AI and knowledge management features
 ```
 
 ## AI Integration Stack
