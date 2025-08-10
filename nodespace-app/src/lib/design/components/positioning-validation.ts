@@ -65,7 +65,7 @@ const findCharacterFromClick = (
   const relativeX = clickX - textareaRect.left;
   const relativeY = clickY - textareaRect.top;
 
-  let bestMatch = { index: 0, distance: Infinity, accuracy: 'approximate' };
+  let bestMatch: PositionResult = { index: 0, distance: Infinity, accuracy: 'approximate' };
 
   const allSpans = mockElement.querySelectorAll('[data-position]');
 
@@ -93,7 +93,7 @@ const findCharacterFromClick = (
       bestMatch = {
         index: position,
         distance,
-        accuracy: distance < 5 ? 'exact' : 'approximate'
+        accuracy: distance < 5 ? 'precise' : 'approximate'
       };
     }
   }
@@ -286,7 +286,7 @@ browserSims.forEach((browser) => {
 
   // Mock with browser-specific variations
   const mockWithVariation = {
-    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 200, height: 20 }),
     querySelectorAll: (selector: string) => {
       if (selector === '[data-position]') {
         return Array.from(testContent).map((char, idx) => ({

@@ -168,8 +168,8 @@
   }
 
   // Handle textarea input
-  function handleInput(event: { target: HTMLTextAreaElement }) {
-    const target = event.target as HTMLTextAreaElement;
+  function handleInput(event: Event & { currentTarget: HTMLTextAreaElement }) {
+    const target = event.currentTarget;
 
     // For single-line, replace newlines with spaces
     if (!multiline) {
@@ -314,13 +314,13 @@
           {#if textareaElement}
             <MockTextElement
               bind:this={mockElementRef}
-              {content}
+              content={content}
               fontFamily={getComputedStyle(textareaElement).fontFamily}
               fontSize={getComputedStyle(textareaElement).fontSize}
               fontWeight={getComputedStyle(textareaElement).fontWeight}
               lineHeight={getComputedStyle(textareaElement).lineHeight}
               width={textareaElement.offsetWidth}
-              {multiline}
+              multiline={multiline}
             />
           {/if}
         {:else}
