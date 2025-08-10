@@ -492,35 +492,52 @@ gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id 
 - **Rationale**: Bun provides faster package installation, script execution, and better TypeScript support
 - **Violation**: Using `npm` instead of `bun` is a process violation that can cause dependency and build issues
 
-**Code Quality Gates (MANDATORY):**
+**Code Quality Gates (MANDATORY - BLOCKING):**
 ```bash
-# Before creating PR, ALL code must pass:
-cd nodespace-app && bun run quality:fix
+# CRITICAL: Before creating PR, ALL code must pass:
+bun run quality:fix
 
 # This runs:
 # 1. ESLint with auto-fix
 # 2. Prettier formatting  
 # 3. TypeScript compilation check
 # 4. Svelte component validation
+
+# VERIFICATION REQUIRED: Must show zero errors like this:
+# ✅ ESLint: 0 errors, warnings acceptable
+# ✅ Prettier: All files formatted
+# ✅ TypeScript: No compilation errors
+# ✅ Svelte Check: No component errors
 ```
 
-**Quality Requirements:**
-- [ ] **ESLint**: No errors, warnings acceptable in development
+**🚨 BLOCKING Quality Requirements (CANNOT CREATE PR WITHOUT):**
+- [ ] **ESLint**: ZERO errors (warnings acceptable in development)
 - [ ] **Prettier**: Code consistently formatted
-- [ ] **TypeScript**: No compilation errors, strict type checking
-- [ ] **Svelte Check**: No component errors or accessibility violations
+- [ ] **TypeScript**: ZERO compilation errors, strict type checking passed
+- [ ] **Svelte Check**: ZERO component errors or accessibility violations
 
-**PR Review and Merge (MANDATORY):**
-1. **Run code quality checks** (use `bun run quality:fix`)
+**❌ PROCESS VIOLATION CONSEQUENCES:**
+- Creating PR with linting errors = immediate process violation
+- Merging PR with linting errors = critical process failure
+- Both engineer and reviewer are responsible for verification
+
+**PR Review and Merge (MANDATORY WITH EXPLICIT VERIFICATION):**
+1. **🚨 FIRST - Verify Code Quality Gates (BLOCKING)**: Run `bun run quality:fix` and confirm ZERO errors
 2. **Review against original issue requirements FIRST** - verify all acceptance criteria are met
 3. **Conduct comprehensive technical review** (use senior-architect-reviewer for complex changes)  
 4. **If review shows ready to merge**: Immediately approve and merge the PR
 5. **If review shows issues**: Request changes with specific feedback
-6. **No additional approval required** unless explicitly stated in issue
+6. **❌ AUTOMATIC REJECTION**: Any PR with linting/TypeScript errors must be rejected immediately
 
 ### Code Review Guidelines
 
-**CRITICAL: Issue Requirements Review (FIRST PRIORITY):**
+**🚨 MANDATORY FIRST STEP - Linting Verification:**
+- [ ] **Reviewer MUST run**: `bun run quality:fix` before any other review steps
+- [ ] **Zero errors confirmed**: ESLint, Prettier, TypeScript, Svelte Check all pass
+- [ ] **Automatic rejection**: If any linting errors found, reject PR immediately with specific error list
+- [ ] **Engineer accountability**: Failed linting = process violation, require acknowledgment
+
+**CRITICAL: Issue Requirements Review (SECOND PRIORITY):**
 - [ ] **All acceptance criteria met**: Each checkbox in the original issue is verified and completed
 - [ ] **Original requirements satisfied**: Implementation addresses the specific goals stated in the issue
 - [ ] **Scope alignment**: No feature creep - implementation stays within defined scope
