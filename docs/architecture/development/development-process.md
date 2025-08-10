@@ -118,7 +118,9 @@ Brief description of the complete feature being implemented.
 ### Stage 1: Core Architecture
 **Independent Work Packages:**
 - `[FEATURE] Complete Svelte component store system`
-- `[FEATURE] Complete node hierarchy rendering`
+- `[FEATURE] Complete node hierarchy rendering with visual connecting lines`
+- `[FEATURE] Complete multi-node selection system (single, range, multi-select, keyboard)`
+- `[FEATURE] Complete hybrid text rendering with precise cursor positioning`
 - `[FEATURE] Complete basic routing and navigation`
 - `[FEATURE] Complete Tauri integration layer`
 
