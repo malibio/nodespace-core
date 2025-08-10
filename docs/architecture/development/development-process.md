@@ -536,6 +536,21 @@ bun run test
 # ✅ Integration: Key workflows work
 ```
 
+**🚨 LINTING POLICY - UNIVERSAL FOR ALL TEAM MEMBERS (AI AGENTS & HUMANS):**
+
+**ZERO TOLERANCE POLICY:**
+- [ ] **NO lint suppression allowed anywhere in codebase** - Fix issues properly, don't suppress warnings
+- [ ] **NO EXCEPTIONS** - All lint warnings and errors must be fixed with proper solutions
+- [ ] **Use proper TypeScript types** instead of `any` - Type your code correctly
+- [ ] **Follow Svelte best practices** - Avoid unsafe patterns like `{@html}` 
+- [ ] **Implement safe alternatives** - Create proper components instead of bypassing safety features
+
+**APPROVED SOLUTIONS FOR COMMON ISSUES:**
+- [ ] **Markdown rendering**: Use structured parsing components (MarkdownRenderer) instead of `{@html}`
+- [ ] **Type safety**: Create proper interfaces instead of using `any`
+- [ ] **DOM APIs**: Add proper type definitions to ESLint globals instead of suppressing warnings
+- [ ] **Mock objects**: Type mock functions properly with correct interfaces
+
 **🚨 BLOCKING Quality Requirements (CANNOT CREATE PR WITHOUT):**
 - [ ] **ESLint**: ZERO errors (warnings acceptable in development)
 - [ ] **Prettier**: Code consistently formatted
