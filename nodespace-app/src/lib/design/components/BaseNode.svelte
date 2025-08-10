@@ -307,7 +307,7 @@
             on:keydown={handleKeyDown}
             on:keydown|stopPropagation
             {placeholder}
-            rows={multiline ? '1' : '1'}
+            rows={1}
           ></textarea>
 
           <!-- Mock element for precise cursor positioning -->
