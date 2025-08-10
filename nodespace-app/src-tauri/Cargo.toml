@@ -22,3 +22,11 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+mockall = { workspace = true }
+tempfile = { workspace = true }
+criterion = { workspace = true }
+
