@@ -157,7 +157,7 @@ function initializeTheme() {
   const themeToggle = document.querySelector('.theme-toggle');
   if (themeToggle) {
     themeToggle.innerHTML = `
-      <span style="font-size: 0.875rem; color: var(--ns-color-text-secondary, #666);">Theme:</span>
+      <span style="font-size: 0.875rem; color: hsl(var(--muted-foreground, 215 16% 47%));">Theme:</span>
       <button data-theme="light" title="Light theme">☀️</button>
       <button data-theme="dark" title="Dark theme">🌙</button>
       <button data-theme="system" title="System theme">🖥️</button>
@@ -198,15 +198,10 @@ function setTheme(theme) {
 // Apply theme
 function applyTheme(theme) {
   const resolvedTheme = resolveTheme(theme);
-  const tokens = designTokens[resolvedTheme];
   
-  // Set data-theme attribute
-  document.documentElement.setAttribute('data-theme', resolvedTheme);
-  document.body.className = `theme-${resolvedTheme}`;
-  
-  // Generate and inject CSS custom properties
-  const cssProperties = generateCSSProperties(tokens);
-  updateCSSProperties(cssProperties);
+  // Set theme class on document element for CSS to handle
+  document.documentElement.className = resolvedTheme === 'dark' ? 'dark' : '';
+  document.body.setAttribute('data-theme', resolvedTheme);
   
   // Update all examples
   updateAllExamples();
@@ -228,51 +223,8 @@ function updateThemeToggle() {
   });
 }
 
-// Generate CSS properties from tokens
-function generateCSSProperties(tokens) {
-  const properties = {};
-  
-  // Color properties
-  Object.entries(tokens.color.primary).forEach(([key, value]) => {
-    properties[`--ns-color-primary-${key}`] = value;
-  });
-  
-  Object.entries(tokens.color.surface).forEach(([key, value]) => {
-    properties[`--ns-color-surface-${key}`] = value;
-  });
-  
-  Object.entries(tokens.color.text).forEach(([key, value]) => {
-    properties[`--ns-color-text-${key}`] = value;
-  });
-  
-  Object.entries(tokens.color.border).forEach(([key, value]) => {
-    properties[`--ns-color-border-${key}`] = value;
-  });
-  
-  // Typography properties
-  Object.entries(tokens.typography.fontFamily).forEach(([key, value]) => {
-    properties[`--ns-font-family-${key}`] = value;
-  });
-  
-  Object.entries(tokens.typography.fontSize).forEach(([key, value]) => {
-    properties[`--ns-font-size-${key}`] = value;
-  });
-  
-  // Spacing properties
-  Object.entries(tokens.spacing).forEach(([key, value]) => {
-    properties[`--ns-spacing-${key}`] = value;
-  });
-  
-  return properties;
-}
-
-// Update CSS custom properties in DOM
-function updateCSSProperties(properties) {
-  const root = document.documentElement;
-  Object.entries(properties).forEach(([property, value]) => {
-    root.style.setProperty(property, value);
-  });
-}
+// Note: CSS properties are now handled by shadcn-variables.css
+// The actual shadcn-svelte variables are used directly
 
 // Initialize interactive features
 function initializeInteractiveFeatures() {
@@ -326,7 +278,7 @@ async function copyToClipboard(text) {
 function showCopyFeedback(button) {
   const originalText = button.textContent;
   button.textContent = 'Copied!';
-  button.style.backgroundColor = '#10b981';
+  button.style.backgroundColor = 'hsl(var(--node-text, 142 71% 45%))';
   button.style.color = 'white';
   
   setTimeout(() => {

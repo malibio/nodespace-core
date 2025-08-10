@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Colors - NodeSpace Design System</title>
   <meta name="description" content="Color system documentation for NodeSpace design system - palettes, usage guidelines, and accessibility compliance.">
+  <link rel="stylesheet" href="assets/shadcn-variables.css">
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎨</text></svg>">
 </head>
@@ -32,184 +33,137 @@
 
     <!-- Primary Color System -->
     <section class="example-section">
-      <h2>Primary Colors</h2>
-      <p>The primary blue palette forms the foundation of NodeSpace's visual identity. These colors maintain professional appearance across both light and dark themes.</p>
+      <h2>shadcn-svelte Color System</h2>
+      <p>NodeSpace uses the professional shadcn-svelte color system with HSL color space for maximum flexibility and consistency across light and dark themes.</p>
       
       <div class="color-grid">
-        <div class="color-swatch" data-color="primary-50">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-50, #eff6ff);">50</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--primary, 210 100% 40%)); color: hsl(var(--primary-foreground, 0 0% 100%)); padding: 1rem;">Primary</div>
           <div class="color-info">
-            <div class="color-name">Primary 50</div>
-            <div class="color-value">var(--ns-color-primary-50)</div>
-            <div class="color-usage">Lightest primary shade, backgrounds</div>
+            <div class="color-name">Primary</div>
+            <div class="color-value">hsl(var(--primary)) = #007acc</div>
+            <div class="color-usage">Main brand color, primary actions, buttons</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="primary-100">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-100, #dbeafe);">100</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--secondary, 210 40% 98%)); color: hsl(var(--secondary-foreground, 215 16% 47%)); padding: 1rem;">Secondary</div>
           <div class="color-info">
-            <div class="color-name">Primary 100</div>
-            <div class="color-value">var(--ns-color-primary-100)</div>
-            <div class="color-usage">Very light primary, subtle backgrounds</div>
+            <div class="color-name">Secondary</div>
+            <div class="color-value">hsl(var(--secondary)) = #f8f9fa</div>
+            <div class="color-usage">Secondary actions, subtle backgrounds</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="primary-200">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-200, #bfdbfe);">200</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--accent, 210 40% 98%)); color: hsl(var(--accent-foreground, 215 16% 47%)); padding: 1rem;">Accent</div>
           <div class="color-info">
-            <div class="color-name">Primary 200</div>
-            <div class="color-value">var(--ns-color-primary-200)</div>
-            <div class="color-usage">Light primary, focus rings, selection</div>
+            <div class="color-name">Accent</div>
+            <div class="color-value">hsl(var(--accent)) = #f8f9fa</div>
+            <div class="color-usage">Accent elements, highlights</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="primary-300">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-300, #93c5fd);">300</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--destructive, 0 84% 60%)); color: hsl(var(--destructive-foreground, 0 0% 100%)); padding: 1rem;">Destructive</div>
           <div class="color-info">
-            <div class="color-name">Primary 300</div>
-            <div class="color-value">var(--ns-color-primary-300)</div>
-            <div class="color-usage">Medium-light primary, disabled states</div>
+            <div class="color-name">Destructive</div>
+            <div class="color-value">hsl(var(--destructive))</div>
+            <div class="color-usage">Error states, delete actions</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="primary-400">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-400, #60a5fa);">400</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--muted, 210 40% 98%)); color: hsl(var(--muted-foreground, 215 16% 47%)); padding: 1rem;">Muted</div>
           <div class="color-info">
-            <div class="color-name">Primary 400</div>
-            <div class="color-value">var(--ns-color-primary-400)</div>
-            <div class="color-usage">Medium primary, secondary actions</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="primary-500">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-500, #007acc); color: white;">500</div>
-          <div class="color-info">
-            <div class="color-name">Primary 500 ⭐</div>
-            <div class="color-value">var(--ns-color-primary-500)</div>
-            <div class="color-usage">Main brand color, primary actions, links</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="primary-600">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-600, #0066b3); color: white;">600</div>
-          <div class="color-info">
-            <div class="color-name">Primary 600</div>
-            <div class="color-value">var(--ns-color-primary-600)</div>
-            <div class="color-usage">Hover states, active primary elements</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="primary-700">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-700, #005299); color: white;">700</div>
-          <div class="color-info">
-            <div class="color-name">Primary 700</div>
-            <div class="color-value">var(--ns-color-primary-700)</div>
-            <div class="color-usage">Active states, pressed buttons</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="primary-800">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-800, #003d80); color: white;">800</div>
-          <div class="color-info">
-            <div class="color-name">Primary 800</div>
-            <div class="color-value">var(--ns-color-primary-800)</div>
-            <div class="color-usage">Dark primary, high contrast text</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="primary-900">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-900, #002966); color: white;">900</div>
-          <div class="color-info">
-            <div class="color-name">Primary 900</div>
-            <div class="color-value">var(--ns-color-primary-900)</div>
-            <div class="color-usage">Darkest primary, emphasis text</div>
+            <div class="color-name">Muted</div>
+            <div class="color-value">hsl(var(--muted)) = #f8f9fa</div>
+            <div class="color-usage">Subtle backgrounds, less important content</div>
           </div>
         </div>
       </div>
       
       <div class="example-code">
-        <pre><code>/* Using primary colors in CSS */
+        <pre><code>/* Using shadcn-svelte colors in CSS */
 .primary-button {
-  background-color: var(--ns-color-primary-500);
-  color: white;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-radius: var(--radius);
 }
 
 .primary-button:hover {
-  background-color: var(--ns-color-primary-600);
+  /* shadcn-svelte uses opacity modifiers for hover states */
+  background-color: hsl(var(--primary) / 0.9);
 }
 
 .primary-button:focus {
-  outline: 2px solid var(--ns-color-primary-500);
+  outline: 2px solid hsl(var(--ring));
   outline-offset: 2px;
 }</code></pre>
       </div>
     </section>
 
-    <!-- Surface Colors -->
+    <!-- Background & Surface Colors -->
     <section class="example-section">
-      <h2>Surface Colors</h2>
-      <p>Surface colors define backgrounds and container elements. They automatically adapt between light and dark themes.</p>
+      <h2>Background & Surface Colors</h2>
+      <p>Background and surface colors provide the foundation for all interface elements. They automatically adapt between light and dark themes using shadcn-svelte variables.</p>
       
       <div class="color-grid">
-        <div class="color-swatch" data-color="surface-background">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-background, #ffffff); color: var(--ns-color-text-primary, #1a1a1a); border: 1px solid var(--ns-color-border-default, #e1e5e9);">Background</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); border: 1px solid hsl(var(--border, 214 32% 91%)); padding: 1rem;">Background</div>
           <div class="color-info">
             <div class="color-name">Background</div>
-            <div class="color-value">var(--ns-color-surface-background)</div>
+            <div class="color-value">hsl(var(--background)) = #ffffff</div>
             <div class="color-usage">Main application background</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="surface-elevated">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-elevated, #ffffff); color: var(--ns-color-text-primary, #1a1a1a); border: 1px solid var(--ns-color-border-default, #e1e5e9);">Elevated</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--card, 0 0% 100%)); color: hsl(var(--card-foreground, 220 13% 10%)); border: 1px solid hsl(var(--border, 214 32% 91%)); padding: 1rem;">Card</div>
           <div class="color-info">
-            <div class="color-name">Elevated</div>
-            <div class="color-value">var(--ns-color-surface-elevated)</div>
-            <div class="color-usage">Cards, modals, dropdowns</div>
+            <div class="color-name">Card</div>
+            <div class="color-value">hsl(var(--card)) = #ffffff</div>
+            <div class="color-usage">Cards, elevated surfaces, containers</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="surface-panel">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-panel, #f8f9fa); color: var(--ns-color-text-primary, #1a1a1a);">Panel</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--popover, 0 0% 100%)); color: hsl(var(--popover-foreground, 220 13% 10%)); border: 1px solid hsl(var(--border, 214 32% 91%)); padding: 1rem;">Popover</div>
           <div class="color-info">
-            <div class="color-name">Panel</div>
-            <div class="color-value">var(--ns-color-surface-panel)</div>
-            <div class="color-usage">Sidebars, panels, subtle backgrounds</div>
+            <div class="color-name">Popover</div>
+            <div class="color-value">hsl(var(--popover)) = #ffffff</div>
+            <div class="color-usage">Dropdowns, tooltips, modals</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="surface-input">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-input, #ffffff); color: var(--ns-color-text-primary, #1a1a1a); border: 1px solid var(--ns-color-border-default, #e1e5e9);">Input</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--muted, 210 40% 98%)); color: hsl(var(--muted-foreground, 215 16% 47%)); padding: 1rem;">Muted</div>
           <div class="color-info">
-            <div class="color-name">Input</div>
-            <div class="color-value">var(--ns-color-surface-input)</div>
-            <div class="color-usage">Form inputs, text areas</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="surface-overlay">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-overlay, rgba(0, 0, 0, 0.1)); color: var(--ns-color-text-primary, #1a1a1a);">Overlay</div>
-          <div class="color-info">
-            <div class="color-name">Overlay</div>
-            <div class="color-value">var(--ns-color-surface-overlay)</div>
-            <div class="color-usage">Modal backgrounds, loading states</div>
+            <div class="color-name">Muted</div>
+            <div class="color-value">hsl(var(--muted)) = #f8f9fa</div>
+            <div class="color-usage">Subtle backgrounds, disabled states</div>
           </div>
         </div>
       </div>
       
       <div class="example-code">
-        <pre><code>/* Surface color usage */
+        <pre><code>/* shadcn-svelte surface usage */
 .card {
-  background-color: var(--ns-color-surface-elevated);
-  border: 1px solid var(--ns-color-border-default);
+  background-color: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
 }
 
 .sidebar {
-  background-color: var(--ns-color-surface-panel);
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
 }
 
-.modal-backdrop {
-  background-color: var(--ns-color-surface-overlay);
+.popover {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
 }</code></pre>
       </div>
     </section>
@@ -247,30 +201,21 @@
           </div>
         </div>
         
-        <div class="color-swatch" data-color="text-disabled">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-background, #ffffff); color: var(--ns-color-text-disabled, #999999); padding: 1rem;">Disabled Text</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--primary, 210 100% 40%)); color: hsl(var(--primary-foreground, 0 0% 100%)); padding: 1rem;">Primary Foreground</div>
           <div class="color-info">
-            <div class="color-name">Disabled</div>
-            <div class="color-value">var(--ns-color-text-disabled)</div>
-            <div class="color-usage">Disabled form elements, inactive states</div>
+            <div class="color-name">Primary Foreground</div>
+            <div class="color-value">hsl(var(--primary-foreground)) = #ffffff</div>
+            <div class="color-usage">Text on primary backgrounds, button text</div>
           </div>
         </div>
         
-        <div class="color-swatch" data-color="text-placeholder">
-          <div class="color-preview" style="background-color: var(--ns-color-surface-background, #ffffff); color: var(--ns-color-text-placeholder, #9ca3af); padding: 1rem;">Placeholder Text</div>
+        <div class="color-swatch">
+          <div class="color-preview" style="background-color: hsl(var(--destructive, 0 84% 60%)); color: hsl(var(--destructive-foreground, 0 0% 100%)); padding: 1rem;">Destructive</div>
           <div class="color-info">
-            <div class="color-name">Placeholder</div>
-            <div class="color-value">var(--ns-color-text-placeholder)</div>
-            <div class="color-usage">Input placeholders, empty states</div>
-          </div>
-        </div>
-        
-        <div class="color-swatch" data-color="text-inverse">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-500, #007acc); color: var(--ns-color-text-inverse, #ffffff); padding: 1rem;">Inverse Text</div>
-          <div class="color-info">
-            <div class="color-name">Inverse</div>
-            <div class="color-value">var(--ns-color-text-inverse)</div>
-            <div class="color-usage">Text on dark backgrounds, buttons</div>
+            <div class="color-name">Destructive</div>
+            <div class="color-value">hsl(var(--destructive))</div>
+            <div class="color-usage">Error messages, delete buttons</div>
           </div>
         </div>
       </div>
@@ -278,51 +223,51 @@
 
     <!-- Node Type Colors -->
     <section class="example-section">
-      <h2>Node Type Colors</h2>
-      <p>Each node type has a distinctive accent color for quick visual identification while maintaining overall design harmony.</p>
+      <h2>NodeSpace Extension Colors</h2>
+      <p>NodeSpace extends shadcn-svelte with custom node-specific colors for quick visual identification while maintaining overall design harmony.</p>
       
       <div class="color-grid">
         <div class="color-swatch">
-          <div class="color-preview" style="background-color: #10b981; color: white;">📝</div>
+          <div class="color-preview" style="background-color: hsl(var(--node-text, 142 71% 45%)); color: white; padding: 1rem;">📝</div>
           <div class="color-info">
             <div class="color-name">Text Node</div>
-            <div class="color-value">#10b981</div>
+            <div class="color-value">hsl(var(--node-text)) = #10b981</div>
             <div class="color-usage">Green accent for text and markdown content</div>
           </div>
         </div>
         
         <div class="color-swatch">
-          <div class="color-preview" style="background-color: #f59e0b; color: white;">✅</div>
+          <div class="color-preview" style="background-color: hsl(var(--node-task, 25 95% 53%)); color: white; padding: 1rem;">✅</div>
           <div class="color-info">
             <div class="color-name">Task Node</div>
-            <div class="color-value">#f59e0b</div>
+            <div class="color-value">hsl(var(--node-task)) = #f59e0b</div>
             <div class="color-usage">Orange accent for tasks and todos</div>
           </div>
         </div>
         
         <div class="color-swatch">
-          <div class="color-preview" style="background-color: var(--ns-color-primary-500, #007acc); color: white;">🤖</div>
+          <div class="color-preview" style="background-color: hsl(var(--node-ai-chat, 221 83% 53%)); color: white; padding: 1rem;">🤖</div>
           <div class="color-info">
             <div class="color-name">AI Chat Node</div>
-            <div class="color-value">var(--ns-color-primary-500)</div>
-            <div class="color-usage">Primary blue for AI conversations</div>
+            <div class="color-value">hsl(var(--node-ai-chat)) = #3b82f6</div>
+            <div class="color-usage">Blue accent for AI conversations</div>
           </div>
         </div>
         
         <div class="color-swatch">
-          <div class="color-preview" style="background-color: #8b5cf6; color: white;">📊</div>
+          <div class="color-preview" style="background-color: hsl(var(--node-entity, 271 81% 56%)); color: white; padding: 1rem;">📊</div>
           <div class="color-info">
             <div class="color-name">Entity Node</div>
-            <div class="color-value">#8b5cf6</div>
+            <div class="color-value">hsl(var(--node-entity)) = #8b5cf6</div>
             <div class="color-usage">Purple accent for structured data</div>
           </div>
         </div>
         
         <div class="color-swatch">
-          <div class="color-preview" style="background-color: #ec4899; color: white;">🔍</div>
+          <div class="color-preview" style="background-color: hsl(var(--node-query, 330 81% 60%)); color: white; padding: 1rem;">🔍</div>
           <div class="color-info">
             <div class="color-name">Query Node</div>
-            <div class="color-value">#ec4899</div>
+            <div class="color-value">hsl(var(--node-query)) = #ec4899</div>
             <div class="color-usage">Pink accent for queries and filters</div>
           </div>
         </div>
@@ -333,49 +278,72 @@
         <div style="display: flex; flex-direction: column; gap: 1rem; max-width: 400px;">
           <!-- Text Node -->
           <div style="
-            background-color: var(--ns-color-surface-background, #ffffff);
-            border: 1px solid var(--ns-color-border-default, #e1e5e9);
-            border-left: 4px solid #10b981;
-            border-radius: 0.5rem;
+            background-color: hsl(var(--card, 0 0% 100%));
+            border: 1px solid hsl(var(--border, 214 32% 91%));
+            border-left: 4px solid hsl(var(--node-text, 142 71% 45%));
+            border-radius: var(--radius, 0.5rem);
             padding: 1rem;
           ">
             <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
               <span>📝</span>
-              <strong>Text Node</strong>
+              <strong style="color: hsl(var(--card-foreground, 220 13% 10%));">Text Node</strong>
             </div>
-            <p style="margin: 0; font-size: 0.875rem; color: var(--ns-color-text-secondary);">Green accent for text content</p>
+            <p style="margin: 0; font-size: 0.875rem; color: hsl(var(--muted-foreground, 215 16% 47%));">Green accent for text content</p>
           </div>
           
           <!-- Task Node -->
           <div style="
-            background-color: var(--ns-color-surface-background, #ffffff);
-            border: 1px solid var(--ns-color-border-default, #e1e5e9);
-            border-left: 4px solid #f59e0b;
-            border-radius: 0.5rem;
+            background-color: hsl(var(--card, 0 0% 100%));
+            border: 1px solid hsl(var(--border, 214 32% 91%));
+            border-left: 4px solid hsl(var(--node-task, 25 95% 53%));
+            border-radius: var(--radius, 0.5rem);
             padding: 1rem;
           ">
             <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
               <span>✅</span>
-              <strong>Task Node</strong>
+              <strong style="color: hsl(var(--card-foreground, 220 13% 10%));">Task Node</strong>
             </div>
-            <p style="margin: 0; font-size: 0.875rem; color: var(--ns-color-text-secondary);">Orange accent for tasks and todos</p>
+            <p style="margin: 0; font-size: 0.875rem; color: hsl(var(--muted-foreground, 215 16% 47%));">Orange accent for tasks and todos</p>
           </div>
           
           <!-- AI Chat Node -->
           <div style="
-            background-color: var(--ns-color-surface-background, #ffffff);
-            border: 1px solid var(--ns-color-border-default, #e1e5e9);
-            border-left: 4px solid var(--ns-color-primary-500, #007acc);
-            border-radius: 0.5rem;
+            background-color: hsl(var(--card, 0 0% 100%));
+            border: 1px solid hsl(var(--border, 214 32% 91%));
+            border-left: 4px solid hsl(var(--node-ai-chat, 221 83% 53%));
+            border-radius: var(--radius, 0.5rem);
             padding: 1rem;
           ">
             <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
               <span>🤖</span>
-              <strong>AI Chat Node</strong>
+              <strong style="color: hsl(var(--card-foreground, 220 13% 10%));">AI Chat Node</strong>
             </div>
-            <p style="margin: 0; font-size: 0.875rem; color: var(--ns-color-text-secondary);">Primary blue for AI conversations</p>
+            <p style="margin: 0; font-size: 0.875rem; color: hsl(var(--muted-foreground, 215 16% 47%));">Blue accent for AI conversations</p>
           </div>
         </div>
+      </div>
+      
+      <div class="example-code">
+        <pre><code>/* NodeSpace extension colors usage */
+.text-node {
+  border-left: 4px solid hsl(var(--node-text));
+}
+
+.task-node {
+  border-left: 4px solid hsl(var(--node-task));
+}
+
+.ai-chat-node {
+  border-left: 4px solid hsl(var(--node-ai-chat));
+}
+
+.entity-node {
+  border-left: 4px solid hsl(var(--node-entity));
+}
+
+.query-node {
+  border-left: 4px solid hsl(var(--node-query));
+}</code></pre>
       </div>
     </section>
 
@@ -388,9 +356,9 @@
         <div class="component-example">
           <div class="component-title">✅ Text Contrast</div>
           <div class="component-demo">
-            <div style="padding: 1rem; background: var(--ns-color-surface-background); color: var(--ns-color-text-primary); border: 1px solid var(--ns-color-border-default);">
+            <div style="padding: 1rem; background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: var(--radius, 0.5rem);">
               <p><strong>Primary text</strong> on background: 4.5:1+ contrast ratio</p>
-              <p style="color: var(--ns-color-text-secondary);"><strong>Secondary text</strong> on background: 4.5:1+ contrast ratio</p>
+              <p style="color: hsl(var(--muted-foreground, 215 16% 47%));"><strong>Muted text</strong> on background: 4.5:1+ contrast ratio</p>
             </div>
           </div>
         </div>
@@ -400,23 +368,25 @@
           <div class="component-demo">
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
               <button style="
-                background: var(--ns-color-primary-500);
-                color: white;
+                background: hsl(var(--primary, 210 100% 40%));
+                color: hsl(var(--primary-foreground, 0 0% 100%));
                 border: none;
                 padding: 0.5rem 1rem;
-                border-radius: 0.25rem;
+                border-radius: var(--radius, 0.5rem);
                 cursor: pointer;
+                font-weight: 500;
               ">Primary Button</button>
               <button style="
-                background: var(--ns-color-surface-background);
-                color: var(--ns-color-text-primary);
-                border: 1px solid var(--ns-color-border-default);
+                background: hsl(var(--secondary, 210 40% 98%));
+                color: hsl(var(--secondary-foreground, 215 16% 47%));
+                border: 1px solid hsl(var(--border, 214 32% 91%));
                 padding: 0.5rem 1rem;
-                border-radius: 0.25rem;
+                border-radius: var(--radius, 0.5rem);
                 cursor: pointer;
+                font-weight: 500;
               ">Secondary Button</button>
             </div>
-            <p style="font-size: 0.875rem; color: var(--ns-color-text-tertiary); margin-top: 0.5rem;">All interactive elements meet 3:1 contrast minimum</p>
+            <p style="font-size: 0.875rem; color: hsl(var(--muted-foreground, 215 16% 47%)); margin-top: 0.5rem;">All interactive elements meet 3:1 contrast minimum</p>
           </div>
         </div>
       </div>
@@ -474,14 +444,22 @@
       
       <h3>Code Examples</h3>
       <div class="example-code">
-        <pre><code>/* Preferred: Semantic color usage */
+        <pre><code>/* Preferred: shadcn-svelte semantic color usage */
 .notification {
-  background-color: var(--ns-color-surface-elevated);
-  border-left: 4px solid var(--ns-color-primary-500);
-  color: var(--ns-color-text-primary);
+  background-color: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  border: 1px solid hsl(var(--border));
+  border-left: 4px solid hsl(var(--primary));
+  border-radius: var(--radius);
 }
 
-/* Avoid: Hard-coded hex values */
+/* NodeSpace extension colors */
+.text-node {
+  background-color: hsl(var(--card));
+  border-left: 4px solid hsl(var(--node-text));
+}
+
+/* Avoid: Hard-coded values that won't theme */
 .notification {
   background-color: #ffffff;  /* ❌ Won't adapt to dark theme */
   border-left: 4px solid #007acc;  /* ❌ Hard-coded */
@@ -491,8 +469,8 @@
     </section>
 
     <!-- Footer -->
-    <footer style="margin-top: 4rem; padding-top: 2rem; border-top: 1px solid var(--ns-color-border-default, #e1e5e9); text-align: center; color: var(--ns-color-text-secondary, #666666);">
-      <p><a href="index.html">← Back to Overview</a> | <a href="typography.html">Typography →</a></p>
+    <footer style="margin-top: 4rem; padding-top: 2rem; border-top: 1px solid hsl(var(--border, 214 32% 91%)); text-align: center; color: hsl(var(--muted-foreground, 215 16% 47%));">
+      <p><a href="index.html" style="color: hsl(var(--primary, 210 100% 40%)); text-decoration: none;">← Back to Overview</a> | <a href="typography.html" style="color: hsl(var(--primary, 210 100% 40%)); text-decoration: none;">Typography →</a></p>
     </footer>
   </div>
 
