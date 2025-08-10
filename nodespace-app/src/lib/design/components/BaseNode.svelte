@@ -38,7 +38,7 @@
   // Edit state
   let focused = false;
   let textareaElement: HTMLTextAreaElement;
-  let mockElementRef: MockTextElement;
+  let mockElementRef: any;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -312,15 +312,16 @@
 
           <!-- Mock element for precise cursor positioning -->
           {#if textareaElement}
+            <!-- @ts-expect-error: Svelte component binding inference issue -->
             <MockTextElement
               bind:this={mockElementRef}
-              content={content}
+              {content}
               fontFamily={getComputedStyle(textareaElement).fontFamily}
               fontSize={getComputedStyle(textareaElement).fontSize}
               fontWeight={getComputedStyle(textareaElement).fontWeight}
               lineHeight={getComputedStyle(textareaElement).lineHeight}
               width={textareaElement.offsetWidth}
-              multiline={multiline}
+              {multiline}
             />
           {/if}
         {:else}

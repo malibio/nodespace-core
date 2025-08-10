@@ -276,11 +276,9 @@ describe('TextNode Component', () => {
         dispatchedContent = event.detail;
       };
       
-      const { getByTestId, component } = render(TextNodeComponent, {
+      const { getByTestId } = render(TextNodeComponent, {
         props: { nodeId: node.id, content: node.content, editable: true }
       });
-      
-      component.$on('save', handleSave);
 
       await fireEvent.click(getByTestId('text-display'));
       const editor = getByTestId('text-editor');
