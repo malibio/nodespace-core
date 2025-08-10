@@ -426,18 +426,24 @@ export const dataStore = getContext<DataStore>('dataStore');
 
 **Status Updates (MANDATORY):**
 ```bash
+# First, get the project item ID for your issue:
+ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Issue.*<issue-title>.*<number>" | awk '{print $NF}')
+
 # When starting work on an issue:
 git checkout -b feature/issue-<number>-brief-description
 gh issue edit <number> --add-assignee "@me"
-gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 
 # When blocked:
 gh issue comment <number> --body "Blocked: [explanation]"
-gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id db18cb7f
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id db18cb7f
 
 # When creating PR:
 gh pr create --title "..." --body "Closes #<number>..."
-gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+
+# When work is completed/merged:
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
 ```
 
 **GitHub Project Status Field IDs:**
@@ -458,6 +464,25 @@ gh project item-edit <item-id> --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --singl
 - **Web Interface**: Manual updates via GitHub project board
 - **MCP Tools**: Use available MCP project management tools if configured
 - Choose the method that works best for your environment
+
+**Practical Example - Complete Workflow:**
+```bash
+# Working on Issue #25 "Add Search Functionality"
+# 1. Get the project item ID
+ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Add Search Functionality.*25" | awk '{print $NF}')
+
+# 2. Start work (Todo → In Progress)
+git checkout -b feature/issue-25-search-functionality
+gh issue edit 25 --add-assignee "@me"
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+
+# 3. Create PR when ready (In Progress → Ready for Review)  
+gh pr create --title "Add Search Functionality" --body "Closes #25"
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+
+# 4. After PR merge (Ready for Review → Done)
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
+```
 
 **Package Manager (MANDATORY):**
 - **ALWAYS use `bun` instead of `npm`** for all frontend/JavaScript package management and scripts

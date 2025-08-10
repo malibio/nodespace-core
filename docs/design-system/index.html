@@ -65,21 +65,51 @@
       </div>
     </section>
 
-    <!-- Design Tokens Overview -->
+    <!-- Design System Overview -->
     <section class="example-section">
-      <h2>Design Tokens</h2>
-      <p>Our design system is built on a foundation of design tokens - named variables that store visual design attributes. These tokens ensure consistency across all NodeSpace interfaces and enable effortless theme switching.</p>
+      <h2>Design System Architecture</h2>
+      <p><strong>NodeSpace uses a hybrid design system</strong> combining <strong>shadcn-svelte</strong> professional UI components with custom NodeSpace-specific components for AI-native knowledge management.</p>
+      
+      <div class="architecture-overview">
+        <div class="tier-card">
+          <h3>🏗️ Tier 1: shadcn-svelte Foundation</h3>
+          <p>Professional, accessible UI components (Button, Input, Card, Dialog, etc.)</p>
+          <ul>
+            <li>Industry-standard design patterns</li>
+            <li>Copy-paste approach for full control</li>
+            <li>Battle-tested accessibility</li>
+            <li>Unified color system</li>
+          </ul>
+        </div>
+        <div class="tier-card">
+          <h3>🧠 Tier 2: NodeSpace Domain Components</h3>
+          <p>Custom components for knowledge management (BaseNode, TextNode, etc.)</p>
+          <ul>
+            <li>AI-specific interaction patterns</li>
+            <li>Hierarchical node displays</li>
+            <li>Built on shadcn-svelte foundation</li>
+            <li>Domain-specific functionality</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Design Tokens -->
+    <section class="example-section">
+      <h2>Unified Color System</h2>
+      <p>NodeSpace uses <strong>shadcn-svelte color variables</strong> as the single source of truth. Your existing NodeSpace colors have been mapped to this professional system for consistency and maintainability.</p>
       
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">🎨 Colors</div>
+          <div class="component-title">🎨 Color Variables</div>
           <div class="component-demo">
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-              <div style="width: 24px; height: 24px; background-color: var(--ns-color-primary-500, #007acc); border-radius: 4px;"></div>
-              <div style="width: 24px; height: 24px; background-color: var(--ns-color-surface-background, #ffffff); border: 1px solid var(--ns-color-border-default, #e1e5e9); border-radius: 4px;"></div>
-              <div style="width: 24px; height: 24px; background-color: var(--ns-color-text-primary, #1a1a1a); border-radius: 4px;"></div>
+              <div style="width: 24px; height: 24px; background-color: hsl(var(--primary, 210 100% 40%)); border-radius: 4px;"></div>
+              <div style="width: 24px; height: 24px; background-color: hsl(var(--background, 0 0% 100%)); border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 4px;"></div>
+              <div style="width: 24px; height: 24px; background-color: hsl(var(--foreground, 220 13% 10%)); border-radius: 4px;"></div>
             </div>
-            <p>Professional blue accent theme with campaign-aligned light and dark mode support.</p>
+            <p><strong>shadcn-svelte variables:</strong> <code>--primary</code>, <code>--background</code>, <code>--foreground</code>, <code>--border</code></p>
+            <p>Your NodeSpace colors mapped to industry-standard variable names.</p>
           </div>
         </div>
         
@@ -123,53 +153,147 @@
       </div>
     </section>
 
-    <!-- Component Architecture -->
+    <!-- Component Examples -->
     <section class="example-section">
-      <h2>Component Architecture</h2>
-      <p>NodeSpace components follow established patterns for consistency, reusability, and maintainability.</p>
+      <h2>Component Examples</h2>
+      <p>Examples of both shadcn-svelte foundation components and NodeSpace domain components working together.</p>
       
       <div class="example-demo">
-        <h3>Base Node Component Example</h3>
-        <div style="max-width: 400px;">
-          <article class="demo-node" style="
-            background-color: var(--ns-color-surface-background, #ffffff);
-            border: 1px solid var(--ns-color-border-default, #e1e5e9);
-            border-left: 4px solid #10b981;
-            border-radius: 0.5rem;
-            padding: 1rem;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-          " onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(0, 0, 0, 0.15)'" onmouseout="this.style.transform=''; this.style.boxShadow='0 1px 3px rgba(0, 0, 0, 0.1)'">
-            <header style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
-              <div style="
-                width: 24px; 
-                height: 24px; 
-                background: var(--ns-color-surface-panel, #f8f9fa); 
-                border-radius: 0.25rem; 
-                display: flex; 
-                align-items: center; 
-                justify-content: center;
-                font-size: 0.875rem;
-              ">📝</div>
-              <div style="flex: 1;">
-                <h3 style="margin: 0; font-size: 1rem; font-weight: 600; color: var(--ns-color-text-primary, #1a1a1a);">Text Node Example</h3>
-              </div>
-            </header>
-            <div>
-              <p style="margin: 0; font-size: 0.875rem; color: var(--ns-color-text-primary, #1a1a1a); line-height: 1.5;">This is an example of a text node with interactive hover states and proper semantic markup.</p>
+        <h3>shadcn-svelte Components</h3>
+        <div class="shadcn-demo" style="
+          background: hsl(var(--card, 0 0% 100%));
+          border: 1px solid hsl(var(--border, 214 32% 91%));
+          border-radius: var(--radius, 0.5rem);
+          padding: 1.5rem;
+          margin-bottom: 1.5rem;
+        ">
+          <h4 style="margin: 0 0 1rem 0; color: hsl(var(--foreground, 220 13% 10%));">Professional UI Components</h4>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
+            <!-- Button variants -->
+            <button style="
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              white-space: nowrap;
+              border-radius: calc(var(--radius, 0.5rem) - 2px);
+              font-size: 0.875rem;
+              font-weight: 500;
+              transition: colors 0.15s ease;
+              height: 2.5rem;
+              padding: 0 1rem;
+              background: hsl(var(--primary, 210 100% 40%));
+              color: hsl(var(--primary-foreground, 0 0% 100%));
+              border: none;
+              cursor: pointer;
+            ">Primary Button</button>
+            
+            <button style="
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              white-space: nowrap;
+              border-radius: calc(var(--radius, 0.5rem) - 2px);
+              font-size: 0.875rem;
+              font-weight: 500;
+              transition: colors 0.15s ease;
+              height: 2.5rem;
+              padding: 0 1rem;
+              background: hsl(var(--secondary, 210 40% 98%));
+              color: hsl(var(--secondary-foreground, 215 16% 47%));
+              border: none;
+              cursor: pointer;
+            ">Secondary</button>
+            
+            <button style="
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              white-space: nowrap;
+              border-radius: calc(var(--radius, 0.5rem) - 2px);
+              font-size: 0.875rem;
+              font-weight: 500;
+              transition: colors 0.15s ease;
+              height: 2.5rem;
+              padding: 0 1rem;
+              background: transparent;
+              color: hsl(var(--foreground, 220 13% 10%));
+              border: 1px solid hsl(var(--border, 214 32% 91%));
+              cursor: pointer;
+            ">Outline</button>
+          </div>
+          
+          <input style="
+            display: flex;
+            height: 2.5rem;
+            width: 100%;
+            border-radius: calc(var(--radius, 0.5rem) - 2px);
+            border: 1px solid hsl(var(--border, 214 32% 91%));
+            background: hsl(var(--background, 0 0% 100%));
+            padding: 0 0.75rem;
+            font-size: 0.875rem;
+            outline: none;
+            transition: border-color 0.15s ease;
+          " placeholder="Professional input component..." />
+        </div>
+        
+        <h3>NodeSpace Domain Components</h3>
+        <div class="nodespace-demo" style="
+          background: hsl(var(--card, 0 0% 100%));
+          border: 1px solid hsl(var(--border, 214 32% 91%));
+          border-radius: var(--radius, 0.5rem);
+          padding: 1rem;
+        ">
+          <div style="display: flex; align-items: start; gap: 0.75rem;">
+            <!-- Custom hierarchy indicator -->
+            <div style="
+              width: 8px; 
+              height: 8px;
+              background: hsl(var(--primary, 210 100% 40%));
+              border-radius: 50%;
+              flex-shrink: 0;
+              margin-top: 6px;
+              box-shadow: 0 0 8px hsl(var(--primary, 210 100% 40%) / 0.3);
+            "></div>
+            <div style="flex: 1;">
+              <h4 style="margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; color: hsl(var(--foreground, 220 13% 10%));">NodeSpace TextNode</h4>
+              <p style="margin: 0; color: hsl(var(--muted-foreground, 215 16% 47%)); font-size: 0.875rem; line-height: 1.5;">
+                Custom component built on shadcn-svelte foundation with AI integration and hierarchical display patterns.
+              </p>
             </div>
-          </article>
+            <button style="
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: calc(var(--radius, 0.5rem) - 2px);
+              font-size: 0.75rem;
+              font-weight: 500;
+              height: 2rem;
+              padding: 0 0.75rem;
+              background: transparent;
+              color: hsl(var(--foreground, 220 13% 10%));
+              border: none;
+              cursor: pointer;
+            ">🤖 AI Assist</button>
+          </div>
         </div>
       </div>
       
       <div class="example-code">
-        <pre><code>&lt;BaseNode
-  nodeType="text"
-  title="Text Node Example"
-  content="This is an example text node."
-  on:click={handleNodeClick}
-  on:select={handleNodeSelect}
+        <pre><code><!-- Use shadcn-svelte components directly -->
+&lt;script&gt;
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+&lt;/script&gt;
+
+&lt;Button variant="default"&gt;Professional UI&lt;/Button&gt;
+&lt;Input placeholder="Type here..." /&gt;
+
+<!-- Custom NodeSpace components built on foundation -->
+&lt;TextNode 
+  nodeId="example"
+  title="My Node"
+  content="AI-powered content"
+  hasChildren={true}
 /&gt;</code></pre>
       </div>
     </section>
@@ -178,55 +302,68 @@
     <section class="example-section">
       <h2>Usage Guidelines</h2>
       
-      <h3>Getting Started</h3>
-      <p>The NodeSpace design system provides TypeScript-first design tokens and Svelte components for building consistent interfaces.</p>
+      <h3>Getting Started with shadcn-svelte</h3>
+      <p>NodeSpace uses professional shadcn-svelte components as the foundation. Import and use these components directly for consistent, accessible UI.</p>
       
       <div class="example-code">
-        <pre><code>// Import design tokens
-import { designTokens, currentTheme } from '$lib/design/theme.js';
-import { cssVars } from '$lib/design/css-generator.js';
-
-// Use in Svelte components
+        <pre><code>// Import shadcn-svelte components
 &lt;script lang="ts"&gt;
-  import { ThemeProvider } from '$lib/design/components/ThemeProvider.svelte';
-  import { BaseNode } from '$lib/design/components/BaseNode.svelte';
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card";
+  import { cn } from "$lib/utils.js";
 &lt;/script&gt;
 
-&lt;ThemeProvider&gt;
-  &lt;BaseNode
-    nodeType="text"
-    title="My Node"
-    content="Node content here"
-  /&gt;
-&lt;/ThemeProvider&gt;</code></pre>
+// Professional UI with your NodeSpace colors
+&lt;Card&gt;
+  &lt;CardHeader&gt;
+    &lt;CardTitle&gt;Settings&lt;/CardTitle&gt;
+  &lt;/CardHeader&gt;
+  &lt;CardContent&gt;
+    &lt;Input placeholder="Enter text..." /&gt;
+    &lt;Button variant="default"&gt;Save&lt;/Button&gt;
+  &lt;/CardContent&gt;
+&lt;/Card&gt;</code></pre>
       </div>
       
-      <h3>CSS Custom Properties</h3>
-      <p>Use CSS custom properties for consistent styling across components:</p>
+      <h3>Unified Color System</h3>
+      <p>Use shadcn-svelte color variables for consistency. Your NodeSpace colors are automatically mapped:</p>
       
       <div class="example-code">
-        <pre><code>/* Component styling with design tokens */
+        <pre><code>/* Use shadcn-svelte color variables */
 .my-component {
-  background-color: var(--ns-color-surface-background);
-  color: var(--ns-color-text-primary);
-  padding: var(--ns-spacing-4);
-  border-radius: var(--ns-radius-lg);
-  font-family: var(--ns-font-family-ui);
-  font-size: var(--ns-font-size-sm);
-}</code></pre>
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+
+/* Your NodeSpace colors are automatically mapped */
+--primary: 210 100% 40%;      /* Your #007acc blue */
+--background: 0 0% 100%;       /* Clean white */
+--foreground: 220 13% 10%;     /* Dark text */</code></pre>
       </div>
       
-      <h3>Theme Integration</h3>
-      <p>Components automatically adapt to light/dark theme changes:</p>
+      <h3>Building Custom Components</h3>
+      <p>For NodeSpace-specific features, build custom components using the shadcn-svelte foundation:</p>
       
       <div class="example-code">
-        <pre><code>// Theme-aware component
+        <pre><code>// Custom component using shadcn-svelte foundation
 &lt;script lang="ts"&gt;
-  import { currentTheme, designTokens } from '$lib/design/theme.js';
+  import { Card, CardContent } from "$lib/components/ui/card";
+  import { Button } from "$lib/components/ui/button";
+  import { cn } from "$lib/utils.js";
   
-  $: tokens = $designTokens;
-  $: isDark = $currentTheme === 'dark';
-&lt;/script&gt;</code></pre>
+  export let nodeId: string;
+  export let hasChildren: boolean = false;
+&lt;/script&gt;
+
+&lt;Card class={cn("text-node", hasChildren && "has-children")}&gt;
+  &lt;CardContent&gt;
+    &lt;!-- Custom NodeSpace logic with professional foundation --&gt;
+    &lt;Button variant="ghost"&gt;🤖 AI Assist&lt;/Button&gt;
+  &lt;/CardContent&gt;
+&lt;/Card&gt;</code></pre>
       </div>
     </section>
 
