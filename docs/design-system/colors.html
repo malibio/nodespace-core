@@ -83,6 +83,16 @@
         </div>
       </div>
       
+      <div style="background: hsl(var(--muted, 210 40% 98%)); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+        <p><strong>Note:</strong> In the current shadcn-svelte implementation, Secondary, Accent, and Muted use the same base color values but serve different semantic purposes:</p>
+        <ul>
+          <li><strong>Secondary:</strong> For secondary buttons and less prominent actions</li>
+          <li><strong>Accent:</strong> For highlighted elements and focus states</li>
+          <li><strong>Muted:</strong> For subdued backgrounds and disabled states</li>
+        </ul>
+        <p>While they currently share the same HSL values, their semantic naming allows for future customization without changing component code.</p>
+      </div>
+      
       <div class="example-code">
         <pre><code>/* Using shadcn-svelte colors in CSS */
 .primary-button {
@@ -395,19 +405,35 @@
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 2rem 0;">
         <div>
           <h4>Light Theme</h4>
-          <div style="background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); padding: 1rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.5rem;">
-            <p><strong>Primary text (#1a1a1a) on white background</strong></p>
-            <p style="color: hsl(var(--muted-foreground, 215 16% 47%));">Secondary text (#737a83) provides visual hierarchy</p>
-            <p style="color: hsl(var(--muted-foreground, 215 16% 47%));">Tertiary text (#737a83) for supporting information</p>
+          <div class="theme-example-light" style="
+            background: #ffffff !important; 
+            color: #1a1a1a !important; 
+            padding: 1rem; 
+            border: 1px solid #e1e5e9 !important; 
+            border-radius: 0.5rem;
+            position: relative;
+            isolation: isolate;
+          ">
+            <p style="color: #1a1a1a !important; margin: 0 0 0.5rem 0;"><strong>Primary text (#1a1a1a) on white background</strong></p>
+            <p style="color: #737a83 !important; margin: 0 0 0.5rem 0;">Secondary text (#737a83) provides visual hierarchy</p>
+            <p style="color: #737a83 !important; margin: 0;">Tertiary text (#737a83) for supporting information</p>
           </div>
         </div>
         
         <div>
           <h4>Dark Theme</h4>
-          <div style="background: hsl(224 71% 4%); color: hsl(213 31% 91%); padding: 1rem; border: 1px solid hsl(223 47% 11%); border-radius: 0.5rem;">
-            <p><strong>Primary text (#ffffff) on dark background</strong></p>
-            <p style="color: hsl(215 20% 65%);">Secondary text (#e0e0e0) maintains readability</p>
-            <p style="color: hsl(215 20% 65%);">Tertiary text (#888888) for metadata</p>
+          <div class="theme-example-dark" style="
+            background: #0a0a0f !important; 
+            color: #e8e8ea !important; 
+            padding: 1rem; 
+            border: 1px solid #27272a !important; 
+            border-radius: 0.5rem;
+            position: relative;
+            isolation: isolate;
+          ">
+            <p style="color: #e8e8ea !important; margin: 0 0 0.5rem 0;"><strong>Primary text (#e8e8ea) on dark background</strong></p>
+            <p style="color: #a1a1aa !important; margin: 0 0 0.5rem 0;">Secondary text (#a1a1aa) maintains readability</p>
+            <p style="color: #a1a1aa !important; margin: 0;">Tertiary text (#a1a1aa) for metadata</p>
           </div>
         </div>
       </div>
