@@ -520,34 +520,65 @@ bun run quality:fix
 # ✅ Svelte Check: No component errors
 ```
 
+**Testing Requirements (MANDATORY - BLOCKING):**
+```bash
+# CRITICAL: Before creating PR, ALL tests must pass:
+
+# Rust backend tests
+cargo test
+
+# Frontend unit/component tests
+bun run test
+
+# E2E tests (for UI features)
+bun run test:e2e
+
+# Coverage requirements
+bun run test:coverage
+
+# VERIFICATION REQUIRED: Must show passing tests like this:
+# ✅ Rust: All tests passing, >90% coverage
+# ✅ Frontend: All tests passing, >85% coverage
+# ✅ E2E: Critical user flows tested
+# ✅ Performance: Load times <2s, interactions <100ms
+```
+
 **🚨 BLOCKING Quality Requirements (CANNOT CREATE PR WITHOUT):**
 - [ ] **ESLint**: ZERO errors (warnings acceptable in development)
 - [ ] **Prettier**: Code consistently formatted
 - [ ] **TypeScript**: ZERO compilation errors, strict type checking passed
 - [ ] **Svelte Check**: ZERO component errors or accessibility violations
+- [ ] **Rust Tests**: ALL tests passing with >90% code coverage
+- [ ] **Frontend Tests**: ALL tests passing with >85% component coverage
+- [ ] **Integration Tests**: Critical user workflows tested and passing
+- [ ] **Performance Tests**: Load times <2s, user interactions <100ms response time
 
 **❌ PROCESS VIOLATION CONSEQUENCES (APPLIES TO ALL TEAM MEMBERS):**
 - Creating PR with linting errors = immediate process violation (AI agents & humans)
-- Merging PR with linting errors = critical process failure (AI agents & human reviewers)
+- Creating PR with failing tests = immediate process violation (AI agents & humans)
+- Merging PR with linting/test errors = critical process failure (AI agents & human reviewers)
 - Both implementer and reviewer are responsible for verification regardless of human/AI status
-- **NO EXCEPTIONS**: AI agents and human team members follow identical quality standards
+- **NO EXCEPTIONS**: AI agents and human team members follow identical quality and testing standards
 
 **PR Review and Merge (MANDATORY WITH EXPLICIT VERIFICATION):**
 1. **🚨 FIRST - Verify Code Quality Gates (BLOCKING)**: Run `bun run quality:fix` and confirm ZERO errors
-2. **Review against original issue requirements FIRST** - verify all acceptance criteria are met
-3. **Conduct comprehensive technical review** (use senior-architect-reviewer for complex changes)  
-4. **If review shows ready to merge**: Immediately approve and merge the PR
-5. **If review shows issues**: Request changes with specific feedback
-6. **❌ AUTOMATIC REJECTION**: Any PR with linting/TypeScript errors must be rejected immediately
+2. **🚨 SECOND - Verify Testing Requirements (BLOCKING)**: Run `cargo test` and `bun run test` and confirm ALL tests pass
+3. **Review against original issue requirements FIRST** - verify all acceptance criteria are met
+4. **Conduct comprehensive technical review** (use senior-architect-reviewer for complex changes)  
+5. **If review shows ready to merge**: Immediately approve and merge the PR
+6. **If review shows issues**: Request changes with specific feedback
+7. **❌ AUTOMATIC REJECTION**: Any PR with linting/TypeScript/test errors must be rejected immediately
 
 ### Code Review Guidelines
 
-**🚨 MANDATORY FIRST STEP - Linting Verification (ALL REVIEWERS: AI AGENTS & HUMANS):**
+**🚨 MANDATORY FIRST STEP - Quality & Testing Verification (ALL REVIEWERS: AI AGENTS & HUMANS):**
 - [ ] **Reviewer MUST run**: `bun run quality:fix` before any other review steps
-- [ ] **Zero errors confirmed**: ESLint, Prettier, TypeScript, Svelte Check all pass
-- [ ] **Automatic rejection**: If any linting errors found, reject PR immediately with specific error list
-- [ ] **Implementer accountability**: Failed linting = process violation, require acknowledgment (AI agents & humans)
-- [ ] **Universal standards**: Same quality requirements for all team members regardless of human/AI status
+- [ ] **Zero linting errors confirmed**: ESLint, Prettier, TypeScript, Svelte Check all pass
+- [ ] **Reviewer MUST run**: `cargo test && bun run test` to verify all tests pass
+- [ ] **Coverage requirements verified**: Rust >90%, Frontend >85% coverage maintained
+- [ ] **Automatic rejection**: If any linting/testing errors found, reject PR immediately with specific error list
+- [ ] **Implementer accountability**: Failed quality/testing = process violation, require acknowledgment (AI agents & humans)
+- [ ] **Universal standards**: Same quality and testing requirements for all team members regardless of human/AI status
 
 **CRITICAL: Issue Requirements Review (SECOND PRIORITY):**
 - [ ] **All acceptance criteria met**: Each checkbox in the original issue is verified and completed
@@ -572,10 +603,13 @@ bun run quality:fix
 - [ ] **Performance**: No obvious performance bottlenecks
 
 **Testing Review:**
-- [ ] Tests use @testing-library/svelte appropriately
-- [ ] Test coverage is comprehensive
-- [ ] Integration scenarios tested
-- [ ] Mocks are appropriate and realistic
+- [ ] **Rust Tests**: Unit tests for all business logic, integration tests for API endpoints
+- [ ] **Frontend Tests**: Component tests with @testing-library/svelte, realistic user interactions
+- [ ] **Test Coverage**: Meets minimum thresholds (Rust >90%, Frontend >85%)
+- [ ] **Mock Quality**: Mocks are realistic and match production behavior patterns
+- [ ] **Integration Tests**: End-to-end user workflows tested with Playwright
+- [ ] **Performance Tests**: Load times and interaction responsiveness verified
+- [ ] **Error Handling**: Edge cases and error scenarios thoroughly tested
 
 ## Integration Patterns
 
