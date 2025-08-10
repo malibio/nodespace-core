@@ -7,11 +7,17 @@
   import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
   import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
-  
+
   // Import shadcn-svelte components
-  import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
-  import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle
+  } from '$lib/components/ui/card';
 
   let appName = $state('NodeSpace');
   let appVersion = $state('0.1.0');
@@ -66,12 +72,15 @@
       <h1>{appName}</h1>
       <div class="app-info">
         <span class="version">v{appVersion}</span>
-        <Button variant="outline" size="sm" onclick={toggleTheme} title="Toggle theme ({$themePreference})">
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={toggleTheme}
+          title="Toggle theme ({$themePreference})"
+        >
           {getThemeIcon($themePreference)}
         </Button>
-        <Button variant="default" size="sm" onclick={testConnection}>
-          Test Connection
-        </Button>
+        <Button variant="default" size="sm" onclick={testConnection}>Test Connection</Button>
       </div>
     </header>
 
@@ -86,7 +95,6 @@
               title="Daily Notes"
               content="Today's thoughts and observations"
               compact={true}
-              hasChildren={true}
             />
             <TextNode
               nodeId="projects"
@@ -112,7 +120,6 @@
               title="Templates"
               content="Reusable document templates"
               compact={true}
-              hasChildren={true}
             />
             <TextNode
               nodeId="saved-searches"
@@ -125,7 +132,6 @@
               title="Reports"
               content="Generated analytics and insights"
               compact={true}
-              hasChildren={true}
             />
           </div>
         </div>
@@ -196,7 +202,7 @@
 
               <TextNode
                 nodeId="example-task-parent"
-                title="TaskNode Example (Parent)" 
+                title="TaskNode Example (Parent)"
                 content="☐ Complete design system implementation\n☑ Set up Tauri app structure\n☐ Add AI integration\n\nThis is a parent task node with subtasks."
               />
 
