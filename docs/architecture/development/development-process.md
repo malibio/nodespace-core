@@ -520,6 +520,22 @@ bun run quality:fix
 # ✅ Svelte Check: No component errors
 ```
 
+**Testing Requirements (RECOMMENDED):**
+```bash
+# Before creating PR, run basic tests:
+
+# Rust backend tests
+cargo test
+
+# Frontend tests
+bun run test
+
+# VERIFICATION: Basic test coverage
+# ✅ Rust: Core functionality tested
+# ✅ Frontend: Components render correctly
+# ✅ Integration: Key workflows work
+```
+
 **🚨 BLOCKING Quality Requirements (CANNOT CREATE PR WITHOUT):**
 - [ ] **ESLint**: ZERO errors (warnings acceptable in development)
 - [ ] **Prettier**: Code consistently formatted
@@ -571,11 +587,11 @@ bun run quality:fix
 - [ ] **Error Handling**: Comprehensive error boundaries and validation
 - [ ] **Performance**: No obvious performance bottlenecks
 
-**Testing Review:**
-- [ ] Tests use @testing-library/svelte appropriately
-- [ ] Test coverage is comprehensive
-- [ ] Integration scenarios tested
-- [ ] Mocks are appropriate and realistic
+**Testing Review (When Present):**
+- [ ] **Basic Coverage**: Core functionality has tests
+- [ ] **Component Tests**: UI components render and interact correctly
+- [ ] **Mock Quality**: Mocks are simple and realistic
+- [ ] **Test Clarity**: Tests are easy to understand and maintain
 
 ## Integration Patterns
 
