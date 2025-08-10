@@ -42,6 +42,29 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Advanced UI/UX Capabilities
+
+NodeSpace includes sophisticated user interface capabilities that rival modern IDEs and knowledge management tools:
+
+#### Multi-Node Selection System
+- **Single Selection**: Click-to-select individual blocks with visual highlighting
+- **Range Selection**: Shift+click to select contiguous blocks across hierarchy levels
+- **Multi-Selection**: Ctrl+click (Cmd+click on Mac) to toggle individual blocks
+- **Keyboard Navigation**: Full arrow key navigation with selection shortcuts
+- **Accessibility**: WCAG 2.1 compliant with screen reader support
+
+#### Hierarchical Visual Design
+- **Modern Chevron Controls**: VS Code-style caret icons (> → v) with hover-revealed interaction
+- **Visual Connecting Lines**: Clean vertical lines connecting sibling nodes
+- **Progressive Indentation**: Consistent 24px indentation per hierarchy level
+- **Theme Integration**: Seamless integration with light/dark themes
+
+#### Advanced Text Rendering
+- **Hybrid Syntax Rendering**: Live markdown rendering with inline editing capability
+- **Precise Cursor Positioning**: Mock element system for accurate click-to-cursor placement
+- **Interactive Decorations**: Rich node reference previews and interactive widgets
+- **Performance Optimized**: Efficient rendering for large documents and deep hierarchies
+
 ### Repository Structure
 
 ```
@@ -68,12 +91,13 @@ nodespace-core/                    # Main repository with workspace
 │   │   ├── entity_node.rs         # Custom structured entities
 │   │   └── query_node.rs          # Live data views
 │   └── ui/                        # Core Svelte components
-│       ├── TextNode.svelte        # Text node UI
+│       ├── TextNode.svelte        # Text node UI with hybrid rendering
 │       ├── TaskNode.svelte        # Task node UI
 │       ├── AIChatNode.svelte      # AI chat UI
 │       ├── EntityNode.svelte      # Entity node UI
-│       ├── QueryNode.svelte       # Query node UI
-│       └── BaseNodeWrapper.svelte # Shared node behaviors
+│       ├── QueryNode.svelte       # Query node UI with real-time updates
+│       ├── BaseNode.svelte        # Foundation component with selection support
+│       └── NodeTree.svelte        # Hierarchical display with multi-selection
 ├── nodespace-app/                 # Tauri desktop application
 │   ├── src-tauri/                 # Rust backend
 │   │   ├── Cargo.toml
@@ -86,8 +110,11 @@ nodespace-core/                    # Main repository with workspace
 │   │   ├── main.js
 │   │   └── components/
 │   │       ├── NodeRenderer.svelte    # Component dispatcher
-│   │       ├── NodeTree.svelte        # Hierarchy manager
-│   │       └── QueryView.svelte       # Query results display
+│   │       ├── NodeTree.svelte        # Hierarchy manager with selection system
+│   │       ├── QueryView.svelte       # Query results display
+│   │       └── selection/             # Multi-node selection components
+│   │           ├── SelectionStore.svelte    # Selection state management
+│   │           └── KeyboardNavigation.svelte # Keyboard interaction controller
 │   └── package.json
 └── README.md
 

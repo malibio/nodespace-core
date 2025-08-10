@@ -21,6 +21,7 @@ NodeSpace's technology stack is carefully chosen to provide optimal performance,
 - **IPC Commands**: Type-safe communication between frontend and backend
 - **Auto-Updater**: Built-in application update mechanism
 - **Native Notifications**: System-level notification integration
+- **Native Menus**: Context menus for multi-node selection operations
 
 ### Backend: Rust
 
@@ -79,10 +80,12 @@ tracing-subscriber = "0.3"
 
 **Key Features:**
 - **SvelteKit**: Full-stack framework with file-based routing
-- **Stores**: Reactive state management across components
-- **Component Composition**: Reusable UI components with clear APIs
-- **CSS-in-JS**: Scoped styling with dynamic theme support
+- **Reactive Stores**: Advanced state management for multi-node selection
+- **Component Composition**: Reusable UI components with hierarchical display
+- **CSS-in-JS**: Scoped styling with theme-aware selection highlighting
 - **TypeScript Integration**: Type-safe frontend development
+- **Advanced Interactions**: Multi-modal selection (mouse, keyboard, touch)
+- **Accessibility**: WCAG 2.1 compliant hierarchical navigation
 
 **UI Libraries & Design System:**
 ```json

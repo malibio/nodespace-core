@@ -84,6 +84,28 @@ pub enum AnnotationType {
 }
 ```
 
+### Advanced Text Rendering Features
+
+NodeSpace's TextNode includes sophisticated rendering capabilities that provide a modern editing experience:
+
+#### Hybrid Syntax Rendering
+- **Live Markdown Display**: Syntax renders as visual decorations while maintaining editability
+- **Inline Editing**: Click-to-edit without mode switching between preview and edit
+- **Syntax Preservation**: Raw markdown remains accessible for direct editing
+- **Performance Optimized**: Incremental updates for large documents
+
+#### Precise Cursor Positioning
+- **Mock Element System**: Advanced cursor positioning using DOM measurement
+- **Pixel-Perfect Clicks**: Accurate cursor placement on complex formatted text
+- **Unicode Support**: Proper handling of emoji, multi-byte characters, and RTL text
+- **Cross-Browser Consistency**: Reliable positioning across modern browsers
+
+#### Interactive Node References
+- **Rich Previews**: Hover previews for node references and cross-links
+- **Contextual Navigation**: Quick navigation between related nodes
+- **Metadata Display**: Relationship information and context hints
+- **Performance**: Lazy-loaded previews to maintain responsiveness
+
 ### AI Integration Features
 
 ```rust
