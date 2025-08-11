@@ -48,11 +48,8 @@
     contentChanged: { nodeId: string; content: string };
   }>();
 
-  // Handle general node clicks - enter edit mode
-  function handleClick(event: MouseEvent) {
-    // Don't handle clicks if already focused (avoid interfering with CodeMirror)
-    if (focused) return;
-    
+  // Handle display mode clicks - enter edit mode
+  function handleDisplayClick(event: MouseEvent) {
     if (editable && contentEditable) {
       focused = true;
       // Focus the editor after it's rendered
@@ -60,6 +57,11 @@
         editorRef?.focus();
       }, 0);
     }
+    dispatch('click', { nodeId, event });
+  }
+  
+  // Handle general node clicks (for container)
+  function handleClick(event: MouseEvent) {
     dispatch('click', { nodeId, event });
   }
   
@@ -74,22 +76,25 @@
     dispatch('contentChanged', { nodeId, content });
   }
 
-  // Handle keyboard shortcuts
+  // Handle keyboard shortcuts for display mode
+  function handleDisplayKeyDown(event: KeyboardEvent) {
+    // Enter/Space to enter edit mode
+    if (editable && contentEditable && (event.code === 'Enter' || event.code === 'Space')) {
+      event.preventDefault();
+      focused = true;
+      setTimeout(() => {
+        editorRef?.focus();
+      }, 0);
+    }
+  }
+  
+  // Handle keyboard shortcuts for container
   function handleKeyDown(event: KeyboardEvent) {
     // Escape key exits edit mode
     if (event.key === 'Escape' && focused) {
       event.preventDefault();
       focused = false;
       return;
-    }
-    
-    // When not focused, handle Enter/Space to enter edit mode
-    if (!focused && editable && contentEditable && (event.code === 'Enter' || event.code === 'Space')) {
-      event.preventDefault();
-      focused = true;
-      setTimeout(() => {
-        editorRef?.focus();
-      }, 0);
     }
   }
 
@@ -194,8 +199,8 @@
             class="ns-node__display" 
             role="button"
             tabindex="0"
-            on:click={handleClick}
-            on:keydown={handleKeyDown}
+            on:click={handleDisplayClick}
+            on:keydown={handleDisplayKeyDown}
           >
             <slot name="display-content">
               {#if content}
