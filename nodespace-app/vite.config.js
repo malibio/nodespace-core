@@ -28,4 +28,11 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  // Build optimizations for performance analysis
+  build: {
+    // Enable detailed build info
+    reportCompressedSize: true,
+    chunkSizeWarningLimit: 600
+  }
 }));
