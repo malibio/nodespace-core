@@ -43,12 +43,18 @@ gh issue edit <number> --add-assignee "@me"
 **Use GitHub CLI commands to update project status:**
 
 ```bash
-# Get project item ID for your issue
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "<issue-title>.*<number>" | awk '{print $NF}')
+# Get project item ID for your issue using JSON + jq (IMPROVED)
+ITEM_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
 
 # Update status: Todo → In Progress
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 ```
+
+**Key Improvements:**
+- ✅ **Direct issue number filtering** - No grep/text parsing errors
+- ✅ **JSON structured data** - Reliable and precise
+- ✅ **Explicit limit** - Ensures all project items are retrieved
+- ✅ **Clean one-liner** - Can be used in command substitution
 
 **📖 See [Issue Workflow](issue-workflow.md) for complete CLI command reference**
 
@@ -59,12 +65,12 @@ gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id 
 - Example: Issue #26 (parent) + Issue #46 (sub-issue)
 
 ```bash
-# Update parent issue status
-PARENT_ID=$(gh project item-list 5 --owner malibio | grep "<parent-issue-title>.*<parent-number>" | awk '{print $NF}')
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $PARENT_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+# Update parent issue status (IMPROVED)
+PARENT_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == PARENT_NUMBER) | .id')
+gh project item-edit --id $PARENT_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 
 # Assign parent issue
-gh issue edit <parent-number> --add-assignee "@me"
+gh issue edit PARENT_NUMBER --add-assignee "@me"
 ```
 
 ### 6. Select Appropriate Agent/Expert - MANDATORY
@@ -130,12 +136,16 @@ Before proceeding to implementation, verify ALL of the following:
 - **Code Review Process**: See [PR Review](pr-review.md) for review requirements
 - **Quality Standards**: See [Code Quality](../standards/code-quality.md) for linting and formatting
 
-**Quick Command Reference:**
+**Quick Command Reference (IMPROVED):**
 ```bash
 # Essential CLI commands for startup sequence
-gh issue edit <number> --add-assignee "@me"
-gh project item-list 5 --owner malibio | grep "<issue-title>.*<number>"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+gh issue edit ISSUE_NUMBER --add-assignee "@me"
+
+# Get project item ID (JSON approach)  
+ITEM_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
+
+# Update project status to In Progress
+gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 ```
 
 ## Next Steps
