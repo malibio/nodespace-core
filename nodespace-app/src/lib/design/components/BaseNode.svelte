@@ -44,6 +44,7 @@
   
   // Reactive state tracking
   $: editMode = contentEditable && focused;
+  $: console.log('State update:', { focused, contentEditable, editMode });
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -53,6 +54,7 @@
 
   // Handle display mode clicks - enter edit mode with cursor positioning
   function handleDisplayClick(event: MouseEvent) {
+    console.log('Display click - setting focused to true');
     if (editable && contentEditable) {
       focused = true;
       
@@ -173,16 +175,13 @@
     }
   }
   
-  // Setup global click listener with proper timing
+  // Setup global click listener - DISABLED FOR DEBUGGING
   onMount(() => {
-    // Add listener with slight delay to avoid immediate blur on focus
-    setTimeout(() => {
-      document.addEventListener('click', handleGlobalClick);
-    }, 100);
+    // document.addEventListener('click', handleGlobalClick);
   });
   
   onDestroy(() => {
-    document.removeEventListener('click', handleGlobalClick);
+    // document.removeEventListener('click', handleGlobalClick);
   });
 </script>
 
