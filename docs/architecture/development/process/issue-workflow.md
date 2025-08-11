@@ -197,6 +197,24 @@ Before creating an issue, verify:
 1. **Create feature branch**: `git checkout -b feature/issue-<number>-brief-description`
 2. **Assign issue to self**: `gh issue edit <number> --add-assignee "@me"`
 3. **Update project status**: Todo → In Progress
+
+### Sub-Issue Status Management
+For parent issues using single branch approach (e.g., Issue #26 with sub-issues #46-#50):
+- **Update individual sub-issue status** as work completes to track granular progress
+- **Status updates are mandatory** - ensures accurate project tracking
+- **Sub-issues show completion state** even when using parent branch workflow
+- **Parent issue status** tracks overall epic progress
+
+**CLI Status Update Commands:**
+```bash
+# Get project item ID (handles pagination)
+ITEM_ID=$(gh project item-list 5 --owner malibio --limit 100 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
+
+# Status transitions:
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4  # In Progress  
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084  # Ready for Review
+gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657  # Done
+```
 4. **Read issue acceptance criteria** and requirements
 5. **Plan self-contained implementation** approach
 
