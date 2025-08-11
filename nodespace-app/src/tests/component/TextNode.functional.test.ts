@@ -7,7 +7,7 @@ import { createTestNode, SimpleMockStore } from '../utils/testUtils';
 
 describe('TextNode Functional Tests', () => {
   let store: SimpleMockStore;
-  
+
   beforeEach(() => {
     SimpleMockStore.resetInstance();
     store = SimpleMockStore.getInstance();
@@ -41,7 +41,7 @@ describe('TextNode Functional Tests', () => {
 
       // Simulate the event being called
       const eventData = { nodeId: props.nodeId, content: 'Updated content' };
-      
+
       if (props.onsave) {
         const mockEvent = new CustomEvent('save', { detail: eventData });
         props.onsave(mockEvent);
@@ -57,7 +57,7 @@ describe('TextNode Functional Tests', () => {
       const props = {
         nodeId: 'test-node',
         content: 'Test content',
-        markdown: true,  // This is the corrected prop name
+        markdown: true, // This is the corrected prop name
         multiline: false,
         editable: true
       };
@@ -65,10 +65,10 @@ describe('TextNode Functional Tests', () => {
       // These props should be compatible with both BaseNode and CodeMirrorEditor
       expect(props.markdown).toBe(true);
       expect(typeof props.markdown).toBe('boolean');
-      
+
       // Verify the prop structure matches what components expect
       const expectedProps = ['nodeId', 'content', 'markdown', 'multiline', 'editable'];
-      expectedProps.forEach(prop => {
+      expectedProps.forEach((prop) => {
         expect(props).toHaveProperty(prop);
       });
     });
@@ -77,7 +77,7 @@ describe('TextNode Functional Tests', () => {
   describe('Store Integration', () => {
     it('should save content to store correctly', async () => {
       const node = createTestNode({ content: 'Original content' });
-      
+
       // Simulate the TextNode save operation
       const updatedContent = 'Updated content';
       await store.save({
@@ -85,7 +85,7 @@ describe('TextNode Functional Tests', () => {
         content: updatedContent,
         updatedAt: new Date()
       });
-      
+
       const savedNode = await store.load(node.id);
       expect(savedNode?.content).toBe(updatedContent);
     });
@@ -93,15 +93,15 @@ describe('TextNode Functional Tests', () => {
     it('should handle auto-save debouncing logic', async () => {
       // Mock debounced save function
       const debouncedSave = vi.fn();
-      
+
       // Simulate multiple rapid changes (what would trigger debouncing)
       const changes = ['Test 1', 'Test 2', 'Test 3', 'Final content'];
-      
+
       changes.forEach((content, index) => {
         // Simulate the debouncing logic
         setTimeout(() => debouncedSave(content), 100 * (index + 1));
       });
-      
+
       // In real implementation, only the last change would be saved
       expect(debouncedSave).toBeDefined();
     });
@@ -115,7 +115,7 @@ describe('TextNode Functional Tests', () => {
         contentEditable: true,
         editable: true
       };
-      
+
       // In always-editing mode, these should always be true
       expect(nodeState.isEditing).toBe(true);
       expect(nodeState.contentEditable).toBe(true);
