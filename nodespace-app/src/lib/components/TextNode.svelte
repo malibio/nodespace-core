@@ -111,6 +111,7 @@
   {editable}
   contentEditable={true}
   multiline={isMultiline}
+  markdown={true}
   {placeholder}
   className="ns-text-node {compact ? 'ns-text-node--compact' : ''}"
   on:contentChanged={handleContentChanged}

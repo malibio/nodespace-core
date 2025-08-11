@@ -11,10 +11,9 @@
 </script>
 
 <script lang="ts">
-  import { createEventDispatcher, tick } from 'svelte';
+  import { createEventDispatcher } from 'svelte';
   import Icon, { type IconName } from '../icons/index.js';
-  import MockTextElement from './MockTextElement.svelte';
-  import { findCharacterFromClickFast, isClickWithinTextBounds } from './CursorPositioning';
+  import CodeMirrorEditor from './CodeMirrorEditor.svelte';
 
   // Essential Props (Simplified to 5 core + processing)
   export let nodeType: NodeType = 'text';
@@ -25,6 +24,7 @@
   export let editable: boolean = true;
   export let contentEditable: boolean = true; // Can content be directly edited by user?
   export let multiline: boolean = false; // Single-line by default
+  export let markdown: boolean = false; // Plain text by default
   export let placeholder: string = 'Click to add content...';
 
   // SVG Icon System
@@ -35,197 +35,32 @@
   export let processingAnimation: 'blink' | 'pulse' | 'spin' | 'fade' = 'pulse';
   export let processingIcon: IconName | undefined = undefined;
 
-  // Edit state
-  let focused = false;
-  let textareaElement: HTMLTextAreaElement;
-  let mockElementRef: any;
+  // CodeMirror editor reference
+  let editorRef: CodeMirrorEditor;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
     click: { nodeId: string; event: MouseEvent };
-    focus: { nodeId: string };
-    blur: { nodeId: string };
     contentChanged: { nodeId: string; content: string };
   }>();
-
-  // Handle display click to start editing
-  function handleDisplayClick(event: MouseEvent) {
-    if (!editable || !contentEditable || focused) return;
-    startEditing(event);
-  }
 
   // Handle general node clicks
   function handleClick(event: MouseEvent) {
     dispatch('click', { nodeId, event });
-
-    // If clicking on display content, delegate to handleDisplayClick
-    if (!focused && editable && contentEditable) {
-      const target = event.target as HTMLElement;
-      const displayElement = target.closest('.ns-node__display--clickable');
-      if (displayElement) {
-        handleDisplayClick(event);
-      }
-    }
   }
 
-  // Start editing mode
-  async function startEditing(clickEvent?: MouseEvent) {
-    focused = true;
-    dispatch('focus', { nodeId });
-
-    await tick();
-    if (textareaElement) {
-      // Auto-resize for multiline content on focus
-      if (multiline) {
-        autoResizeTextarea(textareaElement);
-      }
-
-      textareaElement.focus();
-
-      // Position cursor based on click location
-      if (clickEvent) {
-        await tick(); // Wait for textarea to be fully rendered
-        positionCursorFromClick(clickEvent);
-      } else {
-        // No click event, place at end
-        textareaElement.setSelectionRange(
-          textareaElement.value.length,
-          textareaElement.value.length
-        );
-      }
-    }
-  }
-
-  // Position cursor based on click coordinates using mock element
-  async function positionCursorFromClick(clickEvent: MouseEvent) {
-    if (!textareaElement || !mockElementRef) return;
-
-    const textareaRect = textareaElement.getBoundingClientRect();
-
-    // Validate click is within reasonable bounds
-    if (!isClickWithinTextBounds(clickEvent.clientX, clickEvent.clientY, textareaRect)) {
-      // Click is too far from text area, position at end
-      const textLength = textareaElement.value.length;
-      textareaElement.setSelectionRange(textLength, textLength);
-      return;
-    }
-
-    console.log('Mock element positioning:', {
-      content: content.substring(0, 20) + '...',
-      clickX: clickEvent.clientX,
-      clickY: clickEvent.clientY,
-      textareaRect: {
-        left: textareaRect.left,
-        top: textareaRect.top,
-        width: textareaRect.width,
-        height: textareaRect.height
-      },
-      multiline: multiline
-    });
-
-    try {
-      // Get the mock element for position calculation
-      const mockElement = mockElementRef.getElement();
-      if (!mockElement) {
-        console.warn('Mock element not available, falling back to end position');
-        const textLength = textareaElement.value.length;
-        textareaElement.setSelectionRange(textLength, textLength);
-        return;
-      }
-
-      // Use the fast positioning algorithm
-      const positionResult = findCharacterFromClickFast(
-        mockElement,
-        clickEvent.clientX,
-        clickEvent.clientY,
-        textareaRect
-      );
-
-      // Set cursor position based on result
-      const targetPosition = Math.max(
-        0,
-        Math.min(positionResult.index, textareaElement.value.length)
-      );
-
-      console.log('Mock element positioning result:', {
-        targetPosition,
-        accuracy: positionResult.accuracy,
-        distance: positionResult.distance
-      });
-
-      textareaElement.setSelectionRange(targetPosition, targetPosition);
-
-      // Verify the cursor was set correctly
-      setTimeout(() => {
-        console.log('Actual cursor position after set:', textareaElement.selectionStart);
-      }, 10);
-    } catch (error) {
-      console.error('Error in mock element positioning:', error);
-      // Fallback to end position
-      const textLength = textareaElement.value.length;
-      textareaElement.setSelectionRange(textLength, textLength);
-    }
-  }
-
-  // Handle textarea input
-  function handleInput(event: Event & { currentTarget: HTMLTextAreaElement }) {
-    const target = event.currentTarget;
-
-    // For single-line, replace newlines with spaces
-    if (!multiline) {
-      target.value = target.value.replace(/\n/g, ' ');
-    }
-
-    content = target.value;
-
-    // Auto-resize only if multiline
-    if (multiline) {
-      autoResizeTextarea(target);
-    }
-
+  // Handle content changes from CodeMirror
+  function handleContentChanged(event: CustomEvent<{ content: string }>) {
+    content = event.detail.content;
     dispatch('contentChanged', { nodeId, content });
-  }
-
-  // Auto-resize textarea (only for multiline)
-  function autoResizeTextarea(textarea: HTMLTextAreaElement) {
-    textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
-  }
-
-  // Handle blur
-  function handleBlur() {
-    if (!focused) return;
-    focused = false;
-    dispatch('blur', { nodeId });
   }
 
   // Handle keyboard shortcuts
   function handleKeyDown(event: KeyboardEvent) {
-    if (focused) {
-      // When editing, handle Escape and Enter
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        focused = false;
-        dispatch('blur', { nodeId });
-        return;
-      }
-
-      // For single-line, Enter saves and exits
-      if (!multiline && event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        focused = false;
-        dispatch('blur', { nodeId });
-        return;
-      }
-
-      // Other keys pass through naturally
-      return;
-    }
-
-    // When not editing, handle Enter/Space to start editing
+    // When not focused on CodeMirror, handle Enter/Space to focus editor
     if (editable && contentEditable && (event.code === 'Enter' || event.code === 'Space')) {
       event.preventDefault();
-      startEditing();
+      editorRef?.focus();
     }
   }
 
@@ -253,6 +88,7 @@
     `ns-node--${nodeType}`,
     hasChildren && 'ns-node--has-children',
     isProcessing && 'ns-node--processing',
+    'ns-node--always-editing', // Always in editing mode now
     className
   ]
     .filter(Boolean)
@@ -291,75 +127,31 @@
       {/if}
     </div>
 
-    <!-- Node content with edit/display logic -->
+    <!-- Node content with CodeMirror editor -->
     <div class="ns-node__content">
       <slot name="content">
-        {#if focused && contentEditable}
-          <!-- Edit mode (only if content is directly editable) -->
-          <textarea
-            bind:this={textareaElement}
-            class="ns-node__textarea {multiline
-              ? 'ns-node__textarea--multiline'
-              : 'ns-node__textarea--single'}"
-            bind:value={content}
-            on:input={handleInput}
-            on:blur={handleBlur}
-            on:keydown={handleKeyDown}
-            on:keydown|stopPropagation
+        {#if contentEditable}
+          <!-- Always-editing mode with CodeMirror -->
+          <CodeMirrorEditor
+            bind:this={editorRef}
+            bind:content
+            {multiline}
+            markdown_mode={markdown}
+            editable={editable}
             {placeholder}
-            rows={1}
-          ></textarea>
-
-          <!-- Mock element for precise cursor positioning -->
-          {#if textareaElement}
-            <!-- @ts-expect-error: Svelte component binding inference issue -->
-            <MockTextElement
-              bind:this={mockElementRef}
-              {content}
-              fontFamily={getComputedStyle(textareaElement).fontFamily}
-              fontSize={getComputedStyle(textareaElement).fontSize}
-              fontWeight={getComputedStyle(textareaElement).fontWeight}
-              lineHeight={getComputedStyle(textareaElement).lineHeight}
-              width={textareaElement.offsetWidth}
-              {multiline}
-            />
-          {/if}
+            on:contentChanged={handleContentChanged}
+          />
         {:else}
-          <!-- Display mode -->
-          {#if editable && contentEditable}
-            <div
-              class="ns-node__display ns-node__display--clickable"
-              role="button"
-              tabindex="0"
-              on:click={handleDisplayClick}
-              on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  startEditing();
-                }
-              }}
-              aria-label="Click to edit content"
-            >
-              <slot name="display-content">
-                {#if content}
-                  <span class="ns-node__text">{content}</span>
-                {:else}
-                  <span class="ns-node__empty">{placeholder}</span>
-                {/if}
-              </slot>
-            </div>
-          {:else}
-            <!-- Non-editable display -->
-            <div class="ns-node__display" role="region">
-              <slot name="display-content">
-                {#if content}
-                  <span class="ns-node__text">{content}</span>
-                {:else}
-                  <span class="ns-node__empty">{placeholder}</span>
-                {/if}
-              </slot>
-            </div>
-          {/if}
+          <!-- Non-editable display mode -->
+          <div class="ns-node__display" role="region">
+            <slot name="display-content">
+              {#if content}
+                <span class="ns-node__text">{content}</span>
+              {:else}
+                <span class="ns-node__empty">{placeholder}</span>
+              {/if}
+            </slot>
+          </div>
         {/if}
       </slot>
 
@@ -468,50 +260,15 @@
     min-width: 0; /* Prevent overflow */
   }
 
-  /* Textarea styling */
-  .ns-node__textarea {
-    width: 100%;
+  /* CodeMirror integration styles */
+  .ns-node--always-editing .ns-node__content {
+    /* Ensure CodeMirror editor fits seamlessly */
     min-height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: 0;
-    font-family: inherit;
-    font-size: 14px;
-    line-height: 1.4;
-    background: transparent;
-    color: hsl(var(--foreground));
-    outline: none;
-    resize: none;
-    overflow: hidden;
-  }
-
-  /* Single-line textarea (default) */
-  .ns-node__textarea--single {
-    height: 20px;
-    white-space: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  /* Multi-line textarea */
-  .ns-node__textarea--multiline {
-    min-height: 20px;
-    white-space: pre-wrap;
-    overflow-y: auto;
-  }
-
-  .ns-node__textarea::placeholder {
-    color: hsl(var(--muted-foreground));
-    font-style: italic;
   }
 
   /* Display styling */
   .ns-node__display {
     min-height: 20px;
-  }
-
-  .ns-node__display--clickable {
-    cursor: text;
   }
 
   .ns-node__text {

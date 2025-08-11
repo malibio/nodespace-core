@@ -6,7 +6,6 @@
   import TextNode from '$lib/components/TextNode.svelte';
   import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
   import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
-  import MockPositioningTest from '$lib/design/components/MockPositioningTest.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
 
   // Import shadcn-svelte components
@@ -240,10 +239,7 @@ This TextNode demonstrates the enhanced inline editing capabilities with markdow
             </div>
           </div>
 
-          <!-- Mock Element Positioning System Test -->
-          <div class="positioning-test">
-            <MockPositioningTest />
-          </div>
+          <!-- CodeMirror Foundation now handles positioning natively -->
         </div>
       </main>
 
