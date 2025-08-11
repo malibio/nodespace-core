@@ -177,17 +177,18 @@
   // Handle clicks outside the node to blur
   function handleGlobalClick(event: MouseEvent) {
     if (focused && nodeElement && !nodeElement.contains(event.target as HTMLElement)) {
+      console.log('Global click detected outside node, blurring');
       focused = false;
     }
   }
   
-  // Setup global click listener
+  // Setup global click listener - TEMPORARILY DISABLED FOR DEBUGGING
   onMount(() => {
-    document.addEventListener('click', handleGlobalClick);
+    // document.addEventListener('click', handleGlobalClick);
   });
   
   onDestroy(() => {
-    document.removeEventListener('click', handleGlobalClick);
+    // document.removeEventListener('click', handleGlobalClick);
   });
 </script>
 
