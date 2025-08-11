@@ -142,14 +142,28 @@ SCOPE: Complete independent implementation with all acceptance criteria
 - Feature is large/complex and benefits from incremental review
 - Parent issue explicitly specifies "individual branch approach"
 
+#### **Subagent Responsibility Division**
+
+**Primary Agent Responsibilities:**
+- Initial startup sequence (git status, branch creation, issue assignment, project status updates)
+- High-level coordination and task planning
+- Final PR creation and merge process
+- Code review coordination (using senior-architect-reviewer when needed)
+
+**Subagent Responsibilities:**
+- Technical implementation only (within assigned scope)
+- Testing and validation of implementation
+- Technical documentation of changes made
+- Acceptance criteria verification
+
 #### **Mandatory Subagent Prompt Template**
 
 ```markdown
 I need to implement Issue #X [TITLE]. 
 
-**BRANCHING STRATEGY:** [Specify approach based on parent issue]
-**PR POLICY:** [Specify whether to create PR or not]
-**SCOPE:** [Define exact scope of work]
+**BRANCHING STRATEGY:** Work on existing branch `feature/issue-X-name` (already created)
+**PR POLICY:** Primary agent handles PR creation - focus on implementation only
+**SCOPE:** Technical implementation only - startup sequence already completed
 
 ## Context
 [Provide project context and current state]
