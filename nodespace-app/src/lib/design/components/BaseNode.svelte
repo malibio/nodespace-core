@@ -50,6 +50,7 @@
 
   // Handle display mode clicks - enter edit mode with cursor positioning
   function handleDisplayClick(event: MouseEvent) {
+    console.log('Display click handler called!', { editable, contentEditable, focused });
     if (editable && contentEditable) {
       focused = true;
       
@@ -57,8 +58,11 @@
       const clickX = event.clientX;
       const clickY = event.clientY;
       
+      console.log('Setting focused to true, coordinates:', { clickX, clickY });
+      
       // Focus and position cursor after editor is rendered
       setTimeout(() => {
+        console.log('Focusing editor, editorRef exists:', !!editorRef);
         editorRef?.focus();
         // Position cursor at click location
         editorRef?.setCursorAtCoords(clickX, clickY);
@@ -192,6 +196,7 @@
       <slot name="content">
         {#if contentEditable && focused}
           <!-- EDIT MODE: Real-time hybrid CodeMirror -->
+          <div style="background: lightgreen; padding: 4px; margin: 2px;">DEBUG: EDIT MODE</div>
           <CodeMirrorEditor
             bind:this={editorRef}
             bind:content
@@ -204,6 +209,7 @@
           />
         {:else if contentEditable}
           <!-- DISPLAY MODE: Clean formatted rendering -->
+          <div style="background: lightblue; padding: 4px; margin: 2px;">DEBUG: DISPLAY MODE (contentEditable={contentEditable}, focused={focused})</div>
           <div 
             class="ns-node__display" 
             role="button"
@@ -221,6 +227,7 @@
           </div>
         {:else}
           <!-- Non-editable content -->
+          <div style="background: lightcoral; padding: 4px; margin: 2px;">DEBUG: NON-EDITABLE MODE</div>
           <div class="ns-node__display" role="region">
             <slot name="display-content">
               {#if content}
