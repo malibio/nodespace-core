@@ -63,9 +63,21 @@
       // Focus and position cursor after editor is rendered
       setTimeout(() => {
         console.log('Focusing editor, editorRef exists:', !!editorRef);
-        editorRef?.focus();
-        // Position cursor at click location
-        editorRef?.setCursorAtCoords(clickX, clickY);
+        if (editorRef) {
+          editorRef.focus();
+          // Position cursor at click location
+          editorRef.setCursorAtCoords(clickX, clickY);
+        } else {
+          console.log('editorRef not ready, retrying in 50ms...');
+          // Retry if editor not ready yet
+          setTimeout(() => {
+            console.log('Retry - editorRef exists:', !!editorRef);
+            if (editorRef) {
+              editorRef.focus();
+              editorRef.setCursorAtCoords(clickX, clickY);
+            }
+          }, 50);
+        }
       }, 0);
     }
     dispatch('click', { nodeId, event });
@@ -94,9 +106,19 @@
       event.preventDefault();
       focused = true;
       setTimeout(() => {
-        editorRef?.focus();
-        // For keyboard entry, position cursor at end of content
-        editorRef?.setCursorAtEnd();
+        if (editorRef) {
+          editorRef.focus();
+          // For keyboard entry, position cursor at end of content
+          editorRef.setCursorAtEnd();
+        } else {
+          // Retry if editor not ready yet
+          setTimeout(() => {
+            if (editorRef) {
+              editorRef.focus();
+              editorRef.setCursorAtEnd();
+            }
+          }, 50);
+        }
       }, 0);
     }
   }
