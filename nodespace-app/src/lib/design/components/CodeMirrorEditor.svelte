@@ -280,6 +280,34 @@
   export function blur() {
     editorView?.contentDOM.blur();
   }
+
+  // Position cursor at coordinates
+  export function setCursorAtCoords(x: number, y: number) {
+    if (!editorView) return;
+    
+    const pos = editorView.posAtCoords({ x, y });
+    if (pos !== null) {
+      editorView.dispatch({
+        selection: { anchor: pos, head: pos }
+      });
+    }
+  }
+
+  // Get editor DOM element bounds for coordinate calculations
+  export function getEditorBounds() {
+    return editorView?.contentDOM.getBoundingClientRect();
+  }
+
+  // Position cursor at end of document
+  export function setCursorAtEnd() {
+    if (!editorView) return;
+    
+    const doc = editorView.state.doc;
+    const pos = doc.length;
+    editorView.dispatch({
+      selection: { anchor: pos, head: pos }
+    });
+  }
 </script>
 
 <div

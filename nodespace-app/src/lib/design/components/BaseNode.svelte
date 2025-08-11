@@ -48,13 +48,20 @@
     contentChanged: { nodeId: string; content: string };
   }>();
 
-  // Handle display mode clicks - enter edit mode
+  // Handle display mode clicks - enter edit mode with cursor positioning
   function handleDisplayClick(event: MouseEvent) {
     if (editable && contentEditable) {
       focused = true;
-      // Focus the editor after it's rendered
+      
+      // Capture click coordinates for cursor positioning
+      const clickX = event.clientX;
+      const clickY = event.clientY;
+      
+      // Focus and position cursor after editor is rendered
       setTimeout(() => {
         editorRef?.focus();
+        // Position cursor at click location
+        editorRef?.setCursorAtCoords(clickX, clickY);
       }, 0);
     }
     dispatch('click', { nodeId, event });
@@ -84,6 +91,8 @@
       focused = true;
       setTimeout(() => {
         editorRef?.focus();
+        // For keyboard entry, position cursor at end of content
+        editorRef?.setCursorAtEnd();
       }, 0);
     }
   }
