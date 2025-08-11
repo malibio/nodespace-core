@@ -41,6 +41,11 @@
   
   // Focus state for edit/display mode switching
   let focused = false;
+  
+  // Debug reactive statement
+  $: {
+    console.log('Reactive update:', { focused, contentEditable, editMode: contentEditable && focused });
+  }
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -215,52 +220,50 @@
 
     <!-- Node content - edit/display mode switching -->
     <div class="ns-node__content">
-      <slot name="content">
-        {#if contentEditable && focused}
-          <!-- EDIT MODE: Real-time hybrid CodeMirror -->
-          <div style="background: lightgreen; padding: 4px; margin: 2px;">DEBUG: EDIT MODE</div>
-          <CodeMirrorEditor
-            bind:this={editorRef}
-            bind:content
-            {multiline}
-            {markdown}
-            {editable}
-            {placeholder}
-            on:contentChanged={handleContentChanged}
-            on:blur={handleBlur}
-          />
-        {:else if contentEditable}
-          <!-- DISPLAY MODE: Clean formatted rendering -->
-          <div style="background: lightblue; padding: 4px; margin: 2px;">DEBUG: DISPLAY MODE (contentEditable={contentEditable}, focused={focused})</div>
-          <div 
-            class="ns-node__display" 
-            role="button"
-            tabindex="0"
-            on:click={handleDisplayClick}
-            on:keydown={handleDisplayKeyDown}
-          >
-            <slot name="display-content">
-              {#if content}
-                <span class="ns-node__text">{content}</span>
-              {:else}
-                <span class="ns-node__empty">{placeholder}</span>
-              {/if}
-            </slot>
-          </div>
-        {:else}
-          <!-- Non-editable content -->
-          <div style="background: lightcoral; padding: 4px; margin: 2px;">DEBUG: NON-EDITABLE MODE</div>
-          <div class="ns-node__display" role="region">
-            <slot name="display-content">
-              {#if content}
-                <span class="ns-node__text">{content}</span>
-              {:else}
-                <span class="ns-node__empty">{placeholder}</span>
-              {/if}
-            </slot>
-          </div>
-        {/if}
-      </slot>
+      {#if contentEditable && focused}
+        <!-- EDIT MODE: Real-time hybrid CodeMirror -->
+        <div style="background: lightgreen; padding: 4px; margin: 2px;">DEBUG: EDIT MODE</div>
+        <CodeMirrorEditor
+          bind:this={editorRef}
+          bind:content
+          {multiline}
+          {markdown}
+          {editable}
+          {placeholder}
+          on:contentChanged={handleContentChanged}
+          on:blur={handleBlur}
+        />
+      {:else if contentEditable}
+        <!-- DISPLAY MODE: Clean formatted rendering -->
+        <div style="background: lightblue; padding: 4px; margin: 2px;">DEBUG: DISPLAY MODE (contentEditable={contentEditable}, focused={focused})</div>
+        <div 
+          class="ns-node__display" 
+          role="button"
+          tabindex="0"
+          on:click={handleDisplayClick}
+          on:keydown={handleDisplayKeyDown}
+        >
+          <slot name="display-content">
+            {#if content}
+              <span class="ns-node__text">{content}</span>
+            {:else}
+              <span class="ns-node__empty">{placeholder}</span>
+            {/if}
+          </slot>
+        </div>
+      {:else}
+        <!-- Non-editable content -->
+        <div style="background: lightcoral; padding: 4px; margin: 2px;">DEBUG: NON-EDITABLE MODE</div>
+        <div class="ns-node__display" role="region">
+          <slot name="display-content">
+            {#if content}
+              <span class="ns-node__text">{content}</span>
+            {:else}
+              <span class="ns-node__empty">{placeholder}</span>
+            {/if}
+          </slot>
+        </div>
+      {/if}
 
       <!-- Additional node-specific content -->
       <slot></slot>
