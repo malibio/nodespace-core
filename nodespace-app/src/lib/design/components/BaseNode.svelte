@@ -15,6 +15,7 @@
   import Icon, { type IconName } from '../icons/index.js';
   import MockTextElement from './MockTextElement.svelte';
   import { findCharacterFromClickFast, isClickWithinTextBounds } from './CursorPositioning';
+  import CodeMirrorEditor from './CodeMirrorEditor.svelte';
 
   // Essential Props (Simplified to 5 core + processing)
   export let nodeType: NodeType = 'text';
@@ -37,7 +38,7 @@
 
   // Edit state
   let focused = false;
-  let textareaElement: HTMLTextAreaElement;
+  let codeMirrorRef: CodeMirrorEditor;
   let mockElementRef: any;
 
   // Event dispatcher
@@ -74,39 +75,36 @@
     dispatch('focus', { nodeId });
 
     await tick();
-    if (textareaElement) {
-      // Auto-resize for multiline content on focus
-      if (multiline) {
-        autoResizeTextarea(textareaElement);
-      }
-
-      textareaElement.focus();
+    if (codeMirrorRef) {
+      codeMirrorRef.focus();
 
       // Position cursor based on click location
       if (clickEvent) {
-        await tick(); // Wait for textarea to be fully rendered
+        await tick(); // Wait for CodeMirror to be fully rendered
         positionCursorFromClick(clickEvent);
       } else {
         // No click event, place at end
-        textareaElement.setSelectionRange(
-          textareaElement.value.length,
-          textareaElement.value.length
-        );
+        const textLength = codeMirrorRef.getTextLength();
+        codeMirrorRef.setSelection(textLength, textLength);
       }
     }
   }
 
   // Position cursor based on click coordinates using mock element
   async function positionCursorFromClick(clickEvent: MouseEvent) {
-    if (!textareaElement || !mockElementRef) return;
+    if (!codeMirrorRef || !mockElementRef) return;
 
-    const textareaRect = textareaElement.getBoundingClientRect();
+    // Get CodeMirror container bounds by accessing its DOM element
+    const cmContainer = codeMirrorRef?.getContainer();
+    if (!cmContainer) return;
+    
+    const editorRect = cmContainer.getBoundingClientRect();
 
     // Validate click is within reasonable bounds
-    if (!isClickWithinTextBounds(clickEvent.clientX, clickEvent.clientY, textareaRect)) {
-      // Click is too far from text area, position at end
-      const textLength = textareaElement.value.length;
-      textareaElement.setSelectionRange(textLength, textLength);
+    if (!isClickWithinTextBounds(clickEvent.clientX, clickEvent.clientY, editorRect)) {
+      // Click is too far from editor, position at end
+      const textLength = codeMirrorRef.getTextLength();
+      codeMirrorRef.setSelection(textLength, textLength);
       return;
     }
 
@@ -114,11 +112,11 @@
       content: content.substring(0, 20) + '...',
       clickX: clickEvent.clientX,
       clickY: clickEvent.clientY,
-      textareaRect: {
-        left: textareaRect.left,
-        top: textareaRect.top,
-        width: textareaRect.width,
-        height: textareaRect.height
+      editorRect: {
+        left: editorRect.left,
+        top: editorRect.top,
+        width: editorRect.width,
+        height: editorRect.height
       },
       multiline: multiline
     });
@@ -128,8 +126,8 @@
       const mockElement = mockElementRef.getElement();
       if (!mockElement) {
         console.warn('Mock element not available, falling back to end position');
-        const textLength = textareaElement.value.length;
-        textareaElement.setSelectionRange(textLength, textLength);
+        const textLength = codeMirrorRef.getTextLength();
+        codeMirrorRef.setSelection(textLength, textLength);
         return;
       }
 
@@ -138,13 +136,13 @@
         mockElement,
         clickEvent.clientX,
         clickEvent.clientY,
-        textareaRect
+        editorRect
       );
 
       // Set cursor position based on result
       const targetPosition = Math.max(
         0,
-        Math.min(positionResult.index, textareaElement.value.length)
+        Math.min(positionResult.index, codeMirrorRef.getTextLength())
       );
 
       console.log('Mock element positioning result:', {
@@ -153,43 +151,31 @@
         distance: positionResult.distance
       });
 
-      textareaElement.setSelectionRange(targetPosition, targetPosition);
+      codeMirrorRef.setSelection(targetPosition, targetPosition);
 
-      // Verify the cursor was set correctly
-      setTimeout(() => {
-        console.log('Actual cursor position after set:', textareaElement.selectionStart);
-      }, 10);
+      console.log('CodeMirror cursor position set to:', targetPosition);
     } catch (error) {
       console.error('Error in mock element positioning:', error);
       // Fallback to end position
-      const textLength = textareaElement.value.length;
-      textareaElement.setSelectionRange(textLength, textLength);
+      const textLength = codeMirrorRef.getTextLength();
+      codeMirrorRef.setSelection(textLength, textLength);
     }
   }
 
-  // Handle textarea input
-  function handleInput(event: Event & { currentTarget: HTMLTextAreaElement }) {
-    const target = event.currentTarget;
-
-    // For single-line, replace newlines with spaces
-    if (!multiline) {
-      target.value = target.value.replace(/\n/g, ' ');
-    }
-
-    content = target.value;
-
-    // Auto-resize only if multiline
-    if (multiline) {
-      autoResizeTextarea(target);
-    }
-
+  // Handle CodeMirror input
+  function handleCodeMirrorInput(event: CustomEvent<{ content: string }>) {
+    content = event.detail.content;
     dispatch('contentChanged', { nodeId, content });
   }
 
-  // Auto-resize textarea (only for multiline)
-  function autoResizeTextarea(textarea: HTMLTextAreaElement) {
-    textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
+  // Handle CodeMirror focus
+  function handleCodeMirrorFocus() {
+    // Focus is already handled by the startEditing function
+  }
+
+  // Handle CodeMirror blur  
+  function handleCodeMirrorBlur() {
+    handleBlur();
   }
 
   // Handle blur
@@ -296,31 +282,29 @@
       <slot name="content">
         {#if focused && contentEditable}
           <!-- Edit mode (only if content is directly editable) -->
-          <textarea
-            bind:this={textareaElement}
-            class="ns-node__textarea {multiline
-              ? 'ns-node__textarea--multiline'
-              : 'ns-node__textarea--single'}"
-            bind:value={content}
-            on:input={handleInput}
-            on:blur={handleBlur}
-            on:keydown={handleKeyDown}
-            on:keydown|stopPropagation
-            {placeholder}
-            rows={1}
-          ></textarea>
+          <CodeMirrorEditor
+            bind:this={codeMirrorRef}
+            bind:content
+            {multiline}
+            {editable}
+            focused={true}
+            className="ns-node__editor"
+            on:input={handleCodeMirrorInput}
+            on:focus={handleCodeMirrorFocus}
+            on:blur={handleCodeMirrorBlur}
+          />
 
           <!-- Mock element for precise cursor positioning -->
-          {#if textareaElement}
+          {#if codeMirrorRef}
             <!-- @ts-expect-error: Svelte component binding inference issue -->
             <MockTextElement
               bind:this={mockElementRef}
               {content}
-              fontFamily={getComputedStyle(textareaElement).fontFamily}
-              fontSize={getComputedStyle(textareaElement).fontSize}
-              fontWeight={getComputedStyle(textareaElement).fontWeight}
-              lineHeight={getComputedStyle(textareaElement).lineHeight}
-              width={textareaElement.offsetWidth}
+              fontFamily="inherit"
+              fontSize="14px"
+              fontWeight="normal"
+              lineHeight="1.4"
+              width={300}
               {multiline}
             />
           {/if}
@@ -503,6 +487,14 @@
   .ns-node__textarea::placeholder {
     color: hsl(var(--muted-foreground));
     font-style: italic;
+  }
+
+  /* CodeMirror editor styling */
+  .ns-node__content :global(.ns-node__editor) {
+    width: 100%;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.4;
   }
 
   /* Display styling */
