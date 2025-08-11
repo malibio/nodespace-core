@@ -39,7 +39,8 @@ export default [
         Event: 'readonly',
         InputEvent: 'readonly',
         HTMLSpanElement: 'readonly',
-        NodeJS: 'readonly'
+        NodeJS: 'readonly',
+        navigator: 'readonly'
       }
     },
     plugins: {
@@ -86,7 +87,8 @@ export default [
         Event: 'readonly',
         InputEvent: 'readonly',
         HTMLSpanElement: 'readonly',
-        NodeJS: 'readonly'
+        NodeJS: 'readonly',
+        navigator: 'readonly'
       }
     },
     plugins: {

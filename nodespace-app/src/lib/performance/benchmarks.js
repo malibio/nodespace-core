@@ -10,7 +10,9 @@
 
 export class PerformanceBenchmarks {
   constructor() {
+    /** @type {any[]} */
     this.results = [];
+    /** @type {any} */
     this.memoryBaseline = null;
   }
 
@@ -18,9 +20,12 @@ export class PerformanceBenchmarks {
    * Set memory baseline before starting benchmarks
    */
   setMemoryBaseline() {
+    // @ts-ignore - Chrome-specific performance.memory API
     if (performance.memory) {
       this.memoryBaseline = {
+        // @ts-ignore - Chrome-specific performance.memory API
         usedJSHeapSize: performance.memory.usedJSHeapSize,
+        // @ts-ignore - Chrome-specific performance.memory API
         totalJSHeapSize: performance.memory.totalJSHeapSize,
         timestamp: performance.now()
       };
@@ -270,7 +275,7 @@ export class PerformanceBenchmarks {
 
     const results = {
       timestamp: new Date().toISOString(),
-      userAgent: navigator.userAgent,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Node.js Environment',
       memoryBaseline: this.memoryBaseline,
       tests: {}
     };

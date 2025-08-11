@@ -7,6 +7,7 @@
 
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+  // Optimized imports for tree shaking - import only what we use
   import { EditorView, type ViewUpdate } from '@codemirror/view';
   import { EditorState } from '@codemirror/state';
   import { markdown as markdownSupport } from '@codemirror/lang-markdown';
