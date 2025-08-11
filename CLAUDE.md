@@ -14,7 +14,7 @@ NodeSpace is an AI-native knowledge management system built with Rust backend, S
 > 2. **Determine branching strategy**: Check parent issue for specified approach (single branch vs. individual branches)
 > 3. **Create/switch to branch**: Based on strategy - either `git checkout -b feature/issue-<number>-brief-description` OR switch to existing parent issue branch
 > 4. **Assign issue**: `gh issue edit <number> --add-assignee "@me"`
-> 5. **Update project status**: Todo → In Progress (GitHub web interface)
+> 5. **Update project status**: Todo → In Progress (CLI - see [startup-sequence.md](docs/architecture/development/process/startup-sequence.md))
 > 6. **Select subagent**: Use decision tree below to choose specialized agent
 > 7. **Read issue requirements**: Understand all acceptance criteria
 > 8. **Plan implementation**: Self-contained approach with appropriate subagent
@@ -42,7 +42,7 @@ NodeSpace is an AI-native knowledge management system built with Rust backend, S
 > - ✅ **Self-Contained Implementation**: Each issue must work independently with full functionality
 > - ✅ **Early-Phase Mock Development**: Use mock data/services temporarily for parallel development (transitioning to real services soon)
 > - ✅ **Vertical Slicing**: Complete features end-to-end, not horizontal layers
-> - ✅ **GitHub Status Updates**: Manually update project status at each transition (Todo → In Progress → Ready for Review)
+> - ✅ **GitHub Status Updates**: Use CLI commands to update project status at each transition (Todo → In Progress → Ready for Review)
 > - ✅ **Use Appropriate Subagents**: Select specialized agents based on task type (see Subagent Selection Guide below)
 
 ### 1. Understanding the Project
@@ -199,7 +199,7 @@ Before using any subagent:
    gh issue view <number>
    gh issue edit <number> --add-assignee "@me"
    ```
-   Then manually update project status: Todo → In Progress (via GitHub web interface)
+   Then update project status using CLI commands (see [startup-sequence.md](docs/architecture/development/process/startup-sequence.md))
 
 2. **Create Feature Branch**
    ```bash
@@ -224,7 +224,7 @@ Before using any subagent:
    git push -u origin feature/issue-<number>-brief-description
    gh pr create --title "Implement Issue #<number>" --body "Closes #<number>"
    ```
-   Then manually update project status: In Progress → Ready for Review
+   Then update project status using CLI commands: In Progress → Ready for Review
 
 6. **Conduct Code Review**
    - **FOLLOW UNIVERSAL PROCESS**: Use the code review guidelines in the [PR review documentation](docs/architecture/development/process/pr-review.md) 
@@ -283,7 +283,7 @@ Before using any subagent:
 - [ ] Determined branching strategy from parent issue (single branch vs. individual branches)
 - [ ] Created/switched to appropriate branch based on strategy
 - [ ] Assigned issue to self (`gh issue edit <number> --add-assignee "@me"`)
-- [ ] Updated GitHub project status: Todo → In Progress (manual update)
+- [ ] Updated GitHub project status using CLI: Todo → In Progress
 - [ ] Selected appropriate subagent using the decision tree
 - [ ] Read issue requirements and acceptance criteria
 - [ ] Read development process documentation (start with [overview](docs/architecture/development/overview.md))
@@ -303,7 +303,7 @@ Before using any subagent:
 
 **PR and Review:**
 - [ ] Created PR with proper title and description
-- [ ] Updated GitHub project status: In Progress → Ready for Review (manual)
+- [ ] Updated GitHub project status using CLI: In Progress → Ready for Review
 - [ ] Used appropriate subagent for code review if needed
 - [ ] Merged immediately if review passes, or addressed feedback
 
