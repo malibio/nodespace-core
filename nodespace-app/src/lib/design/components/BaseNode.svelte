@@ -137,7 +137,7 @@
             bind:content
             {multiline}
             {markdown}
-            editable={editable}
+            {editable}
             {placeholder}
             on:contentChanged={handleContentChanged}
           />

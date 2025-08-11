@@ -22,7 +22,7 @@
   let editorElement: HTMLDivElement;
   let editorView: EditorView | undefined;
   let internalContent = content;
-  
+
   const dispatch = createEventDispatcher<{
     contentChanged: { content: string };
   }>();
@@ -40,34 +40,34 @@
         '&': {
           fontSize: '14px',
           lineHeight: '1.4',
-          fontFamily: 'inherit',
+          fontFamily: 'inherit'
         },
         '.cm-content': {
           padding: '0',
           minHeight: '20px',
           caretColor: 'hsl(var(--foreground))',
-          color: 'hsl(var(--foreground))',
+          color: 'hsl(var(--foreground))'
         },
         '.cm-focused': {
-          outline: 'none',
+          outline: 'none'
         },
         '.cm-editor': {
           outline: 'none',
-          background: 'transparent',
+          background: 'transparent'
         },
         '.cm-scroller': {
           fontFamily: 'inherit',
           fontSize: 'inherit',
-          lineHeight: 'inherit',
+          lineHeight: 'inherit'
         },
         '.cm-line': {
-          wordBreak: 'break-word',
+          wordBreak: 'break-word'
         },
         '&.cm-focused .cm-selectionBackground': {
-          backgroundColor: 'hsl(var(--accent) / 0.3)',
+          backgroundColor: 'hsl(var(--accent) / 0.3)'
         },
         '.cm-selectionBackground': {
-          backgroundColor: 'hsl(var(--accent) / 0.2)',
+          backgroundColor: 'hsl(var(--accent) / 0.2)'
         }
       }),
 
@@ -91,14 +91,14 @@
           color: 'hsl(var(--muted-foreground))',
           fontStyle: 'italic',
           pointerEvents: 'none',
-          display: content ? 'none' : 'block',
-        },
+          display: content ? 'none' : 'block'
+        }
       }),
-      
+
       // Add placeholder attribute when empty
-      content === '' && placeholder 
-        ? EditorView.contentAttributes.of({'data-placeholder': placeholder})
-        : [],
+      content === '' && placeholder
+        ? EditorView.contentAttributes.of({ 'data-placeholder': placeholder })
+        : []
     ];
 
     // Add markdown support if enabled
@@ -127,7 +127,7 @@
           }
           return tr;
         }),
-        
+
         // Handle Enter key to exit single-line mode
         EditorView.domEventHandlers({
           keydown(event) {
@@ -154,7 +154,7 @@
   // Update editor content
   function updateEditorContent(newContent: string) {
     if (!editorView) return;
-    
+
     const currentContent = editorView.state.doc.toString();
     if (currentContent !== newContent) {
       editorView.dispatch({
@@ -204,8 +204,8 @@
   }
 </script>
 
-<div 
-  bind:this={editorElement} 
+<div
+  bind:this={editorElement}
   class="codemirror-editor"
   class:codemirror-editor--multiline={multiline}
   class:codemirror-editor--single={!multiline}
