@@ -42,10 +42,8 @@
   // Focus state for edit/display mode switching
   let focused = false;
   
-  // Debug reactive statement
-  $: {
-    console.log('Reactive update:', { focused, contentEditable, editMode: contentEditable && focused });
-  }
+  // Reactive state tracking
+  $: editMode = contentEditable && focused;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -55,7 +53,6 @@
 
   // Handle display mode clicks - enter edit mode with cursor positioning
   function handleDisplayClick(event: MouseEvent) {
-    console.log('Display click handler called!', { editable, contentEditable, focused });
     if (editable && contentEditable) {
       focused = true;
       
@@ -63,20 +60,15 @@
       const clickX = event.clientX;
       const clickY = event.clientY;
       
-      console.log('Setting focused to true, coordinates:', { clickX, clickY });
-      
       // Focus and position cursor after editor is rendered
       setTimeout(() => {
-        console.log('Focusing editor, editorRef exists:', !!editorRef);
         if (editorRef) {
           editorRef.focus();
           // Position cursor at click location
           editorRef.setCursorAtCoords(clickX, clickY);
         } else {
-          console.log('editorRef not ready, retrying in 50ms...');
           // Retry if editor not ready yet
           setTimeout(() => {
-            console.log('Retry - editorRef exists:', !!editorRef);
             if (editorRef) {
               editorRef.focus();
               editorRef.setCursorAtCoords(clickX, clickY);
@@ -177,18 +169,20 @@
   // Handle clicks outside the node to blur
   function handleGlobalClick(event: MouseEvent) {
     if (focused && nodeElement && !nodeElement.contains(event.target as HTMLElement)) {
-      console.log('Global click detected outside node, blurring');
       focused = false;
     }
   }
   
-  // Setup global click listener - TEMPORARILY DISABLED FOR DEBUGGING
+  // Setup global click listener with proper timing
   onMount(() => {
-    // document.addEventListener('click', handleGlobalClick);
+    // Add listener with slight delay to avoid immediate blur on focus
+    setTimeout(() => {
+      document.addEventListener('click', handleGlobalClick);
+    }, 100);
   });
   
   onDestroy(() => {
-    // document.removeEventListener('click', handleGlobalClick);
+    document.removeEventListener('click', handleGlobalClick);
   });
 </script>
 
@@ -223,7 +217,6 @@
     <div class="ns-node__content">
       {#if contentEditable && focused}
         <!-- EDIT MODE: Real-time hybrid CodeMirror -->
-        <div style="background: lightgreen; padding: 4px; margin: 2px;">DEBUG: EDIT MODE</div>
         <CodeMirrorEditor
           bind:this={editorRef}
           bind:content
@@ -236,7 +229,6 @@
         />
       {:else if contentEditable}
         <!-- DISPLAY MODE: Clean formatted rendering -->
-        <div style="background: lightblue; padding: 4px; margin: 2px;">DEBUG: DISPLAY MODE (contentEditable={contentEditable}, focused={focused})</div>
         <div 
           class="ns-node__display" 
           role="button"
@@ -254,7 +246,6 @@
         </div>
       {:else}
         <!-- Non-editable content -->
-        <div style="background: lightcoral; padding: 4px; margin: 2px;">DEBUG: NON-EDITABLE MODE</div>
         <div class="ns-node__display" role="region">
           <slot name="display-content">
             {#if content}
@@ -380,6 +371,22 @@
   .ns-node--focused .ns-node__content {
     /* Ensure CodeMirror editor fits seamlessly */
     min-height: 20px;
+  }
+  
+  /* Consistent sizing for edit mode */
+  .ns-node--focused .codemirror-editor {
+    width: 100%;
+    background: transparent;
+  }
+  
+  .ns-node--focused .codemirror-editor :global(.cm-editor) {
+    background: transparent;
+    padding: 0;
+  }
+  
+  .ns-node--focused .codemirror-editor :global(.cm-content) {
+    padding: 0;
+    min-height: inherit;
   }
   
   /* Display mode styles */
