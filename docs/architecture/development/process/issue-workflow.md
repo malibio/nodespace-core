@@ -205,6 +205,21 @@ For parent issues using single branch approach (e.g., Issue #26 with sub-issues 
 - **Sub-issues show completion state** even when using parent branch workflow
 - **Parent issue status** tracks overall epic progress
 
+### Sub-Issue Completion Process (MANDATORY)
+After completing each sub-issue implementation:
+
+1. **Commit with issue reference**: `git commit -m "Implement feature (addresses #46)"`
+2. **Push branch immediately**: `git push -u origin feature/issue-parent-name`
+3. **Update sub-issue status**: Todo → Ready for Review (using CLI commands below)
+4. **Verify commit visibility**: Check that sub-issue shows referenced commits in timeline
+
+**Benefits of immediate push:**
+- ✅ Sub-issues can see their implementation commits immediately
+- ✅ Work is backed up and visible for collaboration
+- ✅ Enables continuous integration and early issue detection
+- ✅ Provides transparency and audit trail for stakeholders
+- ✅ Facilitates incremental review process
+
 **CLI Status Update Commands:**
 ```bash
 # Get project item ID (handles pagination)
