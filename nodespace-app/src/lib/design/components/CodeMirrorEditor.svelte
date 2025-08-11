@@ -9,12 +9,12 @@
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { EditorView, type ViewUpdate } from '@codemirror/view';
   import { EditorState } from '@codemirror/state';
-  import { markdown } from '@codemirror/lang-markdown';
+  import { markdown as markdownSupport } from '@codemirror/lang-markdown';
 
   // Props
   export let content = '';
   export let multiline = false;
-  export let markdown_mode = false;
+  export let markdown = false;
   export let editable = true;
   export let placeholder = '';
 
@@ -102,8 +102,8 @@
     ];
 
     // Add markdown support if enabled
-    if (markdown_mode) {
-      extensions.push(markdown());
+    if (markdown) {
+      extensions.push(markdownSupport());
     }
 
     // Handle single-line mode

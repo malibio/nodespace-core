@@ -136,7 +136,7 @@
             bind:this={editorRef}
             bind:content
             {multiline}
-            markdown_mode={markdown}
+            {markdown}
             editable={editable}
             {placeholder}
             on:contentChanged={handleContentChanged}
