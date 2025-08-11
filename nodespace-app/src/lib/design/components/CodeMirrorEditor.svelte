@@ -71,6 +71,62 @@
         }
       }),
 
+      // NodeSpace hybrid markdown theme - applied when markdown prop is true
+      ...(markdown
+        ? [
+            EditorView.theme({
+              // H1 styling - 2rem, font-weight: 600, line-height: 1.38em
+              '.cm-line .cm-header.cm-header-1': {
+                fontSize: '2rem',
+                fontWeight: '600',
+                lineHeight: '1.38em',
+                color: 'hsl(var(--foreground))'
+              },
+              // H2 styling - 1.5rem, font-weight: 600, line-height: 1.38em
+              '.cm-line .cm-header.cm-header-2': {
+                fontSize: '1.5rem',
+                fontWeight: '600',
+                lineHeight: '1.38em',
+                color: 'hsl(var(--foreground))'
+              },
+              // H3 styling - 1.2rem, font-weight: 600, line-height: 1.15em
+              '.cm-line .cm-header.cm-header-3': {
+                fontSize: '1.2rem',
+                fontWeight: '600',
+                lineHeight: '1.15em',
+                color: 'hsl(var(--foreground))'
+              },
+              // H4 styling - 1rem, font-weight: 600, line-height: 1.15em
+              '.cm-line .cm-header.cm-header-4': {
+                fontSize: '1rem',
+                fontWeight: '600',
+                lineHeight: '1.15em',
+                color: 'hsl(var(--foreground))'
+              },
+              // H5 styling - 0.9rem, font-weight: 600, line-height: 1.15em
+              '.cm-line .cm-header.cm-header-5': {
+                fontSize: '0.9rem',
+                fontWeight: '600',
+                lineHeight: '1.15em',
+                color: 'hsl(var(--foreground))'
+              },
+              // H6 styling - 0.8rem, font-weight: 600, line-height: 1.15em
+              '.cm-line .cm-header.cm-header-6': {
+                fontSize: '0.8rem',
+                fontWeight: '600',
+                lineHeight: '1.15em',
+                color: 'hsl(var(--foreground))'
+              },
+              // Ensure header marks (#, ##, etc.) remain visible with same styling
+              '.cm-line .cm-header .cm-header-hash': {
+                color: 'hsl(var(--muted-foreground))',
+                fontWeight: 'inherit',
+                fontSize: 'inherit'
+              }
+            })
+          ]
+        : []),
+
       // Update listener with debouncing
       EditorView.updateListener.of((update: ViewUpdate) => {
         if (update.docChanged) {

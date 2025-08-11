@@ -43,17 +43,17 @@ gh issue edit <number> --add-assignee "@me"
 **Use GitHub CLI commands to update project status:**
 
 ```bash
-# Get project item ID for your issue using JSON + jq (IMPROVED)
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
+# Get project item ID for your issue using direct jq filter (SCALABLE)
+ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
 
 # Update status: Todo → In Progress
 gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 ```
 
 **Key Improvements:**
-- ✅ **Direct issue number filtering** - No grep/text parsing errors
-- ✅ **JSON structured data** - Reliable and precise
-- ✅ **Explicit limit** - Ensures all project items are retrieved
+- ✅ **Direct jq filtering with -q flag** - More efficient than pipe to jq
+- ✅ **Scalable limit (200)** - Handles growing project size
+- ✅ **No intermediate JSON parsing** - Direct output from GitHub CLI
 - ✅ **Clean one-liner** - Can be used in command substitution
 
 **📖 See [Issue Workflow](issue-workflow.md) for complete CLI command reference**
@@ -65,8 +65,8 @@ gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id 
 - Example: Issue #26 (parent) + Issue #46 (sub-issue)
 
 ```bash
-# Update parent issue status (IMPROVED)
-PARENT_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == PARENT_NUMBER) | .id')
+# Update parent issue status (SCALABLE)
+PARENT_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q '.items[] | select(.content.number == PARENT_NUMBER) | .id')
 gh project item-edit --id $PARENT_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
 
 # Assign parent issue
@@ -141,8 +141,8 @@ Before proceeding to implementation, verify ALL of the following:
 # Essential CLI commands for startup sequence
 gh issue edit ISSUE_NUMBER --add-assignee "@me"
 
-# Get project item ID (JSON approach)  
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
+# Get project item ID (Scalable approach)  
+ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
 
 # Update project status to In Progress
 gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
