@@ -6,12 +6,18 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 
 ### Key Architectural Decisions
 
-- **Framework**: Svelte + Tauri (migrating from React for simplicity and performance)
+- **Framework**: Svelte + Tauri (migrating from React for simplicity and performance)  
 - **Backend**: Rust with trait-based plugin system
 - **Node Types**: Core types (Text, Task, AI Chat, Entity, Query) + extensible plugin system
 - **AI Integration**: Native LLM integration for CRUD operations, validation, and content generation
 - **Build Strategy**: Build-time plugin compilation for parallel development
 - **Real-time Updates**: Live query nodes with automatic result synchronization
+
+#### Text Editing Architecture (2025 Decisions)
+- **ADR-001**: Always-Editing Mode - No focused/unfocused states, always show active editor
+- **ADR-002**: Component Composition Inheritance - TextNode extends BaseNode via prop overrides  
+- **ADR-003**: Universal CodeMirror Strategy - All nodes use CodeMirror with different configurations
+- **ADR-004**: Debounced Events Architecture - Use CodeMirror's native debouncing, not manual timers
 
 ---
 
@@ -59,11 +65,13 @@ NodeSpace includes sophisticated user interface capabilities that rival modern I
 - **Progressive Indentation**: Consistent 24px indentation per hierarchy level
 - **Theme Integration**: Seamless integration with light/dark themes
 
-#### Advanced Text Rendering
-- **Hybrid Syntax Rendering**: Live markdown rendering with inline editing capability
-- **Precise Cursor Positioning**: Mock element system for accurate click-to-cursor placement
-- **Interactive Decorations**: Rich node reference previews and interactive widgets
-- **Performance Optimized**: Efficient rendering for large documents and deep hierarchies
+#### Advanced Text Rendering (CodeMirror-Based)
+- **Universal CodeMirror Foundation**: All nodes use CodeMirror 6 with configuration-based specialization
+- **Always-Editing Mode**: No edit/display mode switching - native editor always active
+- **Hybrid Markdown Rendering**: Live syntax highlighting with formatting (syntax + visual styles simultaneously)
+- **Native Click-to-Cursor**: CodeMirror's built-in positioning eliminates custom cursor logic
+- **Debounced Events**: Native CodeMirror debouncing (~300-500ms) for optimal performance
+- **Component Composition Inheritance**: TextNode extends BaseNode via explicit prop overrides
 
 ### Repository Structure
 
@@ -91,12 +99,14 @@ nodespace-core/                    # Main repository with workspace
 │   │   ├── entity_node.rs         # Custom structured entities
 │   │   └── query_node.rs          # Live data views
 │   └── ui/                        # Core Svelte components
-│       ├── TextNode.svelte        # Text node UI with hybrid rendering
-│       ├── TaskNode.svelte        # Task node UI
-│       ├── AIChatNode.svelte      # AI chat UI
-│       ├── EntityNode.svelte      # Entity node UI
-│       ├── QueryNode.svelte       # Query node UI with real-time updates
-│       ├── BaseNode.svelte        # Foundation component with selection support
+│       ├── CodeMirrorEditor.svelte # Universal editor foundation (CodeMirror 6 wrapper)
+│       ├── BaseNode.svelte        # Always-editing foundation with CodeMirror integration
+│       ├── TextNode.svelte        # Extends BaseNode: multiline + markdown
+│       ├── TaskNode.svelte        # Extends BaseNode: single-line + task features
+│       ├── PersonNode.svelte      # Extends BaseNode: read-only + computed content
+│       ├── EntityNode.svelte      # Extends BaseNode: entity-specific behavior
+│       ├── AIChatNode.svelte      # Extends BaseNode: AI interaction features
+│       ├── QueryNode.svelte       # Extends BaseNode: query syntax + real-time updates
 │       └── NodeTree.svelte        # Hierarchical display with multi-selection
 ├── nodespace-app/                 # Tauri desktop application
 │   ├── src-tauri/                 # Rust backend
@@ -305,6 +315,157 @@ pub struct QueryNode {
 - **Complex Queries**: Filter, sort, and aggregate across multiple entity types
 - **View-Specific Calculations**: Rankings, percentiles, and aggregate metrics
 - **Live Synchronization**: Changes to source nodes instantly update query results
+
+---
+
+## Frontend Component Architecture
+
+### Component Inheritance Pattern
+
+NodeSpace frontend uses **Svelte component composition** to implement node type inheritance. All specialized nodes extend BaseNode through explicit prop overrides, creating a maintainable hierarchy.
+
+#### BaseNode Foundation
+```svelte
+<!-- BaseNode.svelte: Universal editing foundation -->
+<script lang="ts">
+  // Core configuration with defaults
+  export let nodeId: string = '';
+  export let content: string = '';
+  export let multiline: boolean = false;    // Single-line by default
+  export let markdown: boolean = false;     // Plain text by default  
+  export let contentEditable: boolean = true; // Editable by default
+</script>
+
+<!-- Always-editing mode: CodeMirror always visible -->
+<CodeMirrorEditor 
+  {content}
+  {multiline}
+  {markdown}
+  editable={contentEditable}
+  on:contentChanged={handleContentChanged}
+/>
+```
+
+#### Specialized Node Types
+```svelte
+<!-- TextNode.svelte: Multiline + Markdown -->
+<BaseNode 
+  {nodeId}
+  {content}
+  multiline={true}     <!-- Override: Enable multiline -->
+  markdown={true}      <!-- Override: Enable markdown syntax -->
+  on:contentChanged    <!-- Events bubble up -->
+/>
+
+<!-- PersonNode.svelte: Read-only + Computed Content -->
+<script>
+  $: content = `${firstName} ${lastName} ${email}`;
+</script>
+<BaseNode 
+  {nodeId}
+  {content}
+  contentEditable={false}  <!-- Override: Read-only -->
+  on:click={handlePersonClick}
+/>
+
+<!-- TaskNode.svelte: Single-line + Task Features -->
+<BaseNode 
+  {nodeId}
+  {content}
+  multiline={false}    <!-- Override: Single-line only -->
+  markdown={false}     <!-- Override: Plain text -->
+  iconName={completed ? "check-circle" : "circle"}
+  on:contentChanged
+/>
+```
+
+### CodeMirror Integration
+
+#### Universal Editor Strategy
+- **All nodes use CodeMirror** with different configurations
+- **Always-editing mode** - no focused/unfocused states
+- **Native positioning** - eliminates custom cursor positioning code
+- **Debounced events** - uses CodeMirror's native debouncing (~300-500ms)
+
+#### CodeMirrorEditor Component
+```typescript
+interface CodeMirrorEditorProps {
+  content: string;              // Text content (reactive)
+  multiline: boolean;           // Single-line vs multiline
+  markdown: boolean;            // Syntax highlighting on/off
+  editable: boolean;            // Read-only vs editable
+  on:contentChanged: Function;  // Debounced content changes
+}
+```
+
+#### Configuration Examples
+```javascript
+// BaseNode: Single-line, plain text
+const baseNodeConfig = {
+  multiline: false,
+  markdown: false,
+  extensions: [basicKeymap, singleLineMode]
+};
+
+// TextNode: Multiline, markdown
+const textNodeConfig = {
+  multiline: true,
+  markdown: true,
+  extensions: [basicKeymap, markdown(), hybridTheme]
+};
+
+// PersonNode: Read-only
+const personNodeConfig = {
+  multiline: false,
+  markdown: false,
+  extensions: [basicKeymap, EditorState.readOnly.of(true)]
+};
+```
+
+### Event Architecture
+
+#### Debounced Content Flow
+```
+User Types → CodeMirror Debouncing → contentChanged → BaseNode → SpecificNode → Save
+   (immediate)     (~300-500ms)         (debounced)     (relay)    (handle)    (API)
+```
+
+#### Event Bubbling Pattern
+```svelte
+<!-- Events flow naturally through component hierarchy -->
+<script>
+  // TextNode.svelte
+  function handleContentChanged(event) {
+    // TextNode-specific logic
+    content = event.detail.content;
+    
+    // Auto-save for TextNode
+    if (autoSave && content !== lastSavedContent) {
+      saveContent(content); // No additional debouncing needed
+    }
+    
+    // Bubble to parent
+    dispatch('contentChanged', event.detail);
+  }
+</script>
+
+<BaseNode on:contentChanged={handleContentChanged} />
+```
+
+### Benefits of This Architecture
+
+#### Code Reduction
+- **~300+ lines eliminated** - MockTextElement and CursorPositioning systems removed
+- **Single editor system** - No dual textarea/CodeMirror implementations
+- **Simplified state management** - No focused/unfocused complexity
+
+#### Consistency & Maintainability  
+- **Uniform editing experience** - All nodes behave predictably
+- **Clear inheritance chain** - Easy to see what each node type overrides
+- **Type safety** - TypeScript validates all component relationships
+- **Future-ready** - Foundation for hybrid rendering, rich decorations
+
+---
 
 ### External Node Types (Plugin System)
 
