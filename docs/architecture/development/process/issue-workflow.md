@@ -220,15 +220,19 @@ After completing each sub-issue implementation:
 - ✅ Provides transparency and audit trail for stakeholders
 - ✅ Facilitates incremental review process
 
-**CLI Status Update Commands:**
-```bash
-# Get project item ID (handles pagination)
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 100 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
+**CLI Status Update Commands (CANONICAL - USE THESE EXACTLY):**
 
-# Status transitions:
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4  # In Progress  
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084  # Ready for Review
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657  # Done
+See [startup-sequence.md](startup-sequence.md) for the definitive commands. Copy-paste these:
+
+```bash
+# Todo → In Progress  
+ISSUE_NUMBER=REPLACE_WITH_NUMBER && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4 && echo "✅ Issue #$ISSUE_NUMBER updated to 'In Progress'"
+
+# In Progress → Ready for Review
+ISSUE_NUMBER=REPLACE_WITH_NUMBER && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084 && echo "✅ Issue #$ISSUE_NUMBER updated to 'Ready for Review'"
+
+# Ready for Review → Done
+ISSUE_NUMBER=REPLACE_WITH_NUMBER && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657 && echo "✅ Issue #$ISSUE_NUMBER updated to 'Done'"
 ```
 4. **Read issue acceptance criteria** and requirements
 5. **Plan self-contained implementation** approach
@@ -248,38 +252,23 @@ gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id 
 - **Done**: `98236657`
 - **Ready to Merge**: `414430c1`
 
-**Status Update Commands:**
-```bash
-# Get project item ID for your issue:
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Issue.*<issue-title>.*<number>" | awk '{print $NF}')
-
-# Start work (Todo → In Progress)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
-
-# Create PR (In Progress → Ready for Review)  
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
-
-# Complete work (Ready for Review → Done)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
-```
+**⚠️ DEPRECATED:** Use the canonical commands above instead. See [startup-sequence.md](startup-sequence.md) for the current commands.
 
 **Practical Example - Complete Workflow:**
 ```bash
 # Working on Issue #25 "Add Search Functionality"
-# 1. Get the project item ID
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Add Search Functionality.*25" | awk '{print $NF}')
 
-# 2. Start work (Todo → In Progress)
+# 1. Start work (Todo → In Progress) - CANONICAL COMMAND
 git checkout -b feature/issue-25-search-functionality
 gh issue edit 25 --add-assignee "@me"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+ISSUE_NUMBER=25 && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4 && echo "✅ Issue #$ISSUE_NUMBER updated to 'In Progress'"
 
-# 3. Create PR when ready (In Progress → Ready for Review)  
+# 2. Create PR when ready (In Progress → Ready for Review) - CANONICAL COMMAND  
 gh pr create --title "Add Search Functionality" --body "Closes #25"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+ISSUE_NUMBER=25 && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084 && echo "✅ Issue #$ISSUE_NUMBER updated to 'Ready for Review'"
 
-# 4. After PR merge (Ready for Review → Done)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
+# 3. After PR merge (Ready for Review → Done) - CANONICAL COMMAND
+ISSUE_NUMBER=25 && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657 && echo "✅ Issue #$ISSUE_NUMBER updated to 'Done'"
 ```
 
 ## Implementation Process

@@ -13,8 +13,11 @@ NodeSpace is an AI-native knowledge management system built with Rust backend, S
 > 1. **Check git status**: `git status` - commit any pending changes first
 > 2. **Determine branching strategy**: Check parent issue for specified approach (single branch vs. individual branches)
 > 3. **Create/switch to branch**: Based on strategy - either `git checkout -b feature/issue-<number>-brief-description` OR switch to existing parent issue branch
-> 4. **Assign issue**: `gh issue edit <number> --add-assignee "@me"`
-> 5. **Update project status**: Todo → In Progress (CLI - see [startup-sequence.md](docs/architecture/development/process/startup-sequence.md))
+> 4. **Assign issue**: `gh issue edit <number> --add-assignee "@me"`  
+> 5. **Update project status**: Use CANONICAL COMMAND (copy-paste, replace issue number):
+> ```bash
+> ISSUE_NUMBER=YOUR_ISSUE_NUMBER && ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json -q ".items[] | select(.content.number == $ISSUE_NUMBER) | .id") && gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4 && echo "✅ Issue #$ISSUE_NUMBER updated to 'In Progress'"
+> ```
 > 6. **Select subagent**: Use decision tree below to choose specialized agent
 > 7. **Read issue requirements**: Understand all acceptance criteria
 > 8. **Plan implementation**: Self-contained approach with appropriate subagent
@@ -136,8 +139,9 @@ Use the most appropriate specialized sub-agent available for complex tasks. Clau
    - Use `senior-architect-reviewer` agent for complex features
    - All quality gates and review requirements apply universally to AI agents and human reviewers
 
-**TodoWrite Tool Users - CRITICAL:**
-- Your **FIRST todo item** must be: "Complete mandatory startup sequence (git status, determine branching strategy, checkout/switch branch, assign issue, select subagent)"
+**TodoWrite Tool Users - UPDATED:**
+- Your **FIRST todo item** must be: "Complete startup sequence: git status, branch strategy, create branch, assign issue (gh issue edit N --add-assignee '@me'), update status (use canonical command), select subagent"
+- **Include the canonical status update command** in your planning 
 - Do NOT break the startup sequence into separate todo items
 - Only after completing the startup sequence should you add implementation todos
 
