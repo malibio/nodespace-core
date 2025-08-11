@@ -11,7 +11,7 @@
 </script>
 
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import Icon, { type IconName } from '../icons/index.js';
   import CodeMirrorEditor from './CodeMirrorEditor.svelte';
 
@@ -35,8 +35,12 @@
   export let processingAnimation: 'blink' | 'pulse' | 'spin' | 'fade' = 'pulse';
   export let processingIcon: IconName | undefined = undefined;
 
-  // CodeMirror editor reference
+  // References
   let editorRef: CodeMirrorEditor;
+  let nodeElement: HTMLDivElement;
+  
+  // Focus state for edit/display mode switching
+  let focused = false;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -44,9 +48,24 @@
     contentChanged: { nodeId: string; content: string };
   }>();
 
-  // Handle general node clicks
+  // Handle general node clicks - enter edit mode
   function handleClick(event: MouseEvent) {
+    // Don't handle clicks if already focused (avoid interfering with CodeMirror)
+    if (focused) return;
+    
+    if (editable && contentEditable) {
+      focused = true;
+      // Focus the editor after it's rendered
+      setTimeout(() => {
+        editorRef?.focus();
+      }, 0);
+    }
     dispatch('click', { nodeId, event });
+  }
+  
+  // Handle blur - exit edit mode
+  function handleBlur() {
+    focused = false;
   }
 
   // Handle content changes from CodeMirror
@@ -57,10 +76,20 @@
 
   // Handle keyboard shortcuts
   function handleKeyDown(event: KeyboardEvent) {
-    // When not focused on CodeMirror, handle Enter/Space to focus editor
-    if (editable && contentEditable && (event.code === 'Enter' || event.code === 'Space')) {
+    // Escape key exits edit mode
+    if (event.key === 'Escape' && focused) {
       event.preventDefault();
-      editorRef?.focus();
+      focused = false;
+      return;
+    }
+    
+    // When not focused, handle Enter/Space to enter edit mode
+    if (!focused && editable && contentEditable && (event.code === 'Enter' || event.code === 'Space')) {
+      event.preventDefault();
+      focused = true;
+      setTimeout(() => {
+        editorRef?.focus();
+      }, 0);
     }
   }
 
@@ -88,7 +117,7 @@
     `ns-node--${nodeType}`,
     hasChildren && 'ns-node--has-children',
     isProcessing && 'ns-node--processing',
-    'ns-node--always-editing', // Always in editing mode now
+    focused && 'ns-node--focused',
     className
   ]
     .filter(Boolean)
@@ -99,10 +128,27 @@
 
   // Animation class for processing state
   $: iconAnimationClass = isProcessing ? `ns-node__icon--${processingAnimation}` : '';
+  
+  // Handle clicks outside the node to blur
+  function handleGlobalClick(event: MouseEvent) {
+    if (focused && nodeElement && !nodeElement.contains(event.target as HTMLElement)) {
+      focused = false;
+    }
+  }
+  
+  // Setup global click listener
+  onMount(() => {
+    document.addEventListener('click', handleGlobalClick);
+  });
+  
+  onDestroy(() => {
+    document.removeEventListener('click', handleGlobalClick);
+  });
 </script>
 
-<!-- Simplified node container - div approach to avoid button/contenteditable conflicts -->
+<!-- Node container with edit/display mode support -->
 <div
+  bind:this={nodeElement}
   class={nodeClasses}
   role="button"
   tabindex="0"
@@ -127,11 +173,11 @@
       {/if}
     </div>
 
-    <!-- Node content with CodeMirror editor -->
+    <!-- Node content - edit/display mode switching -->
     <div class="ns-node__content">
       <slot name="content">
-        {#if contentEditable}
-          <!-- Always-editing mode with CodeMirror -->
+        {#if contentEditable && focused}
+          <!-- EDIT MODE: Real-time hybrid CodeMirror -->
           <CodeMirrorEditor
             bind:this={editorRef}
             bind:content
@@ -140,9 +186,27 @@
             {editable}
             {placeholder}
             on:contentChanged={handleContentChanged}
+            on:blur={handleBlur}
           />
+        {:else if contentEditable}
+          <!-- DISPLAY MODE: Clean formatted rendering -->
+          <div 
+            class="ns-node__display" 
+            role="button"
+            tabindex="0"
+            on:click={handleClick}
+            on:keydown={handleKeyDown}
+          >
+            <slot name="display-content">
+              {#if content}
+                <span class="ns-node__text">{content}</span>
+              {:else}
+                <span class="ns-node__empty">{placeholder}</span>
+              {/if}
+            </slot>
+          </div>
         {:else}
-          <!-- Non-editable display mode -->
+          <!-- Non-editable content -->
           <div class="ns-node__display" role="region">
             <slot name="display-content">
               {#if content}
@@ -260,15 +324,27 @@
     min-width: 0; /* Prevent overflow */
   }
 
-  /* CodeMirror integration styles */
-  .ns-node--always-editing .ns-node__content {
+  /* Edit mode styles */
+  .ns-node--focused {
+    background-color: hsl(var(--muted) / 0.3);
+    border: 1px solid hsl(var(--border));
+  }
+  
+  .ns-node--focused .ns-node__content {
     /* Ensure CodeMirror editor fits seamlessly */
     min-height: 20px;
   }
-
-  /* Display styling */
+  
+  /* Display mode styles */
   .ns-node__display {
+    cursor: text;
     min-height: 20px;
+    padding: 2px 0;
+  }
+  
+  .ns-node__display:hover {
+    background-color: hsl(var(--muted) / 0.1);
+    border-radius: 4px;
   }
 
   .ns-node__text {

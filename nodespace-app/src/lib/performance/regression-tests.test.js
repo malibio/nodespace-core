@@ -250,7 +250,9 @@ describe('Performance Regression Tests', () => {
     });
 
     it('should have reasonable initial memory footprint', () => {
+      // @ts-expect-error - Chrome-specific performance.memory API
       if (performance.memory) {
+        // @ts-expect-error - Chrome-specific performance.memory API
         const initialMemory = performance.memory.usedJSHeapSize;
         expect(initialMemory).toBeLessThan(PERFORMANCE_TARGETS.memory.maxInitialMemory);
       }

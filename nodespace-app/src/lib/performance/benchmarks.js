@@ -20,12 +20,12 @@ export class PerformanceBenchmarks {
    * Set memory baseline before starting benchmarks
    */
   setMemoryBaseline() {
-    // @ts-ignore - Chrome-specific performance.memory API
+    // @ts-expect-error - Chrome-specific performance.memory API
     if (performance.memory) {
       this.memoryBaseline = {
-        // @ts-ignore - Chrome-specific performance.memory API
+        // @ts-expect-error - Chrome-specific performance.memory API
         usedJSHeapSize: performance.memory.usedJSHeapSize,
-        // @ts-ignore - Chrome-specific performance.memory API
+        // @ts-expect-error - Chrome-specific performance.memory API
         totalJSHeapSize: performance.memory.totalJSHeapSize,
         timestamp: performance.now()
       };
@@ -36,9 +36,12 @@ export class PerformanceBenchmarks {
    * Get current memory usage
    */
   getMemoryUsage() {
+    // @ts-expect-error - Chrome-specific performance.memory API
     if (typeof performance !== 'undefined' && performance.memory) {
       return {
+        // @ts-expect-error - Chrome-specific performance.memory API
         usedJSHeapSize: performance.memory.usedJSHeapSize,
+        // @ts-expect-error - Chrome-specific performance.memory API
         totalJSHeapSize: performance.memory.totalJSHeapSize,
         timestamp: performance.now()
       };
