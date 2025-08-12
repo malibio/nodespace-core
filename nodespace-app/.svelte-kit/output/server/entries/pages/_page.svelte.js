@@ -1289,6 +1289,9 @@ class WYSIWYGProcessor {
    * Escape HTML characters
    */
   escapeHTML(text) {
+    if (!text || typeof text !== "string") {
+      return "";
+    }
     const escapeMap = {
       "&": "&amp;",
       "<": "&lt;",

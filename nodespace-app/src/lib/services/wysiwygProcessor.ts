@@ -8,12 +8,14 @@
 
 import { markdownPatternDetector } from './markdownPatternDetector.js';
 import { patternIntegrationUtils } from './markdownPatternUtils.js';
+import { multilineBlockProcessor } from './multilineBlockProcessor.js';
 import type {
   MarkdownPattern,
   PatternDetectionResult,
   PatternDetectionOptions,
   CursorPosition
 } from '$lib/types/markdownPatterns.js';
+import type { MultilineBlock } from './multilineBlockProcessor.js';
 
 /**
  * WYSIWYG processing configuration
@@ -56,6 +58,9 @@ export interface WYSIWYGResult {
   
   /** Detected patterns */
   patterns: MarkdownPattern[];
+  
+  /** Multi-line blocks detected */
+  multilineBlocks: MultilineBlock[];
   
   /** Processing time in milliseconds */
   processingTime: number;
@@ -127,13 +132,16 @@ export class WYSIWYGProcessor {
       // Check for performance warnings from detection
       warnings.push(...detectionResult.warnings);
 
-      // Process patterns for WYSIWYG display
+      // Detect multi-line blocks
+      const multilineBlocks = multilineBlockProcessor.detectMultilineBlocks(content, cursorPosition);
+
+      // Process patterns for WYSIWYG display, incorporating multi-line block context
       const characterClasses = this.config.enableFormatting 
-        ? patternIntegrationUtils.toCSSClasses(detectionResult.patterns)
+        ? this.generateEnhancedCSSClasses(detectionResult.patterns, multilineBlocks)
         : {};
 
-      // Generate processed HTML
-      const processedHTML = await this.generateProcessedHTML(content, detectionResult.patterns);
+      // Generate processed HTML with multi-line block support
+      const processedHTML = await this.generateProcessedHTML(content, detectionResult.patterns, multilineBlocks);
 
       // Adjust cursor position if needed
       let adjustedCursorPosition = cursorPosition;
@@ -156,8 +164,9 @@ export class WYSIWYGProcessor {
       const result: WYSIWYGResult = {
         originalContent: content,
         processedHTML,
-        characterClasses: this.addWYSIWYGClasses(characterClasses, detectionResult.patterns),
+        characterClasses: this.addWYSIWYGClasses(characterClasses, detectionResult.patterns, multilineBlocks),
         patterns: detectionResult.patterns,
+        multilineBlocks,
         processingTime,
         adjustedCursorPosition,
         warnings
@@ -190,6 +199,7 @@ export class WYSIWYGProcessor {
         processedHTML: this.escapeHTML(content),
         characterClasses: {},
         patterns: [],
+        multilineBlocks: [],
         processingTime,
         warnings
       };
@@ -234,7 +244,7 @@ export class WYSIWYGProcessor {
   /**
    * Generate processed HTML with hidden syntax and formatting
    */
-  private async generateProcessedHTML(content: string, patterns: MarkdownPattern[]): Promise<string> {
+  private async generateProcessedHTML(content: string, patterns: MarkdownPattern[], multilineBlocks: MultilineBlock[] = []): Promise<string> {
     if (!this.config.hideSyntax && !this.config.enableFormatting) {
       return this.escapeHTML(content);
     }
@@ -355,11 +365,47 @@ export class WYSIWYGProcessor {
   }
 
   /**
+   * Generate enhanced CSS classes incorporating multi-line block context
+   */
+  private generateEnhancedCSSClasses(patterns: MarkdownPattern[], multilineBlocks: MultilineBlock[]): Record<number, string[]> {
+    const baseClasses = patternIntegrationUtils.toCSSClasses(patterns);
+    const result = { ...baseClasses };
+
+    // Add multi-line block specific classes
+    for (const block of multilineBlocks) {
+      for (let pos = block.start; pos < block.end; pos++) {
+        if (!result[pos]) {
+          result[pos] = [];
+        }
+
+        // Add block-level classes
+        result[pos].push(`${this.config.cssPrefix}-multiline-${block.type}`);
+        
+        if (block.incomplete) {
+          result[pos].push(`${this.config.cssPrefix}-multiline-incomplete`);
+        }
+
+        if (block.indentLevel > 0) {
+          result[pos].push(`${this.config.cssPrefix}-multiline-indent-${block.indentLevel}`);
+        }
+
+        // Add language-specific classes for code blocks
+        if (block.type === 'codeblock' && block.language) {
+          result[pos].push(`${this.config.cssPrefix}-multiline-lang-${block.language}`);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Add WYSIWYG-specific CSS classes to character class map
    */
   private addWYSIWYGClasses(
     characterClasses: Record<number, string[]>, 
-    patterns: MarkdownPattern[]
+    patterns: MarkdownPattern[],
+    multilineBlocks: MultilineBlock[] = []
   ): Record<number, string[]> {
     const result = { ...characterClasses };
 
@@ -635,6 +681,58 @@ export class WYSIWYGUtils {
   padding-left: 16px;
   color: #656d76;
   font-style: italic;
+}
+
+/* Multi-line block styles */
+.${cssPrefix}-multiline-blockquote {
+  display: block;
+  border-left: 4px solid #d0d7de;
+  padding-left: 16px;
+  margin: 8px 0;
+  background-color: rgba(175, 184, 193, 0.05);
+}
+
+.${cssPrefix}-multiline-codeblock {
+  display: block;
+  background-color: rgba(175, 184, 193, 0.1);
+  padding: 12px;
+  border-radius: 6px;
+  border-left: 3px solid #d0d7de;
+  font-family: monospace;
+  white-space: pre-wrap;
+  margin: 8px 0;
+}
+
+.${cssPrefix}-multiline-incomplete {
+  border-left-style: dashed;
+  opacity: 0.8;
+}
+
+.${cssPrefix}-multiline-indent-1 { margin-left: 20px; }
+.${cssPrefix}-multiline-indent-2 { margin-left: 40px; }
+.${cssPrefix}-multiline-indent-3 { margin-left: 60px; }
+.${cssPrefix}-multiline-indent-4 { margin-left: 80px; }
+.${cssPrefix}-multiline-indent-5 { margin-left: 100px; }
+
+/* Language-specific code block styling */
+.${cssPrefix}-multiline-lang-javascript,
+.${cssPrefix}-multiline-lang-js {
+  border-left-color: #f1e05a;
+}
+
+.${cssPrefix}-multiline-lang-typescript,
+.${cssPrefix}-multiline-lang-ts {
+  border-left-color: #2b7489;
+}
+
+.${cssPrefix}-multiline-lang-python,
+.${cssPrefix}-multiline-lang-py {
+  border-left-color: #3572A5;
+}
+
+.${cssPrefix}-multiline-lang-rust,
+.${cssPrefix}-multiline-lang-rs {
+  border-left-color: #dea584;
 }
 
 /* Syntax characters with data attributes */

@@ -24,6 +24,39 @@ export {
   SoftNewlineMetrics
 } from './softNewlineProcessor';
 
+// Multi-line block processing service
+export {
+  MultilineBlockProcessor,
+  multilineBlockProcessor,
+  MultilineBlockIntegration,
+  MultilineBlockMetrics
+} from './multilineBlockProcessor';
+
+// Bullet to node conversion service
+export {
+  BulletToNodeConverter,
+  bulletToNodeConverter,
+  taskBulletConverter,
+  BulletProcessingUtils
+} from './bulletToNodeConverter';
+
+// WYSIWYG processing service
+export {
+  WYSIWYGProcessor,
+  wysiwygProcessor,
+  WYSIWYGUtils,
+  WYSIWYGIntegration
+} from './wysiwygProcessor';
+
+// AI Integration Service
+export {
+  AIIntegrationService,
+  aiIntegrationService,
+  chatGPTIntegrationService,
+  claudeIntegrationService,
+  AIIntegrationUtils
+} from './aiIntegrationService';
+
 // Existing services
 export { default as mockTextService } from './mockTextService';
 

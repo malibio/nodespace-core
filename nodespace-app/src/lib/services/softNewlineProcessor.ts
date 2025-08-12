@@ -16,12 +16,14 @@
 
 import { markdownPatternDetector } from './markdownPatternDetector.js';
 import { patternIntegrationUtils } from './markdownPatternUtils.js';
+import { multilineBlockProcessor } from './multilineBlockProcessor.js';
 import type {
   MarkdownPattern,
   MarkdownPatternType,
   PatternDetectionResult,
   CursorPosition
 } from '$lib/types/markdownPatterns';
+import type { MultilineBlock, BlockContinuationContext } from './multilineBlockProcessor.js';
 
 /**
  * Soft newline context detection result
@@ -47,6 +49,12 @@ export interface SoftNewlineContext {
   
   /** Whether to create a new node */
   shouldCreateNewNode: boolean;
+  
+  /** Multi-line block continuation context */
+  multilineBlockContext?: BlockContinuationContext;
+  
+  /** Whether this is within a multi-line block that should continue */
+  isMultilineBlockContinuation: boolean;
 }
 
 /**
@@ -148,8 +156,15 @@ export class SoftNewlineProcessor {
       cursorPosition - lastNewlineIndex - 1
     );
 
+    // Check for multi-line block continuation context
+    const multilineBlockContext = multilineBlockProcessor.getBlockContinuationContext(content, cursorPosition);
+    
     // Find the most relevant pattern at the beginning of the line
     const relevantPattern = this.findRelevantPattern(contentAfter, patternResult.patterns);
+    
+    // Determine if this is a multi-line block continuation
+    const isMultilineBlockContinuation = multilineBlockContext.inBlock && 
+                                          multilineBlockContext.shouldContinue;
     
     const context: SoftNewlineContext = {
       hasMarkdownAfterNewline: relevantPattern !== null,
@@ -157,8 +172,12 @@ export class SoftNewlineProcessor {
       contentBefore,
       contentAfter,
       newlinePosition: lastNewlineIndex,
-      shouldCreateNewNode: relevantPattern !== null && this.shouldCreateNodeForPattern(relevantPattern),
-      suggestedNodeType: relevantPattern ? this.getNodeTypeForPattern(relevantPattern) : undefined
+      shouldCreateNewNode: relevantPattern !== null && 
+                           this.shouldCreateNodeForPattern(relevantPattern) &&
+                           !isMultilineBlockContinuation, // Don't create new nodes within multi-line blocks
+      suggestedNodeType: relevantPattern ? this.getNodeTypeForPattern(relevantPattern) : undefined,
+      multilineBlockContext,
+      isMultilineBlockContinuation
     };
 
     // Cache the last detection
@@ -264,7 +283,8 @@ export class SoftNewlineProcessor {
       contentBefore: newlinePosition !== undefined ? content.substring(0, newlinePosition) : content,
       contentAfter: newlinePosition !== undefined ? content.substring(newlinePosition + 1) : '',
       newlinePosition: newlinePosition || -1,
-      shouldCreateNewNode: false
+      shouldCreateNewNode: false,
+      isMultilineBlockContinuation: false
     };
   }
 
@@ -393,6 +413,33 @@ export class SoftNewlineIntegration {
     nodeId: string,
     processor: SoftNewlineProcessor = softNewlineProcessor
   ): boolean {
+    // Handle regular Enter key in multi-line blocks
+    if (event.key === 'Enter' && !event.shiftKey) {
+      const multilineBlockContext = multilineBlockProcessor.getBlockContinuationContext(content, cursorPosition);
+      
+      if (multilineBlockContext.inBlock && multilineBlockContext.shouldContinue) {
+        // Let the multi-line block processor handle Enter within blocks
+        const result = multilineBlockProcessor.handleEnterInBlock(content, cursorPosition);
+        
+        if (result.shouldPreventDefault) {
+          event.preventDefault();
+          
+          // Update the DOM element with new content
+          const target = event.target as HTMLElement;
+          if (result.newContent !== undefined) {
+            target.textContent = result.newContent;
+            
+            // Set cursor position
+            if (result.newCursorPosition !== undefined) {
+              SoftNewlineIntegration.setCursorPosition(target, result.newCursorPosition);
+            }
+          }
+          
+          return true; // Event handled
+        }
+      }
+    }
+    
     if (processor.isShiftEnter(event)) {
       // Allow the soft newline to be inserted
       // The real processing happens on subsequent typing
@@ -432,7 +479,7 @@ export class SoftNewlineIntegration {
   }
 
   /**
-   * Set cursor position in DOM content editable element
+   * Set cursor position in DOM content editable element (public method)
    */
   static setCursorPosition(element: HTMLElement, position: number): void {
     const selection = window.getSelection();

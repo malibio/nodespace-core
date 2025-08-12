@@ -8,6 +8,8 @@
   import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
   import BulletConversionDemo from '$lib/components/BulletConversionDemo.svelte';
   import SoftNewlineDemo from '$lib/components/SoftNewlineDemo.svelte';
+  import MultilineBlockDemo from '$lib/components/MultilineBlockDemo.svelte';
+  import AIIntegrationDemo from '$lib/components/AIIntegrationDemo.svelte';
   import MockPositioningTest from '$lib/design/components/MockPositioningTest.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
 
@@ -191,6 +193,16 @@ Generated analytics and insights"
 
           <!-- Soft Newline + Markdown Detection Demo -->
           <SoftNewlineDemo />
+
+          <div class="divider"></div>
+
+          <!-- Multi-line Block Behavior Demo -->
+          <MultilineBlockDemo />
+
+          <div class="divider"></div>
+
+          <!-- AI Integration Demo -->
+          <AIIntegrationDemo />
 
           <div class="divider"></div>
 

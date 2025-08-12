@@ -10,6 +10,9 @@ export { default as NodeTree } from './NodeTree.svelte';
 export { default as HierarchyDemo } from './HierarchyDemo.svelte';
 export { default as SoftNewlineDemo } from './SoftNewlineDemo.svelte';
 export { default as BulletConversionDemo } from './BulletConversionDemo.svelte';
+export { default as WYSIWYGDemo } from './WYSIWYGDemo.svelte';
+export { default as MultilineBlockDemo } from './MultilineBlockDemo.svelte';
+export { default as AIIntegrationDemo } from './AIIntegrationDemo.svelte';
 export type { TreeNodeData } from '$lib/types/tree';
 
 // Re-export types from services
