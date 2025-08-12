@@ -68,7 +68,7 @@ Enable parallel work by mocking dependencies initially, then replacing with real
 **EVERY TEAM MEMBER (AI AGENTS & HUMANS) MUST COMPLETE BEFORE ANY IMPLEMENTATION:**
 
 1. Create feature branch: `feature/issue-<number>-brief-description`
-2. Assign issue to self: `gh issue edit <number> --add-assignee "@me"`
+2. Assign issue to self: `bun run gh:assign <number> "@me"`
 3. Update project status: Todo → In Progress
 4. Read issue acceptance criteria and requirements
 5. Plan self-contained implementation approach

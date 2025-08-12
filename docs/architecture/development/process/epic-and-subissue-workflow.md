@@ -39,7 +39,7 @@ This guide defines the standardized approach for working with Epic issues (paren
 
 ```bash
 # View the issue to identify type
-gh issue view <issue-number>
+bun run gh:view <issue-number>
 
 # Look for:
 # - "Parent Epic: #XX" → This is a SUB-ISSUE
@@ -74,7 +74,7 @@ gh issue view <issue-number>
    ```
 3. **Assign and update epic status**:
    ```bash
-   gh issue edit <epic-number> --add-assignee "@me"
+   bun run gh:assign <epic-number> "@me"
    # Update project status to "In Progress"
    ```
 
@@ -93,12 +93,12 @@ gh issue view <issue-number>
    ```
 3. **Assign and update sub-issue status**:
    ```bash
-   gh issue edit <sub-issue-number> --add-assignee "@me"
+   bun run gh:assign <sub-issue-number> "@me"
    # Update sub-issue project status to "In Progress"
    ```
 4. **Update parent epic status** (if not already in progress):
    ```bash
-   gh issue edit <epic-number> --add-assignee "@me"
+   bun run gh:assign <epic-number> "@me"
    # Update epic project status to "In Progress"
    ```
 
@@ -164,15 +164,12 @@ gh issue view <issue-number>
 git checkout -b feature/issue-54-contenteditable-epic
 
 # Assign and update both issues
-gh issue edit 54 --add-assignee "@me"  # Epic
-gh issue edit 55 --add-assignee "@me"  # Sub-issue
+bun run gh:assign 54 "@me"  # Epic
+bun run gh:assign 55 "@me"  # Sub-issue
 
 # Update project statuses (both to In Progress)
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json | jq -r '.items[] | select(.content.number == 54) | .id')
-gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
-
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 200 --format=json | jq -r '.items[] | select(.content.number == 55) | .id')
-gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+bun run gh:status 54 "In Progress"  # Epic
+bun run gh:status 55 "In Progress"  # Sub-issue
 
 # Work on Issue #55 implementation...
 # After completing #55, mark it done and move to #56...

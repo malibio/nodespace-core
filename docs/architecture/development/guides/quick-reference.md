@@ -12,7 +12,7 @@ git status
 git checkout -b feature/issue-<number>-brief-description
 
 # 3. Assign issue to yourself
-gh issue edit <number> --add-assignee "@me"
+bun run gh:assign <number> "@me"
 
 # 4. Manual: Update GitHub project status (Todo → In Progress)
 # 5. Read issue requirements and plan implementation
@@ -56,19 +56,19 @@ git commit -m "Implement feature (addresses #123)"
 git push -u origin feature/issue-123-brief-description
 
 # Create PR
-gh pr create --title "Implement Issue #123" --body "Closes #123"
+bun run gh:pr 123
 ```
 
 ### GitHub Issue Management
 ```bash
 # List open issues
-gh issue list
+bun run gh:list
 
 # View specific issue
-gh issue view <number>
+bun run gh:view <number>
 
 # Assign issue to yourself
-gh issue edit <number> --add-assignee "@me"
+bun run gh:assign <number> "@me"
 
 # Update issue status (via web interface)
 # Todo → In Progress → Ready for Review → Done

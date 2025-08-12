@@ -16,7 +16,7 @@
 
 **EVERY TEAM MEMBER (AI AGENTS & HUMANS) MUST COMPLETE BEFORE ANY IMPLEMENTATION:**
 - [ ] Create feature branch: `feature/issue-<number>-brief-description`
-- [ ] Assign issue to self: `gh issue edit <number> --add-assignee "@me"`
+- [ ] Assign issue to self: `bun run gh:assign <number> "@me"`
 - [ ] Update project status: Todo → In Progress (CLI or web interface)
 - [ ] Read issue acceptance criteria and requirements
 - [ ] Plan self-contained implementation approach
@@ -439,23 +439,23 @@ export const dataStore = getContext<DataStore>('dataStore');
 **Status Updates (MANDATORY):**
 ```bash
 # First, get the project item ID for your issue:
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Issue.*<issue-title>.*<number>" | awk '{print $NF}')
+# Use project CLI commands instead:
 
 # When starting work on an issue:
 git checkout -b feature/issue-<number>-brief-description
-gh issue edit <number> --add-assignee "@me"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+bun run gh:assign <number> "@me"
+bun run gh:status <number> "In Progress"
 
 # When blocked:
-gh issue comment <number> --body "Blocked: [explanation]"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id db18cb7f
+# Comment via web interface - Blocked: [explanation]
+bun run gh:status <number> "Blocked"
 
 # When creating PR:
-gh pr create --title "..." --body "Closes #<number>..."
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+bun run gh:pr <number>
+bun run gh:status <number> "Ready for Review"
 
 # When work is completed/merged:
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
+bun run gh:status <number> "Done"
 ```
 
 **GitHub Project Status Field IDs:**
@@ -472,7 +472,7 @@ gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id 
 - **Ready to Merge**: `414430c1`
 
 **Status Update Options:**
-- **GitHub CLI**: Use `gh project` commands for programmatic updates
+- **Project CLI**: Use `bun run gh:status` commands for programmatic updates
 - **Web Interface**: Manual updates via GitHub project board
 - **MCP Tools**: Use available MCP project management tools if configured
 - Choose the method that works best for your environment
@@ -481,19 +481,19 @@ gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id 
 ```bash
 # Working on Issue #25 "Add Search Functionality"
 # 1. Get the project item ID
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Add Search Functionality.*25" | awk '{print $NF}')
+# Use project CLI commands:
 
 # 2. Start work (Todo → In Progress)
 git checkout -b feature/issue-25-search-functionality
-gh issue edit 25 --add-assignee "@me"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+bun run gh:assign 25 "@me"
+bun run gh:status <number> "In Progress"
 
 # 3. Create PR when ready (In Progress → Ready for Review)  
-gh pr create --title "Add Search Functionality" --body "Closes #25"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+bun run gh:pr 25
+bun run gh:status <number> "Ready for Review"
 
 # 4. After PR merge (Ready for Review → Done)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
+bun run gh:status <number> "Done"
 ```
 
 **Package Manager (MANDATORY):**

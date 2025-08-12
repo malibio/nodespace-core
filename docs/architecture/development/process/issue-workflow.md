@@ -217,36 +217,29 @@ Before creating an issue, verify:
 
 **Status Update Commands:**
 ```bash
-# Get project item ID for your issue:
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Issue.*<issue-title>.*<number>" | awk '{print $NF}')
-
 # Start work (Todo → In Progress)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+bun run gh:status <number> "In Progress"
 
 # Create PR (In Progress → Ready for Review)  
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+bun run gh:status <number> "Ready for Review"
 
 # Complete work (Ready for Review → Done)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
+bun run gh:status <number> "Done"
 ```
 
 **Practical Example - Complete Workflow:**
 ```bash
 # Working on Issue #25 "Add Search Functionality"
-# 1. Get the project item ID
-ITEM_ID=$(gh project item-list 5 --owner malibio | grep "Add Search Functionality.*25" | awk '{print $NF}')
-
-# 2. Start work (Todo → In Progress)
+# 1. Start work (Todo → In Progress)
 git checkout -b feature/issue-25-search-functionality
-gh issue edit 25 --add-assignee "@me"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+bun run gh:assign 25 "@me"
+bun run gh:status 25 "In Progress"
 
-# 3. Create PR when ready (In Progress → Ready for Review)  
-gh pr create --title "Add Search Functionality" --body "Closes #25"
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id b13f9084
+# 2. Create PR when ready (In Progress → Ready for Review)  
+bun run gh:pr 25
 
-# 4. After PR merge (Ready for Review → Done)
-gh project item-edit --project-id PVT_kwHOADHu9M4A_nxN --id $ITEM_ID --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 98236657
+# 3. After PR merge (Ready for Review → Done)
+# Status automatically updated to Done when PR is merged
 ```
 
 ## Implementation Process
