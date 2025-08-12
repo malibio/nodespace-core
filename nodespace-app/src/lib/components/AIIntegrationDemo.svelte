@@ -426,7 +426,7 @@ const config: PerformanceConfig = {
     <div class="import-controls">
       <textarea
         class="import-textarea"
-        bind:value={importMarkdown}
+        bind:value={importMarkdownContent}
         rows="12"
         placeholder="Paste AI-generated markdown here..."
       ></textarea>
