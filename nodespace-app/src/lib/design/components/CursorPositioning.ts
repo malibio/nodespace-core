@@ -278,16 +278,18 @@ export function analyzeTextComplexity(content: string): {
   hasComplexGraphemes: boolean;
   estimatedComplexity: 'low' | 'medium' | 'high';
 } {
-  const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu;
+  const emojiRegex =
+    /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu;
   const rtlRegex = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
-  const complexGraphemeRegex = /[\u0300-\u036F]|[\u1AB0-\u1AFF]|[\u1DC0-\u1DFF]|[\u20D0-\u20FF]|[\uFE20-\uFE2F]/;
+  const complexGraphemeRegex =
+    /[\u0300-\u036F]|[\u1AB0-\u1AFF]|[\u1DC0-\u1DFF]|[\u20D0-\u20FF]|[\uFE20-\uFE2F]/;
 
   const hasEmojis = emojiRegex.test(content);
   const hasRTL = rtlRegex.test(content);
   const hasComplexGraphemes = complexGraphemeRegex.test(content);
 
   let estimatedComplexity: 'low' | 'medium' | 'high' = 'low';
-  
+
   if (hasEmojis || hasComplexGraphemes) {
     estimatedComplexity = hasRTL ? 'high' : 'medium';
   } else if (hasRTL) {
@@ -311,7 +313,7 @@ export class PositioningPerformanceMonitor {
 
   recordMeasurement(duration: number) {
     this.measurements.push(duration);
-    
+
     // Keep only recent measurements
     if (this.measurements.length > this.maxMeasurements) {
       this.measurements.shift();

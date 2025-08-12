@@ -37,7 +37,12 @@
 
   // Edit state - ContentEditable approach (no focused state needed)
   let contentEditableElement: HTMLDivElement;
-  let mockElementRef: any;
+  let mockElementRef: MockTextElementRef;
+
+  // Interface for MockTextElement component
+  interface MockTextElementRef {
+    getElement(): HTMLDivElement | undefined;
+  }
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -143,10 +148,7 @@
       );
 
       // Convert character index to ContentEditable selection
-      const targetPosition = Math.max(
-        0,
-        Math.min(positionResult.index, content.length)
-      );
+      const targetPosition = Math.max(0, Math.min(positionResult.index, content.length));
 
       console.log('Mock element positioning result:', {
         targetPosition,
@@ -214,15 +216,20 @@
 
     // Ensure we have a text node to work with
     let textNode = contentEditableElement.firstChild;
-    
+
     // If no text node exists, create one
     if (!textNode || textNode.nodeType !== 3 /* Node.TEXT_NODE */) {
       if (content.length === 0) {
-        // For empty content, we need to handle specially
-        contentEditableElement.focus();
+        // Better empty content handling - position cursor at start
+        const range = document.createRange();
+        const selection = window.getSelection();
+        range.selectNodeContents(contentEditableElement);
+        range.collapse(true);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
         return;
       }
-      
+
       // Create text node if it doesn't exist
       textNode = document.createTextNode(content);
       contentEditableElement.innerHTML = '';
@@ -232,15 +239,15 @@
     try {
       const range = document.createRange();
       const safePosition = Math.min(position, textNode.textContent?.length || 0);
-      
+
       // Set cursor position
       range.setStart(textNode, safePosition);
       range.setEnd(textNode, safePosition);
-      
+
       // Apply selection
       selection.removeAllRanges();
       selection.addRange(range);
-      
+
       console.log(`Cursor set to position ${safePosition}`);
     } catch (error) {
       console.error('Error setting cursor position:', error);
@@ -258,7 +265,7 @@
   function handleKeyDown(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     const isContentEditable = target.classList.contains('ns-node__content-editable');
-    
+
     if (isContentEditable) {
       // When in ContentEditable, handle Escape
       if (event.key === 'Escape') {
@@ -369,11 +376,12 @@
             tabindex="0"
             aria-label={content || placeholder}
             data-placeholder={placeholder}
-          >{content}</div>
+          >
+            {content}
+          </div>
 
           <!-- Mock element for precise cursor positioning -->
           {#if contentEditableElement}
-            <!-- @ts-expect-error: Svelte component binding inference issue -->
             <MockTextElement
               bind:this={mockElementRef}
               {content}
@@ -544,7 +552,7 @@
   }
 
   /* Read-only ContentEditable styling for visual consistency */
-  :global(.ns-node__content-editable[contenteditable="false"]) {
+  :global(.ns-node__content-editable[contenteditable='false']) {
     cursor: default;
     color: hsl(var(--muted-foreground));
   }
