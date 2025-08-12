@@ -21,9 +21,9 @@
 
 ### 🔄 Development Process
 - **[Startup Sequence](process/startup-sequence.md)** - Required pre-implementation steps
+- **[Epic and Sub-Issue Workflow](process/epic-and-subissue-workflow.md)** - Working with parent issues and sub-issues
 - **[Issue Workflow](process/issue-workflow.md)** - Issue creation through PR merge
 - **[PR Review Guidelines](process/pr-review.md)** - Code review process and standards
-- **[Branching Strategy](process/branching-strategy.md)** - Git workflow and branch management
 
 ### 🏗️ Development Patterns
 - **[Self-Contained Features](patterns/self-contained-features.md)** - Independent feature implementation
