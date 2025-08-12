@@ -436,6 +436,10 @@ export class WYSIWYGProcessor {
    * Escape HTML characters
    */
   private escapeHTML(text: string): string {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    
     const escapeMap: Record<string, string> = {
       '&': '&amp;',
       '<': '&lt;',
