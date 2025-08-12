@@ -13,8 +13,6 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from 'svelte';
   import Icon, { type IconName } from '../icons/index.js';
-  import MockTextElement from './MockTextElement.svelte';
-  import { findCharacterFromClickFast, isClickWithinTextBounds } from './CursorPositioning';
 
   // Essential Props (Simplified to 5 core + processing)
   export let nodeType: NodeType = 'text';
@@ -37,8 +35,7 @@
 
   // Edit state
   let focused = false;
-  let textareaElement: HTMLTextAreaElement;
-  let mockElementRef: any;
+  let contentEditableElement: HTMLDivElement;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -74,123 +71,93 @@
     dispatch('focus', { nodeId });
 
     await tick();
-    if (textareaElement) {
-      // Auto-resize for multiline content on focus
-      if (multiline) {
-        autoResizeTextarea(textareaElement);
-      }
-
-      textareaElement.focus();
+    if (contentEditableElement) {
+      contentEditableElement.focus();
 
       // Position cursor based on click location
       if (clickEvent) {
-        await tick(); // Wait for textarea to be fully rendered
+        await tick(); // Wait for contenteditable to be fully rendered
         positionCursorFromClick(clickEvent);
       } else {
-        // No click event, place at end
-        textareaElement.setSelectionRange(
-          textareaElement.value.length,
-          textareaElement.value.length
-        );
+        // No click event, place cursor at end
+        placeCursorAtEnd();
       }
     }
   }
 
-  // Position cursor based on click coordinates using mock element
+  // Position cursor based on click coordinates using native Selection API
   async function positionCursorFromClick(clickEvent: MouseEvent) {
-    if (!textareaElement || !mockElementRef) return;
-
-    const textareaRect = textareaElement.getBoundingClientRect();
-
-    // Validate click is within reasonable bounds
-    if (!isClickWithinTextBounds(clickEvent.clientX, clickEvent.clientY, textareaRect)) {
-      // Click is too far from text area, position at end
-      const textLength = textareaElement.value.length;
-      textareaElement.setSelectionRange(textLength, textLength);
-      return;
-    }
-
-    console.log('Mock element positioning:', {
-      content: content.substring(0, 20) + '...',
-      clickX: clickEvent.clientX,
-      clickY: clickEvent.clientY,
-      textareaRect: {
-        left: textareaRect.left,
-        top: textareaRect.top,
-        width: textareaRect.width,
-        height: textareaRect.height
-      },
-      multiline: multiline
-    });
+    if (!contentEditableElement) return;
 
     try {
-      // Get the mock element for position calculation
-      const mockElement = mockElementRef.getElement();
-      if (!mockElement) {
-        console.warn('Mock element not available, falling back to end position');
-        const textLength = textareaElement.value.length;
-        textareaElement.setSelectionRange(textLength, textLength);
-        return;
+      // Use document.caretPositionFromPoint or document.caretRangeFromPoint
+      let caretPosition;
+      
+      if (document.caretPositionFromPoint) {
+        // Firefox
+        caretPosition = document.caretPositionFromPoint(clickEvent.clientX, clickEvent.clientY);
+        if (caretPosition) {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.setStart(caretPosition.offsetNode, caretPosition.offset);
+          range.collapse(true);
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        }
+      } else if (document.caretRangeFromPoint) {
+        // Chrome, Safari
+        const range = document.caretRangeFromPoint(clickEvent.clientX, clickEvent.clientY);
+        if (range) {
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        }
+      } else {
+        // Fallback: place cursor at end
+        placeCursorAtEnd();
       }
-
-      // Use the fast positioning algorithm
-      const positionResult = findCharacterFromClickFast(
-        mockElement,
-        clickEvent.clientX,
-        clickEvent.clientY,
-        textareaRect
-      );
-
-      // Set cursor position based on result
-      const targetPosition = Math.max(
-        0,
-        Math.min(positionResult.index, textareaElement.value.length)
-      );
-
-      console.log('Mock element positioning result:', {
-        targetPosition,
-        accuracy: positionResult.accuracy,
-        distance: positionResult.distance
-      });
-
-      textareaElement.setSelectionRange(targetPosition, targetPosition);
-
-      // Verify the cursor was set correctly
-      setTimeout(() => {
-        console.log('Actual cursor position after set:', textareaElement.selectionStart);
-      }, 10);
     } catch (error) {
-      console.error('Error in mock element positioning:', error);
-      // Fallback to end position
-      const textLength = textareaElement.value.length;
-      textareaElement.setSelectionRange(textLength, textLength);
+      console.error('Error positioning cursor from click:', error);
+      placeCursorAtEnd();
     }
   }
 
-  // Handle textarea input
-  function handleInput(event: Event & { currentTarget: HTMLTextAreaElement }) {
+  // Helper function to place cursor at the end of content
+  function placeCursorAtEnd() {
+    if (!contentEditableElement) return;
+    
+    const selection = window.getSelection();
+    const range = document.createRange();
+    
+    // Move to the end of the contenteditable element
+    range.selectNodeContents(contentEditableElement);
+    range.collapse(false); // false = collapse to end
+    
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  // Handle contenteditable input
+  function handleInput(event: Event & { currentTarget: HTMLDivElement }) {
     const target = event.currentTarget;
+    let newContent = target.textContent || '';
 
     // For single-line, replace newlines with spaces
     if (!multiline) {
-      target.value = target.value.replace(/\n/g, ' ');
+      newContent = newContent.replace(/\n/g, ' ');
+      // Update the element content if we modified it
+      if (newContent !== target.textContent) {
+        target.textContent = newContent;
+        placeCursorAtEnd();
+      }
     }
 
-    content = target.value;
-
-    // Auto-resize only if multiline
-    if (multiline) {
-      autoResizeTextarea(target);
-    }
-
+    content = newContent;
     dispatch('contentChanged', { nodeId, content });
   }
 
-  // Auto-resize textarea (only for multiline)
-  function autoResizeTextarea(textarea: HTMLTextAreaElement) {
-    textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
-  }
+  // ContentEditable automatically adjusts height based on content
+  // No manual resizing needed like with textarea
 
   // Handle blur
   function handleBlur() {
@@ -218,6 +185,15 @@
         return;
       }
 
+      // Prevent default formatting in ContentEditable
+      if (event.ctrlKey || event.metaKey) {
+        const formatKeys = ['b', 'i', 'u', 'k']; // bold, italic, underline, link
+        if (formatKeys.includes(event.key.toLowerCase())) {
+          event.preventDefault();
+          return;
+        }
+      }
+
       // Other keys pass through naturally
       return;
     }
@@ -226,6 +202,32 @@
     if (editable && contentEditable && (event.code === 'Enter' || event.code === 'Space')) {
       event.preventDefault();
       startEditing();
+    }
+  }
+
+  // Handle paste events to ensure plain text only
+  function handlePaste(event: Event & { currentTarget: HTMLDivElement }) {
+    event.preventDefault();
+    const paste = (event as any).clipboardData?.getData('text/plain') || '';
+    
+    // For single-line, replace newlines with spaces
+    const cleanPaste = multiline ? paste : paste.replace(/\n/g, ' ');
+    
+    // Insert text at cursor position
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(cleanPaste));
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    
+    // Update content and dispatch event
+    if (contentEditableElement) {
+      content = contentEditableElement.textContent || '';
+      dispatch('contentChanged', { nodeId, content });
     }
   }
 
@@ -296,34 +298,23 @@
       <slot name="content">
         {#if focused && contentEditable}
           <!-- Edit mode (only if content is directly editable) -->
-          <textarea
-            bind:this={textareaElement}
-            class="ns-node__textarea {multiline
-              ? 'ns-node__textarea--multiline'
-              : 'ns-node__textarea--single'}"
-            bind:value={content}
+          <div
+            bind:this={contentEditableElement}
+            class="ns-node__contenteditable {multiline
+              ? 'ns-node__contenteditable--multiline'
+              : 'ns-node__contenteditable--single'}"
+            contenteditable="true"
+            bind:textContent={content}
             on:input={handleInput}
             on:blur={handleBlur}
             on:keydown={handleKeyDown}
+            on:paste={handlePaste}
             on:keydown|stopPropagation
-            {placeholder}
-            rows={1}
-          ></textarea>
-
-          <!-- Mock element for precise cursor positioning -->
-          {#if textareaElement}
-            <!-- @ts-expect-error: Svelte component binding inference issue -->
-            <MockTextElement
-              bind:this={mockElementRef}
-              {content}
-              fontFamily={getComputedStyle(textareaElement).fontFamily}
-              fontSize={getComputedStyle(textareaElement).fontSize}
-              fontWeight={getComputedStyle(textareaElement).fontWeight}
-              lineHeight={getComputedStyle(textareaElement).lineHeight}
-              width={textareaElement.offsetWidth}
-              {multiline}
-            />
-          {/if}
+            data-placeholder={placeholder}
+            role="textbox"
+            tabindex="0"
+            aria-label="Editable content"
+          >{content}</div>
         {:else}
           <!-- Display mode -->
           {#if editable && contentEditable}
@@ -468,8 +459,8 @@
     min-width: 0; /* Prevent overflow */
   }
 
-  /* Textarea styling */
-  .ns-node__textarea {
+  /* ContentEditable styling */
+  .ns-node__contenteditable {
     width: 100%;
     min-height: 20px;
     padding: 0;
@@ -481,28 +472,37 @@
     background: transparent;
     color: hsl(var(--foreground));
     outline: none;
-    resize: none;
     overflow: hidden;
   }
 
-  /* Single-line textarea (default) */
-  .ns-node__textarea--single {
+  /* Single-line contenteditable (default) */
+  .ns-node__contenteditable--single {
     height: 20px;
     white-space: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
   }
 
-  /* Multi-line textarea */
-  .ns-node__textarea--multiline {
+  /* Multi-line contenteditable */
+  .ns-node__contenteditable--multiline {
     min-height: 20px;
     white-space: pre-wrap;
     overflow-y: auto;
   }
 
-  .ns-node__textarea::placeholder {
+  /* Placeholder styling for contenteditable */
+  .ns-node__contenteditable:empty::before {
+    content: attr(data-placeholder);
     color: hsl(var(--muted-foreground));
     font-style: italic;
+    pointer-events: none;
+  }
+
+  /* Prevent default contenteditable formatting */
+  .ns-node__contenteditable * {
+    font-weight: inherit !important;
+    font-style: inherit !important;
+    text-decoration: none !important;
   }
 
   /* Display styling */
