@@ -11,8 +11,11 @@
 </script>
 
 <script lang="ts">
-  import { createEventDispatcher, tick } from 'svelte';
+  import { createEventDispatcher, tick, onMount, onDestroy } from 'svelte';
   import Icon, { type IconName } from '../icons/index.js';
+  import { SoftNewlineIntegration, softNewlineProcessor } from '$lib/services/softNewlineProcessor.js';
+  import type { SoftNewlineContext, NodeCreationSuggestion } from '$lib/services/softNewlineProcessor.js';
+  import { wysiwygProcessor, type WYSIWYGResult } from '$lib/services/wysiwygProcessor.js';
 
   // Essential Props (Simplified to 5 core + processing)
   export let nodeType: NodeType = 'text';
@@ -33,9 +36,22 @@
   export let processingAnimation: 'blink' | 'pulse' | 'spin' | 'fade' = 'pulse';
   export let processingIcon: IconName | undefined = undefined;
 
+  // WYSIWYG Processing
+  export let enableWYSIWYG: boolean = true;
+  export let wysiwygConfig = {
+    enableRealTime: true,
+    performanceMode: false,
+    maxProcessingTime: 50,
+    debounceDelay: 16,
+    hideSyntax: true,
+    enableFormatting: true
+  };
+
   // Edit state
   let focused = false;
   let contentEditableElement: HTMLDivElement;
+  let wysiwygResult: WYSIWYGResult | null = null;
+  let isWysiwygProcessing = false;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -43,6 +59,8 @@
     focus: { nodeId: string };
     blur: { nodeId: string };
     contentChanged: { nodeId: string; content: string };
+    softNewlineContext: { nodeId: string; context: SoftNewlineContext };
+    nodeCreationSuggested: { nodeId: string; suggestion: NodeCreationSuggestion };
   }>();
 
   // Handle display click to start editing
@@ -92,10 +110,10 @@
     try {
       // Use document.caretPositionFromPoint or document.caretRangeFromPoint
       let caretPosition;
-      
-      if (document.caretPositionFromPoint) {
+
+      if ((document as any).caretPositionFromPoint) {
         // Firefox
-        caretPosition = document.caretPositionFromPoint(clickEvent.clientX, clickEvent.clientY);
+        caretPosition = (document as any).caretPositionFromPoint(clickEvent.clientX, clickEvent.clientY);
         if (caretPosition) {
           const selection = window.getSelection();
           const range = document.createRange();
@@ -125,14 +143,14 @@
   // Helper function to place cursor at the end of content
   function placeCursorAtEnd() {
     if (!contentEditableElement) return;
-    
+
     const selection = window.getSelection();
     const range = document.createRange();
-    
+
     // Move to the end of the contenteditable element
     range.selectNodeContents(contentEditableElement);
     range.collapse(false); // false = collapse to end
-    
+
     selection?.removeAllRanges();
     selection?.addRange(range);
   }
@@ -153,7 +171,45 @@
     }
 
     content = newContent;
+    
+    // Process with WYSIWYG if enabled
+    if (enableWYSIWYG && focused) {
+      processContentWYSIWYG(newContent);
+    }
+    
     dispatch('contentChanged', { nodeId, content });
+
+    // Process soft newline context for multiline nodes with content changes
+    if (multiline && newContent.includes('\n')) {
+      processSoftNewlineContext(newContent);
+    }
+  }
+
+  // Process soft newline context and emit events
+  async function processSoftNewlineContext(content: string) {
+    if (!contentEditableElement) return;
+
+    try {
+      const cursorPosition = SoftNewlineIntegration.getCursorPosition(contentEditableElement);
+      
+      // Use debounced processing for real-time detection
+      const context = await SoftNewlineIntegration.handleInputChange(
+        content,
+        cursorPosition,
+        nodeId
+      );
+
+      // Dispatch context to parent components
+      dispatch('softNewlineContext', { nodeId, context });
+
+      // If a node creation is suggested, dispatch that event too
+      const suggestion = softNewlineProcessor.getNodeCreationSuggestion(context);
+      if (suggestion) {
+        dispatch('nodeCreationSuggested', { nodeId, suggestion });
+      }
+    } catch (error) {
+      console.warn('Error processing soft newline context:', error);
+    }
   }
 
   // ContentEditable automatically adjusts height based on content
@@ -177,8 +233,23 @@
         return;
       }
 
+      // Handle soft newline detection (Shift-Enter)
+      if (multiline && event.key === 'Enter' && event.shiftKey) {
+        // For multiline content, allow Shift-Enter for soft newlines
+        // The soft newline processor will handle pattern detection on subsequent typing
+        return; // Allow default behavior (insert newline)
+      }
+
       // For single-line, Enter saves and exits
       if (!multiline && event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        focused = false;
+        dispatch('blur', { nodeId });
+        return;
+      }
+
+      // For multiline, regular Enter also saves and exits
+      if (multiline && event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         focused = false;
         dispatch('blur', { nodeId });
@@ -209,10 +280,10 @@
   function handlePaste(event: Event & { currentTarget: HTMLDivElement }) {
     event.preventDefault();
     const paste = (event as any).clipboardData?.getData('text/plain') || '';
-    
+
     // For single-line, replace newlines with spaces
     const cleanPaste = multiline ? paste : paste.replace(/\n/g, ' ');
-    
+
     // Insert text at cursor position
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
@@ -223,13 +294,87 @@
       selection.removeAllRanges();
       selection.addRange(range);
     }
-    
+
     // Update content and dispatch event
     if (contentEditableElement) {
       content = contentEditableElement.textContent || '';
       dispatch('contentChanged', { nodeId, content });
     }
   }
+
+  // WYSIWYG processing functions
+  async function processContentWYSIWYG(newContent: string) {
+    if (!enableWYSIWYG || !contentEditableElement) return;
+
+    try {
+      isWysiwygProcessing = true;
+      
+      // Get cursor position
+      const selection = window.getSelection();
+      const cursorPosition = selection ? getCursorPosition() : undefined;
+
+      // Process with real-time WYSIWYG
+      wysiwygProcessor.processRealTime(newContent, cursorPosition || 0, (result) => {
+        wysiwygResult = result;
+        applyWYSIWYGFormatting(result);
+        isWysiwygProcessing = false;
+      });
+
+    } catch (error) {
+      console.warn('WYSIWYG processing error:', error);
+      isWysiwygProcessing = false;
+    }
+  }
+
+  function getCursorPosition(): number {
+    if (!contentEditableElement) return 0;
+    
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return 0;
+
+    const range = selection.getRangeAt(0);
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(contentEditableElement);
+    preCaretRange.setEnd(range.endContainer, range.endOffset);
+    
+    return preCaretRange.toString().length;
+  }
+
+  function applyWYSIWYGFormatting(result: WYSIWYGResult) {
+    if (!contentEditableElement || !result.characterClasses) return;
+
+    // Apply CSS classes to the element
+    // For now, we apply pattern-based classes to the entire element
+    // A more sophisticated implementation would wrap individual characters
+    const existingClasses = Array.from(contentEditableElement.classList)
+      .filter(cls => !cls.startsWith('wysiwyg-'));
+    
+    contentEditableElement.className = existingClasses.join(' ');
+    
+    // Add WYSIWYG classes based on detected patterns
+    const allClasses = new Set<string>();
+    Object.values(result.characterClasses).forEach(classes => {
+      classes.forEach(cls => allClasses.add(cls));
+    });
+
+    allClasses.forEach(cls => {
+      if (cls.startsWith('wysiwyg-')) {
+        contentEditableElement.classList.add(cls);
+      }
+    });
+
+    // Store patterns for reference
+    if (result.patterns.length > 0) {
+      contentEditableElement.dataset.patterns = JSON.stringify(result.patterns.length);
+    }
+  }
+
+  // Initialize WYSIWYG processor configuration
+  onMount(() => {
+    if (enableWYSIWYG) {
+      wysiwygProcessor.updateConfig(wysiwygConfig);
+    }
+  });
 
   // Get node type label for accessibility
   function getNodeTypeLabel(type: NodeType): string {
@@ -265,6 +410,11 @@
 
   // Animation class for processing state
   $: iconAnimationClass = isProcessing ? `ns-node__icon--${processingAnimation}` : '';
+
+  // Cleanup soft newline processor when component is destroyed
+  onDestroy(() => {
+    softNewlineProcessor.cancelProcessing(nodeId);
+  });
 </script>
 
 <!-- Simplified node container - div approach to avoid button/contenteditable conflicts -->
@@ -302,7 +452,7 @@
             bind:this={contentEditableElement}
             class="ns-node__contenteditable {multiline
               ? 'ns-node__contenteditable--multiline'
-              : 'ns-node__contenteditable--single'}"
+              : 'ns-node__contenteditable--single'} {enableWYSIWYG ? 'ns-node__contenteditable--wysiwyg' : ''} {isWysiwygProcessing ? 'ns-node__contenteditable--processing' : ''}"
             contenteditable="true"
             bind:textContent={content}
             on:input={handleInput}
@@ -311,10 +461,13 @@
             on:paste={handlePaste}
             on:keydown|stopPropagation
             data-placeholder={placeholder}
+            data-wysiwyg-enabled={enableWYSIWYG}
             role="textbox"
             tabindex="0"
             aria-label="Editable content"
-          >{content}</div>
+          >
+            {content}
+          </div>
         {:else}
           <!-- Display mode -->
           {#if editable && contentEditable}
@@ -333,7 +486,13 @@
             >
               <slot name="display-content">
                 {#if content}
-                  <span class="ns-node__text">{content}</span>
+                  <span class="ns-node__text {enableWYSIWYG ? 'ns-node__text--wysiwyg' : ''}">
+                    {#if enableWYSIWYG && wysiwygResult}
+                      {@html wysiwygResult.processedHTML}
+                    {:else}
+                      {content}
+                    {/if}
+                  </span>
                 {:else}
                   <span class="ns-node__empty">{placeholder}</span>
                 {/if}
@@ -344,7 +503,13 @@
             <div class="ns-node__display" role="region">
               <slot name="display-content">
                 {#if content}
-                  <span class="ns-node__text">{content}</span>
+                  <span class="ns-node__text {enableWYSIWYG ? 'ns-node__text--wysiwyg' : ''}">
+                    {#if enableWYSIWYG && wysiwygResult}
+                      {@html wysiwygResult.processedHTML}
+                    {:else}
+                      {content}
+                    {/if}
+                  </span>
                 {:else}
                   <span class="ns-node__empty">{placeholder}</span>
                 {/if}
@@ -605,5 +770,112 @@
     .ns-node__text {
       font-size: 13px;
     }
+  }
+
+  /* WYSIWYG Processing Styles */
+  .ns-node__contenteditable--wysiwyg {
+    /* Enhanced contenteditable for WYSIWYG */
+  }
+
+  .ns-node__contenteditable--processing {
+    opacity: 0.8;
+    transition: opacity 0.2s ease;
+  }
+
+  .ns-node__text--wysiwyg {
+    /* Enhanced text display for WYSIWYG */
+  }
+
+  /* WYSIWYG Pattern Styles */
+  :global(.wysiwyg-syntax-hidden) {
+    opacity: 0.3;
+    font-size: 0.8em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  :global(.wysiwyg-header) {
+    font-weight: bold;
+  }
+
+  :global(.wysiwyg-header-1) { font-size: 2em; line-height: 1.2; }
+  :global(.wysiwyg-header-2) { font-size: 1.5em; line-height: 1.2; }
+  :global(.wysiwyg-header-3) { font-size: 1.17em; line-height: 1.3; }
+  :global(.wysiwyg-header-4) { font-size: 1em; line-height: 1.4; }
+  :global(.wysiwyg-header-5) { font-size: 0.83em; line-height: 1.4; }
+  :global(.wysiwyg-header-6) { font-size: 0.67em; line-height: 1.4; }
+
+  :global(.wysiwyg-bold) {
+    font-weight: bold;
+  }
+
+  :global(.wysiwyg-italic) {
+    font-style: italic;
+  }
+
+  :global(.wysiwyg-inlinecode) {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+    background-color: rgba(175, 184, 193, 0.2);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+
+  :global(.wysiwyg-codeblock) {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+    background-color: rgba(175, 184, 193, 0.1);
+    padding: 12px;
+    border-radius: 6px;
+    border-left: 3px solid #d0d7de;
+    display: block;
+    white-space: pre;
+    margin: 8px 0;
+  }
+
+  :global(.wysiwyg-bullet) {
+    display: list-item;
+    margin-left: 1.5em;
+    list-style-type: disc;
+  }
+
+  :global(.wysiwyg-bullet-dash) {
+    list-style-type: '- ';
+  }
+
+  :global(.wysiwyg-bullet-star) {
+    list-style-type: '* ';
+  }
+
+  :global(.wysiwyg-bullet-plus) {
+    list-style-type: '+ ';
+  }
+
+  :global(.wysiwyg-blockquote) {
+    border-left: 3px solid #d0d7de;
+    padding-left: 16px;
+    color: #656d76;
+    font-style: italic;
+    margin: 8px 0;
+  }
+
+  /* Syntax characters with data attributes */
+  :global([data-syntax]::before) {
+    content: attr(data-syntax);
+    opacity: 0.3;
+    font-size: 0.8em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  :global([data-syntax-before]::before) {
+    content: attr(data-syntax-before);
+    opacity: 0.3;
+    font-size: 0.8em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  :global([data-syntax-after]::after) {
+    content: attr(data-syntax-after);
+    opacity: 0.3;
+    font-size: 0.8em;
+    color: hsl(var(--muted-foreground));
   }
 </style>

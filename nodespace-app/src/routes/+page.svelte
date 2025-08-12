@@ -6,6 +6,8 @@
   import TextNode from '$lib/components/TextNode.svelte';
   import HierarchyDemo from '$lib/components/HierarchyDemo.svelte';
   import TextNodeDemo from '$lib/components/TextNodeDemo.svelte';
+  import BulletConversionDemo from '$lib/components/BulletConversionDemo.svelte';
+  import SoftNewlineDemo from '$lib/components/SoftNewlineDemo.svelte';
   import MockPositioningTest from '$lib/design/components/MockPositioningTest.svelte';
   import { themePreference, currentTheme } from '$lib/design/theme.js';
 
@@ -179,6 +181,16 @@ Generated analytics and insights"
 
           <!-- TextNode Demo for Testing Refactored Component -->
           <TextNodeDemo />
+
+          <div class="divider"></div>
+
+          <!-- Smart Bullet-to-Node Conversion Demo -->
+          <BulletConversionDemo />
+
+          <div class="divider"></div>
+
+          <!-- Soft Newline + Markdown Detection Demo -->
+          <SoftNewlineDemo />
 
           <div class="divider"></div>
 

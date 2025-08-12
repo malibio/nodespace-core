@@ -295,3 +295,35 @@ export interface PatternIntegrationUtils {
   /** Detect soft newline contexts */
   detectSoftNewlineContext(content: string, position: number, patterns: MarkdownPattern[]): boolean;
 }
+
+/**
+ * Configuration for bullet conversion behavior
+ */
+export interface BulletConversionConfig {
+  /** Create new nodes or update existing content */
+  createNewNodes: boolean;
+  /** Preserve original bullet syntax in content */
+  preserveBulletSyntax: boolean;
+  /** Maximum nesting depth to allow */
+  maxDepth: number;
+  /** Default node type for converted bullets */
+  defaultNodeType: 'text' | 'task' | 'ai-chat' | 'entity' | 'query';
+  /** Auto-indent pixels per level (matching NodeTree) */
+  indentSize: number;
+}
+
+/**
+ * Result of bullet-to-node conversion operation
+ */
+export interface BulletConversionResult {
+  /** Whether any conversions were performed */
+  hasConversions: boolean;
+  /** Original content with bullet syntax removed */
+  cleanedContent: string;
+  /** New node hierarchy created from bullets */
+  newNodes: import('$lib/types/tree').TreeNodeData[];
+  /** Cursor position after conversion */
+  newCursorPosition: number;
+  /** Parent node ID if creating child relationships */
+  parentNodeId?: string;
+}

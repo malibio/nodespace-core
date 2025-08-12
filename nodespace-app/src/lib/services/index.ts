@@ -16,6 +16,14 @@ export {
   mockPatternData 
 } from './markdownPatternUtils';
 
+// Soft newline processing service
+export {
+  SoftNewlineProcessor,
+  softNewlineProcessor,
+  SoftNewlineIntegration,
+  SoftNewlineMetrics
+} from './softNewlineProcessor';
+
 // Existing services
 export { default as mockTextService } from './mockTextService';
 
