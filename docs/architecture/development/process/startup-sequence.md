@@ -18,8 +18,10 @@ git status
 - Ensure clean working directory
 
 ### 2. Determine Branching Strategy
-- Check parent issue for specified approach (single branch vs. individual branches)
-- Look for instructions in issue description or comments
+- **REQUIRED**: Read [Epic and Sub-Issue Workflow Guide](epic-and-subissue-workflow.md) for comprehensive guidance
+- Identify issue type: Epic, Sub-Issue, or Standalone
+- Apply correct branching strategy based on issue type
+- **For Sub-Issues**: Always use parent epic branch (never create separate branch)
 
 ### 3. Create/Switch to Branch
 Based on strategy determined in step 2:
