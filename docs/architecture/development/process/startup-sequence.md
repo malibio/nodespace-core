@@ -38,25 +38,22 @@ git checkout feature/issue-<parent-number>-name
 
 ### 4. Assign Issue
 ```bash
-gh issue edit <number> --add-assignee "@me"
+bun run gh:assign <number> "@me"
 ```
 
-### 5. Update Project Status - Use CLI Commands
-**Use GitHub CLI commands to update project status:**
+### 5. Update Project Status - Use Bun API Commands
+**Use TypeScript GitHub API commands (no Claude Code approval prompts):**
 
 ```bash
-# Get project item ID for your issue using JSON + jq (IMPROVED)
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
-
 # Update status: Todo → In Progress
-gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+bun run gh:status <number> "In Progress"
 ```
 
-**Key Improvements:**
-- ✅ **Direct issue number filtering** - No grep/text parsing errors
-- ✅ **JSON structured data** - Reliable and precise
-- ✅ **Explicit limit** - Ensures all project items are retrieved
-- ✅ **Clean one-liner** - Can be used in command substitution
+**Key Benefits:**
+- ✅ **No approval prompts** - Pure TypeScript API calls
+- ✅ **Precise and reliable** - Direct GitHub API integration
+- ✅ **Simple syntax** - Easy to remember and use
+- ✅ **Error handling** - Clear success/failure messages
 
 **📖 See [Issue Workflow](issue-workflow.md) for complete CLI command reference**
 
@@ -67,12 +64,11 @@ gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id 
 - Example: Issue #26 (parent) + Issue #46 (sub-issue)
 
 ```bash
-# Update parent issue status (IMPROVED)
-PARENT_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == PARENT_NUMBER) | .id')
-gh project item-edit --id $PARENT_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+# Update parent issue status
+bun run gh:status <parent-number> "In Progress"
 
 # Assign parent issue
-gh issue edit PARENT_NUMBER --add-assignee "@me"
+bun run gh:assign <parent-number> "@me"
 ```
 
 ### 6. Select Appropriate Agent/Expert - MANDATORY
@@ -121,8 +117,8 @@ Before proceeding to implementation, verify ALL of the following:
 
 - [ ] Git status is clean (no uncommitted changes)
 - [ ] Correct branch created/selected (individual vs parent branch strategy)
-- [ ] Issue assigned using `gh issue edit <number> --add-assignee "@me"` (NOT web interface)
-- [ ] Project status updated using CLI commands (NOT web interface)
+- [ ] Issue assigned using `bun run gh:assign <number> "@me"` (API command)
+- [ ] Project status updated using `bun run gh:status <number> "In Progress"` (API command)
 - [ ] Parent issue also updated if single-branch strategy
 - [ ] Specialized agent selected (frontend-expert, ai-ml-engineer, etc.)
 - [ ] Agent will be called with Task tool (NOT direct implementation)
@@ -138,16 +134,18 @@ Before proceeding to implementation, verify ALL of the following:
 - **Code Review Process**: See [PR Review](pr-review.md) for review requirements
 - **Quality Standards**: See [Code Quality](../standards/code-quality.md) for linting and formatting
 
-**Quick Command Reference (IMPROVED):**
+**Quick Command Reference (BUN API COMMANDS):**
 ```bash
-# Essential CLI commands for startup sequence
-gh issue edit ISSUE_NUMBER --add-assignee "@me"
+# Essential bun commands for startup sequence (no approval prompts)
+bun run gh:assign <number> "@me"
+bun run gh:status <number> "In Progress"
 
-# Get project item ID (JSON approach)  
-ITEM_ID=$(gh project item-list 5 --owner malibio --limit 50 --format=json | jq -r '.items[] | select(.content.number == ISSUE_NUMBER) | .id')
-
-# Update project status to In Progress
-gh project item-edit --id $ITEM_ID --project-id PVT_kwHOADHu9M4A_nxN --field-id PVTSSF_lAHOADHu9M4A_nxNzgyq13o --single-select-option-id 47fc9ee4
+# Additional useful commands
+bun run gh:create "Title" "Body"   # Create new issue
+bun run gh:list                    # List all issues
+bun run gh:view <number>          # View issue details
+bun run gh:unassign <number> "@me" # Unassign issue
+bun run gh:help                   # Show all available commands
 ```
 
 ## Next Steps
