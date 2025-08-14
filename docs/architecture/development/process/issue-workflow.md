@@ -92,10 +92,33 @@ GitHub provides enhanced rendering for issue references when using specific form
 - **Bundle Analysis Tools**: webpack-bundle-analyzer for size analysis
 ```
 
+### Issue Naming Patterns
+
+**Follow Natural, Descriptive Titles (Based on Project Analysis):**
+
+```markdown
+# Good Examples from NodeSpace Issues:
+- "Enhanced Visual Parent/Child Relationships with Connecting Lines"
+- "Epic: ContentEditable Text Editing with Smart Markdown Conversion"
+- "Enhancement: Achieve Perfect Review Score (100/100) for ContentEditable System"
+- "Integration Testing with Existing Keyboard Handlers"
+- "Complete Issue #26: Hybrid Markdown Rendering System"
+
+# Avoid Generic Prefixes:
+❌ "[FEATURE] Advanced Node System"
+❌ "[BUG] Fix Button Click"
+❌ "[ENHANCEMENT] Update Component"
+
+# Use Natural Language Instead:
+✅ "Advanced Node Hierarchy Indentation System"
+✅ "Fix Button Click Handler in Navigation"
+✅ "Enhanced Button Component with Loading States"
+```
+
 ### Feature Implementation Template
 
 ```markdown
-# [FEATURE] Complete [Component] System
+# [Descriptive Title Without Prefix]
 
 ## Overview
 Brief description of the complete feature being implemented.
