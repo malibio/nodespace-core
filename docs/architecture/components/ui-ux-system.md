@@ -311,19 +311,178 @@ Rich preview system for node references and cross-links:
 | Text Positioning | < 50ms | Click to cursor placement |
 | Animation Smoothness | 60fps | Expand/collapse transitions |
 
-## Future Extensions
+## Node Hierarchy Interaction System
 
-### Planned Enhancements
+NodeSpace provides sophisticated hierarchical node interaction capabilities including collapse/expand controls, keyboard-driven indentation, and intelligent child node management.
+
+### Current Implementation Status
+
+#### Collapse/Expand System (Implemented)
+
+**Visual Controls:**
+- **Chevron Icons**: Modern right-pointing chevrons (16x16px) that rotate 90° to point down when expanded
+- **Hover Behavior**: Chevrons appear on node hover with opacity transition (0 → 1)
+- **Color Coordination**: Chevrons inherit node type colors from design system (`var(--node-text)`, `var(--node-task)`, etc.)
+- **Positioning**: Centered between parent circle indicator and current node circle, with precise spacing
+
+**Implementation Architecture:**
+```typescript
+// Node data structure with expanded state
+interface NodeData {
+  id: string;
+  type: string;
+  content: string;
+  children: NodeData[];
+  expanded: boolean; // Controls visibility of children
+}
+
+// Component integration
+// BaseNodeViewer.svelte - Manages hierarchy display
+// MinimalBaseNode.svelte - Individual node rendering
+// Icon.svelte - Chevron icon system with rotation
+```
+
+**Spacing Architecture:**
+- **Circle to Text Gap**: 24px (`1.5rem`) to accommodate chevron space
+- **Chevron Positioning**: `right: -0.35rem` for optimal centering between indicators
+- **Child Indentation**: 40px (`2.5rem`) to align with parent circle + gap spacing
+- **Chevron Alignment**: `margin-top: 0.4rem` for vertical alignment with text
+
+#### Basic Keyboard Navigation (Implemented)
+
+**Current Tab/Shift+Tab Behavior:**
+- **Tab**: Indent node (make child of previous sibling)
+- **Shift+Tab**: Outdent node (make sibling of parent)
+- **Integration**: Handled in BaseNodeViewer with cursor position preservation
+
+**Current Limitations:**
+- No node type compatibility checking
+- No advanced child transfer logic
+- No collapsed state awareness in hierarchy operations
+
+### Advanced Indentation System (Planned - Issue #TBD)
+
+Based on analysis of NodeSpace core-ui implementation, the following advanced features are planned:
+
+#### Node Type Compatibility System
+
+**`canHaveChildren` Property:**
+```typescript
+// MinimalBaseNode enhancement
+export let canHaveChildren: boolean = true; // Svelte property pattern
+
+// Node type specific overrides
+// ai-chat nodes: canHaveChildren = false
+// text nodes: canHaveChildren = true (default)
+// task nodes: canHaveChildren = true (default)
+```
+
+#### Enhanced Indentation Rules
+
+**Tab (Indent) Rules:**
+1. Cannot indent if no previous sibling exists
+2. Cannot indent if previous sibling has `canHaveChildren = false`
+3. Node becomes child of previous sibling when valid
+
+**Shift+Tab (Outdent) Rules:**
+1. Cannot outdent root nodes
+2. Next immediate sibling becomes child of outdented node (hierarchy preservation)
+3. Maintains relative positioning in tree structure
+
+#### Sophisticated Child Transfer Logic
+
+**When Deleting Nodes with Children:**
+- **Depth-aware transfer**: Root node children vs nested node children handled differently
+- **Collapsed state awareness**: Insert position depends on target's collapsed state
+- **Auto-expansion**: Nodes receiving children automatically expand
+
+**Backspace/Delete Scenarios:**
+```typescript
+// Child transfer rules based on node depth and target state
+transferChildrenWithDepthPreservation(
+  sourceNode: BaseNode,
+  targetNode: BaseNode, 
+  collapsedNodes: Set<string>
+): void {
+  // Insert at beginning if target was collapsed
+  // Insert at end if target was expanded
+  // Auto-expand target after receiving children
+}
+```
+
+#### Enter Key Enhancement
+
+**Content Splitting with Children:**
+- **Collapsed parent**: Children stay with original (left) node
+- **Expanded parent**: Children move to new (right) node
+- **Preserves hierarchy intent** based on visual state
+
+### Implementation Integration Points
+
+#### Component Architecture
+```
+BaseNodeViewer.svelte
+├── Node hierarchy management
+├── Collapse/expand state tracking
+├── Keyboard event handling
+├── Child transfer orchestration
+└── Visual layout coordination
+
+MinimalBaseNode.svelte
+├── Individual node rendering
+├── canHaveChildren property
+├── Icon display logic
+├── Keyboard shortcuts
+└── Content editing
+
+TextNode.svelte
+├── Text-specific behaviors
+├── Header level inheritance
+├── Markdown formatting
+└── Content persistence
+```
+
+#### State Management
+```typescript
+// Enhanced node structure
+interface EnhancedNodeData extends NodeData {
+  canHaveChildren: boolean;
+  nodeType: string; // For type-specific rules
+  depth: number; // For depth-aware operations
+}
+
+// Collapsed state tracking
+const collapsedNodes = new Set<string>();
+```
+
+### Future Extensions
+
+#### Planned Enhancements
 - **Bulk Operations**: Context menus for selected blocks
 - **Copy/Paste Integration**: Multi-block clipboard operations
 - **Drag and Drop**: Visual drag-drop for hierarchy reorganization
 - **Touch Gestures**: Mobile-optimized selection patterns
 - **Advanced Keyboard**: Vim-style navigation modes
+- **Smart Hierarchy Operations**: AI-assisted node organization
 
-### Extension Points
+#### Extension Points
 - **Selection Plugins**: Custom selection behavior for node types
 - **Interaction Modes**: Alternative interaction patterns
 - **Visual Themes**: Customizable selection and hierarchy styling
 - **Accessibility Extensions**: Enhanced screen reader support
+- **Node Type Rules**: Extensible compatibility system for new node types
 
-This UI/UX architecture provides a solid foundation for sophisticated user interactions while maintaining accessibility, performance, and extensibility for future enhancements.
+### Performance Considerations
+
+**Current Optimizations:**
+- CSS-based chevron animations (hardware accelerated)
+- Efficient DOM updates with Svelte reactivity
+- Minimal re-renders during hierarchy operations
+
+**Planned Optimizations:**
+- Batch hierarchy operations for large trees
+- Virtual scrolling for deep hierarchies
+- Debounced state persistence
+- Memory-efficient collapsed state tracking
+
+This comprehensive hierarchy interaction system provides the foundation for sophisticated knowledge management workflows while maintaining performance and accessibility standards.
