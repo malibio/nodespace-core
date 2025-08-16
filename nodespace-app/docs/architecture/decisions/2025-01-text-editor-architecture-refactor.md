@@ -78,7 +78,7 @@ We will implement an **enhanced contenteditable architecture** that preserves No
 3. **Service-Oriented Business Logic**
    - ContentProcessor handles markdown ↔ AST conversion
    - BacklinkService manages `[[wikilinks]]` and decorations
-   - NodeManager centralizes hierarchy operations
+   - NodeManager centralizes hierarchy operations with proven patterns from `nodespace-core-logic`
    - EventBus enables loose coupling
 
 4. **Enhanced Reactive State Management**
@@ -87,7 +87,13 @@ We will implement an **enhanced contenteditable architecture** that preserves No
    - Real-time decoration updates
    - Performance-optimized reactivity patterns
 
-5. **Extensibility for Future Features**
+5. **Database Persistence Compatibility**
+   - Maintain compatibility with existing `nodespace-core-logic` ordering strategy
+   - Support single-pointer sibling navigation (`before_sibling`) with option to optimize
+   - Preserve root hierarchy optimization for O(1) query performance
+   - Type-segmented metadata preservation from existing NodeOperations
+
+6. **Extensibility for Future Features**
    - Plugin architecture foundation
    - AI integration points
    - Collaborative editing readiness
@@ -98,6 +104,9 @@ We will implement an **enhanced contenteditable architecture** that preserves No
 ### Phase 1: Enhanced Service Layer (3 weeks)
 - **ContentProcessor**: Implement Logseq-style dual-representation (markdown ↔ AST)
 - **NodeManager**: Centralize node operations with proper reactivity (fixes backspace bug)
+  - Migrate hierarchy management from `nodespace-core-logic`
+  - Implement single-pointer sibling ordering (`before_sibling` only initially)
+  - Add content extraction utilities and type-segmented metadata
 - **BacklinkService**: Basic `[[wikilink]]` parsing and resolution
 - **EventBus**: Type-safe event system for service communication
 
@@ -111,6 +120,7 @@ We will implement an **enhanced contenteditable architecture** that preserves No
 - **Node Type Decorations**: Task status, document previews, metadata
 - **Contextual Information**: Hover overlays with node-specific data
 - **Advanced Link Types**: `((block-refs))`, `@mentions`, `![[embeds]]`
+- **Multi-Level Embeddings**: Individual, contextual, and hierarchical embeddings from `nodespace-core-types`
 - **Performance Optimization**: Viewport-based processing, debounced updates
 
 ### Phase 4: AI Integration Preparation (2 weeks)
@@ -195,12 +205,22 @@ We will implement an **enhanced contenteditable architecture** that preserves No
 - **Epic**: #69 Text Editor Architecture Enhancement (Updated)
 - **Phase 1.1**: Enhanced ContentProcessor with Dual-Representation
 - **Phase 1.2**: NodeManager Service with Improved Reactivity
-- **Phase 1.3**: BacklinkService Implementation
-- **Phase 1.4**: EventBus System
+- **Phase 1.3**: Migrate Core Logic Components from `nodespace-core-logic`
+- **Phase 1.4**: BacklinkService Implementation
+- **Phase 1.5**: EventBus System
 - **Phase 2.1**: Bidirectional Link Graph
 - **Phase 2.2**: Real-time Link Detection
 - **Phase 3.1**: Rich Decoration System
 - **Phase 3.2**: Contextual Node Information
+
+### Components to Migrate from Existing Codebase
+From `nodespace-core-logic` and `nodespace-core-types`:
+- **Hierarchy Management**: Complete hierarchy computation system with caching
+- **Node Operations**: Unified upsert with type-segmented metadata preservation  
+- **Content Extraction**: Smart content parsing utilities with fallbacks
+- **Multi-Level Embeddings**: Individual, contextual, and hierarchical embedding support
+- **Performance Optimizations**: Root hierarchy optimization, caching strategies
+- **Sibling Navigation**: Single-pointer approach (`before_sibling`) with upgrade path
 
 ### Documentation
 - **Enhanced Implementation Plan**: `docs/architecture/development/text-editor-architecture-refactor.md`
