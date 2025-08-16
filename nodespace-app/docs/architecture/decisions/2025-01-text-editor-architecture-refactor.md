@@ -1,7 +1,7 @@
-# ADR-003: Text Editor Architecture Refactor
+# ADR-003: Text Editor Architecture Enhancement
 
-**Date**: January 2025  
-**Status**: Approved  
+**Date**: January 2025 (Updated August 2025)  
+**Status**: Approved (Revised)  
 **Participants**: Development Team, Senior Architect, Frontend Expert
 
 ## Context
@@ -13,189 +13,246 @@ Our current text editor architecture has fundamental issues that prevent reliabl
 2. **Mixed Responsibilities**: Components handling both UI logic and business logic
 3. **Performance Issues**: Deep tree traversal on every update, no virtualization
 4. **Maintenance Challenges**: Scattered logic across multiple components
-5. **Extension Limitations**: Difficult to add AI integration, collaborative editing, or plugins
+5. **Extension Limitations**: Difficult to add AI integration, collaborative editing, backlinking, or plugins
 
 ### Specific Bugs
 - **Backspace Node Combination**: Nodes disappear instead of combining content
 - **Content Updates**: UI not reflecting data model changes
 - **Memory Leaks**: Improper event cleanup in complex component trees
 
-### Expert Analysis
+### Expert Analysis & Research
 - **Frontend Expert**: Identified Svelte 5 reactivity violations as root cause
 - **Senior Architect**: Confirmed need for service-oriented architecture with clear separation of concerns
+- **Logseq Research**: Analyzed dual-representation patterns for hybrid markdown editing
+- **ProseMirror Evaluation**: Determined ProseMirror cannot handle NodeSpace's unique indented indicator requirements
+
+### Key Finding: NodeSpace's Unique Value Proposition
+Research revealed that **NodeSpace's custom contenteditable approach with indented node indicators is architecturally superior** to ProseMirror-based solutions. Most block editors (Notion, Craft) use left-aligned gutters because ProseMirror's architecture cannot handle true hierarchical visual indicators.
 
 ## Decision
 
-We will implement a **comprehensive architecture refactor** based on Clean Architecture principles:
+We will implement an **enhanced contenteditable architecture** that preserves NodeSpace's unique hierarchical design while applying proven patterns from Logseq:
 
-### New Architecture Layers
+### Enhanced ContentEditable Architecture
 
 ```
 ┌─────────────────────────────────────────┐
 │                Services                 │
-│  - ContentProcessor                     │
-│  - NodeManager                         │
+│  - ContentProcessor (Logseq patterns)  │
+│  - NodeManager (Enhanced)              │
+│  - BacklinkService (New)               │
+│  - DecorationService (New)             │
 │  - EventBus                            │
 │  - AIService (future)                  │
 └─────────────────────────────────────────┘
                     ↕ Events
 ┌─────────────────────────────────────────┐
 │             State Management            │
-│  - documentStore                       │
+│  - documentStore (Dual-representation) │
 │  - selectionStore                      │
+│  - backlinkStore (New)                 │
 │  - Derived reactive state              │
 └─────────────────────────────────────────┘
                     ↕ Props/Events
 ┌─────────────────────────────────────────┐
-│              UI Components              │
-│  - Pure UI logic only                  │
-│  - Single responsibilities             │
-│  - Event-driven communication          │
+│          UI Components (Enhanced)       │
+│  - BaseNode.svelte (Preserve hierarchy)│
+│  - TextNode.svelte (Enhanced markdown) │
+│  - BacklinkRenderer.svelte (New)       │
+│  - DecorationOverlay.svelte (New)      │
 └─────────────────────────────────────────┘
 ```
 
 ### Key Architectural Principles
 
-1. **Separation of Concerns**
-   - Services handle business logic
-   - Stores manage state
-   - Components handle UI only
+1. **Preserve Unique Hierarchical Design**
+   - Keep indented node indicators that follow content depth
+   - Maintain NodeSpace's superior visual hierarchy
+   - Enhance existing contenteditable foundation
 
-2. **Event-Driven Communication**
-   - Replace prop drilling with event bus
-   - Decouple components from services
-   - Enable plugin architecture
+2. **Dual-Representation Pattern (from Logseq)**
+   - Source representation: Raw markdown with backlinks
+   - Rendered representation: Parsed AST for display
+   - Seamless switching between edit/view contexts
 
-3. **Reactive State Management**
+3. **Service-Oriented Business Logic**
+   - ContentProcessor handles markdown ↔ AST conversion
+   - BacklinkService manages `[[wikilinks]]` and decorations
+   - NodeManager centralizes hierarchy operations
+   - EventBus enables loose coupling
+
+4. **Enhanced Reactive State Management**
    - Centralized stores with Svelte 5 `$state`
-   - Derived computed state
-   - Proper reactivity patterns
+   - Bidirectional link graph management
+   - Real-time decoration updates
+   - Performance-optimized reactivity patterns
 
-4. **Performance Optimization**
-   - Virtual scrolling for large documents
-   - Debounced content processing
-   - Memory leak prevention
+5. **Extensibility for Future Features**
+   - Plugin architecture foundation
+   - AI integration points
+   - Collaborative editing readiness
+   - Rich decoration system
 
 ## Implementation Strategy
 
-### Phase 1: Service Extraction (2 weeks)
-- **ContentProcessor**: Extract markdown/HTML conversion logic
-- **NodeManager**: Centralize node operations (fixes backspace bug)
-- **EventBus**: Implement type-safe event system
+### Phase 1: Enhanced Service Layer (3 weeks)
+- **ContentProcessor**: Implement Logseq-style dual-representation (markdown ↔ AST)
+- **NodeManager**: Centralize node operations with proper reactivity (fixes backspace bug)
+- **BacklinkService**: Basic `[[wikilink]]` parsing and resolution
+- **EventBus**: Type-safe event system for service communication
 
-### Phase 2: State Management (2 weeks)
-- **Document Store**: Centralized document state
-- **Selection Store**: Cursor and selection management
-- **Derived Stores**: Computed state (visible nodes, etc.)
+### Phase 2: Backlinking Foundation (2 weeks)
+- **Bidirectional Link Graph**: Build link index and resolution system
+- **Real-time Link Detection**: Parse `[[links]]` as user types
+- **Basic Decorations**: Simple link highlighting and hover states
+- **Link Navigation**: Click-to-navigate functionality
 
-### Phase 3: Component Refactor (2 weeks)
-- **Pure UI Components**: Remove business logic
-- **Container Components**: Connect services to UI
-- **Event Integration**: Replace prop mutations with events
+### Phase 3: Rich Decorations & Context (3 weeks)
+- **Node Type Decorations**: Task status, document previews, metadata
+- **Contextual Information**: Hover overlays with node-specific data
+- **Advanced Link Types**: `((block-refs))`, `@mentions`, `![[embeds]]`
+- **Performance Optimization**: Viewport-based processing, debounced updates
 
-### Phase 4: Performance Optimization (1 week)
-- **Virtual Scrolling**: Handle large documents
-- **Content Debouncing**: Optimize processing
-- **Memory Management**: Prevent leaks
+### Phase 4: AI Integration Preparation (2 weeks)
+- **Service Extension Points**: Interfaces for AI content enhancement
+- **Smart Suggestions**: Architecture for auto-linking and completions
+- **Collaboration Readiness**: Event-driven updates for real-time sync
+- **Plugin Foundation**: Extensible decoration and service systems
 
 ## Consequences
 
 ### Positive
+- ✅ **Preserves Unique Value**: Maintains NodeSpace's superior indented node indicators
 - ✅ **Fixes Current Bugs**: Solves backspace combination and reactivity issues
-- ✅ **Improves Performance**: Virtual scrolling, optimized processing
-- ✅ **Enables Extensions**: Clear extension points for AI, collaboration
-- ✅ **Better Testing**: Pure functions and services easier to test
-- ✅ **Maintenance**: Clear responsibilities, less complexity
+- ✅ **Enables Backlinking**: Adds sophisticated knowledge management capabilities
+- ✅ **Future-Proof Architecture**: Clear extension points for AI, collaboration, plugins
+- ✅ **Performance Optimized**: Leverages proven patterns from Logseq research
+- ✅ **Better Testing**: Service-oriented design with pure functions
+- ✅ **Reduced Complexity**: Builds on existing foundation rather than replacing it
 
 ### Negative
-- ❌ **Development Time**: 7 weeks of refactor work
-- ❌ **Migration Risk**: Potential for introducing new bugs
-- ❌ **Learning Curve**: Team needs to understand new architecture
+- ❌ **Development Time**: 10 weeks of enhanced development work
+- ❌ **Migration Complexity**: Adding new services while preserving existing functionality
+- ❌ **Learning Curve**: Team needs to understand dual-representation patterns
 
 ### Migration Risks and Mitigation
-- **Risk**: Breaking existing functionality
-- **Mitigation**: Incremental migration with feature flags
-- **Risk**: Performance regression during transition
-- **Mitigation**: Benchmark each phase
+- **Risk**: Breaking existing hierarchical display
+- **Mitigation**: Preserve all existing UI components, enhance incrementally
+- **Risk**: Performance regression with backlinking
+- **Mitigation**: Implement viewport-based processing and caching strategies
+- **Risk**: Complexity of dual-representation
+- **Mitigation**: Follow proven Logseq patterns with comprehensive testing
 
 ## Alternative Approaches Considered
 
-### 1. Quick Fixes Only
-**Rejected**: Would not solve underlying architectural problems
+### 1. ProseMirror Migration
+**Rejected**: Cannot handle NodeSpace's unique indented indicator requirements. Research confirmed ProseMirror's architectural limitations for hierarchical visual design.
 
-### 2. Gradual Component Updates
-**Rejected**: Mixed architecture would persist, maintenance burden continues
+### 2. Quick Fixes Only
+**Rejected**: Would not solve underlying architectural problems or enable backlinking roadmap
 
-### 3. Complete Rewrite
-**Rejected**: Too risky, would lose existing functionality
+### 3. Complete Rewrite with Different Framework
+**Rejected**: Would lose NodeSpace's unique value proposition and working hierarchical system
+
+### 4. Gradual Component Updates Without Service Layer
+**Rejected**: Mixed architecture would persist, making backlinking integration complex
 
 ## Success Metrics
 
 ### Technical
 - [ ] Zero reactivity bugs in text editing
 - [ ] Backspace node combination works reliably
-- [ ] 1000+ node documents load in < 2 seconds
-- [ ] Keystroke latency < 16ms (60fps)
-- [ ] Memory usage < 50MB for large documents
+- [ ] Hierarchical node indicators preserved and enhanced
+- [ ] `[[Wikilinks]]` parse and resolve in real-time
+- [ ] Rich decorations display contextual node information
+- [ ] 1000+ node documents with backlinks load in < 2 seconds
+- [ ] Keystroke latency < 16ms (60fps) with live link detection
 
 ### Architectural
-- [ ] Clear separation between services, stores, and UI
+- [ ] Clear separation between services, stores, and UI components
+- [ ] Dual-representation pattern implemented correctly
+- [ ] Bidirectional link graph maintains consistency
 - [ ] 100% test coverage for core services
-- [ ] Easy to add new node types and features
+- [ ] Easy to add new decoration types and link formats
 - [ ] Plugin system architectural foundation
 
+### User Experience
+- [ ] Seamless backlinking with contextual information
+- [ ] Intuitive node type decorations (task status, previews, etc.)
+- [ ] Preserved hierarchical editing experience
+- [ ] Fast, responsive link navigation
+- [ ] Rich hover states and contextual previews
+
 ### Developer Experience
-- [ ] Comprehensive TypeScript types
-- [ ] Clear debugging capabilities
-- [ ] Excellent error recovery
-- [ ] Maintainable component hierarchy
+- [ ] Comprehensive TypeScript types for all services
+- [ ] Clear debugging capabilities for link resolution
+- [ ] Excellent error recovery and validation
+- [ ] Maintainable service-oriented architecture
 
 ## Implementation Tracking
 
-### GitHub Issues
-- **Epic**: #69 Text Editor Architecture Refactor
-- **Phase 1.1**: #70 ContentProcessor Service
-- **Phase 1.2**: #71 NodeManager Service  
-- **Phase 1.3**: #72 EventBus System
+### GitHub Issues (To Be Updated)
+- **Epic**: #69 Text Editor Architecture Enhancement (Updated)
+- **Phase 1.1**: Enhanced ContentProcessor with Dual-Representation
+- **Phase 1.2**: NodeManager Service with Improved Reactivity
+- **Phase 1.3**: BacklinkService Implementation
+- **Phase 1.4**: EventBus System
+- **Phase 2.1**: Bidirectional Link Graph
+- **Phase 2.2**: Real-time Link Detection
+- **Phase 3.1**: Rich Decoration System
+- **Phase 3.2**: Contextual Node Information
 
 ### Documentation
-- **Implementation Plan**: `docs/architecture/development/text-editor-architecture-refactor.md`
+- **Enhanced Implementation Plan**: `docs/architecture/development/text-editor-architecture-refactor.md`
+- **Backlinking Architecture**: `docs/architecture/features/backlinking-system.md`
+- **Decoration System**: `docs/architecture/features/decoration-system.md`
 - **Troubleshooting**: `docs/troubleshooting/backspace-node-combination-issue.md`
 
 ## Future Enhancements Enabled
 
+### Backlinking & Knowledge Management
+- Advanced link types: `((block-refs))`, `@mentions`, `![[embeds]]`
+- Graph visualization and navigation
+- Smart link suggestions and auto-completion
+- Link context and relationship analysis
+
 ### AI Integration
-- Content enhancement services
-- Smart suggestions
-- Document summarization
+- Content enhancement with link-aware context
+- Smart backlinking suggestions
+- Document summarization with link preservation
+- Intelligent node relationship detection
 
 ### Collaborative Editing
-- Real-time operation broadcasting
-- Conflict resolution
-- User presence indicators
+- Real-time link synchronization
+- Collaborative graph building
+- Shared node decorations and annotations
+- Multi-user link resolution
 
 ### Plugin System
-- Custom node types
-- External integrations
-- Extensible commands
+- Custom decoration types
+- External link integrations (APIs, databases)
+- Extensible node type definitions
+- Third-party service connections
 
 ## Timeline
 
-- **Start Date**: January 2025
-- **Phase 1 Complete**: Week 3
-- **Phase 2 Complete**: Week 5  
-- **Phase 3 Complete**: Week 7
-- **Phase 4 Complete**: Week 8
+- **Start Date**: August 2025
+- **Phase 1 Complete**: Week 3 (Enhanced Service Layer)
+- **Phase 2 Complete**: Week 5 (Backlinking Foundation)
+- **Phase 3 Complete**: Week 8 (Rich Decorations & Context)
+- **Phase 4 Complete**: Week 10 (AI Integration Preparation)
 
 ## Approval
 
 - ✅ **Technical Review**: Senior Architect approval
-- ✅ **Frontend Review**: Frontend Expert approval
-- ✅ **Architecture Review**: Aligns with NodeSpace architectural principles
-- ✅ **Project Priority**: High priority for text editor reliability
+- ✅ **Frontend Review**: Frontend Expert approval  
+- ✅ **Logseq Research**: Comprehensive analysis of proven patterns
+- ✅ **ProseMirror Evaluation**: Technical assessment confirming contenteditable superiority
+- ✅ **Architecture Review**: Preserves NodeSpace's unique value while enabling backlinking
+- ✅ **Project Priority**: High priority for text editor reliability and knowledge management features
 
 ---
 
-**Decision Rationale**: The current architecture has fundamental flaws that prevent reliable text editing functionality and limit future enhancements. This refactor provides a solid foundation for AI integration, collaborative editing, and plugin extensibility while solving immediate technical debt.
+**Decision Rationale**: Research confirmed that NodeSpace's custom contenteditable approach with indented indicators is architecturally superior to ProseMirror-based solutions for hierarchical editing. By enhancing this foundation with Logseq's proven dual-representation patterns, we can solve current technical issues while building sophisticated backlinking capabilities that maintain NodeSpace's unique visual design.
 
-**Next Steps**: Begin Phase 1 implementation with ContentProcessor service extraction.
+**Next Steps**: Update GitHub issues to reflect enhanced contenteditable approach, then begin Phase 1 implementation with enhanced service layer.
