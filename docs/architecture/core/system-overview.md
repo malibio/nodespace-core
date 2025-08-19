@@ -18,6 +18,7 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 - **ADR-002**: Component Composition Inheritance - TextNode extends BaseNode via prop overrides  
 - **ADR-003**: Universal CodeMirror Strategy - All nodes use CodeMirror with different configurations
 - **ADR-004**: Debounced Events Architecture - Use CodeMirror's native debouncing, not manual timers
+- **ADR-005**: Node Reference Decoration System - Universal `@` triggers with `nodespace://` URIs and extensible decorations
 
 ---
 

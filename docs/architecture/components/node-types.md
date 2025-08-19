@@ -589,6 +589,55 @@ impl PluginNode for PresentationNode {
 }
 ```
 
+## Node Reference System
+
+NodeSpace implements a universal node reference system that allows any node to be referenced from within content using `@` triggers and `nodespace://` URIs. This system provides rich, type-specific decorations while maintaining extensibility for new node types.
+
+### Reference Architecture
+
+**Universal Interface**: All nodes are referenceable via `@` keystroke trigger
+**Storage Format**: Standard markdown links `[display-text](nodespace://uuid)`
+**Decoration System**: Each node type controls its own reference appearance
+**Content-Driven**: Uses actual node `content` property, no artificial display names
+
+### Decoration Examples
+
+```typescript
+// BaseNode - default decoration
+class BaseNode {
+  decorateReference(): string {
+    return `<a href="nodespace://${this.id}" class="ns-noderef">${this.content}</a>`;
+  }
+}
+
+// TaskNode - checkbox + status
+class TaskNode extends BaseNode {
+  decorateReference(): string {
+    const checkbox = this.isCompleted() ? '✅' : '☐';
+    return `<a href="nodespace://${this.id}" class="ns-noderef ns-task">
+      ${checkbox} ${this.content}
+    </a>`;
+  }
+}
+
+// UserNode - avatar + status indicator  
+class UserNode extends BaseNode {
+  decorateReference(): string {
+    return `<a href="nodespace://${this.id}" class="ns-noderef ns-user">
+      👤 ${this.content} ${this.isOnline ? '🟢' : '⚫'}
+    </a>`;
+  }
+}
+```
+
+### Integration with ContentProcessor
+
+The node reference system integrates with the enhanced ContentProcessor to detect and render `nodespace://` URIs with appropriate decorations based on node type. See [Node Reference System](node-reference-system.md) for complete technical documentation.
+
+### Architectural Decision
+
+The design decisions and rationale for this system are documented in [ADR-005: Node Reference Decoration System](../decisions/ADR-005-node-reference-decoration-system.md).
+
 ## Node Relationships and Hierarchy
 
 ### Parent-Child Relationships
