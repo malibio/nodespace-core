@@ -1,11 +1,12 @@
 <!--
-  TextNode Component - Minimal wrapper around BaseNode
+  TextNode Component - Enhanced with ContentProcessor for dual-representation
 -->
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import MinimalBaseNode from '$lib/design/components/MinimalBaseNode.svelte';
   import type { NodeNavigationMethods } from '$lib/types/navigation.js';
+  import { contentProcessor } from '$lib/services/contentProcessor.js';
 
   // Minimal props
   export let nodeId: string;
@@ -23,17 +24,12 @@
   // Sync internalContent when content prop changes (reactive to parent updates)
   $: internalContent = content;
   
-  // Parse header level from content and get display text
+  // Parse header level from content using ContentProcessor
   $: {
-    if (internalContent.startsWith('#')) {
-      const headerMatch = internalContent.match(/^(#{1,6})\s+(.*)$/);
-      if (headerMatch) {
-        headerLevel = headerMatch[1].length;
-        displayContent = headerMatch[2];
-      } else {
-        headerLevel = inheritHeaderLevel;
-        displayContent = internalContent;
-      }
+    const detectedHeaderLevel = contentProcessor.parseHeaderLevel(internalContent);
+    if (detectedHeaderLevel > 0) {
+      headerLevel = detectedHeaderLevel;
+      displayContent = contentProcessor.stripHeaderSyntax(internalContent);
     } else {
       headerLevel = inheritHeaderLevel;
       displayContent = internalContent;
@@ -108,7 +104,7 @@
     dispatch('createNewNode', eventDetail);
   }
 
-  // Handle content changes and notify parent
+  // Handle content changes with ContentProcessor validation
   function handleContentChange(newContent: string) {
     // If content becomes empty, reset header level
     if (!newContent.trim()) {
@@ -118,11 +114,20 @@
       return;
     }
     
+    // Validate and sanitize content
+    const sanitizedContent = contentProcessor.sanitizeContent(newContent);
+    const validation = contentProcessor.validateContent(sanitizedContent);
+    
+    // Log validation warnings but don't block content
+    if (validation.warnings.length > 0) {
+      console.warn('Content validation warnings:', validation.warnings);
+    }
+    
     // If we have a header level, store with markdown header syntax
     // But also update displayContent for immediate UI feedback
-    const finalContent = headerLevel > 0 ? `${'#'.repeat(headerLevel)} ${newContent}` : newContent;
+    const finalContent = headerLevel > 0 ? `${'#'.repeat(headerLevel)} ${sanitizedContent}` : sanitizedContent;
     internalContent = finalContent;
-    displayContent = newContent; // Update display without # symbols
+    displayContent = sanitizedContent; // Update display without # symbols
     dispatch('contentChanged', { nodeId, content: finalContent });
   }
 
@@ -182,14 +187,14 @@
           
           const textBeforeCursor = currentText.substring(0, cursorPosition);
           
-          // Check if we're about to complete header syntax
+          // Check if we're about to complete header syntax using ContentProcessor
           if (/^#{1,6}$/.test(textBeforeCursor)) {
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation();
             
-            // Set header level for CSS styling
-            const detectedHeaderLevel = textBeforeCursor.length;
+            // Set header level for CSS styling using ContentProcessor
+            const detectedHeaderLevel = contentProcessor.parseHeaderLevel(textBeforeCursor + ' ');
             headerLevel = detectedHeaderLevel;
             
             // Preserve existing content after the cursor when switching header levels
@@ -251,6 +256,7 @@
     on:navigateArrow={(e) => dispatch('navigateArrow', e.detail)}
     on:combineWithPrevious={(e) => dispatch('combineWithPrevious', e.detail)}
     on:deleteNode={(e) => dispatch('deleteNode', e.detail)}
+    on:keydown={handleTextNodeKeyDown}
   />
 </div>
 
