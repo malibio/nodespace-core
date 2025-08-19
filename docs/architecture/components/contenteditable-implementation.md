@@ -1,22 +1,23 @@
-# ContentEditable Node Implementation
+# Enhanced ContentEditable Architecture
 
 ## Overview
 
-The NodeSpace ContentEditable system provides a foundation for rich text editing with markdown support, built around a three-tier architecture: **MinimalBaseNode** (foundation), **TextNode** (specialization), and **BaseNodeViewer** (management).
+The NodeSpace Enhanced ContentEditable system provides sophisticated text editing with Logseq-inspired dual-representation patterns, built around a service-oriented architecture with **BaseNode** (preserved foundation), **ContentProcessor** (dual-representation), **NodeManager** (operations), and **BacklinkService** (knowledge management).
 
-## Current Implementation Status
+## Architecture Status
 
-### ✅ **Completed Features**
+### 🔄 **Enhanced ContentEditable Implementation (In Progress)**
 
-#### **MinimalBaseNode (Foundation Layer)**
-- **Core contenteditable functionality** - handles all basic text input/editing
-- **Markdown bidirectional conversion** - HTML ↔ Markdown for display vs storage
-- **Event system** - `contentChanged`, `createNewNode` events
-- **Enter key handling** - creates new nodes when Enter is pressed
-- **CSS class application** - accepts `className` prop for styling
-- **Multiline support** - `multiline` prop enables Shift+Enter for line breaks
-- **Inline formatting shortcuts** - Ctrl+B (bold), Ctrl+I (italic), Ctrl+U (underline)
-- **Universal component** - designed to be used by all node types
+Based on comprehensive research including Logseq analysis and ProseMirror evaluation, we've determined that **NodeSpace's existing contenteditable approach with indented node indicators is architecturally superior**. The implementation is being enhanced with proven patterns.
+
+**📋 Current Architecture Plan:** See [Text Editor Architecture Refactor](../decisions/2025-01-text-editor-architecture-refactor.md) for the complete enhanced contenteditable architecture with Logseq-inspired dual-representation patterns.
+
+#### **BaseNode (Preserved Foundation)**
+- **Enhanced contenteditable functionality** - preserves unique hierarchical indicators
+- **Dual-representation patterns** - source markdown ↔ AST ↔ rendered display (Logseq-inspired)
+- **Service integration** - connects to ContentProcessor and NodeManager services
+- **Event-driven architecture** - clean separation of concerns
+- **Hierarchical visual design** - NodeSpace's key differentiator maintained
 
 #### **TextNode (Specialization Layer)**  
 - **Header syntax support** - `# ## ### #### ##### ######` (H1-H6)
@@ -36,12 +37,12 @@ The NodeSpace ContentEditable system provides a foundation for rich text editing
 
 ### 🎯 **Key Architectural Decisions**
 
-#### **MinimalBaseNode Replaces BaseNode**
-The original `BaseNode` component is being replaced by `MinimalBaseNode` as the foundation:
-- **Cleaner API** - streamlined props and functionality
-- **Better separation of concerns** - editing vs presentation logic
-- **Improved performance** - reduced overhead and reactive loops
-- **Enhanced extensibility** - designed for multiple node types
+#### **Enhanced ContentEditable with Service-Oriented Architecture**
+Based on research, we're enhancing the existing BaseNode with proven patterns:
+- **Preserve Unique Value** - NodeSpace's hierarchical indicators are superior to ProseMirror
+- **Logseq-Inspired Patterns** - dual-representation (source ↔ AST ↔ display)
+- **Service-Oriented Design** - ContentProcessor, NodeManager, BacklinkService
+- **Performance Optimizations** - migrate proven patterns from `nodespace-core-logic`
 
 #### **CSS-Based Header Formatting**
 Headers use CSS styling rather than DOM manipulation:
