@@ -1,9 +1,9 @@
 /**
  * Enhanced ContentProcessor Service
- * 
+ *
  * Implements Logseq-inspired dual-representation pattern (Source ↔ AST ↔ Display)
  * as the foundation for Issue #70 (Phase 1.1 of Epic #69: Text Editor Architecture Enhancement).
- * 
+ *
  * Key Features:
  * - Lossless conversions between source markdown, AST, and display HTML
  * - Wikilink detection and preparation for backlinking (Phase 2 foundation)
@@ -117,7 +117,7 @@ export interface PreparedContent {
 
 export class ContentProcessor {
   private static instance: ContentProcessor;
-  
+
   // Performance optimization: Cache frequently accessed patterns
   private readonly HEADER_REGEX = /^(#{1,6})\s+(.*)$/gm;
   private readonly WIKILINK_REGEX = /\[\[([^[\]]+(?:\[[^[\]]*\][^[\]]*)*)\]\]/g;
@@ -162,14 +162,14 @@ export class ContentProcessor {
     let currentBlock = '';
     let blockStartPos = 0;
     let inParagraph = false;
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineStart = source.indexOf(line, position);
-      
+
       // Check if this line is a header
       const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
-      
+
       if (headerMatch) {
         // If we have accumulated paragraph content, process it first
         if (currentBlock.trim()) {
@@ -178,7 +178,7 @@ export class ContentProcessor {
           metadata.inlineFormatCount += this.countInlineFormats(currentBlock);
           currentBlock = '';
         }
-        
+
         // Process header
         const headerNode: HeaderNode = {
           type: 'header',
@@ -210,10 +210,10 @@ export class ContentProcessor {
         }
         currentBlock += line;
       }
-      
+
       position = lineStart + line.length + 1; // +1 for newline
     }
-    
+
     // Process any remaining paragraph content
     if (currentBlock.trim()) {
       const paragraphNode = this.parseParagraph(currentBlock.trim(), blockStartPos);
@@ -239,7 +239,7 @@ export class ContentProcessor {
       return '';
     }
 
-    return ast.children.map(node => this.renderNode(node)).join('');
+    return ast.children.map((node) => this.renderNode(node)).join('');
   }
 
   /**
@@ -251,7 +251,7 @@ export class ContentProcessor {
       return '';
     }
 
-    return ast.children.map(node => this.nodeToMarkdown(node)).join('\n\n');
+    return ast.children.map((node) => this.nodeToMarkdown(node)).join('\n\n');
   }
 
   // ========================================================================
@@ -309,12 +309,14 @@ export class ContentProcessor {
     // Syntax validation using existing validator
     const syntaxValidation = validateMarkdown(content);
     if (!syntaxValidation.isValid) {
-      errors.push(...syntaxValidation.errors.map(error => ({
-        type: 'syntax' as const,
-        message: error,
-        position: 0,
-        suggestion: 'Fix markdown syntax'
-      })));
+      errors.push(
+        ...syntaxValidation.errors.map((error) => ({
+          type: 'syntax' as const,
+          message: error,
+          position: 0,
+          suggestion: 'Fix markdown syntax'
+        }))
+      );
     }
 
     // Performance warnings
@@ -329,9 +331,7 @@ export class ContentProcessor {
     // Structure validation
     const headerLevels = this.extractHeaderLevels(content);
     if (headerLevels.length > 0) {
-      const maxGap = Math.max(...headerLevels.slice(1).map((level, i) => 
-        level - headerLevels[i]
-      ));
+      const maxGap = Math.max(...headerLevels.slice(1).map((level, i) => level - headerLevels[i]));
       if (maxGap > 1) {
         warnings.push({
           type: 'formatting',
@@ -353,25 +353,27 @@ export class ContentProcessor {
    * Removes dangerous content while maintaining text structure
    */
   public sanitizeContent(content: string): string {
-    return content
-      // Remove script tags and content
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      // Remove event handlers (more comprehensive)
-      .replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '')
-      .replace(/\s*on\w+\s*=\s*[^"'\s>]*/gi, '')
-      // Remove javascript: and vbscript: protocols completely
-      .replace(/javascript:[^"'\s>]*/gi, '')
-      .replace(/vbscript:[^"'\s>]*/gi, '')
-      // Remove data: URLs (potential XSS vector)
-      .replace(/data:[^;]*;base64[^"'\s>]*/gi, 'removed-data-url')
-      // Remove potentially dangerous HTML elements
-      .replace(/<iframe\b[^>]*>/gi, '')
-      .replace(/<object\b[^>]*>/gi, '')
-      .replace(/<embed\b[^>]*>/gi, '')
-      .replace(/<link\b[^>]*>/gi, '')
-      .replace(/<meta\b[^>]*>/gi, '')
-      // Remove style attributes that could contain CSS injection
-      .replace(/\s*style\s*=\s*["'][^"']*["']/gi, '');
+    return (
+      content
+        // Remove script tags and content
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        // Remove event handlers (more comprehensive)
+        .replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '')
+        .replace(/\s*on\w+\s*=\s*[^"'\s>]*/gi, '')
+        // Remove javascript: and vbscript: protocols completely
+        .replace(/javascript:[^"'\s>]*/gi, '')
+        .replace(/vbscript:[^"'\s>]*/gi, '')
+        // Remove data: URLs (potential XSS vector)
+        .replace(/data:[^;]*;base64[^"'\s>]*/gi, 'removed-data-url')
+        // Remove potentially dangerous HTML elements
+        .replace(/<iframe\b[^>]*>/gi, '')
+        .replace(/<object\b[^>]*>/gi, '')
+        .replace(/<embed\b[^>]*>/gi, '')
+        .replace(/<link\b[^>]*>/gi, '')
+        .replace(/<meta\b[^>]*>/gi, '')
+        // Remove style attributes that could contain CSS injection
+        .replace(/\s*style\s*=\s*["'][^"']*["']/gi, '')
+    );
   }
 
   // ========================================================================
@@ -415,16 +417,16 @@ export class ContentProcessor {
 
     // Reset regex state
     this.WIKILINK_REGEX.lastIndex = 0;
-    
+
     while ((match = this.WIKILINK_REGEX.exec(content)) !== null) {
       const fullMatch = match[0];
       const linkContent = match[1];
-      
+
       // Support display text: [[target|display]]
       const parts = linkContent.split('|');
       const target = parts[0].trim();
       const displayText = parts[1]?.trim() || target;
-      
+
       wikiLinks.push({
         text: linkContent,
         target,
@@ -444,7 +446,7 @@ export class ContentProcessor {
   public prepareBacklinkSyntax(content: string): PreparedContent {
     const wikiLinks = this.detectWikiLinks(content);
     const linkPositions = new Map<string, number[]>();
-    
+
     // Group positions by target
     for (const link of wikiLinks) {
       const positions = linkPositions.get(link.target) || [];
@@ -491,7 +493,7 @@ export class ContentProcessor {
 
     // Parse inline elements: wikilinks, bold, italic, code
     const inlinePatterns = this.findInlinePatterns(text);
-    
+
     if (inlinePatterns.length === 0) {
       // Plain text
       children.push({
@@ -503,7 +505,7 @@ export class ContentProcessor {
     } else {
       // Mixed content with inline formatting
       let lastEnd = 0;
-      
+
       for (const pattern of inlinePatterns) {
         // Add text before pattern
         if (pattern.start > lastEnd) {
@@ -514,17 +516,17 @@ export class ContentProcessor {
             end: start + pattern.start
           });
         }
-        
+
         // Add the pattern node
         children.push({
           ...pattern,
           start: start + pattern.start,
           end: start + pattern.end
         });
-        
+
         lastEnd = pattern.end;
       }
-      
+
       // Add remaining text
       if (lastEnd < text.length) {
         children.push({
@@ -555,7 +557,7 @@ export class ContentProcessor {
       const parts = linkContent.split('|');
       const target = parts[0].trim();
       const displayText = parts[1]?.trim() || target;
-      
+
       patterns.push({
         type: 'wikilink',
         target,
@@ -612,39 +614,39 @@ export class ContentProcessor {
         const headerNode = node as HeaderNode;
         return `<h${headerNode.level} class="ns-markdown-heading ns-markdown-h${headerNode.level}">${this.escapeHtml(headerNode.content)}</h${headerNode.level}>`;
       }
-      
+
       case 'paragraph': {
         const paragraphNode = node as ParagraphNode;
-        const content = paragraphNode.children.map(child => this.renderNode(child)).join('');
+        const content = paragraphNode.children.map((child) => this.renderNode(child)).join('');
         return `<p class="ns-markdown-paragraph">${content}</p>`;
       }
-      
+
       case 'text': {
         const textNode = node as TextNode;
         return this.escapeHtml(textNode.content);
       }
-      
+
       case 'wikilink': {
         const wikiNode = node as WikiLinkNode;
         // For now, render as plain text. Phase 2 will add actual linking
         return `<span class="ns-wikilink" data-target="${this.escapeHtml(wikiNode.target)}">${this.escapeHtml(wikiNode.displayText)}</span>`;
       }
-      
+
       case 'bold': {
         const boldNode = node as InlineNode;
         return `<strong class="ns-markdown-bold">${this.escapeHtml(boldNode.content)}</strong>`;
       }
-      
+
       case 'italic': {
         const italicNode = node as InlineNode;
         return `<em class="ns-markdown-italic">${this.escapeHtml(italicNode.content)}</em>`;
       }
-      
+
       case 'code': {
         const codeNode = node as InlineNode;
         return `<code class="ns-markdown-code">${this.escapeHtml(codeNode.content)}</code>`;
       }
-      
+
       default:
         return '';
     }
@@ -656,29 +658,29 @@ export class ContentProcessor {
         const headerNode = node as HeaderNode;
         return `${headerNode.rawSyntax} ${headerNode.content}`;
       }
-      
+
       case 'paragraph': {
         const paragraphNode = node as ParagraphNode;
-        return paragraphNode.children.map(child => this.nodeToMarkdown(child)).join('');
+        return paragraphNode.children.map((child) => this.nodeToMarkdown(child)).join('');
       }
-      
+
       case 'text': {
         const textNode = node as TextNode;
         return textNode.content;
       }
-      
+
       case 'wikilink': {
         const wikiNode = node as WikiLinkNode;
         return wikiNode.rawSyntax;
       }
-      
+
       case 'bold':
       case 'italic':
       case 'code': {
         const inlineNode = node as InlineNode;
         return inlineNode.rawSyntax;
       }
-      
+
       default:
         return '';
     }
@@ -695,45 +697,45 @@ export class ContentProcessor {
       /<embed/i
     ];
 
-    return suspiciousPatterns.some(pattern => pattern.test(content));
+    return suspiciousPatterns.some((pattern) => pattern.test(content));
   }
 
   private extractHeaderLevels(content: string): number[] {
     const levels: number[] = [];
     const lines = content.split('\n');
-    
+
     for (const line of lines) {
       const level = this.parseHeaderLevel(line);
       if (level > 0) {
         levels.push(level);
       }
     }
-    
+
     return levels;
   }
 
   private countInlineFormats(content: string): number {
     let count = 0;
-    
+
     // Count bold
     count += (content.match(/\*\*(.*?)\*\*/g) || []).length;
-    
+
     // Count italic
     count += (content.match(/(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g) || []).length;
-    
+
     // Count code
     count += (content.match(/`([^`]+)`/g) || []).length;
-    
+
     // Count wikilinks
     count += (content.match(/\[\[([^\]]+)\]\]/g) || []).length;
-    
+
     return count;
   }
 
   private getWordCount(content: string): number {
     const plainText = stripMarkdown(content);
     if (!plainText) return 0;
-    return plainText.split(/\s+/).filter(word => word.length > 0).length;
+    return plainText.split(/\s+/).filter((word) => word.length > 0).length;
   }
 
   private escapeHtml(text: string): string {
