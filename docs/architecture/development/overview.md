@@ -41,6 +41,7 @@
 - **[Code Quality](standards/code-quality.md)** - Linting policy, quality gates, and enforcement
 - **[Testing Guidelines](standards/testing.md)** - Testing requirements and strategies
 - **[Package Management](standards/package-management.md)** - Bun enforcement and dependency management
+- **[Technical Debt](technical-debt.md)** - Known limitations, workarounds, and future improvements
 
 ### 🛠️ Guides & Reference
 - **[Quick Reference](guides/quick-reference.md)** - Commands, checklists, and common operations
