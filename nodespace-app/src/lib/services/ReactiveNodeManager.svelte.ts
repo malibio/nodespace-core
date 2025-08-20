@@ -1,6 +1,6 @@
 /**
  * ReactiveNodeManager - Svelte 5 reactive wrapper for NodeManager
- * 
+ *
  * This file provides Svelte 5 $state() reactivity for the NodeManager service.
  * The core logic remains in NodeManager.ts for testability.
  */
@@ -10,36 +10,36 @@ import { NodeManager, type NodeManagerEvents, type Node } from './NodeManager';
 export class ReactiveNodeManager extends NodeManager {
   private _reactiveNodes = $state(new Map<string, Node>());
   private _reactiveRootNodeIds = $state<string[]>([]);
-  
+
   constructor(events: NodeManagerEvents) {
     super(events);
-    
+
     // Sync reactive state with base class state
     this.syncReactiveState();
   }
-  
+
   /**
    * Override to use reactive state
    */
   get nodes(): Map<string, Node> {
     return this._reactiveNodes;
   }
-  
+
   /**
    * Override to use reactive state
    */
   get rootNodeIds(): string[] {
     return this._reactiveRootNodeIds;
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
-  initializeFromLegacyData(legacyNodes: any[]): void {
+  initializeFromLegacyData(legacyNodes: unknown[]): void {
     super.initializeFromLegacyData(legacyNodes);
     this.syncReactiveState();
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
@@ -48,7 +48,7 @@ export class ReactiveNodeManager extends NodeManager {
     this.syncReactiveState();
     return result;
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
@@ -56,7 +56,7 @@ export class ReactiveNodeManager extends NodeManager {
     super.deleteNode(nodeId);
     this.syncReactiveState();
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
@@ -67,7 +67,7 @@ export class ReactiveNodeManager extends NodeManager {
     }
     return result;
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
@@ -78,7 +78,7 @@ export class ReactiveNodeManager extends NodeManager {
     }
     return result;
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
@@ -89,7 +89,7 @@ export class ReactiveNodeManager extends NodeManager {
     }
     return result;
   }
-  
+
   /**
    * Override to sync reactive state after operations
    */
@@ -97,7 +97,7 @@ export class ReactiveNodeManager extends NodeManager {
     super.combineNodes(currentNodeId, previousNodeId);
     this.syncReactiveState();
   }
-  
+
   /**
    * Sync reactive state with base class state
    */
@@ -105,16 +105,16 @@ export class ReactiveNodeManager extends NodeManager {
     // Clear reactive state
     this._reactiveNodes.clear();
     this._reactiveRootNodeIds.length = 0;
-    
+
     // Copy from base class
     const baseNodes = super.nodes;
     const baseRootIds = super.rootNodeIds;
-    
+
     // Update reactive state
     for (const [id, node] of baseNodes) {
       this._reactiveNodes.set(id, node);
     }
-    
+
     this._reactiveRootNodeIds.push(...baseRootIds);
   }
 }

@@ -9,7 +9,7 @@
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { v4 as uuidv4 } from 'uuid';
   import { ReactiveNodeManager } from '$lib/services/ReactiveNodeManager.svelte';
-  import { type NodeManagerEvents, type Node } from '$lib/services/NodeManager';
+  import { type NodeManagerEvents } from '$lib/services/NodeManager';
 
   // Legacy test data - will be migrated to NodeManager
   const legacyNodes = [
@@ -318,16 +318,16 @@
     hierarchyChanged: () => {
       // Reactivity is handled automatically by Svelte 5 $state
     },
-    nodeCreated: (nodeId: string) => {
+    nodeCreated: () => {
       // Additional logic for node creation if needed
     },
-    nodeDeleted: (nodeId: string) => {
+    nodeDeleted: () => {
       // Additional logic for node deletion if needed
     }
   };
 
   const nodeManager = new ReactiveNodeManager(nodeManagerEvents);
-  
+
   // Initialize NodeManager with legacy data
   nodeManager.initializeFromLegacyData(legacyNodes);
 
@@ -341,16 +341,16 @@
       inheritHeaderLevel?: number;
     }>
   ) {
-    const { afterNodeId, nodeType, currentContent, newContent, inheritHeaderLevel } = event.detail;
-    
+    const { afterNodeId, nodeType, currentContent, newContent } = event.detail;
+
     // Update current node content if provided
     if (currentContent !== undefined) {
       nodeManager.updateNodeContent(afterNodeId, currentContent);
     }
-    
+
     // Create new node using NodeManager
     const newNodeId = nodeManager.createNode(afterNodeId, newContent || '', nodeType);
-    
+
     // Handle HTML formatting conversion if needed
     if (newContent && newContent.includes('<span class="markdown-')) {
       setTimeout(() => {
@@ -655,7 +655,7 @@
   ) {
     const { nodeId, currentContent } = event.detail;
     const visibleNodes = nodeManager.getVisibleNodes();
-    const currentIndex = visibleNodes.findIndex(n => n.id === nodeId);
+    const currentIndex = visibleNodes.findIndex((n) => n.id === nodeId);
 
     if (currentIndex <= 0) {
       return; // No previous node to combine with
@@ -665,7 +665,7 @@
       // Empty node - just delete it and focus previous
       const previousNode = visibleNodes[currentIndex - 1];
       nodeManager.deleteNode(nodeId);
-      
+
       // Focus handled by NodeManager event callback
       setTimeout(() => {
         const previousElement = document.getElementById(`contenteditable-${previousNode.id}`);
@@ -685,14 +685,14 @@
   function handleDeleteNode(event: CustomEvent<{ nodeId: string }>) {
     const { nodeId } = event.detail;
     const visibleNodes = nodeManager.getVisibleNodes();
-    const currentIndex = visibleNodes.findIndex(n => n.id === nodeId);
+    const currentIndex = visibleNodes.findIndex((n) => n.id === nodeId);
 
     if (currentIndex <= 0) {
       return; // No previous node to focus
     }
 
     const previousNode = visibleNodes[currentIndex - 1];
-    
+
     // Use NodeManager to delete node
     nodeManager.deleteNode(nodeId);
 

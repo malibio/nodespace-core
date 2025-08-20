@@ -1,6 +1,6 @@
 /**
  * NodeManager Test Suite
- * 
+ *
  * Comprehensive tests for NodeManager service focusing on:
  * - Data migration from legacy array structure
  * - Backspace combination bug fixes
@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect, beforeEach } from 'vitest';
-import { NodeManager, type NodeManagerEvents, type Node } from '$lib/services/NodeManager';
+import { NodeManager, type NodeManagerEvents } from '$lib/services/NodeManager';
 
 describe('NodeManager', () => {
   let nodeManager: NodeManager;
@@ -74,7 +74,7 @@ describe('NodeManager', () => {
       expect(nodeManager.nodes.size).toBe(2);
       expect(nodeManager.rootNodeIds).toEqual(['node1', 'node2']);
       expect(hierarchyChangedCalls).toBe(1);
-      
+
       const node1 = nodeManager.findNode('node1');
       expect(node1).toBeTruthy();
       expect(node1?.content).toBe('First node');
@@ -202,7 +202,7 @@ describe('NodeManager', () => {
       const level3 = nodeManager.findNode('level3');
       expect(level3?.depth).toBe(3);
       expect(level3?.parentId).toBe('level2');
-      
+
       const level2 = nodeManager.findNode('level2');
       expect(level2?.depth).toBe(2);
       expect(level2?.parentId).toBe('level1');
@@ -262,7 +262,7 @@ describe('NodeManager', () => {
 
       const node1 = nodeManager.findNode('node1');
       const node2 = nodeManager.findNode('node2');
-      
+
       expect(node1?.content).toBe('First contentSecond content');
       expect(node2).toBeNull(); // node2 should be deleted
       expect(focusRequestedCalls).toHaveLength(1);
@@ -272,12 +272,12 @@ describe('NodeManager', () => {
     test('handles empty node combination', () => {
       // Update node2 to be empty
       nodeManager.updateNodeContent('node2', '');
-      
+
       nodeManager.combineNodes('node2', 'node1');
 
       const node1 = nodeManager.findNode('node1');
       const node2 = nodeManager.findNode('node2');
-      
+
       expect(node1?.content).toBe('First content'); // Unchanged since node2 was empty
       expect(node2).toBeNull();
       expect(focusRequestedCalls).toHaveLength(1);
@@ -287,7 +287,7 @@ describe('NodeManager', () => {
     test('preserves cursor position at junction', () => {
       nodeManager.updateNodeContent('node1', 'Hello ');
       nodeManager.updateNodeContent('node2', 'World!');
-      
+
       nodeManager.combineNodes('node2', 'node1');
 
       const node1 = nodeManager.findNode('node1');
@@ -300,7 +300,7 @@ describe('NodeManager', () => {
 
       const node2 = nodeManager.findNode('node2');
       const child1 = nodeManager.findNode('child1');
-      
+
       expect(node2?.children).toEqual(['child1']);
       expect(child1?.parentId).toBe('node2');
       expect(nodeManager.findNode('node3')).toBeNull();
@@ -309,9 +309,9 @@ describe('NodeManager', () => {
     test('updates parent references correctly', () => {
       const child1 = nodeManager.findNode('child1');
       expect(child1?.parentId).toBe('node3');
-      
+
       nodeManager.combineNodes('node3', 'node2');
-      
+
       const updatedChild1 = nodeManager.findNode('child1');
       expect(updatedChild1?.parentId).toBe('node2');
     });
@@ -319,7 +319,7 @@ describe('NodeManager', () => {
     test('handles edge cases - first node combination', () => {
       // Try to combine first node with non-existent previous
       nodeManager.combineNodes('node1', 'non-existent');
-      
+
       // Should not change anything
       expect(nodeManager.findNode('node1')).toBeTruthy();
       expect(focusRequestedCalls).toHaveLength(0);
@@ -327,7 +327,7 @@ describe('NodeManager', () => {
 
     test('handles edge cases - non-existent nodes', () => {
       nodeManager.combineNodes('non-existent1', 'non-existent2');
-      
+
       // Should not crash or change anything
       expect(focusRequestedCalls).toHaveLength(0);
     });
@@ -336,16 +336,16 @@ describe('NodeManager', () => {
       // Add a parent to child1 to test nested combination
       const parent = nodeManager.findNode('node3');
       expect(parent?.children).toEqual(['child1']);
-      
+
       // Create another child
       const newChildId = nodeManager.createNode('child1', 'Another child', 'text');
-      
+
       // Reset event calls
       focusRequestedCalls.length = 0;
-      
+
       // Combine the children
       nodeManager.combineNodes(newChildId, 'child1');
-      
+
       const child1 = nodeManager.findNode('child1');
       expect(child1?.content).toBe('Child contentAnother child');
       expect(nodeManager.findNode(newChildId)).toBeNull();
@@ -374,12 +374,12 @@ describe('NodeManager', () => {
 
     test('createNode inserts correctly', () => {
       const newNodeId = nodeManager.createNode('node1', 'New content', 'text');
-      
+
       expect(newNodeId).toBeTruthy();
       expect(nodeManager.rootNodeIds).toEqual(['node1', newNodeId]);
       expect(nodeCreatedCalls).toContain(newNodeId);
       expect(hierarchyChangedCalls).toBeGreaterThan(0);
-      
+
       const newNode = nodeManager.findNode(newNodeId);
       expect(newNode?.content).toBe('New content');
       expect(newNode?.autoFocus).toBe(true);
@@ -388,16 +388,16 @@ describe('NodeManager', () => {
 
     test('updateNodeContent preserves reactivity', () => {
       nodeManager.updateNodeContent('node1', 'Updated content');
-      
+
       const node = nodeManager.findNode('node1');
       expect(node?.content).toBe('Updated content');
     });
 
     test('deleteNode removes and updates references', () => {
       const newNodeId = nodeManager.createNode('node1', 'To be deleted', 'text');
-      
+
       nodeManager.deleteNode(newNodeId);
-      
+
       expect(nodeManager.findNode(newNodeId)).toBeNull();
       expect(nodeDeletedCalls).toContain(newNodeId);
       expect(nodeManager.rootNodeIds).toEqual(['node1']);
@@ -407,7 +407,7 @@ describe('NodeManager', () => {
       const node = nodeManager.findNode('node1');
       expect(node?.id).toBe('node1');
       expect(node?.content).toBe('Test content');
-      
+
       const nonExistent = nodeManager.findNode('non-existent');
       expect(nonExistent).toBeNull();
     });
@@ -450,13 +450,13 @@ describe('NodeManager', () => {
 
     test('indentNode updates depth and parent', () => {
       const success = nodeManager.indentNode('child1');
-      
+
       expect(success).toBe(true);
       expect(hierarchyChangedCalls).toBeGreaterThan(0);
-      
+
       const parent = nodeManager.findNode('parent');
       const child1 = nodeManager.findNode('child1');
-      
+
       expect(parent?.children).toEqual(['child1']);
       expect(child1?.parentId).toBe('parent');
       expect(child1?.depth).toBe(1);
@@ -466,15 +466,15 @@ describe('NodeManager', () => {
     test('outdentNode maintains tree structure', () => {
       // First indent child1
       nodeManager.indentNode('child1');
-      
+
       // Then outdent it
       const success = nodeManager.outdentNode('child1');
-      
+
       expect(success).toBe(true);
-      
+
       const parent = nodeManager.findNode('parent');
       const child1 = nodeManager.findNode('child1');
-      
+
       expect(parent?.children).toEqual([]);
       expect(child1?.parentId).toBeUndefined();
       expect(child1?.depth).toBe(0);
@@ -484,24 +484,24 @@ describe('NodeManager', () => {
     test('getVisibleNodes respects expanded state', () => {
       // Indent child1 under parent
       nodeManager.indentNode('child1');
-      
+
       let visibleNodes = nodeManager.getVisibleNodes();
-      expect(visibleNodes.map(n => n.id)).toEqual(['parent', 'child1', 'child2']);
-      
+      expect(visibleNodes.map((n) => n.id)).toEqual(['parent', 'child1', 'child2']);
+
       // Collapse parent
       nodeManager.toggleExpanded('parent');
-      
+
       visibleNodes = nodeManager.getVisibleNodes();
-      expect(visibleNodes.map(n => n.id)).toEqual(['parent', 'child2']);
+      expect(visibleNodes.map((n) => n.id)).toEqual(['parent', 'child2']);
     });
 
     test('toggleExpanded changes visibility', () => {
       // Indent child1 under parent
       nodeManager.indentNode('child1');
-      
+
       const parent = nodeManager.findNode('parent');
       expect(parent?.expanded).toBe(true);
-      
+
       const success = nodeManager.toggleExpanded('parent');
       expect(success).toBe(true);
       expect(parent?.expanded).toBe(false);
@@ -512,11 +512,11 @@ describe('NodeManager', () => {
       // Create a complex hierarchy: parent > child1, child2
       nodeManager.indentNode('child1');
       nodeManager.indentNode('child2');
-      
+
       const parent = nodeManager.findNode('parent');
       const child1 = nodeManager.findNode('child1');
       const child2 = nodeManager.findNode('child2');
-      
+
       // Both child1 and child2 should be under parent after indenting
       expect(parent?.children).toEqual(['child1', 'child2']);
       expect(child1?.parentId).toBe('parent');
@@ -550,29 +550,39 @@ describe('NodeManager', () => {
         }
       ];
       nodeManager.initializeFromLegacyData(testNodes);
-      
+
       // Initially both should be visible
-      expect(nodeManager.visibleNodes.map(n => n.id)).toEqual(['node1', 'child1']);
-      
+      expect(nodeManager.visibleNodes.map((n) => n.id)).toEqual(['node1', 'child1']);
+
       // Collapse parent - child should disappear
       nodeManager.toggleExpanded('node1');
-      expect(nodeManager.visibleNodes.map(n => n.id)).toEqual(['node1']);
-      
+      expect(nodeManager.visibleNodes.map((n) => n.id)).toEqual(['node1']);
+
       // Expand parent - child should reappear
       nodeManager.toggleExpanded('node1');
-      expect(nodeManager.visibleNodes.map(n => n.id)).toEqual(['node1', 'child1']);
+      expect(nodeManager.visibleNodes.map((n) => n.id)).toEqual(['node1', 'child1']);
     });
 
     test('node map updates preserve reactivity', () => {
-      const testNodes = [{ id: 'test', type: 'text', content: 'Test', autoFocus: false, inheritHeaderLevel: 0, children: [], expanded: true }];
+      const testNodes = [
+        {
+          id: 'test',
+          type: 'text',
+          content: 'Test',
+          autoFocus: false,
+          inheritHeaderLevel: 0,
+          children: [],
+          expanded: true
+        }
+      ];
       nodeManager.initializeFromLegacyData(testNodes);
-      
+
       expect(nodeManager.nodes.size).toBe(1);
-      
+
       const newNodeId = nodeManager.createNode('test', 'New node');
       expect(nodeManager.nodes.size).toBe(2);
       expect(nodeManager.nodes.has(newNodeId)).toBe(true);
-      
+
       nodeManager.deleteNode(newNodeId);
       expect(nodeManager.nodes.size).toBe(1);
       expect(nodeManager.nodes.has(newNodeId)).toBe(false);
@@ -590,7 +600,7 @@ describe('NodeManager', () => {
 
     test('handles empty legacy data', () => {
       nodeManager.initializeFromLegacyData([]);
-      
+
       expect(nodeManager.nodes.size).toBe(0);
       expect(nodeManager.rootNodeIds).toEqual([]);
       expect(nodeManager.visibleNodes).toEqual([]);
@@ -602,26 +612,50 @@ describe('NodeManager', () => {
         null, // Null entry
         { id: 'child-without-parent', parentId: 'missing' } // Orphaned child
       ];
-      
+
       // Should not crash
-      expect(() => nodeManager.initializeFromLegacyData(malformedData as any)).not.toThrow();
+      expect(() => nodeManager.initializeFromLegacyData(malformedData as unknown[])).not.toThrow();
     });
 
     test('maintains consistency after multiple operations', () => {
       const testNodes = [
-        { id: 'a', type: 'text', content: 'A', autoFocus: false, inheritHeaderLevel: 0, children: [], expanded: true },
-        { id: 'b', type: 'text', content: 'B', autoFocus: false, inheritHeaderLevel: 0, children: [], expanded: true },
-        { id: 'c', type: 'text', content: 'C', autoFocus: false, inheritHeaderLevel: 0, children: [], expanded: true }
+        {
+          id: 'a',
+          type: 'text',
+          content: 'A',
+          autoFocus: false,
+          inheritHeaderLevel: 0,
+          children: [],
+          expanded: true
+        },
+        {
+          id: 'b',
+          type: 'text',
+          content: 'B',
+          autoFocus: false,
+          inheritHeaderLevel: 0,
+          children: [],
+          expanded: true
+        },
+        {
+          id: 'c',
+          type: 'text',
+          content: 'C',
+          autoFocus: false,
+          inheritHeaderLevel: 0,
+          children: [],
+          expanded: true
+        }
       ];
       nodeManager.initializeFromLegacyData(testNodes);
-      
+
       // Perform multiple operations
       nodeManager.indentNode('b');
       nodeManager.indentNode('c');
       const newId = nodeManager.createNode('c', 'D');
       nodeManager.combineNodes('c', 'b');
       nodeManager.outdentNode(newId);
-      
+
       // Verify consistency
       const visibleNodes = nodeManager.getVisibleNodes();
       for (const node of visibleNodes) {

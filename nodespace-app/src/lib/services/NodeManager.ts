@@ -1,9 +1,9 @@
 /**
  * NodeManager Service
- * 
+ *
  * Centralized service for managing node operations with Svelte 5 $state() reactivity.
  * Replaces complex inline node management logic in BaseNodeViewer.
- * 
+ *
  * Key Features:
  * - Map-based node storage for efficient lookups
  * - Reactive node state with automatic UI updates
@@ -24,7 +24,7 @@ export interface Node {
   expanded: boolean;
   autoFocus: boolean;
   inheritHeaderLevel: number;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface NodeManagerEvents {
@@ -38,13 +38,13 @@ export class NodeManager {
   private _nodes: Map<string, Node>;
   private _rootNodeIds: string[];
   private events: NodeManagerEvents;
-  
+
   constructor(events: NodeManagerEvents) {
     this._nodes = new Map<string, Node>();
     this._rootNodeIds = [];
     this.events = events;
   }
-  
+
   /**
    * Reactive getter - automatically updates UI when nodes change
    * Returns all visible nodes in hierarchical order respecting expanded state
@@ -66,7 +66,7 @@ export class NodeManager {
   get rootNodeIds(): string[] {
     return this._rootNodeIds;
   }
-  
+
   /**
    * CRITICAL METHOD - Fixes backspace combination bug
    * Combines currentNode with previousNode, preserving content and hierarchy
@@ -86,7 +86,7 @@ export class NodeManager {
     if (currentNode.children.length > 0) {
       previousNode.children.push(...currentNode.children);
       // Update parent references
-      currentNode.children.forEach(childId => {
+      currentNode.children.forEach((childId) => {
         const child = this.findNode(childId);
         if (child) child.parentId = previousNode.id;
       });
@@ -98,41 +98,42 @@ export class NodeManager {
     // Notify UI for cursor positioning
     this.events.focusRequested(previousNode.id, junctionPosition);
   }
-  
+
   /**
    * DATA MIGRATION - Initialize from legacy BaseNodeViewer array structure
    * Converts nested array structure to Map-based system preserving all properties
    */
-  initializeFromLegacyData(legacyNodes: any[]): void {
+  initializeFromLegacyData(legacyNodes: unknown[]): void {
     this._nodes.clear();
     this._rootNodeIds.length = 0;
 
     // Convert legacy nodes recursively
-    const convertNode = (legacyNode: any, depth: number = 0, parentId?: string): string => {
+    const convertNode = (legacyNode: unknown, depth: number = 0, parentId?: string): string => {
       // Handle malformed data
       if (!legacyNode || typeof legacyNode !== 'object' || !legacyNode.id) {
         return '';
       }
-      
-      const nodeId = legacyNode.id;
-      
+
+      const legacyNodeObj = legacyNode as Record<string, unknown>;
+      const nodeId = legacyNodeObj.id as string;
+
       // Create new Node from legacy structure
       const node: Node = {
         id: nodeId,
-        content: legacyNode.content || '',
-        nodeType: legacyNode.type || 'text',
+        content: (legacyNodeObj.content as string) || '',
+        nodeType: (legacyNodeObj.type as string) || 'text',
         depth: depth,
         parentId: parentId,
         children: [],
-        expanded: legacyNode.expanded !== false, // Default to true
-        autoFocus: legacyNode.autoFocus || false,
-        inheritHeaderLevel: legacyNode.inheritHeaderLevel || 0,
-        metadata: legacyNode.metadata || {}
+        expanded: (legacyNodeObj.expanded as boolean) !== false, // Default to true
+        autoFocus: (legacyNodeObj.autoFocus as boolean) || false,
+        inheritHeaderLevel: (legacyNodeObj.inheritHeaderLevel as number) || 0,
+        metadata: (legacyNodeObj.metadata as Record<string, unknown>) || {}
       };
 
       // Process children if they exist
-      if (legacyNode.children && Array.isArray(legacyNode.children)) {
-        node.children = legacyNode.children.map((child: any) => 
+      if (legacyNodeObj.children && Array.isArray(legacyNodeObj.children)) {
+        node.children = (legacyNodeObj.children as unknown[]).map((child: unknown) =>
           convertNode(child, depth + 1, nodeId)
         );
       }
@@ -145,14 +146,15 @@ export class NodeManager {
     // Convert all root level nodes
     for (const legacyNode of legacyNodes) {
       const nodeId = convertNode(legacyNode);
-      if (nodeId) { // Only add valid node IDs
+      if (nodeId) {
+        // Only add valid node IDs
         this._rootNodeIds.push(nodeId);
       }
     }
 
     this.events.hierarchyChanged();
   }
-  
+
   /**
    * Create new node after specified node
    */
@@ -195,7 +197,7 @@ export class NodeManager {
 
     this.events.nodeCreated(newId);
     this.events.hierarchyChanged();
-    
+
     return newId;
   }
 
@@ -220,36 +222,29 @@ export class NodeManager {
     if (node.parentId) {
       const parent = this.findNode(node.parentId);
       if (parent) {
-        parent.children = parent.children.filter(id => id !== nodeId);
+        parent.children = parent.children.filter((id) => id !== nodeId);
       }
     } else {
-      this._rootNodeIds = this._rootNodeIds.filter(id => id !== nodeId);
+      this._rootNodeIds = this._rootNodeIds.filter((id) => id !== nodeId);
     }
-
-    // Only delete children if they're still actually children of this node
-    // (i.e., they haven't been moved to another parent)
-    const childrenToDelete = node.children.filter(childId => {
-      const child = this.findNode(childId);
-      return child && child.parentId === nodeId;
-    });
 
     // Recursively delete children that are still owned by this node
     const deleteRecursive = (id: string) => {
       const nodeToDelete = this._nodes.get(id);
       if (nodeToDelete) {
         // Only delete children that still belong to this node
-        const ownedChildren = nodeToDelete.children.filter(childId => {
+        const ownedChildren = nodeToDelete.children.filter((childId) => {
           const child = this._nodes.get(childId);
           return child && child.parentId === id;
         });
-        ownedChildren.forEach(childId => deleteRecursive(childId));
+        ownedChildren.forEach((childId) => deleteRecursive(childId));
         // Remove from map
         this._nodes.delete(id);
       }
     };
 
     deleteRecursive(nodeId);
-    
+
     this.events.nodeDeleted(nodeId);
     this.events.hierarchyChanged();
   }
@@ -268,10 +263,10 @@ export class NodeManager {
     const node = this.findNode(nodeId);
     if (!node) return false;
 
-    const siblings = node.parentId 
+    const siblings = node.parentId
       ? this.findNode(node.parentId)?.children || []
       : this._rootNodeIds;
-    
+
     const nodeIndex = siblings.indexOf(nodeId);
     if (nodeIndex <= 0) return false; // Can't indent if no previous sibling
 
@@ -305,7 +300,7 @@ export class NodeManager {
     if (!parent) return false;
 
     // Remove from parent's children
-    parent.children = parent.children.filter(id => id !== nodeId);
+    parent.children = parent.children.filter((id) => id !== nodeId);
 
     // Add to grandparent's children or root
     if (parent.parentId) {
@@ -359,19 +354,19 @@ export class NodeManager {
    */
   private getVisibleNodesRecursive(nodeIds: string[]): Node[] {
     const result: Node[] = [];
-    
+
     for (const nodeId of nodeIds) {
       const node = this._nodes.get(nodeId);
       if (node) {
         result.push(node);
-        
+
         // Include children if node is expanded
         if (node.expanded && node.children.length > 0) {
           result.push(...this.getVisibleNodesRecursive(node.children));
         }
       }
     }
-    
+
     return result;
   }
 

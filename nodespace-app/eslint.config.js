@@ -60,6 +60,37 @@ export default [
     }
   },
   {
+    files: ['**/*.svelte.ts'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: 'module'
+      },
+      globals: {
+        console: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+        localStorage: 'readonly',
+        $state: 'readonly',
+        $derived: 'readonly',
+        $effect: 'readonly',
+        $props: 'readonly',
+        $bindable: 'readonly',
+        $inspect: 'readonly'
+      }
+    },
+    plugins: {
+      '@typescript-eslint': ts
+    },
+    rules: {
+      ...ts.configs.recommended.rules,
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-explicit-any': 'warn',
+      'no-console': process.env.NODE_ENV === 'production' ? 'error' : 'off'
+    }
+  },
+  {
     files: ['**/*.svelte'],
     languageOptions: {
       parser: svelteParser,
