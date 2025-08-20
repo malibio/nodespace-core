@@ -124,7 +124,7 @@ export class NodeManager {
     if (!node) return false;
 
     // Use ContentProcessor to validate and analyze content
-    const ast = this.contentProcessor.parseMarkdown(content);
+    this.contentProcessor.parseMarkdown(content);
     
     // Update the node content
     node.content = content;
