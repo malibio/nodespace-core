@@ -37,6 +37,7 @@ export class ReactiveNodeManager extends NodeManager {
    */
   initializeFromLegacyData(legacyNodes: unknown[]): void {
     super.initializeFromLegacyData(legacyNodes);
+    // Full sync needed for initialization
     this.syncReactiveState();
   }
 
@@ -45,7 +46,11 @@ export class ReactiveNodeManager extends NodeManager {
    */
   createNode(afterNodeId: string, content: string = '', nodeType: string = 'text'): string {
     const result = super.createNode(afterNodeId, content, nodeType);
-    this.syncReactiveState();
+    // Incremental update: add new node to reactive state
+    const newNode = super.nodes.get(result);
+    if (newNode) {
+      this._reactiveNodes.set(result, newNode);
+    }
     return result;
   }
 
@@ -54,7 +59,13 @@ export class ReactiveNodeManager extends NodeManager {
    */
   deleteNode(nodeId: string): void {
     super.deleteNode(nodeId);
-    this.syncReactiveState();
+    // Incremental update: remove node from reactive state
+    this._reactiveNodes.delete(nodeId);
+    // Update root nodes list if this was a root node
+    const rootIndex = this._reactiveRootNodeIds.indexOf(nodeId);
+    if (rootIndex !== -1) {
+      this._reactiveRootNodeIds.splice(rootIndex, 1);
+    }
   }
 
   /**
@@ -63,7 +74,13 @@ export class ReactiveNodeManager extends NodeManager {
   indentNode(nodeId: string): boolean {
     const result = super.indentNode(nodeId);
     if (result) {
-      this.syncReactiveState();
+      // Incremental update: update modified nodes
+      const updatedNode = super.nodes.get(nodeId);
+      if (updatedNode) {
+        this._reactiveNodes.set(nodeId, updatedNode);
+        // Update parent and root nodes lists as needed
+        this.updateHierarchyState(nodeId, updatedNode);
+      }
     }
     return result;
   }
@@ -74,7 +91,13 @@ export class ReactiveNodeManager extends NodeManager {
   outdentNode(nodeId: string): boolean {
     const result = super.outdentNode(nodeId);
     if (result) {
-      this.syncReactiveState();
+      // Incremental update: update modified nodes
+      const updatedNode = super.nodes.get(nodeId);
+      if (updatedNode) {
+        this._reactiveNodes.set(nodeId, updatedNode);
+        // Update parent and root nodes lists as needed
+        this.updateHierarchyState(nodeId, updatedNode);
+      }
     }
     return result;
   }
@@ -85,7 +108,11 @@ export class ReactiveNodeManager extends NodeManager {
   toggleExpanded(nodeId: string): boolean {
     const result = super.toggleExpanded(nodeId);
     if (result) {
-      this.syncReactiveState();
+      // Incremental update: only update the specific node
+      const updatedNode = super.nodes.get(nodeId);
+      if (updatedNode) {
+        this._reactiveNodes.set(nodeId, updatedNode);
+      }
     }
     return result;
   }
@@ -95,11 +122,39 @@ export class ReactiveNodeManager extends NodeManager {
    */
   combineNodes(currentNodeId: string, previousNodeId: string): void {
     super.combineNodes(currentNodeId, previousNodeId);
-    this.syncReactiveState();
+    // Incremental update: update combined node and remove deleted node
+    const updatedNode = super.nodes.get(previousNodeId);
+    if (updatedNode) {
+      this._reactiveNodes.set(previousNodeId, updatedNode);
+    }
+    // Remove the deleted node
+    this._reactiveNodes.delete(currentNodeId);
+    const rootIndex = this._reactiveRootNodeIds.indexOf(currentNodeId);
+    if (rootIndex !== -1) {
+      this._reactiveRootNodeIds.splice(rootIndex, 1);
+    }
   }
 
   /**
-   * Sync reactive state with base class state
+   * Update hierarchy state for parent/child relationships
+   */
+  private updateHierarchyState(nodeId: string, updatedNode: Node): void {
+    // Update parent node if it exists
+    if (updatedNode.parentId) {
+      const parentNode = super.nodes.get(updatedNode.parentId);
+      if (parentNode) {
+        this._reactiveNodes.set(updatedNode.parentId, parentNode);
+      }
+    }
+    
+    // Update root nodes list based on current state
+    const baseRootIds = super.rootNodeIds;
+    this._reactiveRootNodeIds.length = 0;
+    this._reactiveRootNodeIds.push(...baseRootIds);
+  }
+
+  /**
+   * Sync reactive state with base class state (full synchronization)
    */
   private syncReactiveState(): void {
     // Clear reactive state

@@ -13,6 +13,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { ContentProcessor } from './ContentProcessor';
 
 export interface Node {
   id: string;
@@ -38,11 +39,13 @@ export class NodeManager {
   private _nodes: Map<string, Node>;
   private _rootNodeIds: string[];
   private events: NodeManagerEvents;
+  protected contentProcessor: ContentProcessor;
 
   constructor(events: NodeManagerEvents) {
     this._nodes = new Map<string, Node>();
     this._rootNodeIds = [];
     this.events = events;
+    this.contentProcessor = ContentProcessor.getInstance();
   }
 
   /**
@@ -65,6 +68,74 @@ export class NodeManager {
    */
   get rootNodeIds(): string[] {
     return this._rootNodeIds;
+  }
+
+  // ========================================================================
+  // Dual-Representation Methods (ContentProcessor Integration)
+  // ========================================================================
+
+  /**
+   * Parse node content as markdown and return AST
+   * Enables content analysis and manipulation
+   */
+  parseNodeContent(nodeId: string) {
+    const node = this.findNode(nodeId);
+    if (!node) return null;
+    return this.contentProcessor.parseMarkdown(node.content);
+  }
+
+  /**
+   * Render node content as HTML for display
+   * Supports formatted content presentation
+   */
+  renderNodeAsHTML(nodeId: string): string {
+    const node = this.findNode(nodeId);
+    if (!node) return '';
+    const ast = this.contentProcessor.parseMarkdown(node.content);
+    return this.contentProcessor.renderAST(ast);
+  }
+
+  /**
+   * Get header level for a node using ContentProcessor
+   * Replaces manual header parsing throughout the codebase
+   */
+  getNodeHeaderLevel(nodeId: string): number {
+    const node = this.findNode(nodeId);
+    if (!node) return 0;
+    return this.contentProcessor.parseHeaderLevel(node.content);
+  }
+
+  /**
+   * Get display text without markdown syntax
+   * Useful for navigation and search
+   */
+  getNodeDisplayText(nodeId: string): string {
+    const node = this.findNode(nodeId);
+    if (!node) return '';
+    return this.contentProcessor.stripHeaderSyntax(node.content);
+  }
+
+  /**
+   * Update node content with ContentProcessor validation
+   * Ensures content integrity and triggers content analysis
+   */
+  updateNodeContentWithProcessing(nodeId: string, content: string): boolean {
+    const node = this.findNode(nodeId);
+    if (!node) return false;
+
+    // Use ContentProcessor to validate and analyze content
+    const ast = this.contentProcessor.parseMarkdown(content);
+    
+    // Update the node content
+    node.content = content;
+    
+    // Update header level if it's a header node
+    const headerLevel = this.contentProcessor.parseHeaderLevel(content);
+    if (headerLevel > 0) {
+      node.inheritHeaderLevel = headerLevel;
+    }
+
+    return true;
   }
 
   /**

@@ -7,302 +7,11 @@
   import TextNode from '$lib/components/TextNode.svelte';
   import Icon from '$lib/design/icons';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
-  import { v4 as uuidv4 } from 'uuid';
   import { ReactiveNodeManager } from '$lib/services/ReactiveNodeManager.svelte';
   import { type NodeManagerEvents } from '$lib/services/NodeManager';
+  import { demoNodes } from './DemoData';
 
-  // Legacy test data - will be migrated to NodeManager
-  const legacyNodes = [
-    {
-      id: uuidv4(),
-      type: 'text',
-      autoFocus: false,
-      content: '# Main Project Overview',
-      inheritHeaderLevel: 1,
-      children: [
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: '## Features with **bold** and *italic* text',
-          inheritHeaderLevel: 2,
-          children: [
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'User authentication with __underlined__ security',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Database operations',
-              inheritHeaderLevel: 0,
-              children: [
-                {
-                  id: uuidv4(),
-                  type: 'text',
-                  autoFocus: false,
-                  content: 'CRUD operations with **optimized** queries',
-                  inheritHeaderLevel: 0,
-                  children: [],
-                  expanded: true
-                },
-                {
-                  id: uuidv4(),
-                  type: 'text',
-                  autoFocus: false,
-                  content: 'Data validation and *error handling*',
-                  inheritHeaderLevel: 0,
-                  children: [],
-                  expanded: true
-                },
-                {
-                  id: uuidv4(),
-                  type: 'text',
-                  autoFocus: false,
-                  content: 'Advanced features',
-                  inheritHeaderLevel: 0,
-                  children: [
-                    {
-                      id: uuidv4(),
-                      type: 'text',
-                      autoFocus: false,
-                      content: 'Real-time updates via __WebSocket__',
-                      inheritHeaderLevel: 0,
-                      children: [],
-                      expanded: true
-                    },
-                    {
-                      id: uuidv4(),
-                      type: 'text',
-                      autoFocus: false,
-                      content: 'Caching with **Redis** integration',
-                      inheritHeaderLevel: 0,
-                      children: [],
-                      expanded: true
-                    }
-                  ],
-                  expanded: true
-                }
-              ],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'API endpoints with *RESTful* design',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            }
-          ],
-          expanded: true
-        },
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: '## Testing Strategy (collapsed)',
-          inheritHeaderLevel: 2,
-          children: [
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Unit tests with **Jest** framework',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Integration tests for *API endpoints*',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'E2E testing',
-              inheritHeaderLevel: 0,
-              children: [
-                {
-                  id: uuidv4(),
-                  type: 'text',
-                  autoFocus: false,
-                  content: 'Playwright for __browser automation__',
-                  inheritHeaderLevel: 0,
-                  children: [],
-                  expanded: true
-                },
-                {
-                  id: uuidv4(),
-                  type: 'text',
-                  autoFocus: false,
-                  content: 'Visual regression with **Chromatic**',
-                  inheritHeaderLevel: 0,
-                  children: [],
-                  expanded: true
-                }
-              ],
-              expanded: true
-            }
-          ],
-          expanded: false
-        }
-      ],
-      expanded: true
-    },
-    {
-      id: uuidv4(),
-      type: 'text',
-      autoFocus: false,
-      content: '### Development Notes',
-      inheritHeaderLevel: 3,
-      children: [
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: 'Use **TypeScript** for type safety',
-          inheritHeaderLevel: 0,
-          children: [],
-          expanded: true
-        },
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: 'Follow *ESLint* and __Prettier__ conventions',
-          inheritHeaderLevel: 0,
-          children: [],
-          expanded: true
-        },
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: 'Git workflow',
-          inheritHeaderLevel: 0,
-          children: [
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Feature branches with **descriptive** names',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Pull requests with *code review*',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Automated CI/CD with __GitHub Actions__',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            }
-          ],
-          expanded: true
-        }
-      ],
-      expanded: true
-    },
-    {
-      id: uuidv4(),
-      type: 'text',
-      autoFocus: false,
-      content: 'Deployment (collapsed branch)',
-      inheritHeaderLevel: 0,
-      children: [
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: '**Production** environment setup',
-          inheritHeaderLevel: 0,
-          children: [],
-          expanded: true
-        },
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: 'Staging environment',
-          inheritHeaderLevel: 0,
-          children: [
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Mirror of *production* with test data',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            },
-            {
-              id: uuidv4(),
-              type: 'text',
-              autoFocus: false,
-              content: 'Automated deployment from __main branch__',
-              inheritHeaderLevel: 0,
-              children: [],
-              expanded: true
-            }
-          ],
-          expanded: true
-        },
-        {
-          id: uuidv4(),
-          type: 'text',
-          autoFocus: false,
-          content: 'Monitoring and *alerting* systems',
-          inheritHeaderLevel: 0,
-          children: [],
-          expanded: true
-        }
-      ],
-      expanded: false
-    },
-    {
-      id: uuidv4(),
-      type: 'text',
-      autoFocus: false,
-      content: 'Simple leaf node with **formatting**',
-      inheritHeaderLevel: 0,
-      children: [],
-      expanded: true
-    },
-    {
-      id: uuidv4(),
-      type: 'text',
-      autoFocus: false,
-      content: 'Another leaf with *italics* and __underline__',
-      inheritHeaderLevel: 0,
-      children: [],
-      expanded: true
-    }
-  ];
+  // Demo data imported from external file
 
   // NodeManager setup with event callbacks
   const nodeManagerEvents: NodeManagerEvents = {
@@ -328,8 +37,8 @@
 
   const nodeManager = new ReactiveNodeManager(nodeManagerEvents);
 
-  // Initialize NodeManager with legacy data
-  nodeManager.initializeFromLegacyData(legacyNodes);
+  // Initialize NodeManager with demo data
+  nodeManager.initializeFromLegacyData(demoNodes);
 
   // Handle creating new nodes when Enter is pressed
   function handleCreateNewNode(
@@ -649,7 +358,7 @@
   }
 
   // Handle combining current node with previous node (Backspace at start of node)
-  // CRITICAL FIX: Replaced 75-line complex function with clean NodeManager delegation
+  // CLEAN DELEGATION: All logic handled by NodeManager
   function handleCombineWithPrevious(
     event: CustomEvent<{ nodeId: string; currentContent: string }>
   ) {
@@ -657,26 +366,16 @@
     const visibleNodes = nodeManager.getVisibleNodes();
     const currentIndex = visibleNodes.findIndex((n) => n.id === nodeId);
 
-    if (currentIndex <= 0) {
-      return; // No previous node to combine with
-    }
+    if (currentIndex <= 0) return; // No previous node to combine with
+
+    const previousNode = visibleNodes[currentIndex - 1];
 
     if (currentContent.trim() === '') {
-      // Empty node - just delete it and focus previous
-      const previousNode = visibleNodes[currentIndex - 1];
+      // Empty node - delete and focus previous at end
       nodeManager.deleteNode(nodeId);
-
-      // Focus handled by NodeManager event callback
-      setTimeout(() => {
-        const previousElement = document.getElementById(`contenteditable-${previousNode.id}`);
-        if (previousElement) {
-          previousElement.focus();
-          setCursorAtPosition(previousElement, previousNode.content.length);
-        }
-      }, 0);
+      nodeManagerEvents.focusRequested(previousNode.id, previousNode.content.length);
     } else {
-      // Combine nodes using NodeManager's optimized logic
-      const previousNode = visibleNodes[currentIndex - 1];
+      // Combine nodes - NodeManager handles focus automatically
       nodeManager.combineNodes(nodeId, previousNode.id);
     }
   }
@@ -687,24 +386,13 @@
     const visibleNodes = nodeManager.getVisibleNodes();
     const currentIndex = visibleNodes.findIndex((n) => n.id === nodeId);
 
-    if (currentIndex <= 0) {
-      return; // No previous node to focus
-    }
+    if (currentIndex <= 0) return; // No previous node to focus
 
     const previousNode = visibleNodes[currentIndex - 1];
 
-    // Use NodeManager to delete node
+    // Delete node and focus previous at end
     nodeManager.deleteNode(nodeId);
-
-    // Focus previous node at end of content
-    setTimeout(() => {
-      const previousElement = document.getElementById(`contenteditable-${previousNode.id}`);
-      if (previousElement) {
-        previousElement.focus();
-        const content = previousElement.textContent || '';
-        setCursorAtPosition(previousElement, content.length);
-      }
-    }, 0);
+    nodeManagerEvents.focusRequested(previousNode.id, previousNode.content.length);
   }
 
   // Helper functions removed - NodeManager handles all node operations
