@@ -5,7 +5,8 @@
  * Separates DOM manipulation from Svelte reactive logic to eliminate race conditions
  */
 
-import { contentProcessor } from '$lib/services/contentProcessor.js';
+import ContentProcessor from '$lib/services/contentProcessor.js';
+import { NodeReferenceService, type TriggerContext } from '$lib/services/NodeReferenceService.js';
 
 export interface ContentEditableEvents {
   contentChanged: (content: string) => void;
@@ -24,6 +25,13 @@ export interface ContentEditableEvents {
   navigateArrow: (data: { nodeId: string; direction: 'up' | 'down'; columnHint: number }) => void;
   combineWithPrevious: (data: { nodeId: string; currentContent: string }) => void;
   deleteNode: (data: { nodeId: string }) => void;
+  // @ Trigger System Events
+  triggerDetected: (data: {
+    triggerContext: TriggerContext;
+    cursorPosition: { x: number; y: number };
+  }) => void;
+  triggerHidden: () => void;
+  nodeReferenceSelected: (data: { nodeId: string; nodeTitle: string }) => void;
 }
 
 export class ContentEditableController {
@@ -59,7 +67,7 @@ export class ContentEditableController {
     this.originalContent = content;
 
     // Initialize header level tracking
-    this.currentHeaderLevel = contentProcessor.parseHeaderLevel(content);
+    this.currentHeaderLevel = ContentProcessor.getInstance().parseHeaderLevel(content);
 
     // Set initial content based on editing state
     if (autoFocus) {
@@ -185,11 +193,11 @@ export class ContentEditableController {
   }
 
   private setFormattedContent(content: string): void {
-    const headerLevel = contentProcessor.parseHeaderLevel(content);
+    const headerLevel = ContentProcessor.getInstance().parseHeaderLevel(content);
 
     if (headerLevel > 0) {
       // For headers: strip # symbols but preserve inline formatting
-      const cleanText = contentProcessor.stripHeaderSyntax(content);
+      const cleanText = ContentProcessor.getInstance().stripHeaderSyntax(content);
       const htmlContent = this.markdownToHtml(cleanText);
       this.element.innerHTML = htmlContent;
     } else {
@@ -269,8 +277,11 @@ export class ContentEditableController {
       const textContent = this.element.textContent || '';
       this.originalContent = textContent; // Update stored content immediately
 
+      // Check for @ trigger detection
+      this.checkForTrigger(textContent, cursorOffset);
+
       // Check for header level changes
-      const newHeaderLevel = contentProcessor.parseHeaderLevel(textContent);
+      const newHeaderLevel = ContentProcessor.getInstance().parseHeaderLevel(textContent);
       if (newHeaderLevel !== this.currentHeaderLevel) {
         this.currentHeaderLevel = newHeaderLevel;
         this.events.headerLevelChanged(newHeaderLevel);
@@ -322,7 +333,7 @@ export class ContentEditableController {
       const futureText = currentText + ' ';
 
       // Check if this completes a header pattern (e.g., "#" becomes "# ")
-      const newHeaderLevel = contentProcessor.parseHeaderLevel(futureText);
+      const newHeaderLevel = ContentProcessor.getInstance().parseHeaderLevel(futureText);
       if (newHeaderLevel !== this.currentHeaderLevel) {
         // Use setTimeout to let the space character be added first
         setTimeout(() => {
@@ -694,7 +705,7 @@ export class ContentEditableController {
     afterCursor: string;
   } {
     // Check if we're in a header node
-    const headerLevel = contentProcessor.parseHeaderLevel(content);
+    const headerLevel = ContentProcessor.getInstance().parseHeaderLevel(content);
     let inheritedSyntax = '';
 
     if (headerLevel > 0) {
@@ -800,5 +811,131 @@ export class ContentEditableController {
    */
   private escapeRegex(string: string): string {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // ============================================================================
+  // Private Methods - @ Trigger Detection
+  // ============================================================================
+
+  /**
+   * Check for @ trigger and emit events for autocomplete modal
+   */
+  private checkForTrigger(content: string, cursorPosition: number): void {
+    const triggerContext = this.detectTrigger(content, cursorPosition);
+    
+    if (triggerContext && triggerContext.isValid) {
+      // Get cursor position in screen coordinates
+      const cursorCoords = this.getCursorScreenPosition();
+      if (cursorCoords) {
+        this.events.triggerDetected({
+          triggerContext,
+          cursorPosition: cursorCoords
+        });
+      }
+    } else {
+      this.events.triggerHidden();
+    }
+  }
+
+  /**
+   * Detect @ trigger in content at cursor position
+   */
+  private detectTrigger(content: string, cursorPosition: number): TriggerContext | null {
+    // Look backwards from cursor to find @ symbol
+    const beforeCursor = content.substring(0, cursorPosition);
+    const lastAtIndex = beforeCursor.lastIndexOf('@');
+    
+    if (lastAtIndex === -1) {
+      return null; // No @ symbol found
+    }
+    
+    // Check if @ is at word boundary or start of content
+    const charBeforeAt = lastAtIndex > 0 ? beforeCursor[lastAtIndex - 1] : ' ';
+    if (!/\s/.test(charBeforeAt) && lastAtIndex > 0) {
+      return null; // @ is not at word boundary
+    }
+    
+    // Extract query text between @ and cursor
+    const queryText = content.substring(lastAtIndex + 1, cursorPosition);
+    
+    // Validate query (no spaces, reasonable length)
+    if (queryText.includes(' ') || queryText.includes('\n')) {
+      return null; // Query contains invalid characters
+    }
+    
+    if (queryText.length > 50) {
+      return null; // Query too long
+    }
+    
+    return {
+      trigger: '@',
+      query: queryText,
+      startPosition: lastAtIndex,
+      endPosition: cursorPosition,
+      element: this.element,
+      isValid: true,
+      metadata: {}
+    };
+  }
+
+  /**
+   * Get cursor position in screen coordinates for modal positioning
+   */
+  private getCursorScreenPosition(): { x: number; y: number } | null {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+    
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    
+    return {
+      x: rect.left,
+      y: rect.bottom + 5 // Position modal slightly below cursor
+    };
+  }
+
+  /**
+   * Insert node reference at current cursor position
+   */
+  public insertNodeReference(nodeId: string, nodeTitle: string): void {
+    if (!this.isEditing) {
+      return;
+    }
+    
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return;
+    }
+    
+    const currentContent = this.element.textContent || '';
+    const cursorPosition = this.getCurrentColumn();
+    
+    // Find the @ trigger that initiated this
+    const triggerContext = this.detectTrigger(currentContent, cursorPosition);
+    if (!triggerContext) {
+      return;
+    }
+    
+    // Create nodespace URI link
+    const nodeReference = `[${nodeTitle}](nodespace://${nodeId})`;
+    
+    // Replace the @ trigger and query with the reference
+    const beforeTrigger = currentContent.substring(0, triggerContext.startPosition);
+    const afterCursor = currentContent.substring(triggerContext.endPosition);
+    const newContent = beforeTrigger + nodeReference + afterCursor;
+    
+    // Update content and position cursor after the inserted reference
+    this.originalContent = newContent;
+    this.setLiveFormattedContent(newContent);
+    
+    // Position cursor after the inserted reference
+    const newCursorPosition = triggerContext.startPosition + nodeReference.length;
+    this.restoreCursorPosition(newCursorPosition);
+    
+    // Emit content change event
+    this.events.contentChanged(newContent);
+    this.events.nodeReferenceSelected({ nodeId, nodeTitle });
   }
 }

@@ -14,7 +14,7 @@
  */
 
 import { eventBus } from './EventBus';
-import { ContentProcessor } from './ContentProcessor';
+import { ContentProcessor } from './contentProcessor';
 import type { NodeManager } from './NodeManager';
 import type { HierarchyService } from './HierarchyService';
 import type { NodeSpaceNode } from './MockDatabaseService';

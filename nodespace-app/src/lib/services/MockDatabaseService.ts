@@ -121,6 +121,28 @@ export class MockDatabaseService {
   }
 
   /**
+   * Upsert node (insert or update)
+   */
+  async upsertNode(node: NodeSpaceNode): Promise<NodeSpaceNode> {
+    // Validate node schema
+    this.validateNode(node);
+
+    const existingNode = this.nodes.get(node.id);
+    if (existingNode) {
+      // Remove old indexes
+      this.updateIndexesOnDelete(existingNode);
+    }
+
+    // Insert/update the node
+    this.nodes.set(node.id, { ...node });
+
+    // Add new indexes
+    this.updateIndexesOnInsert(node);
+
+    return { ...node };
+  }
+
+  /**
    * Get node by ID
    */
   async getNode(nodeId: string): Promise<NodeSpaceNode | null> {
