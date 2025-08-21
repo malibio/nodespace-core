@@ -6,9 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi, type MockedFunction } from 'vitest';
-import { contentProcessor } from '../../lib/services/contentProcessor';
-import type { NodeReferenceService, NodeReference, NodespaceLink } from '../../lib/services/NodeReferenceService';
-import type { NodeSpaceNode } from '../../lib/services/MockDatabaseService';
+import { contentProcessor, type ParagraphNode } from '../../lib/services/contentProcessor';
+import type { NodeReferenceService, NodeReference } from '../../lib/services/NodeReferenceService';
 
 // Mock NodeReferenceService
 const mockNodeReferenceService = {
@@ -83,7 +82,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
       expect(ast.children).toHaveLength(1);
       expect(ast.children[0].type).toBe('paragraph');
       
-      const paragraph = ast.children[0] as any;
+      const paragraph = ast.children[0] as ParagraphNode;
       expect(paragraph.children).toHaveLength(3); // Text + NodespaceRef + Text
       
       const refNode = paragraph.children[1];
@@ -135,7 +134,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         metadata: {}
       };
 
-      (mockNodeReferenceService.parseNodespaceURI as MockedFunction<any>)
+(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
         .mockReturnValue(mockReference);
 
       const markdown = 'Check [My Node](nodespace://node/test-123) here.';
@@ -173,9 +172,9 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         metadata: {}
       };
 
-      (mockNodeReferenceService.parseNodespaceURI as MockedFunction<any>)
+(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
         .mockReturnValue(mockReference);
-      (mockNodeReferenceService.addReference as MockedFunction<any>)
+(mockNodeReferenceService.addReference as MockedFunction<typeof mockNodeReferenceService.addReference>)
         .mockResolvedValue(undefined);
 
       const content = 'Reference to [Target](nodespace://node/target-node)';
@@ -198,7 +197,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         metadata: {}
       };
 
-      (mockNodeReferenceService.parseNodespaceURI as MockedFunction<any>)
+(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
         .mockReturnValue(mockReference);
 
       const markdown = 'Check [Test Node](nodespace://node/test-123) here.';
@@ -224,7 +223,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
 
   describe('Error Handling', () => {
     it('should handle broken references gracefully', async () => {
-      (mockNodeReferenceService.parseNodespaceURI as MockedFunction<any>)
+(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
         .mockReturnValue(null);
 
       const markdown = 'Broken [Reference](nodespace://node/nonexistent)';
@@ -235,7 +234,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     });
 
     it('should handle service errors gracefully', async () => {
-      (mockNodeReferenceService.parseNodespaceURI as MockedFunction<any>)
+(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
         .mockImplementation(() => {
           throw new Error('Service error');
         });
@@ -255,7 +254,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
       
       // Mock event bus to capture events
       const originalEmit = vi.fn();
-      const eventBus = { emit: originalEmit };
+      const _eventBus = { emit: originalEmit };
       
       // Process content
       contentProcessor.processContentWithEventEmission(content, 'source-node');

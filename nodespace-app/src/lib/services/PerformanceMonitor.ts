@@ -217,7 +217,7 @@ export class PerformanceMonitor {
   // ============================================================================
   
   private startMemoryMonitoring(): void {
-    if (typeof window !== 'undefined' && (window as any).process?.memoryUsage) {
+    if (typeof window !== 'undefined' && 'process' in window && (window as Window & { process?: { memoryUsage: () => { rss: number; heapUsed: number; heapTotal: number; external: number } } }).process?.memoryUsage) {
       this.memoryTimer = window.setInterval(() => {
         this.captureMemorySnapshot();
       }, this.memoryCheckInterval);
@@ -241,8 +241,8 @@ export class PerformanceMonitor {
         this.checkMemoryLeaks(snapshot);
       } 
       // Browser environment - approximate using performance API
-      else if (typeof performance !== 'undefined' && (performance as any).memory) {
-        const mem = (performance as any).memory;
+      else if (typeof performance !== 'undefined' && 'memory' in performance && (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory) {
+        const mem = (performance as Performance & { memory: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
         const snapshot: MemorySnapshot = {
           heapUsed: mem.usedJSHeapSize,
           heapTotal: mem.totalJSHeapSize,
@@ -282,8 +282,8 @@ export class PerformanceMonitor {
       });
       
       // Emit memory warning event if EventBus is available
-      if (typeof window !== 'undefined' && (window as any).eventBus) {
-        (window as any).eventBus.emit({
+      if (typeof window !== 'undefined' && 'eventBus' in window && (window as Window & { eventBus?: { emit: (event: unknown) => void } }).eventBus) {
+        (window as Window & { eventBus: { emit: (event: unknown) => void } }).eventBus.emit({
           type: 'performance:memory-warning',
           namespace: 'system',
           source: 'PerformanceMonitor',
@@ -356,8 +356,8 @@ export class PerformanceMonitor {
       });
       
       // Emit regression event if EventBus is available
-      if (typeof window !== 'undefined' && (window as any).eventBus) {
-        (window as any).eventBus.emit({
+      if (typeof window !== 'undefined' && 'eventBus' in window && (window as Window & { eventBus?: { emit: (event: unknown) => void } }).eventBus) {
+        (window as Window & { eventBus: { emit: (event: unknown) => void } }).eventBus.emit({
           type: 'performance:regression',
           namespace: 'quality',
           source: 'PerformanceMonitor',

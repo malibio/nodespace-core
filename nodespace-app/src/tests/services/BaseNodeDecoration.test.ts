@@ -7,7 +7,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { 
-  BaseNodeDecorator,
   TaskNodeDecorator,
   UserNodeDecorator,
   DateNodeDecorator,
@@ -15,8 +14,7 @@ import {
   AINodeDecorator,
   NodeDecoratorFactory,
   NODE_TYPE_CONFIGS,
-  type DecorationContext,
-  type DecorationResult
+  type DecorationContext
 } from '$lib/services/BaseNodeDecoration';
 import { NodeReferenceService } from '$lib/services/NodeReferenceService';
 import { EnhancedNodeManager } from '$lib/services/EnhancedNodeManager';
@@ -30,7 +28,7 @@ import { MockDatabaseService } from '$lib/services/MockDatabaseService';
 
 describe('BaseNode Decoration System', () => {
   let nodeReferenceService: NodeReferenceService;
-  let decoratorFactory: NodeDecoratorFactory;
+  let _decoratorFactory: NodeDecoratorFactory;
   let databaseService: MockDatabaseService;
   let nodeManager: EnhancedNodeManager;
   let hierarchyService: HierarchyService;
@@ -49,7 +47,7 @@ describe('BaseNode Decoration System', () => {
       databaseService
     );
     
-    decoratorFactory = new NodeDecoratorFactory(nodeReferenceService);
+    _decoratorFactory = new NodeDecoratorFactory(nodeReferenceService);
     
     // Mock DOM environment
     const createMockElement = (tagName: string) => {
@@ -74,7 +72,7 @@ describe('BaseNode Decoration System', () => {
     
     global.document = {
       createElement: vi.fn(createMockElement)
-    } as any;
+    } as Partial<Document>;
   });
 
   afterEach(() => {

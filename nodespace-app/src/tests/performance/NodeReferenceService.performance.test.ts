@@ -13,11 +13,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { NodeReferenceService } from '$lib/services/NodeReferenceService';
 import { OptimizedNodeReferenceService } from '$lib/services/OptimizedNodeReferenceService';
 import { PerformanceMonitor } from '$lib/services/PerformanceMonitor';
-import { NodeManager } from '$lib/services/NodeManager';
+import { NodeManager, type Node } from '$lib/services/NodeManager';
 import { HierarchyService } from '$lib/services/HierarchyService';
 import { NodeOperationsService } from '$lib/services/NodeOperationsService';
 import { MockDatabaseService } from '$lib/services/MockDatabaseService';
 import type { NodeSpaceNode } from '$lib/services/MockDatabaseService';
+
+// Union type for service operations
+type ReferenceService = NodeReferenceService | OptimizedNodeReferenceService;
 import { ContentProcessor } from '$lib/services/contentProcessor';
 import { eventBus } from '$lib/services/EventBus';
 
@@ -32,7 +35,7 @@ const PERFORMANCE_TARGETS = {
 };
 
 // Helper to convert NodeManager Node to NodeSpaceNode
-function convertToNodeSpaceNode(managerNode: any, index: number = 0): NodeSpaceNode {
+function convertToNodeSpaceNode(managerNode: Node, index: number = 0): NodeSpaceNode {
   return {
     id: managerNode.id || `test-node-${index}`,
     type: managerNode.nodeType || 'text',
@@ -162,7 +165,7 @@ describe('NodeReferenceService Performance Tests', () => {
       
       for (const content of testCases) {
         const start = performance.now();
-        const result = nodeReferenceService.detectTrigger(content, content.length);
+        const _result = nodeReferenceService.detectTrigger(content, content.length);
         const duration = performance.now() - start;
         
         totalTime += duration;
@@ -331,7 +334,7 @@ describe('NodeReferenceService Performance Tests', () => {
         const uri = `nodespace://node/${nodeId}`;
         
         const start = performance.now();
-        const result = nodeReferenceService.resolveNodespaceURI(uri);
+        const _result = nodeReferenceService.resolveNodespaceURI(uri);
         const duration = performance.now() - start;
         
         expect(duration).toBeLessThan(PERFORMANCE_TARGETS.URI_RESOLUTION_MS);
@@ -466,15 +469,15 @@ describe('NodeReferenceService Performance Tests', () => {
 
     it('should demonstrate performance improvements with optimization', async () => {
       const testOperations = [
-        { name: 'trigger-detection', op: (service: any) => service.detectTrigger('test @query here', 12) },
+        { name: 'trigger-detection', op: (service: ReferenceService) => service.detectTrigger('test @query here', 12) },
         { 
           name: 'autocomplete', 
-          op: async (service: any) => await service.showAutocomplete({
+          op: async (service: ReferenceService) => await service.showAutocomplete({
             trigger: '@', query: 'perf', startPosition: 0, endPosition: 5,
             element: null, isValid: true, metadata: {}
           })
         },
-        { name: 'uri-resolution', op: (service: any) => service.resolveNodespaceURI('nodespace://node/perf-node-1') }
+        { name: 'uri-resolution', op: (service: ReferenceService) => service.resolveNodespaceURI('nodespace://node/perf-node-1') }
       ];
 
       const benchmarks: { [key: string]: { standard: number; optimized: number } } = {};

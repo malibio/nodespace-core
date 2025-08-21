@@ -7,12 +7,13 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { NodeReferenceService } from '$lib/services/NodeReferenceService';
-import { NodeManager } from '$lib/services/NodeManager';
+import { NodeManager, type Node } from '$lib/services/NodeManager';
 import { HierarchyService } from '$lib/services/HierarchyService';
 import { NodeOperationsService } from '$lib/services/NodeOperationsService';
 import { MockDatabaseService } from '$lib/services/MockDatabaseService';
 import { ContentProcessor } from '$lib/services/contentProcessor';
 import { eventBus } from '$lib/services/EventBus';
+import type { ReferencesUpdateNeededEvent } from '$lib/services/EventTypes';
 
 describe('NodeReferenceService - Universal Node Reference System', () => {
   let nodeReferenceService: NodeReferenceService;
@@ -266,8 +267,8 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
   });
 
   describe('Bidirectional Reference Tracking', () => {
-    let sourceNode: any;
-    let targetNode: any;
+    let sourceNode: Node;
+    let targetNode: Node;
 
     beforeEach(() => {
       sourceNode = nodeManager.createNode('Source Node', null, 'text');
@@ -473,7 +474,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
   describe('EventBus Integration', () => {
     it('should emit reference events when adding/removing references', async () => {
-      const events: any[] = [];
+      const events: ReferencesUpdateNeededEvent[] = [];
       
       eventBus.subscribe('references:update-needed', (event) => {
         events.push(event);

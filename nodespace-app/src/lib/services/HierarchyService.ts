@@ -19,7 +19,7 @@
  */
 
 import { eventBus } from './EventBus';
-import type { NodeManager } from './NodeManager';
+import type { NodeManager, Node } from './NodeManager';
 // import type { NodeSpaceNode } from './MockDatabaseService';
 
 // ============================================================================
@@ -302,8 +302,8 @@ export class HierarchyService {
    * Performance optimized for large hierarchies
    */
   public getAllNodesInRoot(rootId: string): {
-    nodes: Map<string, any>;
-    rootNode: any | null;
+    nodes: Map<string, Node>;
+    rootNode: Node | null;
     totalCount: number;
     maxDepth: number;
   } {
@@ -321,7 +321,7 @@ export class HierarchyService {
 
     // Get all descendants efficiently
     const allDescendants = this.getDescendants(rootId);
-    const allNodes = new Map<string, any>();
+    const allNodes = new Map<string, Node>();
     
     // Add root node
     allNodes.set(rootId, rootNode);
@@ -366,7 +366,7 @@ export class HierarchyService {
   public getBulkHierarchyStructure(rootId: string): {
     nodes: Array<{
       id: string;
-      node: any;
+      node: Node;
       parent_id: string | null;
       before_sibling_id: string | null;
       depth: number;

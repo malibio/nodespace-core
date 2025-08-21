@@ -15,6 +15,14 @@ import { NodeManager, type NodeManagerEvents } from '$lib/services/NodeManager';
 import { HierarchyService } from '$lib/services/HierarchyService';
 import { eventBus } from '$lib/services/EventBus';
 
+// Test helper interface for hierarchical structures
+interface TestHierarchyNode {
+  id: string;
+  type: string;
+  content: string;
+  children: TestHierarchyNode[];
+}
+
 describe('HierarchyService', () => {
   let nodeManager: NodeManager;
   let hierarchyService: HierarchyService;
@@ -541,7 +549,7 @@ describe('HierarchyService', () => {
       hierarchyService.getNodeDepth('test-node');
       
       let stats = hierarchyService.getCacheStats();
-      const initialCacheSize = stats.depthCacheSize;
+      const _initialCacheSize = stats.depthCacheSize;
 
       // Emit hierarchy update event
       eventBus.emit({
@@ -642,8 +650,8 @@ describe('HierarchyService', () => {
   // Helper Functions
   // ========================================================================
 
-  function createDeepHierarchy(depth: number): any {
-    let current: any = {
+  function createDeepHierarchy(depth: number): TestHierarchyNode {
+    let current: TestHierarchyNode = {
       id: `level-${depth - 1}`,
       type: 'text',
       content: `Level ${depth - 1}`,
@@ -662,12 +670,12 @@ describe('HierarchyService', () => {
     return current;
   }
 
-  function createLargeHierarchy(nodeCount: number): any {
+  function createLargeHierarchy(nodeCount: number): TestHierarchyNode {
     const root = {
       id: 'root',
       type: 'text',
       content: 'Root',
-      children: [] as any[]
+      children: [] as TestHierarchyNode[]
     };
 
     // Create a balanced tree structure
@@ -676,7 +684,7 @@ describe('HierarchyService', () => {
     const maxChildrenPerNode = 10;
 
     while (nodeIdCounter < nodeCount - 1) { // -1 because root is already counted
-      const nextLevel: any[] = [];
+      const nextLevel: TestHierarchyNode[] = [];
 
       for (const parent of currentLevel) {
         const childrenCount = Math.min(

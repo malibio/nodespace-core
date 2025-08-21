@@ -13,9 +13,7 @@
  * - Integration with existing NodeReferenceService and DecorationCoordinator
  */
 
-import { decorationCoordinator } from './DecorationCoordinator';
-import type { NodeReferenceService, NodeReference } from './NodeReferenceService';
-import type { NodeSpaceNode } from './MockDatabaseService';
+import type { NodeReferenceService } from './NodeReferenceService';
 
 // ============================================================================
 // Core Types and Interfaces
@@ -497,55 +495,59 @@ export const NODE_TYPE_CONFIGS: Record<string, NodeTypeConfig> = {
     icon: '📄',
     label: 'Text',
     color: 'var(--node-text)',
-    defaultDecoration: (context) => new BaseNodeDecorator(null as any, 'text').getBaseDecoration(context)
+    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'text'); } })()
+      .getBaseDecoration(context)
   },
   task: {
     icon: '☐',
     label: 'Task',
     color: 'var(--node-task)',
-    defaultDecoration: (context) => new TaskNodeDecorator(null as any).decorateReference(context)
+    defaultDecoration: (context) => new TaskNodeDecorator(null!).decorateReference(context)
   },
   user: {
     icon: '👤',
     label: 'User',
     color: 'var(--node-user)',
-    defaultDecoration: (context) => new UserNodeDecorator(null as any).decorateReference(context)
+    defaultDecoration: (context) => new UserNodeDecorator(null!).decorateReference(context)
   },
   date: {
     icon: '📅',
     label: 'Date',
     color: 'var(--node-date)',
-    defaultDecoration: (context) => new DateNodeDecorator(null as any).decorateReference(context)
+    defaultDecoration: (context) => new DateNodeDecorator(null!).decorateReference(context)
   },
   document: {
     icon: '📄',
     label: 'Document',
     color: 'var(--node-document)',
-    defaultDecoration: (context) => new DocumentNodeDecorator(null as any).decorateReference(context)
+    defaultDecoration: (context) => new DocumentNodeDecorator(null!).decorateReference(context)
   },
   ai_chat: {
     icon: '🤖',
     label: 'AI Chat',
     color: 'var(--node-ai-chat)',
-    defaultDecoration: (context) => new AINodeDecorator(null as any).decorateReference(context)
+    defaultDecoration: (context) => new AINodeDecorator(null!).decorateReference(context)
   },
   entity: {
     icon: '🏷️',
     label: 'Entity',
     color: 'var(--node-entity)',
-    defaultDecoration: (context) => new BaseNodeDecorator(null as any, 'entity').getBaseDecoration(context)
+    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'entity'); } })()
+      .getBaseDecoration(context)
   },
   query: {
     icon: '🔍',
     label: 'Query',
     color: 'var(--node-query)',
-    defaultDecoration: (context) => new BaseNodeDecorator(null as any, 'query').getBaseDecoration(context)
+    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'query'); } })()
+      .getBaseDecoration(context)
   },
   default: {
     icon: '📄',
     label: 'Node',
     color: 'var(--node-text)',
-    defaultDecoration: (context) => new BaseNodeDecorator(null as any, 'default').getBaseDecoration(context)
+    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'default'); } })()
+      .getBaseDecoration(context)
   }
 };
 

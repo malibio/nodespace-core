@@ -531,7 +531,7 @@ export class NodeReferenceRenderer {
     element.addEventListener('keydown', keydownHandler);
     
     // Store handler for cleanup
-    (element as any)._keydownHandler = keydownHandler;
+    (element as HTMLElement & { _keydownHandler?: EventListener })._keydownHandler = keydownHandler;
   }
 
   private getCachedDecoration(nodeId: string, displayContext: string): { result: DecorationResult; element?: HTMLElement } | null {
@@ -655,9 +655,10 @@ export class NodeReferenceRenderer {
     
     // Clean up keyboard handlers
     for (const cached of this.renderCache.values()) {
-      if (cached.element && (cached.element as any)._keydownHandler) {
-        cached.element.removeEventListener('keydown', (cached.element as any)._keydownHandler);
-        delete (cached.element as any)._keydownHandler;
+      const elementWithHandler = cached.element as HTMLElement & { _keydownHandler?: EventListener };
+      if (cached.element && elementWithHandler._keydownHandler) {
+        cached.element.removeEventListener('keydown', elementWithHandler._keydownHandler);
+        delete elementWithHandler._keydownHandler;
       }
     }
     

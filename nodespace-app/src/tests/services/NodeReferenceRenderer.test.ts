@@ -36,9 +36,35 @@ describe('NodeReferenceRenderer', () => {
     
     renderer = initializeNodeReferenceRenderer(nodeReferenceService);
     
+    // Mock DOM interfaces
+    interface MockElement {
+      tagName: string;
+      innerHTML: string;
+      classList: {
+        add: ReturnType<typeof vi.fn>;
+        remove: ReturnType<typeof vi.fn>;
+        contains: ReturnType<typeof vi.fn>;
+        toggle: ReturnType<typeof vi.fn>;
+      };
+      dataset: Record<string, string>;
+      setAttribute: ReturnType<typeof vi.fn>;
+      addEventListener: ReturnType<typeof vi.fn>;
+      removeEventListener: ReturnType<typeof vi.fn>;
+    }
+
+    interface MockTreeWalker {
+      nextNode: ReturnType<typeof vi.fn>;
+    }
+
+    interface MockDocument {
+      createElement: ReturnType<typeof vi.fn>;
+      createTreeWalker: ReturnType<typeof vi.fn>;
+      querySelectorAll: ReturnType<typeof vi.fn>;
+    }
+
     // Mock DOM environment
     global.document = {
-      createElement: vi.fn((tagName) => ({
+      createElement: vi.fn((tagName: string): MockElement => ({
         tagName: tagName.toUpperCase(),
         innerHTML: '',
         classList: {
@@ -52,16 +78,21 @@ describe('NodeReferenceRenderer', () => {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn()
       })),
-      createTreeWalker: vi.fn(() => ({
+      createTreeWalker: vi.fn((): MockTreeWalker => ({
         nextNode: vi.fn(() => null)
       })),
       querySelectorAll: vi.fn(() => [])
-    } as any;
+    } as MockDocument;
     
+    interface MockWindow {
+      IntersectionObserver: ReturnType<typeof vi.fn>;
+      MutationObserver: ReturnType<typeof vi.fn>;
+    }
+
     global.window = {
       IntersectionObserver: vi.fn(),
       MutationObserver: vi.fn()
-    } as any;
+    } as MockWindow;
   });
 
   afterEach(() => {
@@ -121,7 +152,7 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn()
-      } as any;
+      } as MockElement;
     });
 
     it('should render a single task reference correctly', async () => {
@@ -186,11 +217,11 @@ describe('NodeReferenceRenderer', () => {
 
   describe('Container Rendering', () => {
     let mockContainer: HTMLElement;
-    let testNodes: NodeSpaceNode[];
+    let _testNodes: NodeSpaceNode[];
 
     beforeEach(async () => {
       // Create test nodes
-      testNodes = [
+      _testNodes = [
         await nodeReferenceService.createNode('task', 'Task 1\nstatus: pending'),
         await nodeReferenceService.createNode('user', 'John Doe\nrole: admin'),
         await nodeReferenceService.createNode('date', '2024-12-31\nProject deadline')
@@ -203,7 +234,7 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn()
-      } as any;
+      } as MockElement;
     });
 
     it('should render container without viewport optimization', async () => {
@@ -253,7 +284,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any;
+      } as MockElement;
       
       // Render to populate cache
       await renderer.renderReference(mockElement, testNode.id, 'inline');
@@ -276,7 +307,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any;
+      } as MockElement;
       
       // Initial render
       await renderer.renderReference(mockElement, testNode.id, 'inline');
@@ -303,7 +334,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(() => { throw new Error('Mock error'); }),
         addEventListener: vi.fn()
-      } as any;
+      } as MockElement;
       
       // Should not throw, should render error state
       await expect(renderer.renderReference(mockElement, 'some-id', 'inline')).resolves.not.toThrow();
@@ -314,9 +345,9 @@ describe('NodeReferenceRenderer', () => {
       const errorService = {
         ...nodeReferenceService,
         resolveNodespaceURI: vi.fn().mockRejectedValue(new Error('Service error'))
-      } as any;
+      } as MockElement;
       
-      const errorRenderer = new (NodeReferenceRenderer as any)(errorService);
+      const errorRenderer = new (NodeReferenceRenderer as typeof NodeReferenceRenderer)(errorService as NodeReferenceService);
       
       const mockElement = {
         innerHTML: '',
@@ -324,7 +355,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any;
+      } as MockElement;
       
       await errorRenderer.renderReference(mockElement, 'test-id', 'inline');
       
@@ -364,7 +395,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any;
+      } as MockElement;
       
       const beforeMetrics = renderer.getMetrics();
       

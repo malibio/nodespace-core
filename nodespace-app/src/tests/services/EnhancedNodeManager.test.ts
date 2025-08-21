@@ -13,6 +13,7 @@
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import type { HierarchicalTextNode } from '$lib/services/mockTextService';
 import { EnhancedNodeManager } from '$lib/services/EnhancedNodeManager';
 import type { NodeManagerEvents } from '$lib/services/NodeManager';
 import { eventBus } from '$lib/services/EventBus';
@@ -190,7 +191,7 @@ describe('EnhancedNodeManager', () => {
         id: 'deep-root',
         type: 'text',
         content: 'Deep root',
-        children: [] as any[]
+        children: [] as HierarchicalTextNode[]
       };
 
       let current = deepHierarchy;
@@ -199,7 +200,7 @@ describe('EnhancedNodeManager', () => {
           id: `level-${i}`,
           type: 'text',
           content: `Level ${i}`,
-          children: [] as any[]
+          children: [] as HierarchicalTextNode[]
         };
         current.children.push(child);
         current = child;
@@ -378,8 +379,8 @@ describe('EnhancedNodeManager', () => {
       const secondTime = performance.now() - secondCallTime;
 
       // Compare analysis content without timestamp
-      const { lastAnalyzed: _, ...analysis1Clean } = analysis1 as any;
-      const { lastAnalyzed: __, ...analysis2Clean } = analysis2 as any;
+      const { lastAnalyzed: _lastAnalyzed1, ...analysis1Clean } = analysis1 as Record<string, unknown>;
+      const { lastAnalyzed: _lastAnalyzed2, ...analysis2Clean } = analysis2 as Record<string, unknown>;
       
       expect(analysis1Clean).toEqual(analysis2Clean);
       expect(secondTime).toBeLessThan(firstTime); // Cached call should be faster
@@ -656,7 +657,7 @@ describe('EnhancedNodeManager', () => {
           id: 'root', 
           type: 'document', 
           content: 'Root', 
-          children: [] as any[] 
+          children: [] as HierarchicalTextNode[] 
         }];
 
         for (let i = 1; i < size; i++) {
@@ -894,7 +895,7 @@ describe('EnhancedNodeManager', () => {
       // Perform various operations
       const globalAnalysis = enhancedNodeManager.analyzeAllNodes();
       const conceptNodes = enhancedNodeManager.searchNodes({ nodeType: 'concept' });
-      const nodesWithManyRefs = enhancedNodeManager.searchNodes({ minWordCount: 5 });
+      const _nodesWithManyRefs = enhancedNodeManager.searchNodes({ minWordCount: 5 });
 
       for (let i = 0; i < 10; i++) {
         enhancedNodeManager.getEnhancedNodeDepth(`kb-node-${i * 10}`);

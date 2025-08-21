@@ -26,7 +26,7 @@
 
 import { eventBus } from './EventBus';
 import { ContentProcessor } from './contentProcessor';
-import type { NodeManager } from './NodeManager';
+import type { NodeManager, Node } from './NodeManager';
 import type { HierarchyService } from './HierarchyService';
 import type { NodeOperationsService } from './NodeOperationsService';
 import type { MockDatabaseService, NodeSpaceNode } from './MockDatabaseService';
@@ -119,6 +119,7 @@ export class NodeReferenceService {
   private suggestionCache = new Map<string, { result: AutocompleteResult; timestamp: number }>();
   private uriCache = new Map<string, NodeReference>();
   private searchCache = new Map<string, NodeSpaceNode[]>();
+  private mentionsCache = new Map<string, string[]>(); // nodeId -> array of mentioned nodeIds
   private readonly cacheTimeout = 30000; // 30 seconds
   
   // Configuration
@@ -443,7 +444,7 @@ export class NodeReferenceService {
         root_id: this.findRootId(managerNode.id),
         before_sibling_id: null, // Would need to calculate from hierarchy
         created_at: new Date().toISOString(), // Would come from metadata in full implementation
-        mentions: (managerNode as any).mentions || [],
+        mentions: [], // Initialize empty mentions array - will be populated by mentions tracking
         metadata: managerNode.metadata,
         embedding_vector: null
       };
@@ -477,13 +478,17 @@ export class NodeReferenceService {
         throw new Error(`Node not found: source=${!!sourceNode}, target=${!!targetNode}`);
       }
 
-      // Get current mentions
-      const currentMentions = (sourceNode as any).mentions || [];
+      // Get current mentions from database
+      const dbSourceNode = await this.databaseService.getNode(sourceId);
+      const currentMentions = dbSourceNode?.mentions || [];
       
       // Add reference if not already present
       if (!currentMentions.includes(targetId)) {
         const updatedMentions = [...currentMentions, targetId];
         await this.nodeOperationsService.updateNodeMentions(sourceId, updatedMentions);
+        
+        // Update local cache
+        this.mentionsCache.set(sourceId, updatedMentions);
         
         // Emit reference added event
         this.emitReferenceEvent('added', sourceId, targetId);
@@ -504,13 +509,17 @@ export class NodeReferenceService {
         throw new Error(`Source node not found: ${sourceId}`);
       }
 
-      // Get current mentions
-      const currentMentions = (sourceNode as any).mentions || [];
+      // Get current mentions from database
+      const dbSourceNode = await this.databaseService.getNode(sourceId);
+      const currentMentions = dbSourceNode?.mentions || [];
       
       // Remove reference if present
       if (currentMentions.includes(targetId)) {
         const updatedMentions = currentMentions.filter(id => id !== targetId);
         await this.nodeOperationsService.updateNodeMentions(sourceId, updatedMentions);
+        
+        // Update local cache
+        this.mentionsCache.set(sourceId, updatedMentions);
         
         // Emit reference removed event
         this.emitReferenceEvent('removed', sourceId, targetId);
@@ -530,7 +539,8 @@ export class NodeReferenceService {
       return [];
     }
 
-    const mentions = (node as any).mentions || [];
+    // Get mentions from local cache (kept in sync with database operations)
+    const mentions = this.mentionsCache.get(nodeId) || [];
     return mentions.map(mentionedId => {
       const targetNode = this.nodeManager.findNode(mentionedId);
       return {
@@ -894,7 +904,7 @@ export class NodeReferenceService {
     }
   }
 
-  private extractNodeTitle(node: any): string {
+  private extractNodeTitle(node: Node | NodeSpaceNode): string {
     if (!node.content) return 'Untitled';
     
     // Try to extract title from content

@@ -17,8 +17,6 @@ import { NodeReferenceService } from './NodeReferenceService';
 import type { 
   TriggerContext, 
   AutocompleteResult, 
-  NodeSuggestion,
-  AutocompleteConfig,
   NodeReference,
   NodespaceLink
 } from './NodeReferenceService';
@@ -183,7 +181,7 @@ class DebouncedProcessor<T, R> {
           }, this.maxDelay * 2);
           
           resolve(result);
-        } catch (error) {
+        } catch (_error) {
           this.timers.delete(key);
           reject(error);
         }
@@ -215,12 +213,6 @@ class DebouncedProcessor<T, R> {
 // Viewport-Based Processing
 // ============================================================================
 
-interface ViewportInfo {
-  top: number;
-  bottom: number;
-  height: number;
-  elementHeight: number;
-}
 
 class ViewportProcessor {
   private visibleElements = new Set<string>();
@@ -239,7 +231,7 @@ class ViewportProcessor {
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          const elementId = (entry.target as any).dataset?.nodeId;
+          const elementId = (entry.target as HTMLElement).dataset?.nodeId;
           if (elementId) {
             if (entry.isIntersecting) {
               this.visibleElements.add(elementId);
@@ -259,8 +251,10 @@ class ViewportProcessor {
   
   observeElement(element: HTMLElement, nodeId: string): void {
     if (this.observer && element) {
-      (element as any).dataset = (element as any).dataset || {};
-      (element as any).dataset.nodeId = nodeId;
+      if (!element.dataset) {
+        (element as HTMLElement & { dataset: DOMStringMap }).dataset = {};
+      }
+      element.dataset.nodeId = nodeId;
       this.observer.observe(element);
     }
   }
@@ -290,6 +284,14 @@ class ViewportProcessor {
     }
   }
   
+  getVisibleElementsCount(): number {
+    return this.visibleElements.size;
+  }
+  
+  getProcessingQueueSize(): number {
+    return this.processingQueue.size;
+  }
+
   cleanup(): void {
     if (this.observer) {
       this.observer.disconnect();
@@ -396,7 +398,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       // Enhanced trigger detection with better performance
       const result = this.optimizedTriggerDetection(content, cursorPosition);
       
-      const duration = measurement.finish();
+      const _duration = measurement.finish();
       
       // Record success/failure metrics
       this.performanceMonitor.recordMetric(
@@ -405,7 +407,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       );
       
       return result;
-    } catch (error) {
+    } catch (_error) {
       measurement.finish();
       this.performanceMonitor.recordMetric('operation-failure', 1);
       console.error('OptimizedNodeReferenceService: Error in trigger detection', error);
@@ -489,7 +491,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       
       measurement.finish();
       return result;
-    } catch (error) {
+    } catch (_error) {
       measurement.finish();
       this.performanceMonitor.recordMetric('operation-failure', 1);
       throw error;
@@ -570,7 +572,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       
       this.renderDecorations(element, links);
       measurement.finish();
-    } catch (error) {
+    } catch (_error) {
       measurement.finish();
       console.error('Error processing element references', error);
     }
@@ -637,8 +639,8 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       this.debouncedSearch.clear();
       
       // Force garbage collection hint (if available)
-      if (typeof window !== 'undefined' && (window as any).gc) {
-        (window as any).gc();
+      if (typeof window !== 'undefined' && 'gc' in window && typeof (window as Window & { gc?: () => void }).gc === 'function') {
+        (window as Window & { gc: () => void }).gc();
       }
       
       // Log cache statistics
@@ -652,7 +654,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       console.debug('OptimizedNodeReferenceService: Cache stats', stats);
       
       measurement.finish();
-    } catch (error) {
+    } catch (_error) {
       measurement.finish();
       console.error('Error during memory cleanup', error);
     }
@@ -670,13 +672,13 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       for (const query of commonQueries) {
         try {
           await this.searchNodes(query);
-        } catch (error) {
+        } catch (_error) {
           // Ignore prewarming errors
         }
       }
       
       console.debug('OptimizedNodeReferenceService: Cache prewarming completed');
-    } catch (error) {
+    } catch (_error) {
       console.warn('OptimizedNodeReferenceService: Cache prewarming failed', error);
     }
   }
@@ -728,8 +730,8 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
         decoration: this.decorationCache.getStats()
       },
       viewport: {
-        visibleElements: (this.viewportProcessor as any).visibleElements?.size || 0,
-        processingQueue: (this.viewportProcessor as any).processingQueue?.size || 0
+        visibleElements: this.viewportProcessor.getVisibleElementsCount(),
+        processingQueue: this.viewportProcessor.getProcessingQueueSize()
       }
     };
   }

@@ -516,14 +516,29 @@ export class EnhancedNodeManager extends NodeManager {
    * Get enhanced performance statistics
    */
   public getEnhancedStats(): {
-    nodeManager: any;
-    hierarchyService: any;
+    nodeManager: {
+      totalNodes: number;
+      rootNodes: number;
+      highestDepth: number;
+      hierarchyUpdates: number;
+    };
+    hierarchyService: {
+      depthCacheSize: number;
+      childrenCacheSize: number;
+      siblingsCacheSize: number;
+      hitRatio: number;
+      performance: Record<string, unknown>;
+    };
     analysisCache: {
       size: number;
       hitRatio: number;
       oldestEntry: number;
     };
-    contentAnalysis: any;
+    contentAnalysis: {
+      totalProcessed: number;
+      averageComplexity: number;
+      cacheHitRatio: number;
+    };
   } {
     const hierarchyStats = this.hierarchyService.getCacheStats();
     
@@ -596,7 +611,7 @@ export class EnhancedNodeManager extends NodeManager {
         id: nodeId,
         node: node,
         parent_id: node.parentId || null,
-        before_sibling_id: (node as any).before_sibling_id || null,
+        before_sibling_id: null, // Would be calculated from hierarchy ordering
         depth: this.hierarchyService.getNodeDepth(nodeId),
         children_count: children.length,
         mentions_count: node.mentions?.length || 0,

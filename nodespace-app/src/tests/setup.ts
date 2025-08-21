@@ -5,6 +5,17 @@
 import { vi } from 'vitest';
 import '@testing-library/jest-dom';
 
+// Ensure global object is available for legacy test compatibility
+// In Vitest/Node.js environment, global should already be available, but provide fallback
+if (typeof global === 'undefined') {
+  (globalThis as any).global = globalThis;
+} else {
+  // Ensure global and globalThis are properly linked
+  if (global !== globalThis) {
+    Object.setPrototypeOf(global, globalThis);
+  }
+}
+
 // Ensure DOM globals are available
 import { JSDOM } from 'jsdom';
 
