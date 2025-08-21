@@ -455,7 +455,7 @@ export class NodeOperationsService {
    * Merge metadata with type-specific handling
    */
   private mergeMetadata(
-    existingNode: any,
+    existingNode: NodeSpaceNode | unknown,
     newMetadata?: Record<string, unknown>,
     extractedMetadata?: Record<string, unknown>,
     preserve = true
@@ -483,7 +483,7 @@ export class NodeOperationsService {
   /**
    * Convert NodeSpaceNode format to NodeManager format
    */
-  private convertToNodeManagerFormat(node: NodeSpaceNode): any {
+  private convertToNodeManagerFormat(node: NodeSpaceNode): unknown {
     return {
       id: node.id,
       content: node.content,

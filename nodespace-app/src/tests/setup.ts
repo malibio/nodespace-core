@@ -54,7 +54,7 @@ Object.defineProperty(globalThis, 'NodeFilter', {
 interface MockMutationObserver {
   observe: () => void;
   disconnect: () => void;
-  takeRecords: () => any[];
+  takeRecords: () => MutationRecord[];
 }
 
 (globalThis as typeof globalThis & { MutationObserver: new () => MockMutationObserver }).MutationObserver = vi.fn(() => ({
@@ -103,9 +103,16 @@ console.error = (...args) => {
 };
 
 // Enhanced Event constructor to ensure proper target property
+interface TestEventInit {
+  bubbles?: boolean;
+  cancelable?: boolean;
+  composed?: boolean;
+  target?: EventTarget;
+}
+
 const OriginalEvent = globalThis.Event;
 globalThis.Event = class extends OriginalEvent {
-  constructor(type: string, eventInitDict?: EventInit) {
+  constructor(type: string, eventInitDict?: TestEventInit) {
     super(type, eventInitDict);
     // Ensure target is properly set when event is created
     if (!this.target && eventInitDict?.target) {

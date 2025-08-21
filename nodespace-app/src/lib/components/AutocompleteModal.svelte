@@ -47,7 +47,7 @@
   export let visible: boolean = false;
   export let position: { x: number; y: number } = { x: 0, y: 0 };
   export let query: string = '';
-  export let nodeReferenceService: NodeReferenceService;
+  export let nodeReferenceService: NodeReferenceService | null = null;
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -144,6 +144,9 @@
           metadata: {}
         };
 
+        if (!nodeReferenceService) {
+          throw new Error('NodeReferenceService not available');
+        }
         const result: AutocompleteResult = await nodeReferenceService.showAutocomplete(triggerContext);
         
         searchResults = result.suggestions;
@@ -166,6 +169,9 @@
 
     try {
       // Get recent nodes or default suggestions
+      if (!nodeReferenceService) {
+        throw new Error('NodeReferenceService not available');
+      }
       const recentNodes = await nodeReferenceService.searchNodes('', undefined);
       
       // Convert to suggestions format
@@ -211,6 +217,9 @@
 
   async function selectNodeSuggestion(suggestion: NodeSuggestion): Promise<void> {
     try {
+      if (!nodeReferenceService) {
+        throw new Error('NodeReferenceService not available');
+      }
       const node = await nodeReferenceService.resolveNodespaceURI(
         nodeReferenceService.createNodespaceURI(suggestion.nodeId)
       );
