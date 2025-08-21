@@ -51,10 +51,22 @@ Object.defineProperty(globalThis, 'NodeFilter', {
 });
 
 // Mock MutationObserver for testing
+interface MockMutationRecord {
+  type: string;
+  target: Node;
+  addedNodes: NodeList;
+  removedNodes: NodeList;
+  previousSibling: Node | null;
+  nextSibling: Node | null;
+  attributeName: string | null;
+  attributeNamespace: string | null;
+  oldValue: string | null;
+}
+
 interface MockMutationObserver {
   observe: () => void;
   disconnect: () => void;
-  takeRecords: () => MutationRecord[];
+  takeRecords: () => MockMutationRecord[];
 }
 
 (globalThis as typeof globalThis & { MutationObserver: new () => MockMutationObserver }).MutationObserver = vi.fn(() => ({
@@ -103,11 +115,17 @@ console.error = (...args) => {
 };
 
 // Enhanced Event constructor to ensure proper target property
+interface MockEventTarget {
+  addEventListener: (type: string, listener: () => void) => void;
+  removeEventListener: (type: string, listener: () => void) => void;
+  dispatchEvent: (event: Event) => boolean;
+}
+
 interface TestEventInit {
   bubbles?: boolean;
   cancelable?: boolean;
   composed?: boolean;
-  target?: EventTarget;
+  target?: MockEventTarget;
 }
 
 const OriginalEvent = globalThis.Event;
