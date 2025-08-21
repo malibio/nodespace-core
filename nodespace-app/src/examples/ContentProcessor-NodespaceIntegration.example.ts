@@ -6,7 +6,7 @@
  */
 
 import { contentProcessor } from '../lib/services/contentProcessor';
-import NodeReferenceService from '../lib/services/NodeReferenceService';
+// import NodeReferenceService from '../lib/services/NodeReferenceService';
 import { eventBus } from '../lib/services/EventBus';
 
 // Example: Setting up ContentProcessor with NodeReferenceService integration
@@ -67,9 +67,9 @@ export async function demonstrateNodespaceIntegration() {
   const sourceNodeId = 'demo-document-001';
   
   // Set up event listeners to capture emitted events
-  const capturedEvents: any[] = [];
+  const capturedEvents: unknown[] = [];
   const originalEmit = eventBus.emit;
-  eventBus.emit = (event: any) => {
+  eventBus.emit = (event: unknown) => {
     capturedEvents.push(event);
     return originalEmit.call(eventBus, event);
   };

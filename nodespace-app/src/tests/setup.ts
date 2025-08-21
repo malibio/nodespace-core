@@ -45,6 +45,37 @@ Object.defineProperty(globalThis, 'Node', {
   writable: true
 });
 
+Object.defineProperty(globalThis, 'NodeFilter', {
+  value: dom.window.NodeFilter,
+  writable: true
+});
+
+// Mock MutationObserver for testing
+interface MockMutationObserver {
+  observe: () => void;
+  disconnect: () => void;
+  takeRecords: () => any[];
+}
+
+(globalThis as typeof globalThis & { MutationObserver: new () => MockMutationObserver }).MutationObserver = vi.fn(() => ({
+  observe: vi.fn(),
+  disconnect: vi.fn(),
+  takeRecords: vi.fn().mockReturnValue([])
+}));
+
+// Mock IntersectionObserver for testing
+interface MockIntersectionObserver {
+  observe: () => void;
+  unobserve: () => void;
+  disconnect: () => void;
+}
+
+(globalThis as typeof globalThis & { IntersectionObserver: new () => MockIntersectionObserver }).IntersectionObserver = vi.fn(() => ({
+  observe: vi.fn(),
+  unobserve: vi.fn(),
+  disconnect: vi.fn()
+}));
+
 // Basic global test setup
 interface MockResizeObserver {
   observe: () => void;
@@ -70,3 +101,19 @@ console.error = (...args) => {
   }
   originalConsoleError(...args);
 };
+
+// Enhanced Event constructor to ensure proper target property
+const OriginalEvent = globalThis.Event;
+globalThis.Event = class extends OriginalEvent {
+  constructor(type: string, eventInitDict?: EventInit) {
+    super(type, eventInitDict);
+    // Ensure target is properly set when event is created
+    if (!this.target && eventInitDict?.target) {
+      Object.defineProperty(this, 'target', {
+        value: eventInitDict.target,
+        writable: false,
+        configurable: true
+      });
+    }
+  }
+} as typeof Event;

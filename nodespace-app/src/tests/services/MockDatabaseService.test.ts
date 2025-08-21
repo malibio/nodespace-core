@@ -90,7 +90,7 @@ describe('MockDatabaseService', () => {
         mentions: 'not-an-array', // Invalid: should be array
         metadata: {},
         embedding_vector: null
-      } as any;
+      } as unknown as NodeSpaceNode;
 
       await expect(db.insertNode(invalidNode)).rejects.toThrow('Node mentions must be an array');
     });
@@ -107,7 +107,7 @@ describe('MockDatabaseService', () => {
         mentions: [],
         metadata: null, // Invalid: should be object
         embedding_vector: null
-      } as any;
+      } as unknown as NodeSpaceNode;
 
       await expect(db.insertNode(invalidNode)).rejects.toThrow('Node metadata must be an object');
     });
@@ -903,8 +903,8 @@ describe('MockDatabaseService', () => {
       const queryStartTime = performance.now();
       
       const specialNodes = await db.queryNodes({ type: 'special' });
-      const withMentions = await db.queryNodes({ mentioned_by: 'node-0' });
-      const contentSearch = await db.queryNodes({ content_contains: '500' });
+      const _withMentions = await db.queryNodes({ mentioned_by: 'node-0' });
+      const _contentSearch = await db.queryNodes({ content_contains: '500' });
       
       const queryTime = performance.now() - queryStartTime;
 

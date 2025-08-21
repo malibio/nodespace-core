@@ -171,14 +171,14 @@ class DebouncedProcessor<T, R> {
     }
     
     return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(async () => {
+      const timer = (typeof window !== 'undefined' ? window.setTimeout : setTimeout)(async () => {
         try {
           const result = await this.processor(input);
           this.results.set(key, result);
           this.timers.delete(key);
           
           // Clean up result after a while
-          setTimeout(() => {
+          (typeof window !== 'undefined' ? window.setTimeout : setTimeout)(() => {
             this.results.delete(key);
           }, this.maxDelay * 2);
           
@@ -196,7 +196,7 @@ class DebouncedProcessor<T, R> {
   cancel(key: string): void {
     const timer = this.timers.get(key);
     if (timer) {
-      clearTimeout(timer);
+      (typeof window !== 'undefined' ? window.clearTimeout : clearTimeout)(timer);
       this.timers.delete(key);
     }
     this.results.delete(key);
@@ -204,7 +204,7 @@ class DebouncedProcessor<T, R> {
   
   clear(): void {
     for (const timer of this.timers.values()) {
-      clearTimeout(timer);
+      (typeof window !== 'undefined' ? window.clearTimeout : clearTimeout)(timer);
     }
     this.timers.clear();
     this.results.clear();
@@ -372,6 +372,14 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
     if (this.performanceConfig.cachePrewarmingEnabled) {
       this.prewarmCaches();
     }
+  }
+  
+  // ============================================================================
+  // Environment Detection
+  // ============================================================================
+  
+  private isNodeEnvironment(): boolean {
+    return typeof window === 'undefined';
   }
   
   // ============================================================================
@@ -583,6 +591,11 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
   }
   
   private findLinkElement(container: HTMLElement, link: NodespaceLink): HTMLElement | null {
+    // Environment check for DOM operations
+    if (this.isNodeEnvironment() || !document) {
+      return null;
+    }
+    
     // Efficient link element finding (simplified for example)
     const walker = document.createTreeWalker(
       container,
@@ -608,9 +621,11 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
   // ============================================================================
   
   private startMemoryManagement(): void {
-    this.memoryCleanupTimer = window.setInterval(() => {
-      this.performMemoryCleanup();
-    }, this.memoryCleanupInterval);
+    if (typeof window !== 'undefined') {
+      this.memoryCleanupTimer = window.setInterval(() => {
+        this.performMemoryCleanup();
+      }, this.memoryCleanupInterval);
+    }
   }
   
   private performMemoryCleanup(): void {
@@ -725,8 +740,8 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
   
   public cleanup(): void {
     // Stop memory management
-    if (this.memoryCleanupTimer) {
-      clearInterval(this.memoryCleanupTimer);
+    if (this.memoryCleanupTimer && typeof window !== 'undefined') {
+      window.clearInterval(this.memoryCleanupTimer);
       this.memoryCleanupTimer = null;
     }
     
