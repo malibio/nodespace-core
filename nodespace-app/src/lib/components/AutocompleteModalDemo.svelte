@@ -135,7 +135,7 @@
     );
     
     let node;
-    while (node = walker.nextNode()) {
+    while ((node = walker.nextNode())) {
       if (node === range.startContainer) {
         return position + range.startOffset;
       }

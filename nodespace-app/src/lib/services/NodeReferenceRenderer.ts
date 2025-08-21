@@ -19,10 +19,9 @@ import { decorationCoordinator } from './DecorationCoordinator';
 import { NodeDecoratorFactory } from './BaseNodeDecoration';
 import type { 
   DecorationContext, 
-  DecorationResult, 
-  BaseNodeDecorator 
+  DecorationResult
 } from './BaseNodeDecoration';
-import type { NodeReferenceService, NodeReference } from './NodeReferenceService';
+import type { NodeReferenceService } from './NodeReferenceService';
 import type { NodeSpaceNode } from './MockDatabaseService';
 
 // ============================================================================
@@ -389,7 +388,7 @@ export class NodeReferenceRenderer {
     );
 
     let textNode;
-    while (textNode = walker.nextNode()) {
+    while ((textNode = walker.nextNode())) {
       const text = textNode.textContent || '';
       const nodespaceLinkRegex = /nodespace:\/\/node\/([a-zA-Z0-9_-]+)(?:\?[^)\s]*)?\)/g;
       

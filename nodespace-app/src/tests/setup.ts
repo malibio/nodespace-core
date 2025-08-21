@@ -54,8 +54,8 @@ Object.defineProperty(globalThis, 'NodeFilter', {
 interface MockMutationRecord {
   type: string;
   target: Node;
-  addedNodes: NodeList;
-  removedNodes: NodeList;
+  addedNodes: Node[];
+  removedNodes: Node[];
   previousSibling: Node | null;
   nextSibling: Node | null;
   attributeName: string | null;
