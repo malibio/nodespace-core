@@ -2,16 +2,17 @@
 
 ## Executive Summary
 
-NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture combines Rust backend services with a Svelte frontend, packaged as a Tauri desktop application. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
+NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded LanceDB** and **TypeScript services**, providing a unified frontend-centric approach. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
 
 ### Key Architectural Decisions
 
-- **Framework**: Svelte + Tauri (migrating from React for simplicity and performance)  
-- **Backend**: Rust with trait-based plugin system
+- **Framework**: Svelte + Tauri desktop application with frontend-centric architecture
+- **Core Services**: TypeScript services (migrated from Rust) with embedded LanceDB
+- **Data Architecture**: Universal node schema with JSON metadata and single-pointer hierarchy
 - **Node Types**: Core types (Text, Task, AI Chat, Entity, Query) + extensible plugin system
 - **AI Integration**: Native LLM integration for CRUD operations, validation, and content generation
-- **Build Strategy**: Build-time plugin compilation for parallel development
-- **Real-time Updates**: Live query nodes with automatic result synchronization
+- **Build Strategy**: Service extension pattern with simplified in-memory caching
+- **Real-time Updates**: EventBus-driven UI reactivity with live query synchronization
 
 #### Text Editing Architecture (2025 Decisions)
 - **ADR-001**: Always-Editing Mode - No focused/unfocused states, always show active editor
@@ -30,11 +31,11 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 ┌─────────────────────────────────────────────────────────────┐
 │                    Tauri Desktop App                        │
 ├─────────────────────────────────────────────────────────────┤
-│  Frontend (Svelte)           │  Backend (Rust)              │
-│  ├── Node Components         │  ├── Core Services           │
-│  ├── Query Views             │  ├── Entity Management       │
-│  ├── AI Chat Interface       │  ├── Validation Engine       │
-│  └── Plugin Loader           │  └── Plugin Registry         │
+│  Frontend (Svelte + TypeScript Services)                    │
+│  ├── Node Components         │  ├── HierarchyService        │
+│  ├── Query Views             │  ├── NodeOperationsService   │
+│  ├── AI Chat Interface       │  ├── Extended NodeManager    │
+│  └── Plugin Loader           │  └── EventBus Coordination   │
 ├─────────────────────────────────────────────────────────────┤
 │                   Node Type System                          │
 │  ┌─────────┬─────────┬─────────┬─────────┬─────────┬──────────┐ │
@@ -43,7 +44,7 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 │  └─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                     Data Layer                              │
-│  ├── Unified Database (LanceDB)                             │
+│  ├── Embedded LanceDB (universal node schema)               │
 │  ├── File System (raw content)                              │
 │  └── NLP Engine (mistral.rs)                                │
 └─────────────────────────────────────────────────────────────┘
@@ -145,6 +146,83 @@ nodespace-code-node/               # Code plugin repository
 
 ---
 
+## Core Service Architecture (2025 Updates)
+
+### Frontend-Centric TypeScript Services
+
+NodeSpace uses a **service extension pattern** where core logic migrated from Rust backend to TypeScript frontend services for simplified desktop architecture:
+
+#### Service Composition Pattern
+```typescript
+export class EnhancedNodeManager extends NodeManager {
+  private hierarchyService: HierarchyService;
+  private nodeOperationsService: NodeOperationsService;
+  
+  constructor(events: NodeManagerEvents) {
+    super(events);
+    this.hierarchyService = new HierarchyService(this);
+    this.nodeOperationsService = new NodeOperationsService(this);
+  }
+}
+```
+
+#### Key Services
+- **HierarchyService**: Depth calculation, children/descendants, path computation
+- **NodeOperationsService**: Unified upsert operations, metadata preservation  
+- **Extended NodeManager**: Extends existing service with new capabilities
+- **EventBus Integration**: UI reactivity coordination (not cache invalidation)
+
+#### Simplified Caching Strategy
+For desktop applications with embedded LanceDB, caching focuses on **computed values only**:
+
+```typescript
+interface SimplifiedCache {
+  // Cache expensive computations, not raw data
+  depthCache: Map<string, number>;           // Node depths
+  childrenCache: Map<string, string[]>;      // Direct children IDs
+  siblingOrderCache: Map<string, string[]>;  // Sibling chains
+}
+```
+
+**Desktop-Optimized Benefits:**
+- **Direct LanceDB queries** are fast enough without data caching layers
+- **In-memory computation caching** for expensive calculations only
+- **EventBus coordination** for reactive UI updates
+- **Simplified architecture** with fewer cache consistency issues
+
+### Universal Node Schema
+
+All nodes use a **single unified schema** rather than separate tables per type:
+
+```typescript
+interface NodeSpaceNode {
+  id: string;
+  type: string;                           // Node type identifier  
+  content: string;                        // Primary content
+  parent_id: string | null;               // Hierarchy parent
+  root_id: string;                        // Root node ID
+  before_sibling_id: string | null;       // Single-pointer sibling ordering
+  created_at: string;                     // Creation timestamp
+  mentions: string[];                     // Referenced node IDs (backlink system)
+  metadata: Record<string, unknown>;      // Type-specific JSON properties
+  embedding_vector: Float32Array | null;  // AI/ML integration
+}
+```
+
+#### Universal Schema Benefits
+- **Flexibility**: Easy to add new node types via `type` field
+- **Performance**: Single table queries, no complex joins
+- **Simplicity**: One service handles all node operations  
+- **Backlink Integration**: `mentions` array IS the backlink system
+- **Metadata**: Type-specific properties in flexible JSON field
+
+#### Hierarchy Navigation
+- **Single-pointer approach**: Uses `before_sibling_id` for sibling ordering
+- **Sibling chain building**: Reconstruct full sibling order from pointers
+- **Future-ready**: Architecture supports dual-pointer optimization later
+
+---
+
 ## Node Type System
 
 ### Core Node Types (Built-in)
@@ -152,22 +230,23 @@ nodespace-code-node/               # Code plugin repository
 The system includes five essential node types that form the foundation of the knowledge management system:
 
 #### 1. TextNode - Foundation Node Type
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextNode {
-    pub id: String,
-    pub content: String,                    // Markdown-supported text
-    pub parent_id: Option<String>,
-    pub children: Vec<String>,
-    pub metadata: HashMap<String, Value>,
-    pub created_at: DateTime<Utc>,
-    pub modified_at: DateTime<Utc>,
-}
-
-impl NodeBehavior for TextNode {
-    fn node_type(&self) -> &'static str { "text" }
-    fn can_have_children(&self) -> bool { true }
-    fn supports_markdown(&self) -> bool { true }
+```typescript
+// Universal schema - all node types use the same structure
+const textNode: NodeSpaceNode = {
+    id: "text-001",
+    type: "text",                           // Identifies as TextNode
+    content: "# My Document\nContent...",   // Markdown-supported text
+    parent_id: "parent-001",                // Hierarchy parent
+    root_id: "root-001",                    // Root node reference
+    before_sibling_id: null,                // First sibling in order
+    created_at: "2025-01-21T10:00:00Z",
+    mentions: ["node-002", "node-003"],     // Referenced nodes (backlinks)
+    metadata: {                             // Type-specific properties
+        markdown_enabled: true,
+        can_have_children: true,
+        auto_save: true
+    },
+    embedding_vector: null                  // Computed by AI service
 }
 ```
 
