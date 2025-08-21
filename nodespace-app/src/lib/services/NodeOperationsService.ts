@@ -541,7 +541,7 @@ export class NodeOperationsService {
     content: string;
     metadata: Record<string, unknown>;
   } {
-    const defaults: Record<string, any> = {
+    const defaults: Record<string, { content: string; metadata: Record<string, unknown> }> = {
       'text': {
         content: '',
         metadata: {}
@@ -648,7 +648,7 @@ export class NodeOperationsService {
   /**
    * Find root ID for a node by walking up hierarchy
    */
-  private findNodeRootId(node: any): string {
+  private findNodeRootId(node: { id: string; parentId?: string | null }): string {
     let current = node;
     while (current.parentId) {
       const parent = this.nodeManager.findNode(current.parentId);
@@ -661,7 +661,7 @@ export class NodeOperationsService {
   /**
    * Get created_at timestamp from existing node
    */
-  private getCreatedAtFromNode(node: any): string {
+  private getCreatedAtFromNode(node: { metadata?: Record<string, unknown> }): string {
     // NodeManager nodes don't have created_at, so we'll use current time
     // In full implementation, this would be stored in metadata or database
     return node.metadata?.created_at || new Date().toISOString();
@@ -697,7 +697,7 @@ export class NodeOperationsService {
   private emitNodeOperationEvent(
     operation: string,
     nodeId: string,
-    data: any,
+    data: unknown,
     metadata?: Record<string, unknown>
   ): void {
     eventBus.emit({

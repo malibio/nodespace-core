@@ -34,7 +34,7 @@
   let mounted = false;
   let nodeReferenceService: NodeReferenceService;
   let nodeReferenceRenderer: NodeReferenceRenderer;
-  let demoContainer: HTMLDivElement;
+  let demoContainer: HTMLDivElement | undefined;
   let status = writable('Initializing...');
   let selectedContext = writable<'inline' | 'popup' | 'preview'>('inline');
   
@@ -227,7 +227,9 @@ AI-native knowledge management system built with modern web technologies.`
     });
 
     // Store unsubscribe functions for cleanup
-    (demoContainer as any)._unsubscribeFunctions = [clickUnsubscribe, hoverUnsubscribe];
+    if (demoContainer) {
+      (demoContainer as HTMLElement & { _unsubscribeFunctions?: (() => void)[] })._unsubscribeFunctions = [clickUnsubscribe, hoverUnsubscribe];
+    }
   }
 
   // ============================================================================

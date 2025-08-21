@@ -27,7 +27,7 @@
   let modalVisible = false;
   let modalPosition = { x: 200, y: 150 };
   let currentQuery = '';
-  let contentEditableElement: HTMLDivElement;
+  let contentEditableElement: HTMLDivElement | undefined;
   
   // Services
   let databaseService: MockDatabaseService;
