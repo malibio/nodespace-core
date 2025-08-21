@@ -2,7 +2,7 @@
 
 ## Overview
 
-NodeSpace's technology stack is carefully chosen to provide optimal performance, developer experience, and maintainability for an AI-native desktop application. The combination of Rust backend, Svelte frontend, and Tauri framework creates a powerful foundation for building sophisticated knowledge management capabilities.
+NodeSpace's technology stack is carefully chosen to provide optimal performance, developer experience, and maintainability for an AI-native desktop application. The architecture centers on a **Tauri desktop application** with **embedded LanceDB** and **TypeScript services**, creating a unified frontend-centric approach for sophisticated knowledge management capabilities.
 
 ## Core Architecture
 
@@ -23,51 +23,55 @@ NodeSpace's technology stack is carefully chosen to provide optimal performance,
 - **Native Notifications**: System-level notification integration
 - **Native Menus**: Context menus for multi-node selection operations
 
-### Backend: Rust
+### TypeScript Services (Frontend-Centric Architecture)
 
-**Why Rust:**
-- **Memory Safety**: Zero-cost abstractions without garbage collection overhead
-- **Performance**: Comparable to C++ with modern language features
-- **Concurrency**: Built-in async/await with excellent ecosystem
-- **Type Safety**: Compile-time error prevention and excellent tooling
-- **AI Integration**: Growing ecosystem of ML/AI libraries
+**Why TypeScript Services:**
+- **Unified Architecture**: Single language for UI and business logic
+- **Desktop Optimization**: Direct integration with embedded database
+- **Developer Experience**: Excellent tooling and type safety
+- **Simplified Deployment**: No backend/frontend coordination complexity
+- **Performance**: Fast enough for desktop workloads with embedded storage
 
-**Key Libraries:**
-```toml
-[dependencies]
-# Core async runtime
-tokio = { version = "1.39", features = ["full"] }
+**Migration from Rust Backend:**
+- **Core Logic Migration**: Hierarchy operations and node management moved to TypeScript
+- **Service Extension Pattern**: Extend existing NodeManager rather than replacement
+- **Simplified Caching**: In-memory computation caching appropriate for desktop context
 
-# AI Integration
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", features = ["metal"] }
-
-# Database connectivity
-lance = "0.16"  # Vector database
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-
-# Web framework (for API endpoints)
-axum = "0.7"
-
-# Configuration management
-config = "0.14"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = "0.3"
+**TypeScript Service Stack:**
+```json
+{
+  "dependencies": {
+    // Core TypeScript services
+    "@types/node": "^20.14.0",
+    "typescript": "~5.6.2",
+    
+    // Database integration
+    "@lancedb/lancedb": "^0.16.0",
+    "apache-arrow": "^17.0.0",
+    
+    // AI Integration (via Rust bindings)
+    "@mistralrs/node": "latest",
+    
+    // Service architecture
+    "rxjs": "^7.8.1",           // Reactive programming for EventBus
+    "zod": "^3.23.8",           // Runtime type validation
+    
+    // Performance monitoring
+    "perf_hooks": "node",       // Built-in performance measuring
+    
+    // Configuration and logging
+    "winston": "^3.13.0",       // Logging framework
+    "dotenv": "^16.4.5"         // Configuration management
+  }
+}
 ```
 
-**Architecture Patterns:**
-- **Service Injection**: Trait-based dependency injection for testability
-- **Result-Based Error Handling**: Comprehensive error propagation with context
-- **Async-First Design**: All I/O operations use async/await patterns
-- **Type-Driven Development**: Strong typing prevents runtime errors
+**TypeScript Architecture Patterns:**
+- **Service Extension**: Extend existing services rather than replacement
+- **Event-Driven Coordination**: EventBus for UI reactivity (not cache invalidation)
+- **Type-Safe Database Operations**: Zod schemas for runtime validation
+- **Simplified Error Handling**: Result types and comprehensive error propagation
+- **Reactive State Management**: RxJS for complex service coordination
 
 ### Frontend: Svelte
 
@@ -205,44 +209,40 @@ pub enum AIBackend {
 
 ## Database Architecture
 
-### Unified Storage: LanceDB
+### Embedded LanceDB
 
-**Why LanceDB-Only:**
-- **Unified Storage**: Single database for both structured data and vector embeddings
-- **Performance**: Columnar storage with SIMD optimizations
-- **Rust Integration**: Native Rust client library
-- **Vector-Optimized**: Purpose-built for embedding storage and search
-- **Scalability**: Handles complex queries and millions of records efficiently
-- **Versioning**: Built-in data versioning capabilities
+**Why Embedded LanceDB:**
+- **Desktop Optimization**: Runs in-process with no network overhead
+- **Unified Storage**: Single database for structured data and vector embeddings
+- **Performance**: Columnar storage with SIMD optimizations, fast enough without complex caching
+- **TypeScript Integration**: Native JavaScript/Node.js client library
+- **Vector-Optimized**: Purpose-built for embedding storage and semantic search
+- **Simplified Architecture**: No separate backend deployment or coordination
 - **ACID Support**: Transactional guarantees for data consistency
 
-**Schema Design:**
-```rust
-// Core node storage schema
-struct NodeRecord {
-    id: String,
-    node_type: String,
-    content: serde_json::Value,
-    parent_id: Option<String>,
-    created_at: DateTime<Utc>,
-    modified_at: DateTime<Utc>,
+**Universal Node Schema:**
+```typescript
+// Single unified table for all node types
+interface NodeSpaceNode {
+    id: string;                             // Unique node identifier
+    type: string;                           // Node type identifier
+    content: string;                        // Primary content/text
+    parent_id: string | null;               // Hierarchy parent
+    root_id: string;                        // Root node reference
+    before_sibling_id: string | null;       // Single-pointer sibling ordering
+    created_at: string;                     // ISO 8601 timestamp
+    mentions: string[];                     // Referenced node IDs (backlink system)
+    metadata: Record<string, unknown>;      // Type-specific JSON properties
+    embedding_vector: Float32Array | null;  // AI/ML embeddings
 }
 
-// Entity-specific data
-struct EntityRecord {
-    node_id: String,
-    entity_type: String,
-    stored_fields: serde_json::Value,
-    calculated_fields: Option<serde_json::Value>,
-    schema_version: i32,
-}
-
-// Query subscriptions
-struct QuerySubscription {
-    id: String,
-    node_id: String,
-    query_definition: serde_json::Value,
-    last_result_hash: Option<String>,
+// Database adapter interface
+interface LanceDBAdapter {
+    async getNode(id: string): Promise<NodeSpaceNode | null>;
+    async upsertNode(node: NodeSpaceNode): Promise<void>;
+    async getNodesByParent(parentId: string): Promise<NodeSpaceNode[]>;
+    async searchByContent(query: string): Promise<NodeSpaceNode[]>;
+    async similaritySearch(embedding: Float32Array): Promise<NodeSpaceNode[]>;
 }
 ```
 
