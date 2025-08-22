@@ -1,126 +1,71 @@
 /**
- * Node Reference Components Registry
+ * Node Reference Components - Core Component System
  * 
- * Exports all node reference components and provides utilities
- * for dynamic component resolution.
+ * Exports the base node reference component and component registry
+ * for the component-based node decoration system.
  */
 
+// Core component imports
 import BaseNodeReference from './BaseNodeReference.svelte';
-import TaskNodeReference from './TaskNodeReference.svelte';
-import DateNodeReference from './DateNodeReference.svelte';
-import UserNodeReference from './UserNodeReference.svelte';
-
-import type { ComponentDecoration } from '$lib/types/ComponentDecoration';
+import type { ComponentDecoration } from '../../types/ComponentDecoration';
 import type { SvelteComponent } from 'svelte';
 
+// Component constructor type for Node Reference components
+type NodeReferenceComponent = new (...args: unknown[]) => SvelteComponent;
+
 // Export components
-export {
-  BaseNodeReference,
-  TaskNodeReference,
-  DateNodeReference,
-  UserNodeReference
-};
+export { BaseNodeReference };
 
 // Core node reference components registry
 // Plugin node types can extend this registry at build time
-export const NODE_REFERENCE_COMPONENTS: Record<string, any> = {
+export const NODE_REFERENCE_COMPONENTS: Record<string, NodeReferenceComponent> = {
   // Core node types (built-in)
-  'BaseNodeReference': BaseNodeReference,
-  'TaskNodeReference': TaskNodeReference, 
-  'DateNodeReference': DateNodeReference,
-  'UserNodeReference': UserNodeReference,
+  BaseNodeReference: BaseNodeReference,
   
-  // Node type mappings (for backward compatibility)
-  'base': BaseNodeReference,
-  'text': BaseNodeReference,
-  'task': TaskNodeReference,
-  'date': DateNodeReference,
-  'user': UserNodeReference,
-  'document': BaseNodeReference,  // Will use BaseNodeReference until DocumentNodeReference is implemented
-  'ai_chat': BaseNodeReference,   // Will use BaseNodeReference until AINodeReference is implemented
-  'entity': BaseNodeReference,    // Will use BaseNodeReference until EntityNodeReference is implemented
-  'query': BaseNodeReference,     // Will use BaseNodeReference until QueryNodeReference is implemented
-  
-  // Plugin node types would be added here at build time, e.g.:
-  // 'pdf': PdfNodeReference,     // From @nodespace/pdf-plugin
-  // 'image': ImageNodeReference, // From @nodespace/image-plugin
-  // 'video': VideoNodeReference, // From @nodespace/media-plugin
+  // All node types use BaseNodeReference for now
+  // Specific implementations will be added when properly specified
+  base: BaseNodeReference,
+  text: BaseNodeReference,
+  task: BaseNodeReference,
+  user: BaseNodeReference,
+  date: BaseNodeReference,
+  document: BaseNodeReference,
+  ai_chat: BaseNodeReference
 };
 
 /**
- * Get the appropriate component for a node type
+ * Get component constructor by node type
  */
-export function getNodeReferenceComponent(nodeType: string): any {
-  return NODE_REFERENCE_COMPONENTS[nodeType] || BaseNodeReference;
+export function getNodeReferenceComponent(nodeType: string): NodeReferenceComponent {
+  return NODE_REFERENCE_COMPONENTS[nodeType] || NODE_REFERENCE_COMPONENTS.base;
 }
 
 /**
- * Get component name for a node type (used for serialization)
+ * Get component name for debugging/inspection
  */
-export function getComponentName(nodeType: string): string {
-  const component = getNodeReferenceComponent(nodeType);
-  
-  // Map component back to name
-  if (component === TaskNodeReference) return 'TaskNodeReference';
-  if (component === DateNodeReference) return 'DateNodeReference';
-  if (component === UserNodeReference) return 'UserNodeReference';
-  
-  return 'BaseNodeReference';
+export function getComponentName(component: NodeReferenceComponent): string {
+  if (component === BaseNodeReference) return 'BaseNodeReference';
+  return 'BaseNodeReference'; // All components are BaseNodeReference for now
 }
 
 /**
- * Get component by name (used for deserialization and hydration)
+ * Get component constructor by name (for hydration)
  */
-export function getComponentByName(componentName: string): any {
-  // Try registry first (supports plugin components)
-  const component = NODE_REFERENCE_COMPONENTS[componentName];
-  if (component) {
-    return component;
-  }
-
-  // Fallback to core components
+export function getComponentByName(componentName: string): NodeReferenceComponent {
   switch (componentName) {
-    case 'TaskNodeReference': return TaskNodeReference;
-    case 'DateNodeReference': return DateNodeReference;
-    case 'UserNodeReference': return UserNodeReference;
     case 'BaseNodeReference':
-    default:
       return BaseNodeReference;
+    default:
+      return BaseNodeReference; // Default fallback
   }
 }
 
 /**
- * Register a plugin node reference component (for build-time extension)
- * This allows plugin packages to register their components during the build process
+ * Creates a basic component decoration using BaseNodeReference
  */
-export function registerNodeReferenceComponent(
-  componentName: string, 
-  nodeType: string, 
-  component: any
-): void {
-  NODE_REFERENCE_COMPONENTS[componentName] = component;
-  NODE_REFERENCE_COMPONENTS[nodeType] = component;
-  
-  console.debug(`NodeSpace: Registered node reference component`, { 
-    componentName, 
-    nodeType, 
-    component: component.name 
-  });
-}
-
-/**
- * Create a component decoration for a node type
- */
-export function createComponentDecoration(
-  nodeType: string, 
-  props: Record<string, any>
-): ComponentDecoration {
+export function createNodeReferenceDecoration(nodeType: string, props: Record<string, unknown>): ComponentDecoration {
   return {
     component: getNodeReferenceComponent(nodeType),
     props,
-    metadata: {
-      nodeType,
-      componentName: getComponentName(nodeType)
-    }
   };
 }

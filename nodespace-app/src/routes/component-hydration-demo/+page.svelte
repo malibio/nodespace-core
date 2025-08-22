@@ -14,7 +14,9 @@
   import { componentHydrationSystem } from '$lib/services/ComponentHydrationSystem';
   import type { HydrationResult } from '$lib/services/ComponentHydrationSystem';
 
-  let contentContainer: HTMLElement;
+  // Content container for hydration
+
+  let contentContainer: HTMLElement | undefined = undefined;
   let hydrationResult: HydrationResult | null = null;
   let processingStatus = 'Ready';
 
@@ -53,20 +55,20 @@ with another reference nodespace://user/457/jane-smith in the middle.
 
     try {
       processingStatus = 'Processing content...';
-      
+
       // Step 1: Process markdown content with nodespace references
       const processed = await contentProcessor.processContent(sampleContent);
-      
+
       processingStatus = 'Rendering HTML...';
-      
+
       // Step 2: Render to HTML (this creates component placeholders)
       const html = contentProcessor.renderToHTML(processed);
-      
+
       // Step 3: Insert HTML into container
       contentContainer.innerHTML = html;
-      
+
       processingStatus = 'Hydrating components...';
-      
+
       // Step 4: Hydrate component placeholders
       hydrationResult = await componentHydrationSystem.hydrate({
         container: contentContainer,
@@ -77,9 +79,8 @@ with another reference nodespace://user/457/jane-smith in the middle.
           console.error('Component hydration failed:', { error, placeholder });
         }
       });
-      
+
       processingStatus = `Completed: ${hydrationResult.hydrated} components hydrated, ${hydrationResult.failed} failed`;
-      
     } catch (error) {
       console.error('Demo error:', error);
       processingStatus = `Error: ${error}`;
@@ -87,7 +88,9 @@ with another reference nodespace://user/457/jane-smith in the middle.
   }
 
   function cleanup() {
-    componentHydrationSystem.cleanup(contentContainer);
+    if (contentContainer) {
+      componentHydrationSystem.cleanup(contentContainer);
+    }
     hydrationResult = null;
     processingStatus = 'Cleaned up';
   }
@@ -102,27 +105,23 @@ with another reference nodespace://user/457/jane-smith in the middle.
   <header class="demo-header">
     <h1>Component Hydration Demo</h1>
     <p class="subtitle">Issue #74 - Rich Node Reference Decorations</p>
-    
+
     <div class="controls">
-      <button on:click={processAndHydrate} class="btn btn-primary">
-        Process & Hydrate
-      </button>
-      
-      <button on:click={cleanup} class="btn btn-secondary">
-        Cleanup Components
-      </button>
+      <button on:click={processAndHydrate} class="btn btn-primary"> Process & Hydrate </button>
+
+      <button on:click={cleanup} class="btn btn-secondary"> Cleanup Components </button>
     </div>
-    
+
     <div class="status">
-      <strong>Status:</strong> {processingStatus}
+      <strong>Status:</strong>
+      {processingStatus}
     </div>
 
     {#if hydrationResult}
       <div class="stats">
-        <strong>Results:</strong> 
-        Hydrated: {hydrationResult.hydrated}, 
-        Failed: {hydrationResult.failed},
-        Errors: {hydrationResult.errors.length}
+        <strong>Results:</strong>
+        Hydrated: {hydrationResult.hydrated}, Failed: {hydrationResult.failed}, Errors: {hydrationResult
+          .errors.length}
       </div>
     {/if}
   </header>
@@ -135,10 +134,7 @@ with another reference nodespace://user/457/jane-smith in the middle.
 
     <div class="output-section">
       <h2>Rendered Output with Components</h2>
-      <div 
-        bind:this={contentContainer}
-        class="content-container"
-      >
+      <div bind:this={contentContainer} class="content-container">
         <!-- Content will be inserted and hydrated here -->
       </div>
     </div>
@@ -150,7 +146,10 @@ with another reference nodespace://user/457/jane-smith in the middle.
     max-width: 1200px;
     margin: 0 auto;
     padding: 2rem;
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family:
+      system-ui,
+      -apple-system,
+      sans-serif;
   }
 
   .demo-header {
@@ -202,7 +201,8 @@ with another reference nodespace://user/457/jane-smith in the middle.
     background: #4b5563;
   }
 
-  .status, .stats {
+  .status,
+  .stats {
     font-size: 0.875rem;
     color: #4b5563;
     margin-bottom: 0.5rem;
@@ -214,13 +214,15 @@ with another reference nodespace://user/457/jane-smith in the middle.
     gap: 2rem;
   }
 
-  .source-section, .output-section {
+  .source-section,
+  .output-section {
     background: #f9fafb;
     border-radius: 0.5rem;
     padding: 1.5rem;
   }
 
-  .source-section h2, .output-section h2 {
+  .source-section h2,
+  .output-section h2 {
     color: #374151;
     margin-bottom: 1rem;
     font-size: 1.25rem;
@@ -245,14 +247,14 @@ with another reference nodespace://user/457/jane-smith in the middle.
   }
 
   /* Style the component placeholders while they're loading */
-  :global(.ns-component-placeholder[data-hydrate="pending"]) {
+  :global(.ns-component-placeholder[data-hydrate='pending']) {
     background: #fef3c7;
     border: 1px dashed #f59e0b;
     padding: 0.125rem 0.25rem;
     border-radius: 0.125rem;
   }
 
-  :global(.ns-component-placeholder[data-hydrate="failed"]) {
+  :global(.ns-component-placeholder[data-hydrate='failed']) {
     background: #fee2e2;
     border: 1px dashed #ef4444;
     padding: 0.125rem 0.25rem;
@@ -264,7 +266,7 @@ with another reference nodespace://user/457/jane-smith in the middle.
     .demo-content {
       grid-template-columns: 1fr;
     }
-    
+
     .controls {
       flex-direction: column;
     }

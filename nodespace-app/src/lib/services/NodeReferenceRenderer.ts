@@ -1,10 +1,10 @@
 /**
  * NodeReferenceRenderer - Performance-Optimized Reference Decoration System
- * 
+ *
  * Coordinates the rendering of rich node reference decorations using the BaseNode
  * decoration system. Provides viewport-based optimization, accessibility support,
  * and integration with the existing NodeReferenceService and DecorationCoordinator.
- * 
+ *
  * Key Features:
  * - Viewport-based processing for large documents
  * - XSS-safe content rendering with sanitization
@@ -17,10 +17,8 @@
 import { eventBus } from './EventBus';
 import { decorationCoordinator } from './DecorationCoordinator';
 import { NodeDecoratorFactory } from './BaseNodeDecoration';
-import type { 
-  DecorationContext, 
-  DecorationResult
-} from './BaseNodeDecoration';
+import type { DecorationContext, DecorationResult } from './BaseNodeDecoration';
+import type { ComponentDecoration } from '../types/ComponentDecoration';
 import type { NodeReferenceService } from './NodeReferenceService';
 import type { NodeSpaceNode } from './MockDatabaseService';
 
@@ -69,18 +67,22 @@ export class NodeReferenceRenderer {
 
   private nodeReferenceService: NodeReferenceService;
   private decoratorFactory: NodeDecoratorFactory;
-  private renderCache = new Map<string, { result: DecorationResult; timestamp: number; element?: HTMLElement }>();
+  private renderCache = new Map<
+    string,
+    { result: ComponentDecoration | DecorationResult; timestamp: number; element?: HTMLElement }
+  >();
   private intersectionObserver: IntersectionObserver | null = null;
   private mutationObserver: MutationObserver | null = null;
-  
+
   // Performance optimization
   private pendingRenders = new Set<string>();
-  private renderQueue: Array<{ nodeId: string; element: HTMLElement; context: DecorationContext }> = [];
+  private renderQueue: Array<{ nodeId: string; element: HTMLElement; context: DecorationContext }> =
+    [];
   private renderTimeout: number | null = null;
   private readonly cacheTimeout = 300000; // 5 minutes
   private readonly batchSize = 50;
   private readonly debounceMs = 100;
-  
+
   // Metrics tracking
   private metrics: RenderMetrics = {
     totalReferences: 0,
@@ -101,7 +103,7 @@ export class NodeReferenceRenderer {
   private constructor(nodeReferenceService: NodeReferenceService) {
     this.nodeReferenceService = nodeReferenceService;
     this.decoratorFactory = new NodeDecoratorFactory(nodeReferenceService);
-    
+
     this.setupEventBusIntegration();
     this.setupViewportOptimization();
     this.setupMutationObserving();
@@ -115,12 +117,12 @@ export class NodeReferenceRenderer {
    * Render all node references in a container
    */
   public async renderContainer(
-    container: HTMLElement, 
+    container: HTMLElement,
     context: Partial<RenderContext> = {},
     options: RenderOptions = {}
   ): Promise<void> {
     const startTime = performance.now();
-    
+
     const renderContext: RenderContext = {
       containerElement: container,
       displayContext: 'inline',
@@ -149,7 +151,7 @@ export class NodeReferenceRenderer {
       this.metrics.lastRender = Date.now();
 
       // Emit completion event
-      eventBus.emit({
+      (eventBus.emit as any)({
         type: 'references:rendered',
         namespace: 'coordination',
         source: this.serviceName,
@@ -159,9 +161,13 @@ export class NodeReferenceRenderer {
         renderTime,
         metadata: { context: renderContext, options }
       });
-
     } catch (error) {
-      console.error('NodeReferenceRenderer: Error rendering container', { error, container, context, options });
+      console.error('NodeReferenceRenderer: Error rendering container', {
+        error,
+        container,
+        context,
+        options
+      });
       throw error;
     }
   }
@@ -206,13 +212,13 @@ export class NodeReferenceRenderer {
 
       // Generate decoration
       const decoration = this.decoratorFactory.decorateReference(decorationContext);
-      
+
       // Cache the result
       this.cacheDecoration(nodeId, displayContext, decoration, element);
-      
+
       // Apply decoration to element
       this.applyDecoration(element, decoration, decorationContext);
-      
+
       // Register with decoration coordinator
       decorationCoordinator.registerDecoration({
         nodeId,
@@ -225,9 +231,13 @@ export class NodeReferenceRenderer {
       });
 
       this.metrics.renderedReferences++;
-      
     } catch (error) {
-      console.error('NodeReferenceRenderer: Error rendering reference', { error, element, nodeId, displayContext });
+      console.error('NodeReferenceRenderer: Error rendering reference', {
+        error,
+        element,
+        nodeId,
+        displayContext
+      });
       this.renderErrorReference(element, nodeId, 'Rendering error');
     }
   }
@@ -236,24 +246,24 @@ export class NodeReferenceRenderer {
    * Update decoration for a specific node
    */
   public async updateDecoration(
-    nodeId: string, 
+    nodeId: string,
     reason: 'content-changed' | 'status-changed' | 'metadata-changed' = 'content-changed'
   ): Promise<void> {
     try {
       // Invalidate cache for this node
       this.invalidateNodeCache(nodeId);
-      
+
       // Find all rendered instances of this node
       const elements = this.findRenderedElements(nodeId);
-      
+
       // Re-render each instance
       for (const element of elements) {
         const displayContext = this.getElementDisplayContext(element);
         await this.renderReference(element, nodeId, displayContext, { force: true });
       }
-      
+
       // Emit update event
-      eventBus.emit({
+      (eventBus.emit as any)({
         type: 'decoration:updated',
         namespace: 'coordination',
         source: this.serviceName,
@@ -263,7 +273,6 @@ export class NodeReferenceRenderer {
         affectedElements: elements.length,
         metadata: { reason }
       });
-      
     } catch (error) {
       console.error('NodeReferenceRenderer: Error updating decoration', { error, nodeId, reason });
     }
@@ -323,18 +332,26 @@ export class NodeReferenceRenderer {
   // ========================================================================
 
   private setupViewportOptimization(): void {
-    if (typeof window === 'undefined' || !window.IntersectionObserver) {
+    // Check for IntersectionObserver support
+    if (
+      typeof window === 'undefined' ||
+      typeof window.IntersectionObserver === 'undefined' ||
+      !window.IntersectionObserver
+    ) {
+      console.debug(
+        'NodeReferenceRenderer: IntersectionObserver not available, viewport optimization disabled'
+      );
       return;
     }
 
-    this.intersectionObserver = new IntersectionObserver(
+    this.intersectionObserver = new window.IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           const element = entry.target as HTMLElement;
           const nodeId = element.dataset.nodeId;
-          
+
           if (!nodeId) continue;
-          
+
           if (entry.isIntersecting) {
             // Element entered viewport - render if not already rendered
             if (!element.classList.contains('ns-noderef--rendered')) {
@@ -353,15 +370,23 @@ export class NodeReferenceRenderer {
   }
 
   private setupMutationObserving(): void {
-    if (typeof window === 'undefined' || !window.MutationObserver) {
+    // Check for MutationObserver support
+    if (
+      typeof window === 'undefined' ||
+      typeof window.MutationObserver === 'undefined' ||
+      !window.MutationObserver
+    ) {
+      console.debug(
+        'NodeReferenceRenderer: MutationObserver not available, automatic DOM change detection disabled'
+      );
       return;
     }
 
-    this.mutationObserver = new MutationObserver((mutations) => {
+    this.mutationObserver = new window.MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (mutation.type === 'childList') {
           // Check for new node references added to the DOM
-          for (const node of mutation.addedNodes) {
+          for (const node of Array.from(mutation.addedNodes)) {
             if (node.nodeType === Node.ELEMENT_NODE) {
               const element = node as HTMLElement;
               this.scanForNewReferences(element);
@@ -376,40 +401,37 @@ export class NodeReferenceRenderer {
   // Reference Discovery and Processing
   // ========================================================================
 
-  private findNodeReferences(container: HTMLElement): Array<{ element: HTMLElement; nodeId: string; uri: string }> {
+  private findNodeReferences(
+    container: HTMLElement
+  ): Array<{ element: HTMLElement; nodeId: string; uri: string }> {
     const references: Array<{ element: HTMLElement; nodeId: string; uri: string }> = [];
-    
+
     // Find elements with nodespace:// URIs
-    const walker = document.createTreeWalker(
-      container,
-      NodeFilter.SHOW_TEXT,
-      null,
-      false
-    );
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
 
     let textNode;
     while ((textNode = walker.nextNode())) {
       const text = textNode.textContent || '';
       const nodespaceLinkRegex = /nodespace:\/\/node\/([a-zA-Z0-9_-]+)(?:\?[^)\s]*)?\)/g;
-      
+
       let match;
       while ((match = nodespaceLinkRegex.exec(text)) !== null) {
         const uri = match[0];
         const nodeId = match[1];
-        
+
         // Create a placeholder element for the reference
         const referenceElement = document.createElement('span');
         referenceElement.className = 'ns-noderef-placeholder';
         referenceElement.dataset.nodeId = nodeId;
         referenceElement.dataset.uri = uri;
-        
+
         references.push({ element: referenceElement, nodeId, uri });
       }
     }
 
     // Also find existing rendered references
     const existingRefs = container.querySelectorAll('[data-node-id]');
-    for (const element of existingRefs) {
+    for (const element of Array.from(existingRefs)) {
       const nodeId = (element as HTMLElement).dataset.nodeId;
       const uri = (element as HTMLElement).dataset.uri;
       if (nodeId && uri) {
@@ -443,24 +465,24 @@ export class NodeReferenceRenderer {
   ): Promise<void> {
     // Batch process references for performance
     const batches = this.chunkArray(references, context.batchSize);
-    
+
     for (const batch of batches) {
       await Promise.all(
-        batch.map(ref => 
+        batch.map((ref) =>
           this.renderReference(ref.element, ref.nodeId, context.displayContext, options)
         )
       );
-      
+
       // Small delay between batches to prevent blocking
       if (batches.length > 1) {
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
     }
   }
 
   private scanForNewReferences(element: HTMLElement): void {
     const references = this.findNodeReferences(element);
-    
+
     for (const ref of references) {
       if (!ref.element.classList.contains('ns-noderef--rendered')) {
         const displayContext = this.getElementDisplayContext(ref.element);
@@ -474,37 +496,64 @@ export class NodeReferenceRenderer {
   // ========================================================================
 
   private applyDecoration(
-    element: HTMLElement, 
-    decoration: DecorationResult, 
+    element: HTMLElement,
+    decoration: ComponentDecoration | DecorationResult,
     context: DecorationContext
   ): void {
     try {
-      // Set HTML content (already sanitized by decorator)
-      element.innerHTML = decoration.html;
-      
-      // Apply CSS classes
-      element.className = decoration.cssClasses.join(' ');
-      
-      // Set accessibility attributes
-      element.setAttribute('aria-label', decoration.ariaLabel);
-      element.setAttribute('role', decoration.interactive ? 'button' : 'text');
-      
+      // Handle ComponentDecoration vs DecorationResult
+      if ('component' in decoration) {
+        // This is a ComponentDecoration - create component placeholder for hydration
+        const componentName = decoration.component.name;
+        const propsJSON = JSON.stringify(decoration.props).replace(/"/g, '&quot;');
+        const metadataJSON = decoration.metadata ? JSON.stringify(decoration.metadata).replace(/"/g, '&quot;') : '';
+        
+        element.innerHTML = `<div class="ns-component-placeholder" 
+          data-hydrate="pending" 
+          data-component="${componentName}" 
+          data-node-type="${context.nodeType}" 
+          data-props="${propsJSON}" 
+          data-metadata="${metadataJSON}"></div>`;
+      } else {
+        // This is a legacy DecorationResult - set HTML content (already sanitized by decorator)
+        element.innerHTML = decoration.html;
+      }
+
+      // Apply CSS classes and accessibility attributes
+      if ('component' in decoration) {
+        // ComponentDecoration - use default classes
+        const nodeType = context.nodeType;
+        element.className = `ns-noderef ns-noderef--${nodeType}`;
+        element.setAttribute('aria-label', decoration.props.ariaLabel as string || `Reference to ${nodeType}`);
+        element.setAttribute('role', 'button'); // Component decorations are interactive
+      } else {
+        // DecorationResult - use provided classes and labels
+        element.className = decoration.cssClasses.join(' ');
+        element.setAttribute('aria-label', decoration.ariaLabel);
+        element.setAttribute('role', 'text'); // DecorationResult doesn't have interactive property
+      }
+
       // Set data attributes
       element.dataset.nodeId = context.nodeId;
       element.dataset.uri = context.uri;
       element.dataset.context = context.displayContext;
-      
+
       // Mark as rendered
       element.classList.add('ns-noderef--rendered');
-      
+
       // Set up keyboard accessibility if interactive
-      if (decoration.interactive) {
+      const isInteractive = 'component' in decoration ? true : false; // DecorationResult doesn't have interactive property
+      if (isInteractive) {
         element.setAttribute('tabindex', '0');
         this.setupKeyboardHandlers(element, context);
       }
-      
     } catch (error) {
-      console.error('NodeReferenceRenderer: Error applying decoration', { error, element, decoration, context });
+      console.error('NodeReferenceRenderer: Error applying decoration', {
+        error,
+        element,
+        decoration,
+        context
+      });
       this.renderErrorReference(element, context.nodeId, 'Application error');
     }
   }
@@ -513,9 +562,9 @@ export class NodeReferenceRenderer {
     const keydownHandler = (event: KeyboardEvent) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        
+
         // Emit click event
-        eventBus.emit({
+        (eventBus.emit as any)({
           type: 'decoration:clicked',
           namespace: 'interaction',
           source: this.serviceName,
@@ -529,31 +578,34 @@ export class NodeReferenceRenderer {
     };
 
     element.addEventListener('keydown', keydownHandler);
-    
+
     // Store handler for cleanup
-    (element as HTMLElement & { _keydownHandler?: EventListener })._keydownHandler = keydownHandler;
+    (element as HTMLElement & { _keydownHandler?: (event: KeyboardEvent) => void })._keydownHandler = keydownHandler;
   }
 
-  private getCachedDecoration(nodeId: string, displayContext: string): { result: DecorationResult; element?: HTMLElement } | null {
+  private getCachedDecoration(
+    nodeId: string,
+    displayContext: string
+  ): { result: ComponentDecoration | DecorationResult; element?: HTMLElement } | null {
     const key = `${nodeId}:${displayContext}`;
     const cached = this.renderCache.get(key);
-    
-    if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+
+    if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
       return cached;
     }
-    
+
     if (cached) {
       this.renderCache.delete(key);
     }
-    
+
     this.metrics.cacheMisses++;
     return null;
   }
 
   private cacheDecoration(
-    nodeId: string, 
-    displayContext: string, 
-    decoration: DecorationResult, 
+    nodeId: string,
+    displayContext: string,
+    decoration: ComponentDecoration | DecorationResult,
     element?: HTMLElement
   ): void {
     const key = `${nodeId}:${displayContext}`;
@@ -593,21 +645,21 @@ export class NodeReferenceRenderer {
 
   private extractNodeTitle(node: NodeSpaceNode): string {
     if (!node.content) return 'Untitled';
-    
+
     const lines = node.content.split('\n');
     const firstLine = lines[0].trim();
-    
+
     const headerMatch = firstLine.match(/^#{1,6}\s*(.*)$/);
     if (headerMatch) {
       return headerMatch[1].trim() || 'Untitled';
     }
-    
+
     return firstLine.substring(0, 100) || 'Untitled';
   }
 
   private invalidateNodeCache(nodeId: string): void {
     const keysToDelete: string[] = [];
-    for (const key of this.renderCache.keys()) {
+    for (const key of Array.from(this.renderCache.keys())) {
       if (key.startsWith(`${nodeId}:`)) {
         keysToDelete.push(key);
       }
@@ -642,26 +694,32 @@ export class NodeReferenceRenderer {
       this.intersectionObserver.disconnect();
       this.intersectionObserver = null;
     }
-    
+
     if (this.mutationObserver) {
       this.mutationObserver.disconnect();
       this.mutationObserver = null;
     }
-    
+
     if (this.renderTimeout) {
-      clearTimeout(this.renderTimeout);
+      if (typeof window !== 'undefined' && window.clearTimeout) {
+        window.clearTimeout(this.renderTimeout);
+      } else if (typeof clearTimeout !== 'undefined') {
+        clearTimeout(this.renderTimeout);
+      }
       this.renderTimeout = null;
     }
-    
+
     // Clean up keyboard handlers
-    for (const cached of this.renderCache.values()) {
-      const elementWithHandler = cached.element as HTMLElement & { _keydownHandler?: EventListener };
+    for (const cached of Array.from(this.renderCache.values())) {
+      const elementWithHandler = cached.element as HTMLElement & {
+        _keydownHandler?: EventListener;
+      };
       if (cached.element && elementWithHandler._keydownHandler) {
         cached.element.removeEventListener('keydown', elementWithHandler._keydownHandler);
         delete elementWithHandler._keydownHandler;
       }
     }
-    
+
     this.renderCache.clear();
     this.renderQueue.length = 0;
     this.pendingRenders.clear();
@@ -674,14 +732,18 @@ export class NodeReferenceRenderer {
 
 let rendererInstance: NodeReferenceRenderer | null = null;
 
-export function getNodeReferenceRenderer(nodeReferenceService?: NodeReferenceService): NodeReferenceRenderer {
+export function getNodeReferenceRenderer(
+  nodeReferenceService?: NodeReferenceService
+): NodeReferenceRenderer {
   if (!rendererInstance && nodeReferenceService) {
     rendererInstance = NodeReferenceRenderer.getInstance(nodeReferenceService);
   }
   return rendererInstance!;
 }
 
-export function initializeNodeReferenceRenderer(nodeReferenceService: NodeReferenceService): NodeReferenceRenderer {
+export function initializeNodeReferenceRenderer(
+  nodeReferenceService: NodeReferenceService
+): NodeReferenceRenderer {
   rendererInstance = NodeReferenceRenderer.getInstance(nodeReferenceService);
   return rendererInstance;
 }

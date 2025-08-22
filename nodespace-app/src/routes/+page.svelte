@@ -42,16 +42,18 @@
       <div class="instructions">
         <h2>NodeSpace Demos</h2>
         <p>Explore the NodeSpace features and components:</p>
-        
+
         <div class="demo-links">
           <a href="/noderef-demo" class="demo-link">
             <span class="demo-icon">🎨</span>
             <div>
               <h3>BaseNode Decoration System</h3>
-              <p>Interactive demonstration of rich node reference decorations with all node types</p>
+              <p>
+                Interactive demonstration of rich node reference decorations with all node types
+              </p>
             </div>
           </a>
-          
+
           <a href="/autocomplete-demo" class="demo-link">
             <span class="demo-icon">@</span>
             <div>
@@ -59,7 +61,7 @@
               <p>Universal node reference system with real-time autocomplete</p>
             </div>
           </a>
-          
+
           <a href="/basenode-autocomplete-demo" class="demo-link">
             <span class="demo-icon">📝</span>
             <div>
@@ -68,7 +70,7 @@
             </div>
           </a>
         </div>
-        
+
         <div class="editor-instructions">
           <h3>Interactive Editor Features:</h3>
           <ol>

@@ -1,10 +1,10 @@
 /**
  * NodeReferenceService - Universal Node Reference System (Phase 2.1)
- * 
+ *
  * Implements comprehensive @ trigger system for universal node referencing,
- * building on Phase 1 foundation (HierarchyService, NodeOperationsService, 
+ * building on Phase 1 foundation (HierarchyService, NodeOperationsService,
  * EnhancedNodeManager, EventBus, MockDatabaseService with mentions array support).
- * 
+ *
  * Core Features:
  * - Universal @ trigger detection in contenteditable elements
  * - Real-time autocomplete with fuzzy search and filtering
@@ -14,7 +14,7 @@
  * - ContentProcessor integration for enhanced content processing
  * - EventBus coordination for real-time updates
  * - Map-based caching following Phase 1 performance patterns
- * 
+ *
  * Integration Architecture:
  * - EventBus: Real-time coordination and cache invalidation
  * - NodeManager/EnhancedNodeManager: Node data access and manipulation
@@ -114,14 +114,14 @@ export class NodeReferenceService {
   private databaseService: MockDatabaseService;
   private contentProcessor: ContentProcessor;
   private readonly serviceName = 'NodeReferenceService';
-  
+
   // Caching for performance (following Phase 1 patterns)
   private suggestionCache = new Map<string, { result: AutocompleteResult; timestamp: number }>();
   private uriCache = new Map<string, NodeReference>();
   private searchCache = new Map<string, NodeSpaceNode[]>();
   private mentionsCache = new Map<string, string[]>(); // nodeId -> array of mentioned nodeIds
   private readonly cacheTimeout = 30000; // 30 seconds
-  
+
   // Configuration
   private autocompleteConfig: AutocompleteConfig = {
     maxSuggestions: 10,
@@ -132,7 +132,7 @@ export class NodeReferenceService {
     prioritizeRecent: true,
     includeContent: true
   };
-  
+
   // Performance metrics
   private performanceMetrics = {
     totalTriggerDetections: 0,
@@ -156,7 +156,7 @@ export class NodeReferenceService {
     this.nodeOperationsService = nodeOperationsService;
     this.databaseService = databaseService;
     this.contentProcessor = contentProcessor || ContentProcessor.getInstance();
-    
+
     this.setupEventBusIntegration();
     this.enhanceContentProcessor();
   }
@@ -178,17 +178,17 @@ export class NodeReferenceService {
       let triggerStart = -1;
       for (let i = cursorPosition - 1; i >= 0; i--) {
         const char = content[i];
-        
+
         if (char === '@') {
           triggerStart = i;
           break;
         }
-        
+
         // Stop if we hit whitespace or newline
         if (/\s/.test(char) || char === '\n') {
           break;
         }
-        
+
         // Stop after reasonable search distance
         if (cursorPosition - i > 50) {
           break;
@@ -201,10 +201,10 @@ export class NodeReferenceService {
 
       // Extract query after @
       const queryText = content.substring(triggerStart + 1, cursorPosition);
-      
+
       // Validate trigger context
       const isValid = this.validateTriggerContext(content, triggerStart, cursorPosition);
-      
+
       const context: TriggerContext = {
         trigger: '@',
         query: queryText,
@@ -224,7 +224,11 @@ export class NodeReferenceService {
 
       return context;
     } catch (error) {
-      console.error('NodeReferenceService: Error detecting trigger', { error, content, cursorPosition });
+      console.error('NodeReferenceService: Error detecting trigger', {
+        error,
+        content,
+        cursorPosition
+      });
       return null;
     }
   }
@@ -271,17 +275,17 @@ export class NodeReferenceService {
 
     // Check cache first
     const cached = this.suggestionCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+    if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
       return cached.result;
     }
 
     try {
       // Search nodes with query
       const nodes = await this.searchNodes(query);
-      
+
       // Convert to suggestions with relevance scoring
       const suggestions: NodeSuggestion[] = [];
-      
+
       for (const node of nodes.slice(0, this.autocompleteConfig.maxSuggestions * 2)) {
         const suggestion = await this.createNodeSuggestion(node, query);
         if (suggestion.relevanceScore >= this.autocompleteConfig.fuzzyThreshold) {
@@ -303,20 +307,20 @@ export class NodeReferenceService {
         metadata: {
           cacheUsed: false,
           fuzzyEnabled: this.autocompleteConfig.enableFuzzySearch,
-          nodeTypes: [...new Set(finalSuggestions.map(s => s.nodeType))]
+          nodeTypes: Array.from(new Set(finalSuggestions.map((s) => s.nodeType)))
         }
       };
 
       // Cache the result
       this.suggestionCache.set(cacheKey, { result, timestamp: Date.now() });
-      
+
       // Update performance metrics
       this.updateAutocompleteTime(queryTime);
-      
+
       return result;
     } catch (error) {
       console.error('NodeReferenceService: Error in autocomplete', { error, query });
-      
+
       return {
         suggestions: [],
         query,
@@ -338,24 +342,30 @@ export class NodeReferenceService {
    */
   public parseNodespaceURI(uri: string): NodeReference | null {
     try {
+      // Check if URL constructor is available
+      if (typeof URL === 'undefined') {
+        console.warn('NodeReferenceService: URL constructor not available in this environment');
+        return null;
+      }
+
       const url = new URL(uri);
-      
+
       if (url.protocol !== 'nodespace:') {
         return null;
       }
 
       // Extract node ID from path
-      const pathParts = url.pathname.split('/').filter(part => part);
+      const pathParts = url.pathname.split('/').filter((part) => part);
       if (pathParts[0] !== 'node' || !pathParts[1]) {
         return null;
       }
 
       const nodeId = pathParts[1];
-      
+
       // Check if node exists
       const node = this.nodeManager.findNode(nodeId);
       const isValid = !!node;
-      
+
       const reference: NodeReference = {
         nodeId,
         uri,
@@ -388,31 +398,62 @@ export class NodeReferenceService {
    */
   public createNodespaceURI(nodeId: string, options: URIOptions = {}): string {
     let uri = `nodespace://node/${nodeId}`;
-    
+
+    // Check if URLSearchParams is available
+    if (typeof URLSearchParams === 'undefined') {
+      console.warn('NodeReferenceService: URLSearchParams not available in this environment');
+      // Fallback to manual query string construction
+      const queryParts: string[] = [];
+
+      if (options.includeHierarchy) {
+        queryParts.push('hierarchy=true');
+      }
+
+      if (options.includeTimestamp) {
+        queryParts.push(`timestamp=${Date.now()}`);
+      }
+
+      if (options.queryParams) {
+        for (const [key, value] of Object.entries(options.queryParams)) {
+          queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+        }
+      }
+
+      if (queryParts.length > 0) {
+        uri += `?${queryParts.join('&')}`;
+      }
+
+      if (options.fragment) {
+        uri += `#${encodeURIComponent(options.fragment)}`;
+      }
+
+      return uri;
+    }
+
     const params = new URLSearchParams();
-    
+
     if (options.includeHierarchy) {
       params.set('hierarchy', 'true');
     }
-    
+
     if (options.includeTimestamp) {
       params.set('timestamp', Date.now().toString());
     }
-    
+
     if (options.queryParams) {
       for (const [key, value] of Object.entries(options.queryParams)) {
         params.set(key, value);
       }
     }
-    
+
     if (params.toString()) {
       uri += `?${params.toString()}`;
     }
-    
+
     if (options.fragment) {
       uri += `#${options.fragment}`;
     }
-    
+
     return uri;
   }
 
@@ -473,7 +514,7 @@ export class NodeReferenceService {
       // Validate both nodes exist
       const sourceNode = this.nodeManager.findNode(sourceId);
       const targetNode = this.nodeManager.findNode(targetId);
-      
+
       if (!sourceNode || !targetNode) {
         throw new Error(`Node not found: source=${!!sourceNode}, target=${!!targetNode}`);
       }
@@ -481,15 +522,15 @@ export class NodeReferenceService {
       // Get current mentions from database
       const dbSourceNode = await this.databaseService.getNode(sourceId);
       const currentMentions = dbSourceNode?.mentions || [];
-      
+
       // Add reference if not already present
       if (!currentMentions.includes(targetId)) {
         const updatedMentions = [...currentMentions, targetId];
         await this.nodeOperationsService.updateNodeMentions(sourceId, updatedMentions);
-        
+
         // Update local cache
         this.mentionsCache.set(sourceId, updatedMentions);
-        
+
         // Emit reference added event
         this.emitReferenceEvent('added', sourceId, targetId);
       }
@@ -512,20 +553,24 @@ export class NodeReferenceService {
       // Get current mentions from database
       const dbSourceNode = await this.databaseService.getNode(sourceId);
       const currentMentions = dbSourceNode?.mentions || [];
-      
+
       // Remove reference if present
       if (currentMentions.includes(targetId)) {
-        const updatedMentions = currentMentions.filter(id => id !== targetId);
+        const updatedMentions = currentMentions.filter((id) => id !== targetId);
         await this.nodeOperationsService.updateNodeMentions(sourceId, updatedMentions);
-        
+
         // Update local cache
         this.mentionsCache.set(sourceId, updatedMentions);
-        
+
         // Emit reference removed event
         this.emitReferenceEvent('removed', sourceId, targetId);
       }
     } catch (error) {
-      console.error('NodeReferenceService: Error removing reference', { error, sourceId, targetId });
+      console.error('NodeReferenceService: Error removing reference', {
+        error,
+        sourceId,
+        targetId
+      });
       throw error;
     }
   }
@@ -541,7 +586,7 @@ export class NodeReferenceService {
 
     // Get mentions from local cache (kept in sync with database operations)
     const mentions = this.mentionsCache.get(nodeId) || [];
-    return mentions.map(mentionedId => {
+    return mentions.map((mentionedId) => {
       const targetNode = this.nodeManager.findNode(mentionedId);
       return {
         nodeId: mentionedId,
@@ -566,7 +611,7 @@ export class NodeReferenceService {
         mentioned_by: nodeId
       });
 
-      return referencingNodes.map(node => ({
+      return referencingNodes.map((node) => ({
         nodeId: node.id,
         uri: this.createNodespaceURI(node.id),
         title: this.extractNodeTitleFromSpaceNode(node),
@@ -575,8 +620,11 @@ export class NodeReferenceService {
         lastResolved: Date.now(),
         metadata: { type: 'incoming' }
       }));
-    } catch (error) {
-      console.error('NodeReferenceService: Error getting incoming references', { error, nodeId });
+    } catch (err) {
+      console.error('NodeReferenceService: Error getting incoming references', {
+        error: err,
+        nodeId
+      });
       return [];
     }
   }
@@ -594,7 +642,7 @@ export class NodeReferenceService {
     }
 
     const cacheKey = `search:${query}:${nodeType || 'all'}`;
-    
+
     // Check cache first
     const cached = this.searchCache.get(cacheKey);
     if (cached) {
@@ -611,7 +659,7 @@ export class NodeReferenceService {
 
       // Cache results
       this.searchCache.set(cacheKey, results);
-      
+
       return results;
     } catch (error) {
       console.error('NodeReferenceService: Error searching nodes', { error, query, nodeType });
@@ -625,7 +673,7 @@ export class NodeReferenceService {
   public async createNode(nodeType: string, content: string): Promise<NodeSpaceNode> {
     try {
       const nodeId = this.generateNodeId();
-      
+
       // Use NodeOperationsService for consistent node creation
       const nodeData: Partial<NodeSpaceNode> = {
         id: nodeId,
@@ -643,9 +691,9 @@ export class NodeReferenceService {
       };
 
       const createdNode = await this.nodeOperationsService.upsertNode(nodeId, nodeData);
-      
+
       // Emit node creation event
-      eventBus.emit({
+      const nodeCreatedEvent: import('./EventTypes').NodeCreatedEvent = {
         type: 'node:created',
         namespace: 'lifecycle',
         source: this.serviceName,
@@ -653,7 +701,8 @@ export class NodeReferenceService {
         nodeId,
         nodeType,
         metadata: { createdViaReference: true }
-      });
+      };
+      eventBus.emit(nodeCreatedEvent);
 
       return createdNode;
     } catch (error) {
@@ -672,17 +721,17 @@ export class NodeReferenceService {
   public enhanceContentProcessor(): void {
     // Add @ trigger detection to content processing pipeline
     const originalProcessContent = this.contentProcessor.processContentWithEventEmission;
-    
+
     this.contentProcessor.processContentWithEventEmission = (content: string, nodeId: string) => {
       // Call original processing
       const result = originalProcessContent.call(this.contentProcessor, content, nodeId);
-      
+
       // Add @ trigger detection
       const atLinks = this.detectNodespaceLinks(content);
-      
+
       // Emit events for detected @ references
       for (const link of atLinks) {
-        eventBus.emit({
+        const referenceResolvedEvent: import('./EventTypes').ReferenceResolutionEvent = {
           type: 'reference:resolved',
           namespace: 'coordination',
           source: this.serviceName,
@@ -696,9 +745,10 @@ export class NodeReferenceService {
             endPos: link.endPos,
             displayText: link.displayText
           }
-        });
+        };
+        eventBus.emit(referenceResolvedEvent);
       }
-      
+
       return result;
     };
   }
@@ -709,13 +759,13 @@ export class NodeReferenceService {
   public detectNodespaceLinks(content: string): NodespaceLink[] {
     const links: NodespaceLink[] = [];
     const regex = /nodespace:\/\/node\/([a-zA-Z0-9_-]+)(?:\?[^)\s]*)?/g;
-    
+
     let match;
     while ((match = regex.exec(content)) !== null) {
       const uri = match[0];
       const nodeId = match[1];
       const reference = this.parseNodespaceURI(uri);
-      
+
       links.push({
         uri,
         startPos: match.index,
@@ -728,7 +778,7 @@ export class NodeReferenceService {
         }
       });
     }
-    
+
     return links;
   }
 
@@ -741,7 +791,7 @@ export class NodeReferenceService {
    */
   public configureAutocomplete(config: Partial<AutocompleteConfig>): void {
     this.autocompleteConfig = { ...this.autocompleteConfig, ...config };
-    
+
     // Clear cache when configuration changes
     this.clearCaches();
   }
@@ -785,7 +835,11 @@ export class NodeReferenceService {
     });
   }
 
-  private validateTriggerContext(content: string, triggerStart: number, cursorPosition: number): boolean {
+  private validateTriggerContext(
+    content: string,
+    triggerStart: number,
+    cursorPosition: number
+  ): boolean {
     // Check if @ is at start of line or preceded by whitespace
     if (triggerStart > 0) {
       const prevChar = content[triggerStart - 1];
@@ -806,22 +860,17 @@ export class NodeReferenceService {
   private getCursorPosition(element: HTMLElement, range: Range): number {
     const textContent = element.textContent || '';
     let position = 0;
-    
-    const walker = document.createTreeWalker(
-      element,
-      NodeFilter.SHOW_TEXT,
-      null,
-      false
-    );
-    
+
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+
     let node;
-    while (node = walker.nextNode()) {
+    while ((node = walker.nextNode())) {
       if (node === range.startContainer) {
         return position + range.startOffset;
       }
       position += node.textContent?.length || 0;
     }
-    
+
     return textContent.length;
   }
 
@@ -882,68 +931,68 @@ export class NodeReferenceService {
     const positions: number[] = [];
     const textLower = text.toLowerCase();
     const queryLower = query.toLowerCase();
-    
+
     let index = textLower.indexOf(queryLower);
     while (index !== -1) {
       positions.push(index);
       index = textLower.indexOf(queryLower, index + 1);
     }
-    
+
     return positions;
   }
 
   private async getNodeHierarchy(nodeId: string): Promise<string[]> {
     try {
       const path = this.hierarchyService.getNodePath(nodeId);
-      return path.nodeIds.map(id => {
+      return path.nodeIds.map((id) => {
         const node = this.nodeManager.findNode(id);
         return node ? this.extractNodeTitle(node) : id;
       });
-    } catch (error) {
+    } catch {
       return [nodeId];
     }
   }
 
   private extractNodeTitle(node: Node | NodeSpaceNode): string {
     if (!node.content) return 'Untitled';
-    
+
     // Try to extract title from content
     const lines = node.content.split('\n');
     const firstLine = lines[0].trim();
-    
+
     // Remove markdown header syntax
     const headerMatch = firstLine.match(/^#{1,6}\s*(.*)$/);
     if (headerMatch) {
       return headerMatch[1].trim() || 'Untitled';
     }
-    
+
     // Return first non-empty line, truncated
     return firstLine.substring(0, 100) || 'Untitled';
   }
 
   private extractNodeTitleFromSpaceNode(node: NodeSpaceNode): string {
     if (!node.content) return 'Untitled';
-    
+
     const lines = node.content.split('\n');
     const firstLine = lines[0].trim();
-    
+
     const headerMatch = firstLine.match(/^#{1,6}\s*(.*)$/);
     if (headerMatch) {
       return headerMatch[1].trim() || 'Untitled';
     }
-    
+
     return firstLine.substring(0, 100) || 'Untitled';
   }
 
   private findRootId(nodeId: string): string {
     let currentId = nodeId;
     let node = this.nodeManager.findNode(currentId);
-    
+
     while (node && node.parentId) {
       currentId = node.parentId;
       node = this.nodeManager.findNode(currentId);
     }
-    
+
     return currentId;
   }
 
@@ -951,8 +1000,12 @@ export class NodeReferenceService {
     return `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  private emitReferenceEvent(action: 'added' | 'removed', sourceId: string, targetId: string): void {
-    eventBus.emit({
+  private emitReferenceEvent(
+    action: 'added' | 'removed',
+    sourceId: string,
+    targetId: string
+  ): void {
+    const referencesUpdateEvent: import('./EventTypes').ReferencesUpdateNeededEvent = {
       type: 'references:update-needed',
       namespace: 'coordination',
       source: this.serviceName,
@@ -961,20 +1014,21 @@ export class NodeReferenceService {
       updateType: 'content',
       affectedReferences: [targetId],
       metadata: { action, targetId }
-    });
+    };
+    eventBus.emit(referencesUpdateEvent);
   }
 
   private invalidateNodeCaches(nodeId: string): void {
     // Clear suggestion cache entries that might include this node
-    for (const [key, _value] of this.suggestionCache) {
+    for (const key of Array.from(this.suggestionCache.keys())) {
       this.suggestionCache.delete(key);
     }
-    
+
     // Clear search cache
     this.searchCache.clear();
-    
+
     // Remove from URI cache
-    for (const [uri, reference] of this.uriCache) {
+    for (const [uri, reference] of Array.from(this.uriCache.entries())) {
       if (reference.nodeId === nodeId) {
         this.uriCache.delete(uri);
       }
@@ -990,32 +1044,35 @@ export class NodeReferenceService {
 
       // Remove references to deleted node
       for (const node of referencingNodes) {
-        const updatedMentions = node.mentions.filter(id => id !== deletedNodeId);
+        const updatedMentions = node.mentions.filter((id) => id !== deletedNodeId);
         await this.nodeOperationsService.updateNodeMentions(node.id, updatedMentions);
       }
     } catch (error) {
-      console.error('NodeReferenceService: Error cleaning up deleted node references', { error, deletedNodeId });
+      console.error('NodeReferenceService: Error cleaning up deleted node references', {
+        error,
+        deletedNodeId
+      });
     }
   }
 
   private updateTriggerDetectionTime(time: number): void {
     const count = this.performanceMetrics.totalTriggerDetections;
     const current = this.performanceMetrics.avgTriggerDetectionTime;
-    this.performanceMetrics.avgTriggerDetectionTime = 
+    this.performanceMetrics.avgTriggerDetectionTime =
       count === 1 ? time : (current * (count - 1) + time) / count;
   }
 
   private updateAutocompleteTime(time: number): void {
     const count = this.performanceMetrics.totalAutocompleteRequests;
     const current = this.performanceMetrics.avgAutocompleteTime;
-    this.performanceMetrics.avgAutocompleteTime = 
+    this.performanceMetrics.avgAutocompleteTime =
       count === 1 ? time : (current * (count - 1) + time) / count;
   }
 
   private updateURIResolutionTime(time: number): void {
     const count = this.performanceMetrics.totalURIResolutions;
     const current = this.performanceMetrics.avgURIResolutionTime;
-    this.performanceMetrics.avgURIResolutionTime = 
+    this.performanceMetrics.avgURIResolutionTime =
       count === 1 ? time : (current * (count - 1) + time) / count;
   }
 }

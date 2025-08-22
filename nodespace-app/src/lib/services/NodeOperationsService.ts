@@ -1,9 +1,9 @@
 /**
  * NodeOperationsService - Node Operations Service with Smart Content Handling
- * 
+ *
  * Implements node operations service with unified upsert functionality, bidirectional
  * mentions consistency, content extraction utilities, and type-specific metadata handling.
- * 
+ *
  * Key Features:
  * - Unified upsertNode with type-segmented metadata preservation
  * - updateNodeMentions with bidirectional consistency (mentions array IS backlinks)
@@ -14,8 +14,9 @@
  */
 
 import { eventBus } from './EventBus';
+import type { ReferencesUpdateNeededEvent, BacklinkDetectedEvent, DebugEvent } from './EventTypes';
 import { ContentProcessor } from './contentProcessor';
-import type { NodeManager } from './NodeManager';
+import type { NodeManager, Node } from './NodeManager';
 import type { HierarchyService } from './HierarchyService';
 import type { NodeSpaceNode } from './MockDatabaseService';
 
@@ -69,7 +70,7 @@ export class NodeOperationsService {
     this.nodeManager = nodeManager;
     this.hierarchyService = hierarchyService;
     this.contentProcessor = contentProcessor || ContentProcessor.getInstance();
-    
+
     this.setupEventBusIntegration();
   }
 
@@ -88,7 +89,7 @@ export class NodeOperationsService {
   ): Promise<NodeSpaceNode> {
     const existingNode = this.nodeManager.findNode(nodeId);
     const isUpdate = !!existingNode;
-    
+
     // Set default options
     const opts: Required<UpsertNodeOptions> = {
       preserveMetadata: true,
@@ -100,7 +101,7 @@ export class NodeOperationsService {
 
     // Extract and process content
     let contentResult = this.extractContentString(data);
-    
+
     // If no content provided and this is an update, preserve existing content
     if (isUpdate && (!data.content || data.content === '') && existingNode?.content) {
       contentResult = {
@@ -111,13 +112,13 @@ export class NodeOperationsService {
         metadata: {}
       };
     }
-    
+
     // Resolve parent and root
     const hierarchyResolution = await this.resolveParentAndRoot(
       data.parent_id,
       data.root_id,
       nodeId,
-      opts.preserveHierarchy && existingNode
+      !!(opts.preserveHierarchy && existingNode)
     );
 
     // Handle sibling positioning
@@ -135,9 +136,7 @@ export class NodeOperationsService {
       parent_id: hierarchyResolution.parentId,
       root_id: hierarchyResolution.rootId,
       before_sibling_id: siblingPosition.beforeSiblingId,
-      created_at: existingNode ? 
-        this.getCreatedAtFromNode(existingNode) : 
-        new Date().toISOString(),
+      created_at: existingNode ? this.getCreatedAtFromNode(existingNode) : new Date().toISOString(),
       mentions: data.mentions || existingNode?.mentions || [],
       metadata: this.mergeMetadata(
         existingNode,
@@ -150,11 +149,11 @@ export class NodeOperationsService {
 
     // Convert to NodeManager format and store
     const nodeManagerNode = this.convertToNodeManagerFormat(baseNodeData);
-    
+
     if (isUpdate) {
       // Update existing node
       this.nodeManager.updateNodeContent(nodeId, nodeManagerNode.content);
-      
+
       // Update other properties
       const node = this.nodeManager.findNode(nodeId);
       if (node) {
@@ -170,7 +169,7 @@ export class NodeOperationsService {
       // For new nodes, we simulate creation since NodeManager doesn't expose direct creation API
       // In practice, this would create the node in the database and then sync with NodeManager
       this.emitNodeOperationEvent('upsert', nodeId, baseNodeData, { isUpdate });
-      
+
       // Update mentions if requested (only for existing nodes in tests)
       if (opts.updateMentions && baseNodeData.mentions.length > 0) {
         // Try to update mentions, but don't fail if node doesn't exist yet
@@ -201,8 +200,8 @@ export class NodeOperationsService {
     const newMentionsSet = new Set(newMentions);
 
     // Find mentions to add and remove
-    const toAdd = newMentions.filter(id => !oldMentionsSet.has(id));
-    const toRemove = oldMentions.filter(id => !newMentionsSet.has(id));
+    const toAdd = newMentions.filter((id) => !oldMentionsSet.has(id));
+    const toRemove = oldMentions.filter((id) => !newMentionsSet.has(id));
 
     // Update the mentions on this node
     existingNode.mentions = [...newMentions];
@@ -217,11 +216,10 @@ export class NodeOperationsService {
     }
 
     // Emit events for coordination
-    eventBus.emit({
+    (eventBus.emit as any)({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: this.serviceName,
-      timestamp: Date.now(),
       nodeId,
       updateType: 'content',
       affectedReferences: [...toAdd, ...toRemove]
@@ -301,14 +299,14 @@ export class NodeOperationsService {
     metadata: Record<string, unknown>;
   } {
     const basicResult = this.extractContentString(data);
-    
+
     // Parse content with ContentProcessor for rich analysis
     const ast = this.contentProcessor.parseMarkdown(basicResult.content);
     const wikiLinks = this.contentProcessor.detectWikiLinks(basicResult.content);
     const headerLevel = this.contentProcessor.parseHeaderLevel(basicResult.content);
-    
+
     // Calculate additional metrics
-    const wordCount = basicResult.content.split(/\s+/).filter(word => word.length > 0).length;
+    const wordCount = basicResult.content.split(/\s+/).filter((word) => word.length > 0).length;
     const hasFormatting = ast.metadata.inlineFormatCount > 0 || headerLevel > 0;
 
     return {
@@ -455,7 +453,7 @@ export class NodeOperationsService {
    * Merge metadata with type-specific handling
    */
   private mergeMetadata(
-    existingNode: NodeSpaceNode | unknown,
+    existingNode: Node | null,
     newMetadata?: Record<string, unknown>,
     extractedMetadata?: Record<string, unknown>,
     preserve = true
@@ -483,7 +481,7 @@ export class NodeOperationsService {
   /**
    * Convert NodeSpaceNode format to NodeManager format
    */
-  private convertToNodeManagerFormat(node: NodeSpaceNode): unknown {
+  private convertToNodeManagerFormat(node: NodeSpaceNode): Partial<Node> {
     return {
       id: node.id,
       content: node.content,
@@ -513,7 +511,7 @@ export class NodeOperationsService {
 
     // Common content fields to check
     const contentFields = ['text', 'body', 'message', 'description', 'value'];
-    
+
     for (const field of contentFields) {
       if (metadata[field] && typeof metadata[field] === 'string') {
         content = metadata[field] as string;
@@ -542,7 +540,7 @@ export class NodeOperationsService {
     metadata: Record<string, unknown>;
   } {
     const defaults: Record<string, { content: string; metadata: Record<string, unknown> }> = {
-      'text': {
+      text: {
         content: '',
         metadata: {}
       },
@@ -550,15 +548,15 @@ export class NodeOperationsService {
         content: '',
         metadata: { chatRole: 'user', timestamp: Date.now() }
       },
-      'task': {
+      task: {
         content: 'New Task',
         metadata: { completed: false, priority: 'medium' }
       },
-      'code': {
+      code: {
         content: '',
         metadata: { language: 'javascript', executable: false }
       },
-      'note': {
+      note: {
         content: '',
         metadata: { tags: [] }
       }
@@ -598,11 +596,10 @@ export class NodeOperationsService {
   private async addBacklinkReference(targetNodeId: string, sourceNodeId: string): Promise<void> {
     // In the NodeManager system, this would update the target node's backlink list
     // For now, we emit an event for coordination
-    eventBus.emit({
+    (eventBus.emit as any)({
       type: 'backlink:detected',
       namespace: 'phase2',
       source: this.serviceName,
-      timestamp: Date.now(),
       sourceNodeId,
       targetNodeId,
       linkType: 'mention',
@@ -616,11 +613,10 @@ export class NodeOperationsService {
    */
   private async removeBacklinkReference(targetNodeId: string, sourceNodeId: string): Promise<void> {
     // Emit event for backlink removal
-    eventBus.emit({
+    (eventBus.emit as any)({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: this.serviceName,
-      timestamp: Date.now(),
       nodeId: targetNodeId,
       updateType: 'content',
       affectedReferences: [sourceNodeId]
@@ -636,7 +632,7 @@ export class NodeOperationsService {
 
     // Use ContentProcessor to detect wikilinks
     const wikiLinks = this.contentProcessor.detectWikiLinks(node.content);
-    const mentionedIds = wikiLinks.map(link => link.target);
+    const mentionedIds = wikiLinks.map((link) => link.target);
 
     // Update mentions if they changed
     const currentMentions = node.mentions || [];
@@ -664,7 +660,7 @@ export class NodeOperationsService {
   private getCreatedAtFromNode(node: { metadata?: Record<string, unknown> }): string {
     // NodeManager nodes don't have created_at, so we'll use current time
     // In full implementation, this would be stored in metadata or database
-    return node.metadata?.created_at || new Date().toISOString();
+    return (node.metadata?.created_at as string) || new Date().toISOString();
   }
 
   /**
@@ -676,10 +672,10 @@ export class NodeOperationsService {
   ): Promise<number> {
     if (!beforeSiblingId) return 0;
 
-    const siblings = parentId ? 
-      this.hierarchyService.getChildren(parentId) :
-      this.nodeManager.rootNodeIds;
-    
+    const siblings = parentId
+      ? this.hierarchyService.getChildren(parentId)
+      : this.nodeManager.rootNodeIds;
+
     const index = siblings.indexOf(beforeSiblingId);
     return index >= 0 ? index + 1 : siblings.length;
   }
@@ -700,11 +696,10 @@ export class NodeOperationsService {
     data: unknown,
     metadata?: Record<string, unknown>
   ): void {
-    eventBus.emit({
+    (eventBus.emit as any)({
       type: 'debug:log',
       namespace: 'debug',
       source: this.serviceName,
-      timestamp: Date.now(),
       level: 'debug',
       message: `Node operation: ${operation} on ${nodeId}`,
       metadata: { operation, nodeId, data, ...metadata }

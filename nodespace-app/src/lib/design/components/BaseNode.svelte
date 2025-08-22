@@ -37,14 +37,13 @@
   } = $props();
 
   // DOM element and controller
-  let contentEditableElement: HTMLDivElement;
+  let contentEditableElement: HTMLDivElement | undefined = undefined;
   let controller: ContentEditableController | null = null;
 
   // Autocomplete modal state
   let showAutocomplete = $state(false);
   let autocompletePosition = $state({ x: 0, y: 0 });
   let currentQuery = $state('');
-  let currentTriggerContext = $state<TriggerContext | null>(null);
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{
@@ -83,9 +82,11 @@
     combineWithPrevious: (data) => dispatch('combineWithPrevious', data),
     deleteNode: (data) => dispatch('deleteNode', data),
     // @ Trigger System Events
-    triggerDetected: (data: { triggerContext: TriggerContext; cursorPosition: { x: number; y: number } }) => {
+    triggerDetected: (data: {
+      triggerContext: TriggerContext;
+      cursorPosition: { x: number; y: number };
+    }) => {
       if (nodeReferenceService) {
-        currentTriggerContext = data.triggerContext;
         currentQuery = data.triggerContext.query;
         autocompletePosition = data.cursorPosition;
         showAutocomplete = true;
@@ -94,7 +95,6 @@
     triggerHidden: () => {
       showAutocomplete = false;
       currentQuery = '';
-      currentTriggerContext = null;
     },
     nodeReferenceSelected: (data: { nodeId: string; nodeTitle: string }) => {
       // Forward the event for potential parent component handling
@@ -138,7 +138,7 @@
 
   function handleNodeSelect(event: CustomEvent<{ node: NodeSpaceNode | NewNodeRequest }>): void {
     const { node } = event.detail;
-    
+
     if (!controller) return;
 
     if (node.type === 'create') {
@@ -152,18 +152,16 @@
       const nodeTitle = extractNodeTitle(existingNode.content);
       controller.insertNodeReference(existingNode.id, nodeTitle);
     }
-    
+
     // Hide the modal
     showAutocomplete = false;
     currentQuery = '';
-    currentTriggerContext = null;
   }
 
   function handleAutocompleteClose(): void {
     showAutocomplete = false;
     currentQuery = '';
-    currentTriggerContext = null;
-    
+
     // Return focus to the content editable element
     if (controller) {
       controller.focus();
@@ -176,16 +174,16 @@
 
   function extractNodeTitle(content: string): string {
     if (!content) return 'Untitled';
-    
+
     const lines = content.split('\n');
     const firstLine = lines[0].trim();
-    
+
     // Remove markdown header syntax
     const headerMatch = firstLine.match(/^#{1,6}\s*(.*)$/);
     if (headerMatch) {
       return headerMatch[1].trim() || 'Untitled';
     }
-    
+
     // Return first non-empty line, truncated
     return firstLine.substring(0, 50) || 'Untitled';
   }

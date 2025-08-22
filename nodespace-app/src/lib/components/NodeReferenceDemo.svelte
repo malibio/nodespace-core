@@ -15,12 +15,11 @@
   import CardTitle from '$lib/components/ui/card/card-title.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
   import Separator from '$lib/components/ui/separator/separator.svelte';
-  import { 
-    NodeReferenceService,
-    type TriggerContext,
-    type AutocompleteResult 
-  } from '$lib/services/NodeReferenceService';
-  import { NodeReferenceRenderer, initializeNodeReferenceRenderer } from '$lib/services/NodeReferenceRenderer';
+  import { NodeReferenceService } from '$lib/services/NodeReferenceService';
+  import {
+    NodeReferenceRenderer,
+    initializeNodeReferenceRenderer
+  } from '$lib/services/NodeReferenceRenderer';
   import { decorationCoordinator } from '$lib/services/DecorationCoordinator';
   import { EnhancedNodeManager } from '$lib/services/EnhancedNodeManager';
   import { HierarchyService } from '$lib/services/HierarchyService';
@@ -34,17 +33,17 @@
   let mounted = false;
   let nodeReferenceService: NodeReferenceService;
   let nodeReferenceRenderer: NodeReferenceRenderer;
-  let demoContainer: HTMLDivElement | undefined;
+  let demoContainer: HTMLDivElement | undefined = undefined;
   let status = writable('Initializing...');
   let selectedContext = writable<'inline' | 'popup' | 'preview'>('inline');
-  
+
   // Demo data
   let demoNodes: NodeSpaceNode[] = [];
-  let renderMetrics = writable({ 
-    totalReferences: 0, 
-    renderedReferences: 0, 
+  let renderMetrics = writable({
+    totalReferences: 0,
+    renderedReferences: 0,
     viewportReferences: 0,
-    renderTime: 0 
+    renderTime: 0
   });
 
   // ============================================================================
@@ -54,13 +53,17 @@
   onMount(async () => {
     try {
       status.set('Initializing services...');
-      
+
       // Initialize core services
       const databaseService = new MockDatabaseService();
       const nodeManager = new EnhancedNodeManager(databaseService);
       const hierarchyService = new HierarchyService(nodeManager, databaseService);
-      const nodeOperationsService = new NodeOperationsService(nodeManager, hierarchyService, databaseService);
-      
+      const nodeOperationsService = new NodeOperationsService(
+        nodeManager,
+        hierarchyService,
+        databaseService
+      );
+
       // Initialize node reference service
       nodeReferenceService = new NodeReferenceService(
         nodeManager,
@@ -68,23 +71,22 @@
         nodeOperationsService,
         databaseService
       );
-      
+
       // Initialize renderer
       nodeReferenceRenderer = initializeNodeReferenceRenderer(nodeReferenceService);
-      
+
       status.set('Creating demo data...');
       await createDemoData();
-      
+
       status.set('Setting up interaction handlers...');
       setupInteractionHandlers();
-      
+
       status.set('Ready - Try the interactive decorations!');
       mounted = true;
-      
+
       // Initial render
       await renderAllExamples();
       updateMetrics();
-      
     } catch (error) {
       console.error('NodeReferenceDemo: Initialization failed', error);
       status.set(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -183,11 +185,11 @@ AI-native knowledge management system built with modern web technologies.`
       decorationType: '*', // Handle all types
       handler: async (event) => {
         console.log('NodeReferenceDemo: Decoration clicked', event);
-        
+
         // For demo purposes, show different actions based on node type
         const nodeId = event.nodeId;
-        const node = demoNodes.find(n => n.id === nodeId);
-        
+        const node = demoNodes.find((n) => n.id === nodeId);
+
         if (node) {
           switch (node.type) {
             case 'task':
@@ -228,7 +230,9 @@ AI-native knowledge management system built with modern web technologies.`
 
     // Store unsubscribe functions for cleanup
     if (demoContainer) {
-      (demoContainer as HTMLElement & { _unsubscribeFunctions?: (() => void)[] })._unsubscribeFunctions = [clickUnsubscribe, hoverUnsubscribe];
+      (
+        demoContainer as HTMLElement & { _unsubscribeFunctions?: (() => void)[] }
+      )._unsubscribeFunctions = [clickUnsubscribe, hoverUnsubscribe];
     }
   }
 
@@ -239,19 +243,16 @@ AI-native knowledge management system built with modern web technologies.`
   async function toggleTaskStatus(node: NodeSpaceNode): Promise<void> {
     const currentStatus = node.content.includes('status: completed') ? 'completed' : 'pending';
     const newStatus = currentStatus === 'completed' ? 'pending' : 'completed';
-    
+
     // Update node content
-    const updatedContent = node.content.replace(
-      /status: \w+/,
-      `status: ${newStatus}`
-    );
-    
+    const updatedContent = node.content.replace(/status: \w+/, `status: ${newStatus}`);
+
     // Update in database (mock)
     node.content = updatedContent;
-    
+
     // Re-render the decoration
     await nodeReferenceRenderer.updateDecoration(node.id, 'content-changed');
-    
+
     status.set(`Task ${node.id} marked as ${newStatus}`);
   }
 
@@ -294,7 +295,7 @@ AI-native knowledge management system built with modern web technologies.`
         batchSize: 10,
         debounceMs: 0
       });
-      
+
       updateMetrics();
     } catch (error) {
       console.error('Error rendering examples:', error);
@@ -331,12 +332,12 @@ AI-native knowledge management system built with modern web technologies.`
   function generateDemoContent(): string {
     if (!demoNodes.length) return 'Loading demo content...';
 
-    const taskNode = demoNodes.find(n => n.type === 'task');
-    const userNode = demoNodes.find(n => n.type === 'user');
-    const dateNode = demoNodes.find(n => n.type === 'date');
-    const docNode = demoNodes.find(n => n.type === 'document');
-    const aiNode = demoNodes.find(n => n.type === 'ai_chat');
-    const entityNode = demoNodes.find(n => n.type === 'entity');
+    const taskNode = demoNodes.find((n) => n.type === 'task');
+    const userNode = demoNodes.find((n) => n.type === 'user');
+    const dateNode = demoNodes.find((n) => n.type === 'date');
+    const docNode = demoNodes.find((n) => n.type === 'document');
+    const aiNode = demoNodes.find((n) => n.type === 'ai_chat');
+    const entityNode = demoNodes.find((n) => n.type === 'entity');
 
     return `
 # NodeSpace Phase 2.2 - BaseNode Decoration System Demo
@@ -405,22 +406,22 @@ Try changing the display context above to see how decorations adapt!
           <div class="flex items-center gap-2">
             <span class="text-sm text-muted-foreground">Display Context:</span>
             <div class="flex gap-1">
-              <Button 
-                variant={$selectedContext === 'inline' ? 'default' : 'outline'} 
+              <Button
+                variant={$selectedContext === 'inline' ? 'default' : 'outline'}
                 size="sm"
                 on:click={() => changeDisplayContext('inline')}
               >
                 Inline
               </Button>
-              <Button 
-                variant={$selectedContext === 'popup' ? 'default' : 'outline'} 
+              <Button
+                variant={$selectedContext === 'popup' ? 'default' : 'outline'}
                 size="sm"
                 on:click={() => changeDisplayContext('popup')}
               >
                 Popup
               </Button>
-              <Button 
-                variant={$selectedContext === 'preview' ? 'default' : 'outline'} 
+              <Button
+                variant={$selectedContext === 'preview' ? 'default' : 'outline'}
                 size="sm"
                 on:click={() => changeDisplayContext('preview')}
               >
@@ -429,9 +430,7 @@ Try changing the display context above to see how decorations adapt!
             </div>
           </div>
 
-          <Button variant="outline" size="sm" on:click={forceRefresh}>
-            🔄 Refresh
-          </Button>
+          <Button variant="outline" size="sm" on:click={forceRefresh}>🔄 Refresh</Button>
         </div>
 
         <!-- Metrics -->
@@ -453,7 +452,7 @@ Try changing the display context above to see how decorations adapt!
       <CardTitle>Interactive Node References</CardTitle>
     </CardHeader>
     <CardContent>
-      <div 
+      <div
         bind:this={demoContainer}
         class="prose prose-sm max-w-none dark:prose-invert"
         style="white-space: pre-wrap; line-height: 1.6;"
@@ -479,7 +478,7 @@ Try changing the display context above to see how decorations adapt!
             <li>• Due date display</li>
           </ul>
         </div>
-        
+
         <div>
           <h4 class="font-semibold mb-2">User Decorations</h4>
           <ul class="space-y-1 text-muted-foreground">
@@ -489,7 +488,7 @@ Try changing the display context above to see how decorations adapt!
             <li>• Compact name display</li>
           </ul>
         </div>
-        
+
         <div>
           <h4 class="font-semibold mb-2">Date Decorations</h4>
           <ul class="space-y-1 text-muted-foreground">
@@ -499,7 +498,7 @@ Try changing the display context above to see how decorations adapt!
             <li>• Past/future indicators</li>
           </ul>
         </div>
-        
+
         <div>
           <h4 class="font-semibold mb-2">Document Decorations</h4>
           <ul class="space-y-1 text-muted-foreground">
@@ -509,7 +508,7 @@ Try changing the display context above to see how decorations adapt!
             <li>• Type-specific styling</li>
           </ul>
         </div>
-        
+
         <div>
           <h4 class="font-semibold mb-2">AI Chat Decorations</h4>
           <ul class="space-y-1 text-muted-foreground">
@@ -519,7 +518,7 @@ Try changing the display context above to see how decorations adapt!
             <li>• Animated status</li>
           </ul>
         </div>
-        
+
         <div>
           <h4 class="font-semibold mb-2">Accessibility Features</h4>
           <ul class="space-y-1 text-muted-foreground">

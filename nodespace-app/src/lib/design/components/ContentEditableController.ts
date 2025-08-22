@@ -6,7 +6,7 @@
  */
 
 import ContentProcessor from '$lib/services/contentProcessor.js';
-import { NodeReferenceService, type TriggerContext } from '$lib/services/NodeReferenceService.js';
+import type { TriggerContext } from '$lib/services/NodeReferenceService.js';
 
 export interface ContentEditableEvents {
   contentChanged: (content: string) => void;
@@ -822,7 +822,7 @@ export class ContentEditableController {
    */
   private checkForTrigger(content: string, cursorPosition: number): void {
     const triggerContext = this.detectTrigger(content, cursorPosition);
-    
+
     if (triggerContext && triggerContext.isValid) {
       // Get cursor position in screen coordinates
       const cursorCoords = this.getCursorScreenPosition();
@@ -844,29 +844,29 @@ export class ContentEditableController {
     // Look backwards from cursor to find @ symbol
     const beforeCursor = content.substring(0, cursorPosition);
     const lastAtIndex = beforeCursor.lastIndexOf('@');
-    
+
     if (lastAtIndex === -1) {
       return null; // No @ symbol found
     }
-    
+
     // Check if @ is at word boundary or start of content
     const charBeforeAt = lastAtIndex > 0 ? beforeCursor[lastAtIndex - 1] : ' ';
     if (!/\s/.test(charBeforeAt) && lastAtIndex > 0) {
       return null; // @ is not at word boundary
     }
-    
+
     // Extract query text between @ and cursor
     const queryText = content.substring(lastAtIndex + 1, cursorPosition);
-    
+
     // Validate query (no spaces, reasonable length)
     if (queryText.includes(' ') || queryText.includes('\n')) {
       return null; // Query contains invalid characters
     }
-    
+
     if (queryText.length > 50) {
       return null; // Query too long
     }
-    
+
     return {
       trigger: '@',
       query: queryText,
@@ -886,10 +886,10 @@ export class ContentEditableController {
     if (!selection || selection.rangeCount === 0) {
       return null;
     }
-    
+
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
-    
+
     return {
       x: rect.left,
       y: rect.bottom + 5 // Position modal slightly below cursor
@@ -903,37 +903,37 @@ export class ContentEditableController {
     if (!this.isEditing) {
       return;
     }
-    
+
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
       return;
     }
-    
+
     const currentContent = this.element.textContent || '';
     const cursorPosition = this.getCurrentColumn();
-    
+
     // Find the @ trigger that initiated this
     const triggerContext = this.detectTrigger(currentContent, cursorPosition);
     if (!triggerContext) {
       return;
     }
-    
+
     // Create nodespace URI link
     const nodeReference = `[${nodeTitle}](nodespace://${nodeId})`;
-    
+
     // Replace the @ trigger and query with the reference
     const beforeTrigger = currentContent.substring(0, triggerContext.startPosition);
     const afterCursor = currentContent.substring(triggerContext.endPosition);
     const newContent = beforeTrigger + nodeReference + afterCursor;
-    
+
     // Update content and position cursor after the inserted reference
     this.originalContent = newContent;
     this.setLiveFormattedContent(newContent);
-    
+
     // Position cursor after the inserted reference
     const newCursorPosition = triggerContext.startPosition + nodeReference.length;
     this.restoreCursorPosition(newCursorPosition);
-    
+
     // Emit content change event
     this.events.contentChanged(newContent);
     this.events.nodeReferenceSelected({ nodeId, nodeTitle });

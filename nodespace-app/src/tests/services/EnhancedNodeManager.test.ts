@@ -1,6 +1,6 @@
 /**
  * EnhancedNodeManager Test Suite
- * 
+ *
  * Comprehensive integration tests for EnhancedNodeManager focusing on:
  * - Service composition integration
  * - Backward compatibility with NodeManager
@@ -13,10 +13,10 @@
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import type { HierarchicalTextNode } from '$lib/services/mockTextService';
-import { EnhancedNodeManager } from '$lib/services/EnhancedNodeManager';
-import type { NodeManagerEvents } from '$lib/services/NodeManager';
-import { eventBus } from '$lib/services/EventBus';
+import type { HierarchicalTextNode } from '../../lib/services/mockTextService.js';
+import { EnhancedNodeManager } from '../../lib/services/EnhancedNodeManager.js';
+import type { NodeManagerEvents } from '../../lib/services/NodeManager.js';
+import { eventBus } from '../../lib/services/EventBus.js';
 
 describe('EnhancedNodeManager', () => {
   let enhancedNodeManager: EnhancedNodeManager;
@@ -95,7 +95,7 @@ describe('EnhancedNodeManager', () => {
       ]);
 
       const newNodeId = enhancedNodeManager.createNode('root', 'New content');
-      
+
       expect(events.nodeCreated).toHaveBeenCalledWith(newNodeId);
       expect(events.hierarchyChanged).toHaveBeenCalled();
     });
@@ -156,8 +156,8 @@ describe('EnhancedNodeManager', () => {
     test('getEnhancedDescendants returns all descendants recursively', () => {
       const descendants = enhancedNodeManager.getEnhancedDescendants('root');
       expect(descendants).toHaveLength(3); // section1, section2, subsection1
-      
-      const descendantIds = descendants.map(n => n.id);
+
+      const descendantIds = descendants.map((n) => n.id);
       expect(descendantIds).toContain('section1');
       expect(descendantIds).toContain('section2');
       expect(descendantIds).toContain('subsection1');
@@ -165,15 +165,15 @@ describe('EnhancedNodeManager', () => {
 
     test('getNodePath returns complete node path with depths', () => {
       const path = enhancedNodeManager.getNodePath('subsection1');
-      
+
       expect(path.nodes).toHaveLength(3);
       expect(path.depths).toEqual([0, 1, 2]);
-      expect(path.nodes.map(n => n.id)).toEqual(['root', 'section1', 'subsection1']);
+      expect(path.nodes.map((n) => n.id)).toEqual(['root', 'section1', 'subsection1']);
     });
 
     test('getEnhancedSiblings provides rich sibling information', () => {
       const siblingInfo = enhancedNodeManager.getEnhancedSiblings('section1');
-      
+
       expect(siblingInfo.siblings).toHaveLength(2);
       expect(siblingInfo.currentPosition).toBe(0);
       expect(siblingInfo.nextSibling?.id).toBe('section2');
@@ -187,22 +187,47 @@ describe('EnhancedNodeManager', () => {
 
     test('enhanced operations are faster than manual traversal', () => {
       // Create deeper hierarchy for performance testing
-      const deepHierarchy = {
+      const deepHierarchy: HierarchicalTextNode = {
         id: 'deep-root',
-        type: 'text',
+        title: 'Deep Root',
         content: 'Deep root',
-        children: [] as HierarchicalTextNode[]
+        nodeType: 'text',
+        depth: 0,
+        parentId: null,
+        children: [] as HierarchicalTextNode[],
+        expanded: true,
+        hasChildren: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        metadata: {
+          wordCount: 2,
+          lastEditedBy: 'test',
+          version: 1
+        }
       };
 
       let current = deepHierarchy;
       for (let i = 0; i < 20; i++) {
-        const child = {
+        const child: HierarchicalTextNode = {
           id: `level-${i}`,
-          type: 'text',
+          title: `Level ${i}`,
           content: `Level ${i}`,
-          children: [] as HierarchicalTextNode[]
+          nodeType: 'text',
+          depth: i + 1,
+          parentId: current.id,
+          children: [] as HierarchicalTextNode[],
+          expanded: true,
+          hasChildren: false,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          metadata: {
+            wordCount: 2,
+            lastEditedBy: 'test',
+            version: 1
+          }
         };
         current.children.push(child);
+        current.hasChildren = true;
         current = child;
       }
 
@@ -262,7 +287,7 @@ describe('EnhancedNodeManager', () => {
       });
 
       expect(success).toBe(true);
-      
+
       const updatedNode = enhancedNodeManager.findNode('node1');
       expect(updatedNode!.content).toBe('Updated content');
       expect(updatedNode!.metadata).toHaveProperty('originalProp');
@@ -285,10 +310,10 @@ describe('EnhancedNodeManager', () => {
       enhancedNodeManager.updateNodeMentions('node1', ['node2']);
 
       expect(node1!.mentions).toEqual(['node2']);
-      
+
       // Verify event was emitted for consistency
       const recentEvents = eventBus.getRecentEvents();
-      const mentionEvents = recentEvents.filter(e => e.type === 'node:updated');
+      const mentionEvents = recentEvents.filter((e) => e.type === 'node:updated');
       expect(mentionEvents.length).toBeGreaterThan(0);
     });
   });
@@ -338,7 +363,7 @@ describe('EnhancedNodeManager', () => {
       const documentNode = enhancedNodeManager.findNode('document');
       const sectionNode = enhancedNodeManager.findNode('section');
       const note2Node = enhancedNodeManager.findNode('note2');
-      
+
       if (documentNode) documentNode.mentions = ['note1'];
       if (sectionNode) sectionNode.mentions = ['note2'];
       if (note2Node) note2Node.mentions = ['document'];
@@ -346,7 +371,7 @@ describe('EnhancedNodeManager', () => {
 
     test('analyzeNode provides comprehensive insights', () => {
       const analysis = enhancedNodeManager.analyzeNode('document');
-      
+
       expect(analysis).toBeTruthy();
       expect(analysis!.nodeId).toBe('document');
       expect(analysis!.contentType).toBe('linked'); // Has wikilinks
@@ -362,7 +387,7 @@ describe('EnhancedNodeManager', () => {
 
     test('analyzeNode handles nodes with no formatting', () => {
       const analysis = enhancedNodeManager.analyzeNode('subsection');
-      
+
       expect(analysis!.hasWikiLinks).toBe(false);
       expect(analysis!.headerLevel).toBe(0);
       expect(analysis!.formattingComplexity).toBe(0);
@@ -378,17 +403,27 @@ describe('EnhancedNodeManager', () => {
       const analysis2 = enhancedNodeManager.analyzeNode('document', true); // Use cache
       const secondTime = performance.now() - secondCallTime;
 
-      // Compare analysis content without timestamp
-      const { lastAnalyzed: _lastAnalyzed1, ...analysis1Clean } = analysis1 as Record<string, unknown>;
-      const { lastAnalyzed: _lastAnalyzed2, ...analysis2Clean } = analysis2 as Record<string, unknown>;
-      
+      // Compare analysis content without timestamp (lastAnalyzed fields are intentionally discarded)
+      const { lastAnalyzed: _lastAnalyzed1, ...analysis1Clean } = analysis1 as unknown as Record<
+        string,
+        unknown
+      >;
+      const { lastAnalyzed: _lastAnalyzed2, ...analysis2Clean } = analysis2 as unknown as Record<
+        string,
+        unknown
+      >;
+
+      // Suppress unused variable warnings - these are intentionally extracted and discarded
+      void _lastAnalyzed1;
+      void _lastAnalyzed2;
+
       expect(analysis1Clean).toEqual(analysis2Clean);
       expect(secondTime).toBeLessThan(firstTime); // Cached call should be faster
     });
 
     test('analyzeAllNodes provides aggregate insights', () => {
       const globalAnalysis = enhancedNodeManager.analyzeAllNodes();
-      
+
       expect(globalAnalysis.totalNodes).toBeGreaterThan(4); // At least the nodes we created
       expect(globalAnalysis.byType).toBeDefined();
       expect(globalAnalysis.avgDepth).toBeGreaterThanOrEqual(0);
@@ -419,13 +454,13 @@ describe('EnhancedNodeManager', () => {
           children: []
         });
       }
-      
+
       enhancedNodeManager.initializeFromLegacyData(nodes);
     });
 
     test('bulkUpdateNodes processes multiple nodes efficiently', async () => {
       const nodeIds = ['bulk-node-0', 'bulk-node-2', 'bulk-node-4'];
-      
+
       const result = await enhancedNodeManager.bulkUpdateNodes(nodeIds, {
         metadata: { bulk: true, updated: Date.now() },
         nodeType: 'updated-even'
@@ -446,7 +481,7 @@ describe('EnhancedNodeManager', () => {
 
     test('bulkUpdateNodes handles failures gracefully', async () => {
       const nodeIds = ['bulk-node-0', 'non-existent-node', 'bulk-node-2'];
-      
+
       const result = await enhancedNodeManager.bulkUpdateNodes(nodeIds, {
         content: 'Updated content'
       });
@@ -463,10 +498,12 @@ describe('EnhancedNodeManager', () => {
       });
 
       const recentEvents = eventBus.getRecentEvents();
-      const debugEvents = recentEvents.filter(e => e.type === 'debug:log' && e.message?.includes('Bulk operation'));
-      
+      const debugEvents = recentEvents.filter(
+        (e) => e.type === 'debug:log' && (e as any).message?.includes('Bulk operation')
+      );
+
       expect(debugEvents.length).toBeGreaterThan(0);
-      expect(debugEvents[0].message).toContain('2 success');
+      expect((debugEvents[0] as any).message).toContain('2 success');
     });
   });
 
@@ -527,9 +564,9 @@ describe('EnhancedNodeManager', () => {
       });
 
       expect(results).toHaveLength(3); // doc1, note2, milestone1
-      expect(results.map(n => n.id)).toContain('doc1');
-      expect(results.map(n => n.id)).toContain('note2');
-      expect(results.map(n => n.id)).toContain('milestone1');
+      expect(results.map((n) => n.id)).toContain('doc1');
+      expect(results.map((n) => n.id)).toContain('note2');
+      expect(results.map((n) => n.id)).toContain('milestone1');
     });
 
     test('searchNodes filters by node type', () => {
@@ -538,7 +575,7 @@ describe('EnhancedNodeManager', () => {
       });
 
       expect(results).toHaveLength(2);
-      expect(results.every(n => n.nodeType === 'document')).toBe(true);
+      expect(results.every((n) => n.nodeType === 'document')).toBe(true);
     });
 
     test('searchNodes filters by wikilinks presence', () => {
@@ -552,7 +589,7 @@ describe('EnhancedNodeManager', () => {
 
       expect(resultsWithLinks.length).toBeGreaterThan(0);
       expect(resultsWithoutLinks.length).toBeGreaterThan(0);
-      
+
       // Total should match all nodes in the system
       const totalNodes = enhancedNodeManager.nodes.size;
       expect(resultsWithLinks.length + resultsWithoutLinks.length).toBe(totalNodes);
@@ -565,10 +602,10 @@ describe('EnhancedNodeManager', () => {
 
       // Should find nodes that mention milestone1 (section1 in the test data)
       expect(results.length).toBeGreaterThanOrEqual(0); // May be 0 if mentions not set up properly
-      
+
       // If we find results, verify they have the right mentions
       if (results.length > 0) {
-        expect(results.some(node => node.mentions?.includes('milestone1'))).toBe(true);
+        expect(results.some((node) => node.mentions?.includes('milestone1'))).toBe(true);
       }
     });
 
@@ -579,7 +616,7 @@ describe('EnhancedNodeManager', () => {
 
       expect(results.length).toBeGreaterThan(0);
       expect(results.length).toBeLessThan(5); // Should exclude short notes
-      expect(results.map(n => n.id)).toContain('note2');
+      expect(results.map((n) => n.id)).toContain('note2');
     });
 
     test('searchNodes filters by hierarchy depth', () => {
@@ -589,7 +626,7 @@ describe('EnhancedNodeManager', () => {
 
       // Should only contain nodes at depth 0 (root nodes)
       expect(results.length).toBeGreaterThan(0);
-      
+
       // Verify all results are actually at depth 0
       for (const node of results) {
         const depth = enhancedNodeManager.getEnhancedNodeDepth(node.id);
@@ -653,12 +690,14 @@ describe('EnhancedNodeManager', () => {
     test('performance remains good with cached operations', () => {
       // Create a moderately sized hierarchy
       const createLargeHierarchy = (size: number) => {
-        const nodes = [{ 
-          id: 'root', 
-          type: 'document', 
-          content: 'Root', 
-          children: [] as HierarchicalTextNode[] 
-        }];
+        const nodes = [
+          {
+            id: 'root',
+            type: 'document',
+            content: 'Root',
+            children: [] as HierarchicalTextNode[]
+          }
+        ];
 
         for (let i = 1; i < size; i++) {
           nodes.push({
@@ -706,19 +745,19 @@ describe('EnhancedNodeManager', () => {
       expect(analysis1).toBeTruthy();
 
       // Emit node updated event
-      eventBus.emit({
-        type: 'node:updated',
-        namespace: 'lifecycle',
+      const nodeUpdatedEvent = {
+        type: 'node:updated' as const,
+        namespace: 'lifecycle' as const,
         source: 'test',
-        timestamp: Date.now(),
         nodeId: 'test-node',
-        updateType: 'content',
+        updateType: 'content' as const,
         previousValue: 'old',
         newValue: 'new'
-      });
+      };
+      eventBus.emit(nodeUpdatedEvent);
 
       // Allow event processing
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Analysis should be refreshed (cache invalidated)
       const analysis2 = enhancedNodeManager.analyzeNode('test-node', false); // Force fresh analysis
@@ -731,9 +770,7 @@ describe('EnhancedNodeManager', () => {
           id: 'parent',
           type: 'text',
           content: 'Parent',
-          children: [
-            { id: 'child', type: 'text', content: 'Child', children: [] }
-          ]
+          children: [{ id: 'child', type: 'text', content: 'Child', children: [] }]
         }
       ]);
 
@@ -742,17 +779,17 @@ describe('EnhancedNodeManager', () => {
       enhancedNodeManager.analyzeNode('parent');
 
       // Emit hierarchy change event
-      eventBus.emit({
-        type: 'hierarchy:changed',
-        namespace: 'lifecycle',
+      const hierarchyChangedEvent = {
+        type: 'hierarchy:changed' as const,
+        namespace: 'lifecycle' as const,
         source: 'test',
-        timestamp: Date.now(),
         affectedNodes: ['parent', 'child'],
-        changeType: 'move'
-      });
+        changeType: 'move' as const
+      };
+      eventBus.emit(hierarchyChangedEvent);
 
       // Allow event processing
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Service should have responded to the event (no errors thrown)
       expect(true).toBe(true);
@@ -767,16 +804,16 @@ describe('EnhancedNodeManager', () => {
       enhancedNodeManager.analyzeNode('to-delete');
 
       // Emit node deleted event
-      eventBus.emit({
-        type: 'node:deleted',
-        namespace: 'lifecycle',
+      const nodeDeletedEvent = {
+        type: 'node:deleted' as const,
+        namespace: 'lifecycle' as const,
         source: 'test',
-        timestamp: Date.now(),
         nodeId: 'to-delete'
-      });
+      };
+      eventBus.emit(nodeDeletedEvent);
 
       // Allow event processing
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Analysis cache should not contain deleted node
       const stats = enhancedNodeManager.getEnhancedStats();
@@ -848,7 +885,7 @@ describe('EnhancedNodeManager', () => {
 
       // Test hierarchy navigation
       const path = enhancedNodeManager.getNodePath('section1-1');
-      expect(path.nodes.map(n => n.id)).toEqual(['main-doc', 'chapter1', 'section1-1']);
+      expect(path.nodes.map((n) => n.id)).toEqual(['main-doc', 'chapter1', 'section1-1']);
 
       // Test search capabilities
       const documentsWithRefs = enhancedNodeManager.searchNodes({
@@ -862,7 +899,7 @@ describe('EnhancedNodeManager', () => {
     test('maintains performance with large interconnected knowledge base', () => {
       // Create interconnected knowledge base
       const nodes = [];
-      
+
       // Create 100 nodes with random cross-references
       for (let i = 0; i < 100; i++) {
         nodes.push({
@@ -895,7 +932,7 @@ describe('EnhancedNodeManager', () => {
       // Perform various operations
       const globalAnalysis = enhancedNodeManager.analyzeAllNodes();
       const conceptNodes = enhancedNodeManager.searchNodes({ nodeType: 'concept' });
-      const _nodesWithManyRefs = enhancedNodeManager.searchNodes({ minWordCount: 5 });
+      enhancedNodeManager.searchNodes({ minWordCount: 5 }); // Search for nodes with many references
 
       for (let i = 0; i < 10; i++) {
         enhancedNodeManager.getEnhancedNodeDepth(`kb-node-${i * 10}`);
