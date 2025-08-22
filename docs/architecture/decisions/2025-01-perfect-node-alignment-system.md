@@ -25,14 +25,17 @@ We successfully implemented a **mathematically precise alignment system** for No
 - **Transform Optimization**: `translateY(-50%)` for vertical centering without horizontal interference
 
 #### **3. Hierarchical Indentation System**
-- **Child Node Indentation**: `padding-left: calc(0.25rem + 20px)` for consistent nesting levels
-  - `0.25rem`: Base container padding for visual breathing room
-  - `20px`: Space allocation for parent indicator (icon + spacing)
-- **Nested Level Multiplication**: Deeper nesting multiplies the base indentation pattern
-- **Icon Positioning**: Circle/chevron positioned at `left: 8px` (centers 20px container)
-- **Container Sizes**: Both chevrons and circles use 20px × 20px containers for consistent positioning
+- **Node Content Spacing**: `padding-left: 54px` for all node types with 8px gap between circle and text
+  - `26px`: Circle left position
+  - `20px`: Circle width
+  - `8px`: Gap between circle right edge and text content start
+- **Child Node Indentation**: Additional `margin-left` for nested levels
+  - **child-1**: `margin-left: 44px` (single indentation level)
+  - **child-2**: `margin-left: 86px` (double indentation level)
+- **Icon Positioning**: Circle positioned at `left: 26px` with `top` varying by header level
+- **Container Sizes**: Circles use 20px × 20px containers for consistent positioning
 - **Icon Sizes**: Chevron icons 16px × 16px within 20px container, Circle icons 20px × 20px (full container)
-- **Content Alignment**: Text content aligns with parent content, not parent circle
+- **Content Alignment**: Text content maintains consistent 8px gap from circle across all hierarchy levels
 
 #### **4. Hover Interaction System**
 - **Isolated Node Targeting**: `.node-content-wrapper:hover > .node-chevron` prevents parent-chain activation
