@@ -14,6 +14,12 @@
  * - Support for different display contexts (inline, popup, preview)
  */
 
+// Browser API type declarations for server-side compatibility
+declare global {
+  const IntersectionObserver: typeof globalThis.IntersectionObserver;
+  const MutationObserver: typeof globalThis.MutationObserver;
+}
+
 import { eventBus } from './EventBus';
 import { decorationCoordinator } from './DecorationCoordinator';
 import { NodeDecoratorFactory } from './BaseNodeDecoration';
@@ -531,7 +537,7 @@ export class NodeReferenceRenderer {
     element.addEventListener('keydown', keydownHandler);
     
     // Store handler for cleanup
-    (element as HTMLElement & { _keydownHandler?: EventListener })._keydownHandler = keydownHandler;
+    (element as HTMLElement & { _keydownHandler?: (event: KeyboardEvent) => void })._keydownHandler = keydownHandler;
   }
 
   private getCachedDecoration(nodeId: string, displayContext: string): { result: DecorationResult; element?: HTMLElement } | null {
@@ -655,7 +661,7 @@ export class NodeReferenceRenderer {
     
     // Clean up keyboard handlers
     for (const cached of this.renderCache.values()) {
-      const elementWithHandler = cached.element as HTMLElement & { _keydownHandler?: EventListener };
+      const elementWithHandler = cached.element as HTMLElement & { _keydownHandler?: (event: KeyboardEvent) => void };
       if (cached.element && elementWithHandler._keydownHandler) {
         cached.element.removeEventListener('keydown', elementWithHandler._keydownHandler);
         delete elementWithHandler._keydownHandler;

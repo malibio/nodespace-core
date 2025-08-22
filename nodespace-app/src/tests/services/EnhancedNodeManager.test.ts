@@ -382,6 +382,10 @@ describe('EnhancedNodeManager', () => {
       const { lastAnalyzed: _lastAnalyzed1, ...analysis1Clean } = analysis1 as Record<string, unknown>;
       const { lastAnalyzed: _lastAnalyzed2, ...analysis2Clean } = analysis2 as Record<string, unknown>;
       
+      // Variables needed for analysis comparison but not directly used
+      void _lastAnalyzed1;
+      void _lastAnalyzed2;
+      
       expect(analysis1Clean).toEqual(analysis2Clean);
       expect(secondTime).toBeLessThan(firstTime); // Cached call should be faster
     });
@@ -895,7 +899,7 @@ describe('EnhancedNodeManager', () => {
       // Perform various operations
       const globalAnalysis = enhancedNodeManager.analyzeAllNodes();
       const conceptNodes = enhancedNodeManager.searchNodes({ nodeType: 'concept' });
-      const _nodesWithManyRefs = enhancedNodeManager.searchNodes({ minWordCount: 5 });
+      enhancedNodeManager.searchNodes({ minWordCount: 5 });
 
       for (let i = 0; i < 10; i++) {
         enhancedNodeManager.getEnhancedNodeDepth(`kb-node-${i * 10}`);

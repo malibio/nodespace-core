@@ -227,8 +227,8 @@ export class PerformanceMonitor {
   private captureMemorySnapshot(): void {
     try {
       // Node.js environment
-      if (typeof process !== 'undefined' && process.memoryUsage) {
-        const mem = process.memoryUsage();
+      if (typeof globalThis !== 'undefined' && 'process' in globalThis && (globalThis as typeof globalThis & { process?: { memoryUsage: () => { rss: number; heapUsed: number; heapTotal: number; external: number; arrayBuffers: number } } }).process?.memoryUsage) {
+        const mem = (globalThis as typeof globalThis & { process: { memoryUsage: () => { rss: number; heapUsed: number; heapTotal: number; external: number; arrayBuffers: number } } }).process.memoryUsage();
         const snapshot: MemorySnapshot = {
           heapUsed: mem.heapUsed,
           heapTotal: mem.heapTotal,
@@ -241,8 +241,8 @@ export class PerformanceMonitor {
         this.checkMemoryLeaks(snapshot);
       } 
       // Browser environment - approximate using performance API
-      else if (typeof performance !== 'undefined' && 'memory' in performance && (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory) {
-        const mem = (performance as Performance & { memory: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+      else if (typeof performance !== 'undefined' && 'memory' in performance && (performance as typeof performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory) {
+        const mem = (performance as typeof performance & { memory: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
         const snapshot: MemorySnapshot = {
           heapUsed: mem.usedJSHeapSize,
           heapTotal: mem.totalJSHeapSize,
@@ -500,8 +500,8 @@ export class PerformanceMonitor {
   // ============================================================================
   
   public cleanup(): void {
-    if (this.memoryTimer) {
-      clearInterval(this.memoryTimer);
+    if (this.memoryTimer && typeof window !== 'undefined') {
+      window.clearInterval(this.memoryTimer);
       this.memoryTimer = null;
     }
     

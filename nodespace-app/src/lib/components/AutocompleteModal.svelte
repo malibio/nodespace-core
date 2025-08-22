@@ -355,22 +355,32 @@
     return NODE_TYPE_CONFIG[nodeType as keyof typeof NODE_TYPE_CONFIG] || DEFAULT_NODE_TYPE;
   }
 
-  function highlightMatches(text: string, positions: number[]): string {
-    if (!positions.length) return text;
+  function getHighlightSegments(text: string, positions: number[]): Array<{ text: string; highlighted: boolean }> {
+    if (!positions.length) return [{ text, highlighted: false }];
     
-    let highlighted = '';
+    const segments: Array<{ text: string; highlighted: boolean }> = [];
     let lastIndex = 0;
     
     for (const pos of positions) {
-      highlighted += text.substring(lastIndex, pos);
-      highlighted += `<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">`;
-      highlighted += text[pos];
-      highlighted += '</mark>';
+      // Add text before highlight
+      if (pos > lastIndex) {
+        segments.push({ text: text.substring(lastIndex, pos), highlighted: false });
+      }
+      
+      // Add highlighted character
+      if (pos < text.length) {
+        segments.push({ text: text[pos], highlighted: true });
+      }
+      
       lastIndex = pos + 1;
     }
     
-    highlighted += text.substring(lastIndex);
-    return highlighted;
+    // Add remaining text
+    if (lastIndex < text.length) {
+      segments.push({ text: text.substring(lastIndex), highlighted: false });
+    }
+    
+    return segments;
   }
 
   // ============================================================================
@@ -496,7 +506,13 @@
                     <!-- Node content -->
                     <div class="flex-1 min-w-0">
                       <div class="font-medium text-sm truncate">
-                        {@html highlightMatches(suggestion.title, suggestion.matchPositions)}
+                        {#each getHighlightSegments(suggestion.title, suggestion.matchPositions) as segment}
+                          {#if segment.highlighted}
+                            <mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">{segment.text}</mark>
+                          {:else}
+                            {segment.text}
+                          {/if}
+                        {/each}
                       </div>
                       
                       {#if suggestion.content && suggestion.content !== suggestion.title}

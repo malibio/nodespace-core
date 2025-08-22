@@ -6,7 +6,9 @@
  */
 
 import ContentProcessor from '$lib/services/contentProcessor.js';
-import { NodeReferenceService, type TriggerContext } from '$lib/services/NodeReferenceService.js';
+import { type TriggerContext } from '$lib/services/NodeReferenceService.js';
+// Click positioning utilities available if needed
+// import { findCharacterFromClickFast } from './CursorPositioning.js';
 
 export interface ContentEditableEvents {
   contentChanged: (content: string) => void;
@@ -41,6 +43,9 @@ export class ContentEditableController {
   private isInitialized: boolean = false;
   private events: ContentEditableEvents;
   private originalContent: string = ''; // Store original markdown content
+  
+  // Click position tracking for precise cursor positioning
+  private pendingClickPosition: { x: number; y: number } | null = null;
   private isUpdatingFromInput: boolean = false; // Flag to prevent reactive loops
   private currentHeaderLevel: number = 0; // Track header level for CSS updates
 
@@ -49,6 +54,7 @@ export class ContentEditableController {
   private boundHandleBlur = this.handleBlur.bind(this);
   private boundHandleInput = this.handleInput.bind(this);
   private boundHandleKeyDown = this.handleKeyDown.bind(this);
+  private boundHandleClick = this.handleClick.bind(this);
 
   constructor(element: HTMLDivElement, nodeId: string, events: ContentEditableEvents) {
     this.element = element;
@@ -146,6 +152,7 @@ export class ContentEditableController {
     this.element.addEventListener('blur', this.boundHandleBlur);
     this.element.addEventListener('input', this.boundHandleInput);
     this.element.addEventListener('keydown', this.boundHandleKeyDown);
+    this.element.addEventListener('click', this.boundHandleClick);
   }
 
   private removeEventListeners(): void {
@@ -153,6 +160,7 @@ export class ContentEditableController {
     this.element.removeEventListener('blur', this.boundHandleBlur);
     this.element.removeEventListener('input', this.boundHandleInput);
     this.element.removeEventListener('keydown', this.boundHandleKeyDown);
+    this.element.removeEventListener('click', this.boundHandleClick);
   }
 
   private setRawMarkdown(content: string): void {
@@ -243,8 +251,19 @@ export class ContentEditableController {
   private handleFocus(): void {
     this.isEditing = true;
 
+    // Capture current formatted content for position mapping
+    const formattedContent = this.element.innerHTML;
+    
     // On focus: show raw markdown for editing (use stored original content)
     this.setRawMarkdown(this.originalContent);
+
+    // If we have a pending click position, map it to the raw markdown cursor position
+    if (this.pendingClickPosition) {
+      setTimeout(() => {
+        this.positionCursorFromClick(this.pendingClickPosition!, formattedContent);
+        this.pendingClickPosition = null; // Clear the pending position
+      }, 0); // Use setTimeout to ensure DOM has updated
+    }
 
     this.events.focus();
   }
@@ -258,6 +277,21 @@ export class ContentEditableController {
     this.setFormattedContent(currentText);
 
     this.events.blur();
+  }
+
+  private handleClick(event: MouseEvent): void {
+    // If already editing, don't capture click position
+    if (this.isEditing) {
+      return;
+    }
+
+    // Store click position for precise cursor positioning when focusing
+    this.pendingClickPosition = {
+      x: event.clientX,
+      y: event.clientY
+    };
+
+    console.log('Captured click position for cursor mapping:', this.pendingClickPosition);
   }
 
   private handleInput(): void {
@@ -937,5 +971,25 @@ export class ContentEditableController {
     // Emit content change event
     this.events.contentChanged(newContent);
     this.events.nodeReferenceSelected({ nodeId, nodeTitle });
+  }
+
+  /**
+   * Position cursor based on click coordinates (placeholder implementation)
+   * TODO: Integrate with MockElement for precise positioning
+   */
+  private positionCursorFromClick(clickPosition: { x: number; y: number }, formattedContent: string): void {
+    console.log('Positioning cursor from click:', { clickPosition, formattedContent: formattedContent.substring(0, 50) + '...' });
+    
+    // For now, position cursor at the end as fallback
+    // This will be enhanced with MockElement integration
+    this.positionCursorAtEnd();
+  }
+
+  /**
+   * Position cursor at the end of content as fallback
+   */
+  private positionCursorAtEnd(): void {
+    const contentLength = (this.element.textContent || '').length;
+    this.restoreCursorPosition(contentLength);
   }
 }

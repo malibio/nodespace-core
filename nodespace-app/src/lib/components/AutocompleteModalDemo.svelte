@@ -27,7 +27,7 @@
   let modalVisible = false;
   let modalPosition = { x: 200, y: 150 };
   let currentQuery = '';
-  let contentEditableElement: HTMLDivElement;
+  let contentEditableElement: HTMLDivElement | undefined;
   
   // Services
   let databaseService: MockDatabaseService;
@@ -102,7 +102,6 @@
     
     if (triggerContext && triggerContext.isValid) {
       // Show modal at cursor position
-      const rect = target.getBoundingClientRect();
       const range = selection.getRangeAt(0);
       const rangeRect = range.getBoundingClientRect();
       
@@ -268,8 +267,9 @@
       
       <!-- Interactive Text Editor -->
       <div class="space-y-2">
-        <label class="text-sm font-medium">Interactive Editor (Type @ to trigger autocomplete):</label>
+        <label for="demo-editor" class="text-sm font-medium">Interactive Editor (Type @ to trigger autocomplete):</label>
         <div
+          id="demo-editor"
           bind:this={contentEditableElement}
           contenteditable="true"
           class="min-h-32 p-4 border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring"

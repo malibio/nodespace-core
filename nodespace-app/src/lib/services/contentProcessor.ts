@@ -1068,7 +1068,7 @@ export class ContentProcessor {
     const now = Date.now();
     let oldestTimestamp = now;
     
-    for (const [_key, cached] of this.referenceCache) {
+    for (const [, cached] of this.referenceCache) {
       if (cached.timestamp < oldestTimestamp) {
         oldestTimestamp = cached.timestamp;
       }

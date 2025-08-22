@@ -13,6 +13,11 @@
  * - Performance monitoring integration
  */
 
+// Browser API type declarations for server-side compatibility
+declare global {
+  const IntersectionObserver: typeof globalThis.IntersectionObserver;
+}
+
 import { NodeReferenceService } from './NodeReferenceService';
 import type { 
   TriggerContext, 
@@ -252,7 +257,7 @@ class ViewportProcessor {
   observeElement(element: HTMLElement, nodeId: string): void {
     if (this.observer && element) {
       if (!element.dataset) {
-        (element as HTMLElement & { dataset: DOMStringMap }).dataset = {};
+        (element as HTMLElement & { dataset: Record<string, string> }).dataset = {};
       }
       element.dataset.nodeId = nodeId;
       this.observer.observe(element);
@@ -398,7 +403,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       // Enhanced trigger detection with better performance
       const result = this.optimizedTriggerDetection(content, cursorPosition);
       
-      const _duration = measurement.finish();
+      measurement.finish();
       
       // Record success/failure metrics
       this.performanceMonitor.recordMetric(

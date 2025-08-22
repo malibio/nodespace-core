@@ -252,9 +252,8 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     it('should emit events for detected nodespace references', () => {
       const content = 'Reference to [Target](nodespace://node/target-123)';
       
-      // Mock event bus to capture events
-      const originalEmit = vi.fn();
-      const _eventBus = { emit: originalEmit };
+      // Mock event bus to capture events  
+      vi.fn();
       
       // Process content
       contentProcessor.processContentWithEventEmission(content, 'source-node');

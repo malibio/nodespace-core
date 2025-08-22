@@ -548,8 +548,7 @@ describe('HierarchyService', () => {
       // Populate cache
       hierarchyService.getNodeDepth('test-node');
       
-      let stats = hierarchyService.getCacheStats();
-      const _initialCacheSize = stats.depthCacheSize;
+      hierarchyService.getCacheStats();
 
       // Emit hierarchy update event
       eventBus.emit({
@@ -565,7 +564,7 @@ describe('HierarchyService', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       // Cache should be invalidated
-      stats = hierarchyService.getCacheStats();
+      hierarchyService.getCacheStats();
       // Note: Cache invalidation might not immediately reduce size due to 
       // how the implementation works, but cache hits should reset
     });

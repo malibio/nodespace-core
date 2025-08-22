@@ -1,3 +1,6 @@
+/* eslint-env browser */
+/* global Document */
+
 /**
  * BaseNodeDecoration Tests
  * 
@@ -28,7 +31,6 @@ import { MockDatabaseService } from '$lib/services/MockDatabaseService';
 
 describe('BaseNode Decoration System', () => {
   let nodeReferenceService: NodeReferenceService;
-  let _decoratorFactory: NodeDecoratorFactory;
   let databaseService: MockDatabaseService;
   let nodeManager: EnhancedNodeManager;
   let hierarchyService: HierarchyService;
@@ -46,8 +48,6 @@ describe('BaseNode Decoration System', () => {
       nodeOperationsService,
       databaseService
     );
-    
-    _decoratorFactory = new NodeDecoratorFactory(nodeReferenceService);
     
     // Mock DOM environment
     const createMockElement = (tagName: string) => {
@@ -70,7 +70,7 @@ describe('BaseNode Decoration System', () => {
       return element;
     };
     
-    global.document = {
+    (globalThis as unknown as { document: Partial<Document> }).document = {
       createElement: vi.fn(createMockElement)
     } as Partial<Document>;
   });

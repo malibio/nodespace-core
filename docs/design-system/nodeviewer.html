@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NodeViewer - NodeSpace Design System</title>
+  <meta name="description" content="Complete nodeviewer interface with realistic content examples and node type differentiation.">
+  <link rel="stylesheet" href="assets/shadcn-variables.css">
+  <link rel="stylesheet" href="assets/style-guide.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+  <style>
+    /* NodeViewer implementation styles based on BaseNode.svelte */
+    .nodeviewer-demo {
+      background: hsl(var(--card));
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      padding: 2rem;
+      margin: 2rem 0;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+    
+    .two-panel-layout {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 2rem;
+      height: 600px;
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    
+    .main-content {
+      background: hsl(var(--background));
+      padding: 2rem;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      line-height: 1.6;
+    }
+    
+    .properties-panel {
+      background: hsl(var(--muted));
+      border-left: 1px solid hsl(var(--border));
+      padding: 1.5rem;
+      overflow-y: auto;
+    }
+    
+    /* BaseNode implementation */
+    .node {
+      position: relative;
+      padding: 0.25rem;
+      padding-left: calc(0.25rem + 20px);
+      width: 100%;
+      margin-bottom: 0.25rem;
+      cursor: text;
+      border-radius: 0.25rem;
+      transition: background-color 0.15s ease;
+    }
+    
+    .node:hover {
+      background: hsl(var(--muted) / 0.5);
+    }
+    
+    .node:focus-within {
+      outline: 2px solid hsl(var(--primary));
+      outline-offset: 2px;
+    }
+    
+    .node__indicator {
+      position: absolute;
+      left: 8px;
+      top: calc(0.25rem + 0.816em - 0.06375em);
+      transform: translate(-50%, -50%);
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .node__content {
+      flex: 1;
+      min-height: 1.25rem;
+      padding: 0;
+      border: none;
+      background: transparent;
+      font-family: inherit;
+      font-size: 1rem;
+      line-height: 1.6;
+      color: hsl(var(--foreground));
+      outline: none;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      width: 100%;
+      resize: none;
+    }
+    
+    /* Node type indicators */
+    .node-icon {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 0 0 2px hsl(var(--background));
+    }
+    
+    .node-icon--text { 
+      background: hsl(142 71% 45%);
+      box-shadow: 0 0 6px hsl(142 71% 45% / 0.3);
+    }
+    .node-icon--task { 
+      background: hsl(25 95% 53%);
+      box-shadow: 0 0 6px hsl(25 95% 53% / 0.3);
+    }
+    .node-icon--ai { 
+      background: hsl(221 83% 53%);
+      box-shadow: 0 0 6px hsl(221 83% 53% / 0.3);
+    }
+    .node-icon--entity { 
+      background: hsl(271 81% 56%);
+      box-shadow: 0 0 6px hsl(271 81% 56% / 0.3);
+    }
+    .node-icon--query { 
+      background: hsl(330 81% 60%);
+      box-shadow: 0 0 6px hsl(330 81% 60% / 0.3);
+    }
+    
+    /* Hierarchy indentation */
+    .node--level-1 { padding-left: calc(0.25rem + 44px); }
+    .node--level-2 { padding-left: calc(0.25rem + 68px); }
+    .node--level-3 { padding-left: calc(0.25rem + 92px); }
+    
+    /* Header levels */
+    .node--h1 .node__content {
+      font-size: 2rem;
+      font-weight: bold;
+      line-height: 1.2;
+    }
+    
+    .node--h2 .node__content {
+      font-size: 1.5rem;
+      font-weight: bold;
+      line-height: 1.3;
+    }
+    
+    .node--h3 .node__content {
+      font-size: 1.25rem;
+      font-weight: bold;
+      line-height: 1.4;
+    }
+    
+    /* Collapse/expand indicators */
+    .collapse-indicator {
+      position: absolute;
+      left: -12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      border-radius: 2px;
+      font-size: 10px;
+      color: hsl(var(--muted-foreground));
+      background: hsl(var(--background));
+      border: 1px solid hsl(var(--border));
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+    
+    .node:hover .collapse-indicator {
+      opacity: 1;
+    }
+    
+    .collapse-indicator:hover {
+      background: hsl(var(--muted));
+    }
+    
+    /* Properties panel styles */
+    .properties-section {
+      margin-bottom: 2rem;
+    }
+    
+    .properties-section h4 {
+      margin: 0 0 1rem 0;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: hsl(var(--foreground));
+    }
+    
+    .property-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid hsl(var(--border));
+    }
+    
+    .property-label {
+      font-size: 0.875rem;
+      color: hsl(var(--muted-foreground));
+    }
+    
+    .property-value {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: hsl(var(--foreground));
+    }
+    
+    .quick-action {
+      width: 100%;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      border: 1px solid hsl(var(--border));
+      background: hsl(var(--background));
+      color: hsl(var(--foreground));
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: background-color 0.15s ease;
+    }
+    
+    .quick-action:hover {
+      background: hsl(var(--muted));
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      .two-panel-layout {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      
+      .properties-panel {
+        border-left: none;
+        border-top: 1px solid hsl(var(--border));
+      }
+      
+      .node--level-1 { padding-left: calc(0.25rem + 36px); }
+      .node--level-2 { padding-left: calc(0.25rem + 52px); }
+      .node--level-3 { padding-left: calc(0.25rem + 68px); }
+    }
+  </style>
+</head>
+<body class="no-transitions">
+  <div class="style-guide">
+    <!-- Header -->
+    <header>
+      <h1>NodeViewer Interface</h1>
+      <p>Complete nodeviewer interface with realistic content examples, node type differentiation, and hierarchical display patterns.</p>
+    </header>
+
+    <!-- Navigation -->
+    <nav class="style-guide-nav">
+      <a href="index.html">Overview</a>
+      <a href="foundations.html">Foundations</a>
+      <a href="components.html">Components</a>
+      <a href="patterns.html">Patterns</a>
+      <a href="nodeviewer.html" class="active">NodeViewer</a>
+      
+      <div class="theme-toggle">
+        <!-- Theme toggle buttons will be generated by JavaScript -->
+      </div>
+    </nav>
+
+    <!-- Full NodeViewer Demo -->
+    <section class="example-section">
+      <h2>Complete NodeViewer Interface</h2>
+      <p>This demonstrates the full NodeSpace nodeviewer with realistic "Product Launch Campaign Strategy" content, showcasing hierarchical organization, node type differentiation, and the properties panel.</p>
+      
+      <div class="two-panel-layout">
+        <div class="main-content">
+          <!-- Product Launch Campaign Strategy content -->
+          <div class="node node--h1">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Product Launch Campaign Strategy</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">This comprehensive product launch plan provides the strategic framework, tactical execution details, and success measurement criteria necessary for achieving market leadership in the sustainable professional products category.</div>
+          </div>
+          
+          <div class="node node--h2">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Launch Overview</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Product: EcoSmart Professional Series</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Launch Date: July 15, 2025</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Campaign Duration: 12 weeks (4 weeks pre-launch, 4 weeks launch, 4 weeks post-launch)</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Total Budget: $180,000</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Primary Objective: Establish market leadership in sustainable professional products</div>
+          </div>
+          
+          <div class="node node--h2">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Executive Summary</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">The EcoSmart Professional Series represents our most significant product innovation in three years, combining professional-grade performance with industry-leading sustainability features. This launch campaign will position us as the premium choice for environmentally conscious professionals while maintaining our quality and performance reputation.</div>
+          </div>
+          
+          <div class="node node--h2">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Target Audience Analysis</div>
+          </div>
+          
+          <div class="node node--h3">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Primary Target Segment</div>
+          </div>
+          
+          <div class="node node--h3">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Professional Demographics:</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Age: 28-45 years</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Income: 75,000-150,000 annually</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Education: College degree or higher (87%)</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Location: Urban and suburban professionals in major metropolitan areas</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--text"></span>
+            </div>
+            <div class="node__content">Industry Focus: Design, consulting, technology, finance, healthcare</div>
+          </div>
+          
+          <div class="node node--h2">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--task"></span>
+            </div>
+            <div class="node__content">Action Items & Timeline</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--task"></span>
+            </div>
+            <div class="node__content">Week -4: Finalize marketing materials and press kit</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--task"></span>
+            </div>
+            <div class="node__content">Week -3: Begin influencer outreach and media briefings</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--task"></span>
+            </div>
+            <div class="node__content">Week -2: Launch teaser campaign on social media</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--task"></span>
+            </div>
+            <div class="node__content">Week -1: Prepare retail partners and distribution channels</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--task"></span>
+            </div>
+            <div class="node__content">Week 0: Official product launch event</div>
+          </div>
+          
+          <div class="node node--h2">
+            <div class="collapse-indicator">▼</div>
+            <div class="node__indicator">
+              <span class="node-icon node-icon--ai"></span>
+            </div>
+            <div class="node__content">AI-Generated Market Insights</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--ai"></span>
+            </div>
+            <div class="node__content">Based on current market trends and competitor analysis, the sustainable professional products segment is experiencing 23% year-over-year growth. Key opportunity areas include corporate wellness programs and remote work professional setups.</div>
+          </div>
+          
+          <div class="node node--level-1">
+            <div class="node__indicator">
+              <span class="node-icon node-icon--ai"></span>
+            </div>
+            <div class="node__content">Recommended focus on LinkedIn and professional networking platforms for initial launch phase, with emphasis on thought leadership content and sustainability messaging.</div>
+          </div>
+        </div>
+        
+        <div class="properties-panel">
+          <div class="properties-section">
+            <h4>Selected Node Properties</h4>
+            <div class="property-item">
+              <span class="property-label">Type</span>
+              <span class="property-value">Text Node</span>
+            </div>
+            <div class="property-item">
+              <span class="property-label">Created</span>
+              <span class="property-value">Today, 2:30 PM</span>
+            </div>
+            <div class="property-item">
+              <span class="property-label">Modified</span>
+              <span class="property-value">Today, 3:15 PM</span>
+            </div>
+            <div class="property-item">
+              <span class="property-label">Word Count</span>
+              <span class="property-value">47 words</span>
+            </div>
+            <div class="property-item">
+              <span class="property-label">References</span>
+              <span class="property-value">3 backlinks</span>
+            </div>
+          </div>
+          
+          <div class="properties-section">
+            <h4>Node Type Options</h4>
+            <select style="
+              width: 100%;
+              padding: 0.5rem;
+              border: 1px solid hsl(var(--border));
+              border-radius: var(--radius);
+              background: hsl(var(--background));
+              color: hsl(var(--foreground));
+              margin-bottom: 1rem;
+            ">
+              <option>📝 Text Node</option>
+              <option>✅ Task Node</option>
+              <option>🤖 AI Chat Node</option>
+              <option>🏷️ Entity Node</option>
+              <option>🔍 Query Node</option>
+            </select>
+          </div>
+          
+          <div class="properties-section">
+            <h4>Tags</h4>
+            <input style="
+              width: 100%;
+              padding: 0.5rem;
+              border: 1px solid hsl(var(--border));
+              border-radius: var(--radius);
+              background: hsl(var(--background));
+              color: hsl(var(--foreground));
+              margin-bottom: 1rem;
+            " placeholder="Add tags..." value="strategy, marketing, launch" />
+          </div>
+          
+          <div class="properties-section">
+            <h4>Quick Actions</h4>
+            <button class="quick-action">
+              <span>🤖</span>
+              <span>AI Assist</span>
+            </button>
+            <button class="quick-action">
+              <span>📋</span>
+              <span>Copy Reference</span>
+            </button>
+            <button class="quick-action">
+              <span>🔗</span>
+              <span>Create Link</span>
+            </button>
+            <button class="quick-action">
+              <span>📊</span>
+              <span>Generate Summary</span>
+            </button>
+          </div>
+          
+          <div class="properties-section">
+            <h4>Related Nodes</h4>
+            <div style="
+              background: hsl(var(--background));
+              border: 1px solid hsl(var(--border));
+              border-radius: var(--radius);
+              padding: 1rem;
+            ">
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <span class="node-icon node-icon--task"></span>
+                <span style="font-size: 0.875rem;">Marketing Budget Review</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <span class="node-icon node-icon--text"></span>
+                <span style="font-size: 0.875rem;">Competitor Analysis Q3</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="node-icon node-icon--ai"></span>
+                <span style="font-size: 0.875rem;">Market Trend Report</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Node Type Showcase -->
+    <section class="example-section">
+      <h2>Node Type Visual System</h2>
+      <p>Visual differentiation system using color-coded indicators for different content types.</p>
+      
+      <div class="nodeviewer-demo">
+        <div class="node">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--text"></span>
+          </div>
+          <div class="node__content"><strong>📝 Text Node</strong> - Primary content, documentation, and narrative text. Uses green indicators for natural content association.</div>
+        </div>
+        
+        <div class="node">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--task"></span>
+          </div>
+          <div class="node__content"><strong>✅ Task Node</strong> - Actionable items, todos, and deliverables. Orange indicators create urgency and attention for action items.</div>
+        </div>
+        
+        <div class="node">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--ai"></span>
+          </div>
+          <div class="node__content"><strong>🤖 AI Chat Node</strong> - AI-generated content, conversations, and insights. Blue indicators distinguish AI contributions while maintaining trust.</div>
+        </div>
+        
+        <div class="node">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--entity"></span>
+          </div>
+          <div class="node__content"><strong>🏷️ Entity Node</strong> - Tags, categories, and metadata. Purple indicators provide semantic organization and classification.</div>
+        </div>
+        
+        <div class="node">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--query"></span>
+          </div>
+          <div class="node__content"><strong>🔍 Query Node</strong> - Search queries, filters, and dynamic content. Pink indicators highlight interactive and query-based content.</div>
+        </div>
+      </div>
+      
+      <h3>Accessibility & Color Independence</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">♿ Universal Design</div>
+          <div class="component-demo">
+            <ul>
+              <li><strong>Shape + Color:</strong> Circular indicators with distinct colors</li>
+              <li><strong>Emoji Support:</strong> Users can customize indicators with emojis/icons</li>
+              <li><strong>High Contrast:</strong> All colors meet WCAG 4.5:1 contrast ratios</li>
+              <li><strong>Consistent Sizing:</strong> 8px circles with subtle glow effects</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hierarchical Organization -->
+    <section class="example-section">
+      <h2>Hierarchical Organization Patterns</h2>
+      <p>Demonstration of nested content structure with proper indentation and parent-child relationships.</p>
+      
+      <div class="nodeviewer-demo">
+        <div class="node">
+          <div class="collapse-indicator">▼</div>
+          <div class="node__indicator">
+            <span class="node-icon node-icon--text"></span>
+          </div>
+          <div class="node__content">Project Root: Marketing Campaign</div>
+        </div>
+        
+        <div class="node node--level-1">
+          <div class="collapse-indicator">▼</div>
+          <div class="node__indicator">
+            <span class="node-icon node-icon--text"></span>
+          </div>
+          <div class="node__content">Phase 1: Research & Planning</div>
+        </div>
+        
+        <div class="node node--level-2">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--task"></span>
+          </div>
+          <div class="node__content">Market research survey design</div>
+        </div>
+        
+        <div class="node node--level-2">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--task"></span>
+          </div>
+          <div class="node__content">Competitor analysis framework</div>
+        </div>
+        
+        <div class="node node--level-2">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--ai"></span>
+          </div>
+          <div class="node__content">AI-generated audience personas based on data</div>
+        </div>
+        
+        <div class="node node--level-1">
+          <div class="collapse-indicator">▶</div>
+          <div class="node__indicator">
+            <span class="node-icon node-icon--text"></span>
+          </div>
+          <div class="node__content">Phase 2: Execution (collapsed)</div>
+        </div>
+        
+        <div class="node node--level-1">
+          <div class="node__indicator">
+            <span class="node-icon node-icon--entity"></span>
+          </div>
+          <div class="node__content">Tags: #marketing #q3-2025 #priority-high</div>
+        </div>
+      </div>
+      
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">📏 Indentation Rules</div>
+          <div class="component-demo">
+            <ul>
+              <li><strong>Level 0:</strong> 4px base padding</li>
+              <li><strong>Level 1:</strong> 44px (4px + 20px + 24px)</li>
+              <li><strong>Level 2:</strong> 68px (44px + 24px)</li>
+              <li><strong>Level 3:</strong> 92px (68px + 24px)</li>
+              <li><strong>Mobile:</strong> Reduced to 16px per level on small screens</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Features -->
+    <section class="example-section">
+      <h2>Interactive Capabilities</h2>
+      <p>Built-in editing features that make every node a powerful content creation tool.</p>
+      
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">⌨️ Keyboard Shortcuts</div>
+          <div class="component-demo">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Navigate nodes</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">↑ ↓</code>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Indent/outdent</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">Tab / Shift+Tab</code>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>New node</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">Enter</code>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Node reference</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">@</code>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">🎨 Formatting</div>
+          <div class="component-demo">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Bold text</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">Cmd+B</code>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Italic text</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">Cmd+I</code>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Header levels</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;"># ## ###</code>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Underline</span>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">Cmd+U</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Footer -->
+    <footer style="margin-top: 4rem; padding-top: 2rem; border-top: 1px solid hsl(var(--border)); text-align: center; color: hsl(var(--muted-foreground));">
+      <p>NodeSpace Design System - NodeViewer Interface</p>
+    </footer>
+  </div>
+
+  <script src="assets/interactive.js"></script>
+</body>
+</html>

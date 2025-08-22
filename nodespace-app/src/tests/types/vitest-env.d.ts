@@ -7,7 +7,12 @@ import type { TestingLibraryMatchers } from '@testing-library/jest-dom/matchers'
 
 declare global {
   namespace Vi {
-    interface JestAssertion<T = any> extends jest.Matchers<void, T>, TestingLibraryMatchers<T, void> {}
+    interface JestAssertion<T = unknown> extends TestingLibraryMatchers<T, void> {
+      // Vitest assertions interface - add specific method signatures as needed
+      toBe: (expected: T) => void;
+      toEqual: (expected: T) => void;
+      toContain: (expected: unknown) => void;
+    }
   }
   
   /**
@@ -16,10 +21,5 @@ declare global {
    */
   var global: typeof globalThis;
 }
-
-/**
- * Node.js process global for test environment
- */
-declare const process: NodeJS.Process;
 
 export {};

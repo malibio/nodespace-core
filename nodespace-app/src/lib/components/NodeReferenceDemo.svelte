@@ -16,9 +16,7 @@
   import Button from '$lib/components/ui/button/button.svelte';
   import Separator from '$lib/components/ui/separator/separator.svelte';
   import { 
-    NodeReferenceService,
-    type TriggerContext,
-    type AutocompleteResult 
+    NodeReferenceService
   } from '$lib/services/NodeReferenceService';
   import { NodeReferenceRenderer, initializeNodeReferenceRenderer } from '$lib/services/NodeReferenceRenderer';
   import { decorationCoordinator } from '$lib/services/DecorationCoordinator';
@@ -34,7 +32,8 @@
   let mounted = false;
   let nodeReferenceService: NodeReferenceService;
   let nodeReferenceRenderer: NodeReferenceRenderer;
-  let demoContainer: HTMLDivElement | undefined;
+  // Svelte bind:this assignment - populated by framework at runtime
+  let demoContainer: HTMLDivElement | undefined = undefined;
   let status = writable('Initializing...');
   let selectedContext = writable<'inline' | 'popup' | 'preview'>('inline');
   

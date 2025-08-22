@@ -36,15 +36,15 @@
     nodeReferenceService?: NodeReferenceService | null;
   } = $props();
 
-  // DOM element and controller
-  let contentEditableElement: HTMLDivElement;
+  // DOM element and controller - Svelte bind:this assignment
+  let contentEditableElement: HTMLDivElement | undefined = undefined;
   let controller: ContentEditableController | null = null;
 
   // Autocomplete modal state
   let showAutocomplete = $state(false);
   let autocompletePosition = $state({ x: 0, y: 0 });
   let currentQuery = $state('');
-  let currentTriggerContext = $state<TriggerContext | null>(null);
+  let currentTriggerContext = $state<TriggerContext | null>(null); // Used in trigger event handlers
 
   // Event dispatcher
   const dispatch = createEventDispatcher<{

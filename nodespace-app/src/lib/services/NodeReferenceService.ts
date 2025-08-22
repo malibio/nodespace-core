@@ -24,6 +24,8 @@
  * - ContentProcessor: Enhanced @ trigger content processing
  */
 
+// Browser and Node.js compatibility handled via conditional logic
+
 import { eventBus } from './EventBus';
 import { ContentProcessor } from './contentProcessor';
 import type { NodeManager, Node } from './NodeManager';
@@ -338,7 +340,8 @@ export class NodeReferenceService {
    */
   public parseNodespaceURI(uri: string): NodeReference | null {
     try {
-      const url = new URL(uri);
+      // eslint-disable-next-line no-undef
+      const url = typeof window !== 'undefined' ? new URL(uri) : new (global as typeof globalThis).URL(uri);
       
       if (url.protocol !== 'nodespace:') {
         return null;
@@ -389,7 +392,7 @@ export class NodeReferenceService {
   public createNodespaceURI(nodeId: string, options: URIOptions = {}): string {
     let uri = `nodespace://node/${nodeId}`;
     
-    const params = new URLSearchParams();
+    const params = typeof window !== 'undefined' ? new URLSearchParams() : new (global as typeof globalThis).URLSearchParams();
     
     if (options.includeHierarchy) {
       params.set('hierarchy', 'true');
@@ -815,7 +818,7 @@ export class NodeReferenceService {
     );
     
     let node;
-    while (node = walker.nextNode()) {
+    while ((node = walker.nextNode())) {
       if (node === range.startContainer) {
         return position + range.startOffset;
       }
@@ -899,7 +902,7 @@ export class NodeReferenceService {
         const node = this.nodeManager.findNode(id);
         return node ? this.extractNodeTitle(node) : id;
       });
-    } catch (error) {
+    } catch {
       return [nodeId];
     }
   }
@@ -966,7 +969,7 @@ export class NodeReferenceService {
 
   private invalidateNodeCaches(nodeId: string): void {
     // Clear suggestion cache entries that might include this node
-    for (const [key, _value] of this.suggestionCache) {
+    for (const [key] of this.suggestionCache) {
       this.suggestionCache.delete(key);
     }
     

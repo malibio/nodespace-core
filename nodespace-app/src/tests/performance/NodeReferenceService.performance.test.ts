@@ -1,3 +1,6 @@
+/* eslint-env node, browser */
+/* global process */
+
 /**
  * NodeReferenceService Performance Tests - Comprehensive Benchmarking Suite
  * 
@@ -165,7 +168,7 @@ describe('NodeReferenceService Performance Tests', () => {
       
       for (const content of testCases) {
         const start = performance.now();
-        const _result = nodeReferenceService.detectTrigger(content, content.length);
+        nodeReferenceService.detectTrigger(content, content.length);
         const duration = performance.now() - start;
         
         totalTime += duration;
@@ -334,7 +337,7 @@ describe('NodeReferenceService Performance Tests', () => {
         const uri = `nodespace://node/${nodeId}`;
         
         const start = performance.now();
-        const _result = nodeReferenceService.resolveNodespaceURI(uri);
+        nodeReferenceService.resolveNodespaceURI(uri);
         const duration = performance.now() - start;
         
         expect(duration).toBeLessThan(PERFORMANCE_TARGETS.URI_RESOLUTION_MS);
@@ -360,7 +363,7 @@ describe('NodeReferenceService Performance Tests', () => {
 
   describe('Memory Performance and Leak Prevention', () => {
     it('should maintain memory usage within limits during heavy operations', async () => {
-      const initialMemory = process.memoryUsage ? process.memoryUsage().heapUsed : 0;
+      const initialMemory = (typeof process !== 'undefined' && process.memoryUsage) ? process.memoryUsage().heapUsed : 0;
       
       // Perform memory-intensive operations
       for (let i = 0; i < 1000; i++) {
@@ -385,12 +388,12 @@ describe('NodeReferenceService Performance Tests', () => {
         }
       }
       
-      const finalMemory = process.memoryUsage ? process.memoryUsage().heapUsed : 0;
+      const finalMemory = (typeof process !== 'undefined' && process.memoryUsage) ? process.memoryUsage().heapUsed : 0;
       const memoryGrowthMB = (finalMemory - initialMemory) / 1024 / 1024;
       
       console.log(`Memory growth: ${memoryGrowthMB.toFixed(2)}MB`);
       
-      if (process.memoryUsage) {
+      if (typeof process !== 'undefined' && process.memoryUsage) {
         expect(memoryGrowthMB).toBeLessThan(PERFORMANCE_TARGETS.MEMORY_THRESHOLD_MB);
       }
     });

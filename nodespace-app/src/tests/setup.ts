@@ -8,11 +8,11 @@ import '@testing-library/jest-dom';
 // Ensure global object is available for legacy test compatibility
 // In Vitest/Node.js environment, global should already be available, but provide fallback
 if (typeof global === 'undefined') {
-  (globalThis as any).global = globalThis;
+  (globalThis as unknown as { global: typeof globalThis }).global = globalThis;
 } else {
   // Ensure global and globalThis are properly linked
-  if (global !== globalThis) {
-    Object.setPrototypeOf(global, globalThis);
+  if (globalThis.global !== globalThis) {
+    Object.setPrototypeOf(globalThis.global, globalThis);
   }
 }
 

@@ -3,6 +3,8 @@
  * Fixes "global is not defined" errors in tests
  */
 
+/// <reference types="node" />
+
 declare global {
   /**
    * Node.js global object (available in test environment)
@@ -14,22 +16,36 @@ declare global {
    * Additional test-specific global extensions
    */
   namespace globalThis {
-    interface Window extends GlobalEventHandlers {
-      IntersectionObserver: typeof IntersectionObserver;
-      MutationObserver: typeof MutationObserver;
-      ResizeObserver: typeof ResizeObserver;
+    interface Window {
+      IntersectionObserver: new (
+        callback: (entries: unknown[]) => void,
+        options?: unknown
+      ) => {
+        observe: (target: Element) => void;
+        unobserve: (target: Element) => void;
+        disconnect: () => void;
+      };
+      MutationObserver: new (
+        callback: (mutations: unknown[]) => void
+      ) => {
+        observe: (target: Node, options?: unknown) => void;
+        disconnect: () => void;
+        takeRecords: () => unknown[];
+      };
+      ResizeObserver: new (
+        callback: (entries: unknown[]) => void
+      ) => {
+        observe: (target: Element) => void;
+        unobserve: (target: Element) => void;
+        disconnect: () => void;
+      };
     }
   }
 }
 
 /**
  * Additional test environment type augmentations
+ * Enable flexible global properties for testing scenarios
  */
-declare namespace NodeJS {
-  interface Global extends GlobalThis {
-    // Allow any properties to be set on global for testing
-    [key: string]: any;
-  }
-}
 
 export {};
