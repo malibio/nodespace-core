@@ -1,12 +1,15 @@
 /**
  * NodeReferenceRenderer Tests
- * 
+ *
  * Tests for the performance-optimized reference decoration rendering system
  * that coordinates the BaseNode decoration classes.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { NodeReferenceRenderer, initializeNodeReferenceRenderer } from '$lib/services/NodeReferenceRenderer';
+import {
+  NodeReferenceRenderer,
+  initializeNodeReferenceRenderer
+} from '$lib/services/NodeReferenceRenderer';
 import { NodeReferenceService } from '$lib/services/NodeReferenceService';
 import { EnhancedNodeManager } from '$lib/services/EnhancedNodeManager';
 import { HierarchyService } from '$lib/services/HierarchyService';
@@ -57,38 +60,46 @@ describe('NodeReferenceRenderer', () => {
     databaseService = new MockDatabaseService();
     nodeManager = new EnhancedNodeManager(databaseService);
     hierarchyService = new HierarchyService(nodeManager, databaseService);
-    nodeOperationsService = new NodeOperationsService(nodeManager, hierarchyService, databaseService);
+    nodeOperationsService = new NodeOperationsService(
+      nodeManager,
+      hierarchyService,
+      databaseService
+    );
     nodeReferenceService = new NodeReferenceService(
       nodeManager,
       hierarchyService,
       nodeOperationsService,
       databaseService
     );
-    
+
     renderer = initializeNodeReferenceRenderer(nodeReferenceService);
-    
+
     // Mock DOM environment
     globalThis.document = {
-      createElement: vi.fn((tagName: string): MockElement => ({
-        tagName: tagName.toUpperCase(),
-        innerHTML: '',
-        classList: {
-          add: vi.fn(),
-          remove: vi.fn(),
-          contains: vi.fn(() => false),
-          toggle: vi.fn()
-        },
-        dataset: {},
-        setAttribute: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn()
-      })),
-      createTreeWalker: vi.fn((): MockTreeWalker => ({
-        nextNode: vi.fn(() => null)
-      })),
+      createElement: vi.fn(
+        (tagName: string): MockElement => ({
+          tagName: tagName.toUpperCase(),
+          innerHTML: '',
+          classList: {
+            add: vi.fn(),
+            remove: vi.fn(),
+            contains: vi.fn(() => false),
+            toggle: vi.fn()
+          },
+          dataset: {},
+          setAttribute: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn()
+        })
+      ),
+      createTreeWalker: vi.fn(
+        (): MockTreeWalker => ({
+          nextNode: vi.fn(() => null)
+        })
+      ),
       querySelectorAll: vi.fn(() => [])
     } as MockDocument;
-    
+
     globalThis.window = {
       IntersectionObserver: vi.fn(),
       MutationObserver: vi.fn()
@@ -116,7 +127,7 @@ describe('NodeReferenceRenderer', () => {
 
     it('should provide initial metrics', () => {
       const metrics = renderer.getMetrics();
-      
+
       expect(metrics).toEqual({
         totalReferences: 0,
         renderedReferences: 0,
@@ -138,8 +149,11 @@ describe('NodeReferenceRenderer', () => {
 
     beforeEach(async () => {
       // Create a test node
-      testNode = await nodeReferenceService.createNode('task', 'Test Task\nstatus: pending\npriority: high\n\nTest task description');
-      
+      testNode = await nodeReferenceService.createNode(
+        'task',
+        'Test Task\nstatus: pending\npriority: high\n\nTest task description'
+      );
+
       mockElement = {
         innerHTML: '',
         classList: {
@@ -157,27 +171,30 @@ describe('NodeReferenceRenderer', () => {
 
     it('should render a single task reference correctly', async () => {
       await renderer.renderReference(mockElement, testNode.id, 'inline');
-      
+
       expect(mockElement.innerHTML).toContain('ns-noderef--task');
       expect(mockElement.innerHTML).toContain('Test Task');
-      expect(mockElement.setAttribute).toHaveBeenCalledWith('aria-label', expect.stringContaining('Task'));
+      expect(mockElement.setAttribute).toHaveBeenCalledWith(
+        'aria-label',
+        expect.stringContaining('Task')
+      );
       expect(mockElement.setAttribute).toHaveBeenCalledWith('role', 'button');
     });
 
     it('should handle different display contexts', async () => {
       const contexts: Array<'inline' | 'popup' | 'preview'> = ['inline', 'popup', 'preview'];
-      
+
       for (const context of contexts) {
         const element = { ...mockElement };
         await renderer.renderReference(element, testNode.id, context);
-        
+
         expect(element.dataset.context).toBe(context);
       }
     });
 
     it('should handle non-existent nodes gracefully', async () => {
       await renderer.renderReference(mockElement, 'non-existent-id', 'inline');
-      
+
       expect(mockElement.innerHTML).toContain('ns-noderef--error');
       expect(mockElement.innerHTML).toContain('Reference Error');
     });
@@ -186,12 +203,12 @@ describe('NodeReferenceRenderer', () => {
       // First render
       await renderer.renderReference(mockElement, testNode.id, 'inline');
       const firstMetrics = renderer.getMetrics();
-      
+
       // Second render with same parameters
       const secondElement = { ...mockElement };
       await renderer.renderReference(secondElement, testNode.id, 'inline');
       const secondMetrics = renderer.getMetrics();
-      
+
       // Cache should be used (no additional cache miss)
       expect(secondMetrics.cacheMisses).toBe(firstMetrics.cacheMisses);
     });
@@ -200,12 +217,12 @@ describe('NodeReferenceRenderer', () => {
       // First render
       await renderer.renderReference(mockElement, testNode.id, 'inline');
       const firstMetrics = renderer.getMetrics();
-      
+
       // Force refresh
       const secondElement = { ...mockElement };
       await renderer.renderReference(secondElement, testNode.id, 'inline', { force: true });
       const secondMetrics = renderer.getMetrics();
-      
+
       // Should have additional cache miss due to forced refresh
       expect(secondMetrics.cacheMisses).toBeGreaterThan(firstMetrics.cacheMisses);
     });
@@ -226,10 +243,10 @@ describe('NodeReferenceRenderer', () => {
         await nodeReferenceService.createNode('user', 'John Doe\nrole: admin'),
         await nodeReferenceService.createNode('date', '2024-12-31\nProject deadline')
       ];
-      
+
       // Ensure nodes are available for testing
       expect(testNodes).toHaveLength(3);
-      
+
       mockContainer = {
         innerHTML: '',
         classList: { add: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) },
@@ -247,7 +264,7 @@ describe('NodeReferenceRenderer', () => {
         batchSize: 10,
         debounceMs: 0
       });
-      
+
       const metrics = renderer.getMetrics();
       expect(metrics.lastRender).toBeGreaterThan(0);
       expect(metrics.renderTime).toBeGreaterThan(0);
@@ -255,13 +272,13 @@ describe('NodeReferenceRenderer', () => {
 
     it('should handle different display contexts for container', async () => {
       const contexts: Array<'inline' | 'popup' | 'preview'> = ['inline', 'popup', 'preview'];
-      
+
       for (const context of contexts) {
         await renderer.renderContainer(mockContainer, {
           displayContext: context,
           viewportOptimization: false
         });
-        
+
         // Should complete without errors
         const metrics = renderer.getMetrics();
         expect(metrics.lastRender).toBeGreaterThan(0);
@@ -288,18 +305,18 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
       } as unknown as HTMLElement;
-      
+
       // Render to populate cache
       await renderer.renderReference(mockElement, testNode.id, 'inline');
       const beforeClear = renderer.getMetrics();
-      
+
       // Clear cache
       renderer.clearCache();
-      
+
       // Render again should cause cache miss
       await renderer.renderReference(mockElement, testNode.id, 'inline');
       const afterClear = renderer.getMetrics();
-      
+
       expect(afterClear.cacheMisses).toBeGreaterThan(beforeClear.cacheMisses);
     });
 
@@ -311,14 +328,14 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
       } as unknown as HTMLElement;
-      
+
       // Initial render
       await renderer.renderReference(mockElement, testNode.id, 'inline');
       expect(mockElement.innerHTML).toContain('Cached Task');
-      
+
       // Simulate decoration update
       await renderer.updateDecoration(testNode.id, 'content-changed');
-      
+
       // Should handle update without errors
       const metrics = renderer.getMetrics();
       expect(metrics).toBeDefined();
@@ -335,12 +352,16 @@ describe('NodeReferenceRenderer', () => {
         innerHTML: '',
         classList: { add: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) },
         dataset: {},
-        setAttribute: vi.fn(() => { throw new Error('Mock error'); }),
+        setAttribute: vi.fn(() => {
+          throw new Error('Mock error');
+        }),
         addEventListener: vi.fn()
       } as unknown as HTMLElement;
-      
+
       // Should not throw, should render error state
-      await expect(renderer.renderReference(mockElement, 'some-id', 'inline')).resolves.not.toThrow();
+      await expect(
+        renderer.renderReference(mockElement, 'some-id', 'inline')
+      ).resolves.not.toThrow();
     });
 
     it('should handle service errors during rendering', async () => {
@@ -349,9 +370,11 @@ describe('NodeReferenceRenderer', () => {
         ...nodeReferenceService,
         resolveNodespaceURI: vi.fn().mockRejectedValue(new Error('Service error'))
       } as unknown as NodeReferenceService;
-      
-      const errorRenderer = new (NodeReferenceRenderer as typeof NodeReferenceRenderer)(errorService as NodeReferenceService);
-      
+
+      const errorRenderer = new (NodeReferenceRenderer as typeof NodeReferenceRenderer)(
+        errorService as NodeReferenceService
+      );
+
       const mockElement = {
         innerHTML: '',
         classList: { add: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) },
@@ -359,9 +382,9 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
       } as unknown as HTMLElement;
-      
+
       await errorRenderer.renderReference(mockElement, 'test-id', 'inline');
-      
+
       // Should render error state
       expect(mockElement.innerHTML).toContain('ns-noderef--error');
     });
@@ -374,14 +397,14 @@ describe('NodeReferenceRenderer', () => {
   describe('Performance', () => {
     it('should provide performance metrics', () => {
       const metrics = renderer.getMetrics();
-      
+
       expect(metrics).toHaveProperty('totalReferences');
       expect(metrics).toHaveProperty('renderedReferences');
       expect(metrics).toHaveProperty('viewportReferences');
       expect(metrics).toHaveProperty('cacheMisses');
       expect(metrics).toHaveProperty('renderTime');
       expect(metrics).toHaveProperty('lastRender');
-      
+
       expect(typeof metrics.totalReferences).toBe('number');
       expect(typeof metrics.renderedReferences).toBe('number');
       expect(typeof metrics.viewportReferences).toBe('number');
@@ -399,13 +422,13 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
       } as unknown as HTMLElement;
-      
+
       const beforeMetrics = renderer.getMetrics();
-      
+
       await renderer.renderReference(mockElement, testNode.id, 'inline');
-      
+
       const afterMetrics = renderer.getMetrics();
-      
+
       expect(afterMetrics.renderedReferences).toBeGreaterThan(beforeMetrics.renderedReferences);
       expect(afterMetrics.renderTime).toBeGreaterThanOrEqual(0);
     });
@@ -418,7 +441,7 @@ describe('NodeReferenceRenderer', () => {
   describe('Cleanup', () => {
     it('should cleanup resources properly', () => {
       expect(() => renderer.cleanup()).not.toThrow();
-      
+
       // After cleanup, metrics should still be accessible
       const metrics = renderer.getMetrics();
       expect(metrics).toBeDefined();

@@ -3,13 +3,13 @@
 
 /**
  * BaseNodeDecoration Tests
- * 
+ *
  * Comprehensive tests for the BaseNode decoration system including all node types,
  * decoration rendering, caching, and accessibility features.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { 
+import {
   TaskNodeDecorator,
   UserNodeDecorator,
   DateNodeDecorator,
@@ -41,14 +41,18 @@ describe('BaseNode Decoration System', () => {
     databaseService = new MockDatabaseService();
     nodeManager = new EnhancedNodeManager(databaseService);
     hierarchyService = new HierarchyService(nodeManager, databaseService);
-    nodeOperationsService = new NodeOperationsService(nodeManager, hierarchyService, databaseService);
+    nodeOperationsService = new NodeOperationsService(
+      nodeManager,
+      hierarchyService,
+      databaseService
+    );
     nodeReferenceService = new NodeReferenceService(
       nodeManager,
       hierarchyService,
       nodeOperationsService,
       databaseService
     );
-    
+
     // Mock DOM environment
     const createMockElement = (tagName: string) => {
       const element = {
@@ -57,19 +61,21 @@ describe('BaseNode Decoration System', () => {
         innerHTML: '',
         dataset: {}
       };
-      
+
       // Mock textContent setter that updates innerHTML
       Object.defineProperty(element, 'textContent', {
-        get() { return this._textContent || ''; },
-        set(value) { 
+        get() {
+          return this._textContent || '';
+        },
+        set(value) {
           this._textContent = value;
           this.innerHTML = value ? String(value).replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
         }
       });
-      
+
       return element;
     };
-    
+
     (globalThis as unknown as { document: Partial<Document> }).document = {
       createElement: vi.fn(createMockElement)
     } as Partial<Document>;
@@ -85,8 +91,18 @@ describe('BaseNode Decoration System', () => {
 
   describe('Node Type Configurations', () => {
     it('should have configurations for all expected node types', () => {
-      const expectedTypes = ['text', 'task', 'user', 'date', 'document', 'ai_chat', 'entity', 'query', 'default'];
-      
+      const expectedTypes = [
+        'text',
+        'task',
+        'user',
+        'date',
+        'document',
+        'ai_chat',
+        'entity',
+        'query',
+        'default'
+      ];
+
       for (const type of expectedTypes) {
         expect(NODE_TYPE_CONFIGS[type]).toBeDefined();
         expect(NODE_TYPE_CONFIGS[type].icon).toBeTruthy();
@@ -121,7 +137,8 @@ describe('BaseNode Decoration System', () => {
         nodeId: 'task-1',
         nodeType: 'task',
         title: 'Complete project documentation',
-        content: '# Complete project documentation\nstatus: pending\npriority: high\n\nDetailed task description',
+        content:
+          '# Complete project documentation\nstatus: pending\npriority: high\n\nDetailed task description',
         uri: 'nodespace://node/task-1',
         metadata: {},
         targetElement: mockElement,
@@ -136,7 +153,9 @@ describe('BaseNode Decoration System', () => {
       expect(result.html).toContain('Complete project documentation');
       expect(result.cssClasses).toContain('ns-noderef--task-pending');
       expect(result.cssClasses).toContain('ns-noderef--priority-high');
-      expect(result.ariaLabel).toContain('Task: Complete project documentation (pending, high priority)');
+      expect(result.ariaLabel).toContain(
+        'Task: Complete project documentation (pending, high priority)'
+      );
       expect(result.interactive).toBe(true);
       expect(result.metadata.status).toBe('pending');
       expect(result.metadata.priority).toBe('high');
@@ -147,7 +166,8 @@ describe('BaseNode Decoration System', () => {
         nodeId: 'task-2',
         nodeType: 'task',
         title: 'Setup development environment',
-        content: '# Setup development environment\nstatus: completed\npriority: normal\n\nTask is done',
+        content:
+          '# Setup development environment\nstatus: completed\npriority: normal\n\nTask is done',
         uri: 'nodespace://node/task-2',
         metadata: {},
         targetElement: mockElement,
@@ -168,7 +188,8 @@ describe('BaseNode Decoration System', () => {
         nodeId: 'task-3',
         nodeType: 'task',
         title: 'Review pull request',
-        content: 'status: pending\npriority: low\ndue_date: 2024-12-31\n\nNeed to review the changes',
+        content:
+          'status: pending\npriority: low\ndue_date: 2024-12-31\n\nNeed to review the changes',
         uri: 'nodespace://node/task-3',
         metadata: {},
         targetElement: mockElement,
@@ -194,7 +215,7 @@ describe('BaseNode Decoration System', () => {
     beforeEach(() => {
       userDecorator = new UserNodeDecorator(nodeReferenceService);
       mockElement = { dataset: {} } as HTMLElement;
-      
+
       // Mock Math.random for consistent online status
       vi.spyOn(Math, 'random').mockReturnValue(0.7); // > 0.5, so online
     });
@@ -284,7 +305,7 @@ describe('BaseNode Decoration System', () => {
 
     it('should identify today dates correctly', () => {
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-      
+
       const context: DecorationContext = {
         nodeId: 'date-today',
         nodeType: 'date',
@@ -341,7 +362,8 @@ describe('BaseNode Decoration System', () => {
         nodeId: 'doc-1',
         nodeType: 'document',
         title: 'API Documentation',
-        content: '# API Documentation\ntype: pdf\nsize: 2.4MB\n\nComprehensive API documentation for the platform.',
+        content:
+          '# API Documentation\ntype: pdf\nsize: 2.4MB\n\nComprehensive API documentation for the platform.',
         uri: 'nodespace://node/doc-1',
         metadata: {},
         targetElement: mockElement,
@@ -407,7 +429,8 @@ describe('BaseNode Decoration System', () => {
         nodeId: 'ai-1',
         nodeType: 'ai_chat',
         title: 'Architecture Discussion',
-        content: '# Architecture Discussion\nmodel: Claude 3.5 Sonnet\nmessages: 47\nlast_activity: 2024-08-21T14:30:00Z\n\nDiscussion about system design',
+        content:
+          '# Architecture Discussion\nmodel: Claude 3.5 Sonnet\nmessages: 47\nlast_activity: 2024-08-21T14:30:00Z\n\nDiscussion about system design',
         uri: 'nodespace://node/ai-1',
         metadata: {},
         targetElement: mockElement,
@@ -465,7 +488,7 @@ describe('BaseNode Decoration System', () => {
       const factory = new NodeDecoratorFactory(nodeReferenceService);
       const decorator = factory.getDecorator('unknown-type');
       const defaultDecorator = factory.getDecorator('default');
-      
+
       expect(decorator).toBeDefined();
       expect(decorator).toBe(defaultDecorator); // Should return the same default instance
     });
@@ -509,7 +532,7 @@ describe('BaseNode Decoration System', () => {
 
     it('should sanitize malicious content in titles', () => {
       const maliciousTitle = '<script>alert("xss")</script>Legitimate Title';
-      
+
       const context: DecorationContext = {
         nodeId: 'xss-test',
         nodeType: 'task',
@@ -530,7 +553,7 @@ describe('BaseNode Decoration System', () => {
 
     it('should sanitize content with HTML entities', () => {
       const maliciousContent = '# Task & <img src=x onerror=alert(1)> Content';
-      
+
       const context: DecorationContext = {
         nodeId: 'xss-test-2',
         nodeType: 'task',

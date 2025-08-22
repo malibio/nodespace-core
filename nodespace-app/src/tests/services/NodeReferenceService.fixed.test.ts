@@ -1,6 +1,6 @@
 /**
  * NodeReferenceService Fixed Tests - Universal Node Reference System (Phase 2.1)
- * 
+ *
  * Fixed comprehensive test suite addressing interface mismatches and logic bugs
  * from the original test failures.
  */
@@ -51,7 +51,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
       nodeCreated: () => {},
       nodeDeleted: () => {}
     };
-    
+
     nodeManager = new NodeManager(mockEvents);
     hierarchyService = new HierarchyService(nodeManager);
     contentProcessor = ContentProcessor.getInstance();
@@ -121,12 +121,12 @@ describe('NodeReferenceService - Fixed Tests', () => {
       const content1 = '@test';
       const result1 = nodeReferenceService.detectTrigger(content1, 5);
       expect(result1?.query).toBe('test');
-      
+
       // Test @ with no query
       const content2 = 'Hello @ world';
       const result2 = nodeReferenceService.detectTrigger(content2, 7);
       expect(result2?.query).toBe('');
-      
+
       // Test invalid cursor position
       const content3 = 'Hello @world';
       const result3 = nodeReferenceService.detectTrigger(content3, 100);
@@ -204,7 +204,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
       // Create a test node first
       const node = nodeManager.createNode('Test Node', null, 'text');
       expect(node.id).toBeDefined(); // Ensure node was created successfully
-      
+
       const uri = `nodespace://node/${node.id}?hierarchy=true&timestamp=123456#section1`;
 
       const result = nodeReferenceService.parseNodespaceURI(uri);
@@ -256,11 +256,11 @@ describe('NodeReferenceService - Fixed Tests', () => {
     beforeEach(async () => {
       sourceNode = nodeManager.createNode('Source Node', null, 'text');
       targetNode = nodeManager.createNode('Target Node', null, 'text');
-      
+
       // Ensure nodes are properly created
       expect(sourceNode.id).toBeDefined();
       expect(targetNode.id).toBeDefined();
-      
+
       // Add nodes to database for operations that require database access
       await databaseService.upsertNode(convertToNodeSpaceNode(sourceNode));
       await databaseService.upsertNode(convertToNodeSpaceNode(targetNode));
@@ -270,7 +270,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
       await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
 
       const outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
-      
+
       expect(outgoing).toHaveLength(1);
       expect(outgoing[0]).toMatchObject({
         nodeId: targetNode.id,
@@ -286,7 +286,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
       await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
 
       const outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
-      
+
       // Should still only have one reference
       expect(outgoing).toHaveLength(1);
     });
@@ -294,14 +294,14 @@ describe('NodeReferenceService - Fixed Tests', () => {
     it('should remove bidirectional reference', async () => {
       // Add reference first
       await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
-      
+
       // Verify it exists
       let outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
       expect(outgoing).toHaveLength(1);
 
       // Remove reference
       await nodeReferenceService.removeReference(sourceNode.id, targetNode.id);
-      
+
       // Verify it's removed
       outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
       expect(outgoing).toHaveLength(0);
@@ -323,7 +323,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
 
     it('should search nodes by content', async () => {
       const results = await nodeReferenceService.searchNodes('JavaScript');
-      
+
       expect(results.length).toBeGreaterThanOrEqual(1);
       expect(results[0]).toMatchObject({
         type: 'document',
@@ -333,19 +333,19 @@ describe('NodeReferenceService - Fixed Tests', () => {
 
     it('should handle case-insensitive search', async () => {
       const results = await nodeReferenceService.searchNodes('javascript');
-      
+
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 
     it('should create new node successfully', async () => {
       const newNode = await nodeReferenceService.createNode('note', 'New Note Content');
-      
+
       expect(newNode).toMatchObject({
         type: 'note',
         content: 'New Note Content',
         mentions: []
       });
-      
+
       // Verify node was added to system
       expect(newNode.id).toBeDefined();
     });
@@ -354,7 +354,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
   describe('Performance and Configuration - Fixed', () => {
     it('should provide performance metrics', () => {
       const metrics = nodeReferenceService.getPerformanceMetrics();
-      
+
       expect(metrics).toHaveProperty('totalTriggerDetections');
       expect(metrics).toHaveProperty('totalAutocompleteRequests');
       expect(metrics).toHaveProperty('avgTriggerDetectionTime');
@@ -369,7 +369,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
       };
 
       nodeReferenceService.configureAutocomplete(newConfig);
-      
+
       // Configuration change should work without errors
       expect(true).toBe(true);
     });
@@ -377,10 +377,10 @@ describe('NodeReferenceService - Fixed Tests', () => {
     it('should clear caches without errors', () => {
       // Add some data to cache
       nodeReferenceService.detectTrigger('test @query', 12);
-      
+
       // Clear should work
       nodeReferenceService.clearCaches();
-      
+
       expect(true).toBe(true);
     });
   });
@@ -388,9 +388,9 @@ describe('NodeReferenceService - Fixed Tests', () => {
   describe('ContentProcessor Integration - Fixed', () => {
     it('should detect nodespace links in content', () => {
       const content = 'Check out nodespace://node/test-123 for more info';
-      
+
       const links = nodeReferenceService.detectNodespaceLinks(content);
-      
+
       expect(links).toHaveLength(1);
       expect(links[0]).toMatchObject({
         uri: 'nodespace://node/test-123',
@@ -402,9 +402,9 @@ describe('NodeReferenceService - Fixed Tests', () => {
 
     it('should detect multiple links', () => {
       const content = 'See nodespace://node/first and nodespace://node/second';
-      
+
       const links = nodeReferenceService.detectNodespaceLinks(content);
-      
+
       expect(links).toHaveLength(2);
       expect(links[0].nodeId).toBe('first');
       expect(links[1].nodeId).toBe('second');
@@ -412,9 +412,9 @@ describe('NodeReferenceService - Fixed Tests', () => {
 
     it('should handle malformed URIs', () => {
       const content = 'Bad link: nodespace://invalid and nodespace://node/good-123';
-      
+
       const links = nodeReferenceService.detectNodespaceLinks(content);
-      
+
       // Should only find valid URI pattern
       expect(links).toHaveLength(1);
       expect(links[0].nodeId).toBe('good-123');
@@ -424,7 +424,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
   describe('EventBus Integration - Fixed', () => {
     it('should emit events on reference operations', async () => {
       const events: ReferencesUpdateNeededEvent[] = [];
-      
+
       eventBus.subscribe('references:update-needed', (event) => {
         events.push(event);
       });
@@ -438,7 +438,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
 
       // Add reference
       await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
-      
+
       // Remove reference
       await nodeReferenceService.removeReference(sourceNode.id, targetNode.id);
 
@@ -453,7 +453,7 @@ describe('NodeReferenceService - Fixed Tests', () => {
     it('should handle cache invalidation events', () => {
       // Trigger cache population
       nodeReferenceService.detectTrigger('test @query', 12);
-      
+
       // Emit cache invalidation event
       eventBus.emit({
         type: 'node:updated',

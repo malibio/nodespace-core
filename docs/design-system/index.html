@@ -46,7 +46,7 @@
         <div class="component-example">
           <div class="component-title"><a href="components.html">🧩 Components</a></div>
           <div class="component-demo">
-            <p>shadcn-svelte foundation components plus custom NodeSpace domain components with live interactive examples.</p>
+            <p>shadcn-svelte foundation components (buttons, inputs, cards, etc.) with integration patterns and accessibility examples.</p>
           </div>
         </div>
         
@@ -60,7 +60,7 @@
         <div class="component-example">
           <div class="component-title"><a href="nodeviewer.html">📝 NodeViewer</a></div>
           <div class="component-demo">
-            <p>Complete nodeviewer interface with realistic content examples, node type differentiation, and hierarchical display patterns.</p>
+            <p>Complete NodeSpace domain components showcase with mathematically precise positioning, vertical connector lines, and realistic hierarchical content examples.</p>
           </div>
         </div>
       </div>
@@ -277,40 +277,23 @@
           background: hsl(var(--card, 0 0% 100%));
           border: 1px solid hsl(var(--border, 214 32% 91%));
           border-radius: var(--radius, 0.5rem);
-          padding: 1rem;
+          padding: 1.5rem;
+          text-align: center;
         ">
-          <div style="display: flex; align-items: start; gap: 0.75rem;">
-            <!-- Custom hierarchy indicator -->
-            <div style="
-              width: 8px; 
-              height: 8px;
-              background: hsl(var(--primary, 210 100% 40%));
-              border-radius: 50%;
-              flex-shrink: 0;
-              margin-top: 6px;
-              box-shadow: 0 0 8px hsl(var(--primary, 210 100% 40%) / 0.3);
-            "></div>
-            <div style="flex: 1;">
-              <h4 style="margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; color: hsl(var(--foreground, 220 13% 10%));">NodeSpace TextNode</h4>
-              <p style="margin: 0; color: hsl(var(--muted-foreground, 215 16% 47%)); font-size: 0.875rem; line-height: 1.5;">
-                Custom component built on shadcn-svelte foundation with AI integration and hierarchical display patterns.
-              </p>
-            </div>
-            <button style="
-              display: inline-flex;
-              align-items: center;
-              justify-content: center;
-              border-radius: calc(var(--radius, 0.5rem) - 2px);
-              font-size: 0.75rem;
-              font-weight: 500;
-              height: 2rem;
-              padding: 0 0.75rem;
-              background: transparent;
-              color: hsl(var(--foreground, 220 13% 10%));
-              border: none;
-              cursor: pointer;
-            ">🤖 AI Assist</button>
-          </div>
+          <p style="margin: 0 0 1rem 0; color: hsl(var(--muted-foreground, 215 16% 47%));">For comprehensive examples of NodeSpace's hierarchical node system with mathematical positioning precision and vertical connector lines:</p>
+          <a href="nodeviewer.html" style="
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: calc(var(--radius, 0.5rem) - 2px);
+            font-size: 0.875rem;
+            font-weight: 500;
+            height: 2.5rem;
+            padding: 0 1rem;
+            background: hsl(var(--primary, 210 100% 40%));
+            color: hsl(var(--primary-foreground, 0 0% 100%));
+            text-decoration: none;
+          ">📝 View NodeViewer Showcase</a>
         </div>
       </div>
       

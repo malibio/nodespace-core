@@ -11,7 +11,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['src/tests/setup.ts'],
-    
+
     // Ensure proper global environment
     globalSetup: undefined,
     environmentOptions: {

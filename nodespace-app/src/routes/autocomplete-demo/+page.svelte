@@ -40,7 +40,11 @@
           <h1>AutocompleteModal Demo</h1>
           <p>Universal Node Reference System @ Trigger</p>
         </div>
-        <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme ({$themePreference})">
+        <button
+          class="theme-toggle"
+          onclick={toggleTheme}
+          title="Toggle theme ({$themePreference})"
+        >
           {getThemeIcon($themePreference)}
           {$themePreference}
         </button>

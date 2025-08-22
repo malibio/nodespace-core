@@ -80,7 +80,9 @@ interface MockMutationObserver {
   takeRecords: () => MockMutationRecord[];
 }
 
-(globalThis as typeof globalThis & { MutationObserver: new () => MockMutationObserver }).MutationObserver = vi.fn(() => ({
+(
+  globalThis as typeof globalThis & { MutationObserver: new () => MockMutationObserver }
+).MutationObserver = vi.fn(() => ({
   observe: vi.fn(),
   disconnect: vi.fn(),
   takeRecords: vi.fn().mockReturnValue([])
@@ -93,7 +95,9 @@ interface MockIntersectionObserver {
   disconnect: () => void;
 }
 
-(globalThis as typeof globalThis & { IntersectionObserver: new () => MockIntersectionObserver }).IntersectionObserver = vi.fn(() => ({
+(
+  globalThis as typeof globalThis & { IntersectionObserver: new () => MockIntersectionObserver }
+).IntersectionObserver = vi.fn(() => ({
   observe: vi.fn(),
   unobserve: vi.fn(),
   disconnect: vi.fn()

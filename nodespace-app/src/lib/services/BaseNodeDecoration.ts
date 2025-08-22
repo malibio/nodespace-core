@@ -1,9 +1,9 @@
 /**
  * BaseNode Decoration System - Rich Visual Node References (Phase 2.2)
- * 
+ *
  * Implements the decorateReference() pattern for creating rich visual decorations
  * for different node types in the universal node reference system.
- * 
+ *
  * Key Features:
  * - Base decorateReference() method for default styling
  * - Node type-specific decoration classes (TaskNode, UserNode, DateNode, etc.)
@@ -102,7 +102,7 @@ export abstract class BaseNodeDecorator {
    */
   protected sanitizeText(text: string): string {
     if (!text) return '';
-    
+
     // In test environment or Node.js, use simple HTML escaping
     if (typeof document === 'undefined' || !document.createElement) {
       return text
@@ -112,7 +112,7 @@ export abstract class BaseNodeDecorator {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
     }
-    
+
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
@@ -123,10 +123,10 @@ export abstract class BaseNodeDecorator {
    */
   protected extractMetadata(content: string, nodeType: string): Record<string, unknown> {
     const metadata: Record<string, unknown> = {};
-    
+
     // Extract common metadata patterns
     const lines = content.split('\n');
-    
+
     // Look for metadata in first few lines
     for (const line of lines.slice(0, 5)) {
       // Date patterns
@@ -134,28 +134,28 @@ export abstract class BaseNodeDecorator {
       if (dateMatch) {
         metadata.mentionedDate = dateMatch[1];
       }
-      
+
       // Status patterns for tasks
       if (nodeType === 'task') {
         const statusMatch = line.match(/(?:status|state):\s*(\w+)/i);
         if (statusMatch) {
           metadata.status = statusMatch[1].toLowerCase();
         }
-        
+
         // Priority patterns
         const priorityMatch = line.match(/(?:priority|pri):\s*(\w+)/i);
         if (priorityMatch) {
           metadata.priority = priorityMatch[1].toLowerCase();
         }
       }
-      
+
       // User patterns
       if (nodeType === 'user') {
         const emailMatch = line.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
         if (emailMatch) {
           metadata.email = emailMatch[1];
         }
-        
+
         // Role patterns
         const roleMatch = line.match(/(?:role|position):\s*(\w+)/i);
         if (roleMatch) {
@@ -163,7 +163,7 @@ export abstract class BaseNodeDecorator {
         }
       }
     }
-    
+
     return metadata;
   }
 
@@ -202,18 +202,18 @@ export class TaskNodeDecorator extends BaseNodeDecorator {
   public decorateReference(context: DecorationContext): DecorationResult {
     const baseDecoration = this.getBaseDecoration(context);
     const metadata = this.extractMetadata(context.content, 'task');
-    const status = metadata.status as string || 'pending';
-    const priority = metadata.priority as string || 'normal';
-    
+    const status = (metadata.status as string) || 'pending';
+    const priority = (metadata.priority as string) || 'normal';
+
     // Determine checkbox state
     const isCompleted = status === 'completed' || status === 'done';
     const checkboxIcon = isCompleted ? '☑' : '☐';
-    
+
     // Priority indicator
     const priorityIcon = priority === 'high' ? '🔴' : priority === 'low' ? '🔵' : '';
-    
+
     const safeTitle = this.sanitizeText(context.title);
-    
+
     baseDecoration.html = `
       <span class="ns-noderef ns-noderef--task ns-noderef--task-${status}" 
             data-node-id="${context.nodeId}" 
@@ -228,11 +228,14 @@ export class TaskNodeDecorator extends BaseNodeDecorator {
         ${metadata.mentionedDate ? `<span class="ns-noderef__date">${metadata.mentionedDate}</span>` : ''}
       </span>
     `;
-    
-    baseDecoration.cssClasses.push(`ns-noderef--task-${status}`, `ns-noderef--priority-${priority}`);
+
+    baseDecoration.cssClasses.push(
+      `ns-noderef--task-${status}`,
+      `ns-noderef--priority-${priority}`
+    );
     baseDecoration.ariaLabel = `Task: ${safeTitle} (${status}${priority !== 'normal' ? `, ${priority} priority` : ''})`;
     baseDecoration.metadata = { ...baseDecoration.metadata, status, priority, isCompleted };
-    
+
     return baseDecoration;
   }
 }
@@ -245,14 +248,14 @@ export class UserNodeDecorator extends BaseNodeDecorator {
   public decorateReference(context: DecorationContext): DecorationResult {
     const baseDecoration = this.getBaseDecoration(context);
     const metadata = this.extractMetadata(context.content, 'user');
-    
+
     // Mock online status (in real implementation, this would come from presence service)
     const isOnline = Math.random() > 0.5; // Mock for demo
     const role = (metadata.role as string) || 'member';
-    
+
     const safeTitle = this.sanitizeText(context.title);
     const displayName = safeTitle.split(' ')[0] || safeTitle; // Use first name for compact display
-    
+
     baseDecoration.html = `
       <span class="ns-noderef ns-noderef--user ns-noderef--user-${isOnline ? 'online' : 'offline'}" 
             data-node-id="${context.nodeId}" 
@@ -269,11 +272,14 @@ export class UserNodeDecorator extends BaseNodeDecorator {
         ${role !== 'member' ? `<span class="ns-noderef__role">${role}</span>` : ''}
       </span>
     `;
-    
-    baseDecoration.cssClasses.push(`ns-noderef--user-${isOnline ? 'online' : 'offline'}`, `ns-noderef--role-${role}`);
+
+    baseDecoration.cssClasses.push(
+      `ns-noderef--user-${isOnline ? 'online' : 'offline'}`,
+      `ns-noderef--role-${role}`
+    );
     baseDecoration.ariaLabel = `User: ${safeTitle} (${isOnline ? 'online' : 'offline'}${role !== 'member' ? `, ${role}` : ''})`;
     baseDecoration.metadata = { ...baseDecoration.metadata, isOnline, role, displayName };
-    
+
     return baseDecoration;
   }
 }
@@ -285,16 +291,16 @@ export class DateNodeDecorator extends BaseNodeDecorator {
 
   public decorateReference(context: DecorationContext): DecorationResult {
     const baseDecoration = this.getBaseDecoration(context);
-    
+
     // Try to parse date from title or content
     const dateStr = context.title || context.content.split('\n')[0];
     const parsedDate = this.parseDate(dateStr);
-    
+
     const safeTitle = this.sanitizeText(context.title);
     const relativeTime = parsedDate ? this.formatRelativeTime(parsedDate.getTime()) : '';
     const isToday = parsedDate ? this.isToday(parsedDate) : false;
     const isPast = parsedDate ? parsedDate.getTime() < Date.now() : false;
-    
+
     baseDecoration.html = `
       <span class="ns-noderef ns-noderef--date ${isToday ? 'ns-noderef--date-today' : ''} ${isPast ? 'ns-noderef--date-past' : 'ns-noderef--date-future'}" 
             data-node-id="${context.nodeId}" 
@@ -308,14 +314,20 @@ export class DateNodeDecorator extends BaseNodeDecorator {
         ${isToday ? `<span class="ns-noderef__today-badge">Today</span>` : ''}
       </span>
     `;
-    
+
     baseDecoration.cssClasses.push(
       isToday ? 'ns-noderef--date-today' : '',
       isPast ? 'ns-noderef--date-past' : 'ns-noderef--date-future'
     );
     baseDecoration.ariaLabel = `Date: ${safeTitle}${relativeTime ? ` (${relativeTime})` : ''}${isToday ? ' (Today)' : ''}`;
-    baseDecoration.metadata = { ...baseDecoration.metadata, parsedDate: parsedDate?.toISOString() || null, relativeTime, isToday, isPast };
-    
+    baseDecoration.metadata = {
+      ...baseDecoration.metadata,
+      parsedDate: parsedDate?.toISOString() || null,
+      relativeTime,
+      isToday,
+      isPast
+    };
+
     return baseDecoration;
   }
 
@@ -342,15 +354,15 @@ export class DocumentNodeDecorator extends BaseNodeDecorator {
 
   public decorateReference(context: DecorationContext): DecorationResult {
     const baseDecoration = this.getBaseDecoration(context);
-    
+
     // Extract file type and preview from content
     const fileType = this.extractFileType(context.content);
     const preview = this.extractPreview(context.content);
     const size = this.extractSize(context.content);
-    
+
     const safeTitle = this.sanitizeText(context.title);
     const fileTypeIcon = this.getFileTypeIcon(fileType);
-    
+
     baseDecoration.html = `
       <span class="ns-noderef ns-noderef--document ns-noderef--document-${fileType}" 
             data-node-id="${context.nodeId}" 
@@ -369,11 +381,11 @@ export class DocumentNodeDecorator extends BaseNodeDecorator {
         </span>
       </span>
     `;
-    
+
     baseDecoration.cssClasses.push(`ns-noderef--document-${fileType}`);
     baseDecoration.ariaLabel = `Document: ${safeTitle} (${fileType.toUpperCase()}${size ? `, ${size}` : ''})`;
     baseDecoration.metadata = { ...baseDecoration.metadata, fileType, preview, size };
-    
+
     return baseDecoration;
   }
 
@@ -429,15 +441,15 @@ export class AINodeDecorator extends BaseNodeDecorator {
 
   public decorateReference(context: DecorationContext): DecorationResult {
     const baseDecoration = this.getBaseDecoration(context);
-    
+
     // Extract AI-specific metadata
     const model = this.extractModel(context.content);
     const messageCount = this.extractMessageCount(context.content);
     const lastActivity = this.extractLastActivity(context.content);
-    
+
     const safeTitle = this.sanitizeText(context.title);
     const relativeTime = lastActivity ? this.formatRelativeTime(lastActivity) : '';
-    
+
     baseDecoration.html = `
       <span class="ns-noderef ns-noderef--ai-chat" 
             data-node-id="${context.nodeId}" 
@@ -458,11 +470,17 @@ export class AINodeDecorator extends BaseNodeDecorator {
         <span class="ns-noderef__ai-status">💭</span>
       </span>
     `;
-    
+
     baseDecoration.cssClasses.push('ns-noderef--ai-chat');
     baseDecoration.ariaLabel = `AI Chat: ${safeTitle}${model ? ` (${model})` : ''}${messageCount ? `, ${messageCount} messages` : ''}`;
-    baseDecoration.metadata = { ...baseDecoration.metadata, model, messageCount, lastActivity, relativeTime };
-    
+    baseDecoration.metadata = {
+      ...baseDecoration.metadata,
+      model,
+      messageCount,
+      lastActivity,
+      relativeTime
+    };
+
     return baseDecoration;
   }
 
@@ -495,8 +513,12 @@ export const NODE_TYPE_CONFIGS: Record<string, NodeTypeConfig> = {
     icon: '📄',
     label: 'Text',
     color: 'var(--node-text)',
-    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'text'); } })()
-      .getBaseDecoration(context)
+    defaultDecoration: (context) =>
+      new (class extends BaseNodeDecorator {
+        constructor() {
+          super(null!, 'text');
+        }
+      })().getBaseDecoration(context)
   },
   task: {
     icon: '☐',
@@ -532,22 +554,34 @@ export const NODE_TYPE_CONFIGS: Record<string, NodeTypeConfig> = {
     icon: '🏷️',
     label: 'Entity',
     color: 'var(--node-entity)',
-    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'entity'); } })()
-      .getBaseDecoration(context)
+    defaultDecoration: (context) =>
+      new (class extends BaseNodeDecorator {
+        constructor() {
+          super(null!, 'entity');
+        }
+      })().getBaseDecoration(context)
   },
   query: {
     icon: '🔍',
     label: 'Query',
     color: 'var(--node-query)',
-    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'query'); } })()
-      .getBaseDecoration(context)
+    defaultDecoration: (context) =>
+      new (class extends BaseNodeDecorator {
+        constructor() {
+          super(null!, 'query');
+        }
+      })().getBaseDecoration(context)
   },
   default: {
     icon: '📄',
     label: 'Node',
     color: 'var(--node-text)',
-    defaultDecoration: (context) => new (class extends BaseNodeDecorator { constructor() { super(null!, 'default'); } })()
-      .getBaseDecoration(context)
+    defaultDecoration: (context) =>
+      new (class extends BaseNodeDecorator {
+        constructor() {
+          super(null!, 'default');
+        }
+      })().getBaseDecoration(context)
   }
 };
 
@@ -570,17 +604,20 @@ export class NodeDecoratorFactory {
     this.decorators.set('date', new DateNodeDecorator(this.nodeReferenceService));
     this.decorators.set('document', new DocumentNodeDecorator(this.nodeReferenceService));
     this.decorators.set('ai_chat', new AINodeDecorator(this.nodeReferenceService));
-    
+
     // Base decorator for other types
-    this.decorators.set('default', new class extends BaseNodeDecorator {
-      constructor(service: NodeReferenceService) {
-        super(service, 'default');
-      }
-      
-      public decorateReference(context: DecorationContext): DecorationResult {
-        return this.getBaseDecoration(context);
-      }
-    }(this.nodeReferenceService));
+    this.decorators.set(
+      'default',
+      new (class extends BaseNodeDecorator {
+        constructor(service: NodeReferenceService) {
+          super(service, 'default');
+        }
+
+        public decorateReference(context: DecorationContext): DecorationResult {
+          return this.getBaseDecoration(context);
+        }
+      })(this.nodeReferenceService)
+    );
   }
 
   public getDecorator(nodeType: string): BaseNodeDecorator {

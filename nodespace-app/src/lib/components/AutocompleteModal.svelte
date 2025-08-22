@@ -23,7 +23,11 @@
   import CardHeader from '$lib/components/ui/card/card-header.svelte';
   import CardTitle from '$lib/components/ui/card/card-title.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
-  import type { NodeReferenceService, AutocompleteResult, NodeSuggestion } from '$lib/services/NodeReferenceService';
+  import type {
+    NodeReferenceService,
+    AutocompleteResult,
+    NodeSuggestion
+  } from '$lib/services/NodeReferenceService';
   import type { NodeSpaceNode } from '$lib/services/MockDatabaseService';
 
   // ============================================================================
@@ -147,8 +151,9 @@
         if (!nodeReferenceService) {
           throw new Error('NodeReferenceService not available');
         }
-        const result: AutocompleteResult = await nodeReferenceService.showAutocomplete(triggerContext);
-        
+        const result: AutocompleteResult =
+          await nodeReferenceService.showAutocomplete(triggerContext);
+
         searchResults = result.suggestions;
         totalResults = result.totalCount;
         hasMore = result.hasMore;
@@ -173,7 +178,7 @@
         throw new Error('NodeReferenceService not available');
       }
       const recentNodes = await nodeReferenceService.searchNodes('', undefined);
-      
+
       // Convert to suggestions format
       const suggestions: NodeSuggestion[] = [];
       for (const node of recentNodes.slice(0, 5)) {
@@ -223,7 +228,7 @@
       const node = await nodeReferenceService.resolveNodespaceURI(
         nodeReferenceService.createNodespaceURI(suggestion.nodeId)
       );
-      
+
       if (node) {
         dispatch('nodeSelect', { node });
         closeModal();
@@ -262,22 +267,22 @@
         event.preventDefault();
         moveSelection(1);
         break;
-        
+
       case 'ArrowUp':
         event.preventDefault();
         moveSelection(-1);
         break;
-        
+
       case 'Enter':
         event.preventDefault();
         selectCurrentNode();
         break;
-        
+
       case 'Escape':
         event.preventDefault();
         closeModal();
         break;
-        
+
       case 'Tab':
         event.preventDefault();
         moveSelection(event.shiftKey ? -1 : 1);
@@ -294,40 +299,44 @@
   // Position Calculation
   // ============================================================================
 
-  function calculateModalPosition(pos: { x: number; y: number }): { x: number; y: number; placement: 'below' | 'above' } {
+  function calculateModalPosition(pos: { x: number; y: number }): {
+    x: number;
+    y: number;
+    placement: 'below' | 'above';
+  } {
     const modalWidth = 400;
     const modalHeight = 300;
     const padding = 16;
-    
+
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    
+
     let x = pos.x;
     let y = pos.y;
     let placement: 'below' | 'above' = 'below';
-    
+
     // Adjust horizontal position if too close to right edge
     if (x + modalWidth > viewportWidth - padding) {
       x = viewportWidth - modalWidth - padding;
     }
-    
+
     // Adjust horizontal position if too close to left edge
     if (x < padding) {
       x = padding;
     }
-    
+
     // Adjust vertical position
     if (y + modalHeight > viewportHeight - padding) {
       // Place above cursor if no room below
       y = pos.y - modalHeight - 20;
       placement = 'above';
-      
+
       // If still not enough room, place at top
       if (y < padding) {
         y = padding;
       }
     }
-    
+
     return { x, y, placement };
   }
 
@@ -337,16 +346,16 @@
 
   function extractNodeTitle(content: string): string {
     if (!content) return 'Untitled';
-    
+
     const lines = content.split('\n');
     const firstLine = lines[0].trim();
-    
+
     // Remove markdown header syntax
     const headerMatch = firstLine.match(/^#{1,6}\s*(.*)$/);
     if (headerMatch) {
       return headerMatch[1].trim() || 'Untitled';
     }
-    
+
     // Return first non-empty line, truncated
     return firstLine.substring(0, 50) || 'Untitled';
   }
@@ -355,31 +364,34 @@
     return NODE_TYPE_CONFIG[nodeType as keyof typeof NODE_TYPE_CONFIG] || DEFAULT_NODE_TYPE;
   }
 
-  function getHighlightSegments(text: string, positions: number[]): Array<{ text: string; highlighted: boolean }> {
+  function getHighlightSegments(
+    text: string,
+    positions: number[]
+  ): Array<{ text: string; highlighted: boolean }> {
     if (!positions.length) return [{ text, highlighted: false }];
-    
+
     const segments: Array<{ text: string; highlighted: boolean }> = [];
     let lastIndex = 0;
-    
+
     for (const pos of positions) {
       // Add text before highlight
       if (pos > lastIndex) {
         segments.push({ text: text.substring(lastIndex, pos), highlighted: false });
       }
-      
+
       // Add highlighted character
       if (pos < text.length) {
         segments.push({ text: text[pos], highlighted: true });
       }
-      
+
       lastIndex = pos + 1;
     }
-    
+
     // Add remaining text
     if (lastIndex < text.length) {
       segments.push({ text: text.substring(lastIndex), highlighted: false });
     }
-    
+
     return segments;
   }
 
@@ -407,10 +419,7 @@
   <!-- Modal overlay for click-outside handling -->
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div 
-    class="fixed inset-0 z-50 bg-black/20 backdrop-blur-sm"
-    on:click={closeModal}
-  >
+  <div class="fixed inset-0 z-50 bg-black/20 backdrop-blur-sm" on:click={closeModal}>
     <!-- Modal content -->
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -444,24 +453,24 @@
             {#if isLoading}
               <!-- Loading state -->
               <div class="flex items-center justify-center py-8">
-                <div class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full"></div>
+                <div
+                  class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full"
+                ></div>
                 <span class="ml-2 text-sm text-muted-foreground">Searching...</span>
               </div>
-              
             {:else if searchError}
               <!-- Error state -->
               <div class="px-4 py-6 text-center">
                 <div class="text-destructive text-sm">{searchError}</div>
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
+                <Button
+                  variant="ghost"
+                  size="sm"
                   class="mt-2"
                   on:click={() => performSearch(query)}
                 >
                   Try Again
                 </Button>
               </div>
-              
             {:else if searchResults.length === 0}
               <!-- Empty state -->
               <div class="px-4 py-6 text-center">
@@ -470,25 +479,19 @@
                 </div>
                 {#if query}
                   <!-- Create new node option when no results -->
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    class="gap-2"
-                    on:click={createNewNode}
-                  >
+                  <Button variant="outline" size="sm" class="gap-2" on:click={createNewNode}>
                     <span class="text-lg">✨</span>
                     Create "{query}"
                   </Button>
                 {/if}
               </div>
-              
             {:else}
               <!-- Results list -->
               <div class="px-2">
                 {#each searchResults as suggestion, index (suggestion.nodeId)}
                   {@const isSelected = index === selectedIndex}
                   {@const nodeConfig = getNodeTypeConfig(suggestion.nodeType)}
-                  
+
                   <button
                     class={cn(
                       'w-full flex items-start gap-3 p-2 rounded-md text-left transition-colors',
@@ -502,25 +505,29 @@
                     <div class="flex-shrink-0 w-5 h-5 flex items-center justify-center mt-0.5">
                       <span class="text-sm">{nodeConfig.icon}</span>
                     </div>
-                    
+
                     <!-- Node content -->
                     <div class="flex-1 min-w-0">
                       <div class="font-medium text-sm truncate">
                         {#each getHighlightSegments(suggestion.title, suggestion.matchPositions) as segment}
                           {#if segment.highlighted}
-                            <mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">{segment.text}</mark>
+                            <mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded"
+                              >{segment.text}</mark
+                            >
                           {:else}
                             {segment.text}
                           {/if}
                         {/each}
                       </div>
-                      
+
                       {#if suggestion.content && suggestion.content !== suggestion.title}
                         <div class="text-xs text-muted-foreground mt-1 line-clamp-2">
-                          {suggestion.content.substring(0, 100)}{suggestion.content.length > 100 ? '...' : ''}
+                          {suggestion.content.substring(0, 100)}{suggestion.content.length > 100
+                            ? '...'
+                            : ''}
                         </div>
                       {/if}
-                      
+
                       {#if suggestion.hierarchy.length > 1}
                         <div class="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                           <span>📁</span>
@@ -530,17 +537,20 @@
                         </div>
                       {/if}
                     </div>
-                    
+
                     <!-- Metadata -->
                     <div class="flex-shrink-0 flex flex-col items-end gap-1">
                       <span class="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                         {nodeConfig.label}
                       </span>
-                      
+
                       {#if suggestion.relevanceScore > 0.8}
                         <div class="w-2 h-2 bg-green-500 rounded-full" title="High relevance"></div>
                       {:else if suggestion.relevanceScore > 0.6}
-                        <div class="w-2 h-2 bg-yellow-500 rounded-full" title="Medium relevance"></div>
+                        <div
+                          class="w-2 h-2 bg-yellow-500 rounded-full"
+                          title="Medium relevance"
+                        ></div>
                       {/if}
                     </div>
                   </button>
@@ -549,7 +559,7 @@
                 <!-- Create new node option -->
                 {#if query}
                   {@const isCreateSelected = selectedIndex === searchResults.length}
-                  
+
                   <div class="border-t border-border mt-2 pt-2">
                     <button
                       class={cn(
@@ -563,16 +573,14 @@
                       <div class="flex-shrink-0 w-5 h-5 flex items-center justify-center">
                         <span class="text-sm">✨</span>
                       </div>
-                      
+
                       <div class="flex-1">
-                        <div class="font-medium text-sm">
-                          Create new node
-                        </div>
+                        <div class="font-medium text-sm">Create new node</div>
                         <div class="text-xs text-muted-foreground">
                           "{query}"
                         </div>
                       </div>
-                      
+
                       <div class="flex-shrink-0">
                         <span class="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                           Text
@@ -584,9 +592,11 @@
               </div>
             {/if}
           </div>
-          
+
           <!-- Footer with keyboard shortcuts -->
-          <div class="px-4 pt-2 border-t border-border text-xs text-muted-foreground flex items-center justify-between">
+          <div
+            class="px-4 pt-2 border-t border-border text-xs text-muted-foreground flex items-center justify-between"
+          >
             <div class="flex items-center gap-3">
               <span><kbd class="px-1 bg-muted rounded">↕</kbd> Navigate</span>
               <span><kbd class="px-1 bg-muted rounded">⏎</kbd> Select</span>

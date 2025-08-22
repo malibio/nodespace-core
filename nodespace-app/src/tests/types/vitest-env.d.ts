@@ -14,7 +14,7 @@ declare global {
       toContain: (expected: unknown) => void;
     }
   }
-  
+
   /**
    * Ensure the global object is available in test environment
    * In Node.js/Vitest, this should be equivalent to globalThis

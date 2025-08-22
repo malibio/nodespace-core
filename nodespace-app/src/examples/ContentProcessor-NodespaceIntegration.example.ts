@@ -1,6 +1,6 @@
 /**
  * ContentProcessor + NodeReferenceService Integration Example
- * 
+ *
  * Demonstrates the enhanced ContentProcessor working with nodespace:// URIs
  * and real-time reference resolution (Phase 2.1 Days 4-5)
  */
@@ -12,7 +12,7 @@ import { eventBus } from '../lib/services/EventBus';
 // Example: Setting up ContentProcessor with NodeReferenceService integration
 export async function demonstrateNodespaceIntegration() {
   console.log('🔗 ContentProcessor + NodeReferenceService Integration Demo');
-  
+
   // Example content with various reference types
   const sampleContent = `
     # My Document
@@ -54,7 +54,7 @@ export async function demonstrateNodespaceIntegration() {
   console.log('\n🎨 3. HTML Rendering:');
   const html = contentProcessor.markdownToDisplay(sampleContent);
   console.log('Generated HTML length:', html.length);
-  
+
   // Show a snippet of the nodespace reference rendering
   const noderefMatch = html.match(/<a class="ns-noderef[^>]*>.*?<\/a>/);
   if (noderefMatch) {
@@ -65,7 +65,7 @@ export async function demonstrateNodespaceIntegration() {
   // 4. Event Processing
   console.log('\n📡 4. Event-Driven Processing:');
   const sourceNodeId = 'demo-document-001';
-  
+
   // Set up event listeners to capture emitted events
   const capturedEvents: unknown[] = [];
   const originalEmit = eventBus.emit;
@@ -73,10 +73,10 @@ export async function demonstrateNodespaceIntegration() {
     capturedEvents.push(event);
     return originalEmit.call(eventBus, event);
   };
-  
+
   // Process content with event emission
   contentProcessor.processContentWithEventEmission(sampleContent, sourceNodeId);
-  
+
   console.log('Captured', capturedEvents.length, 'events:');
   capturedEvents.forEach((event, index) => {
     console.log(`  ${index + 1}. ${event.type} (${event.namespace})`);
@@ -85,7 +85,7 @@ export async function demonstrateNodespaceIntegration() {
       console.log(`     Link Type: ${event.linkType}, Text: "${event.linkText}"`);
     }
   });
-  
+
   // Restore original emit
   eventBus.emit = originalEmit;
 
@@ -93,21 +93,22 @@ export async function demonstrateNodespaceIntegration() {
   console.log('\n💾 5. Cache Management:');
   const cacheStats = contentProcessor.getReferencesCacheStats();
   console.log('Cache stats:', cacheStats);
-  
+
   // Clear cache
   contentProcessor.clearReferenceCache();
   console.log('Cache cleared');
 
   // 6. Performance Test
   console.log('\n⚡ 6. Performance Test:');
-  const largeContent = Array.from({ length: 50 }, (_, i) => 
-    `Reference ${i}: [Node ${i}](nodespace://node/node-${i})`
+  const largeContent = Array.from(
+    { length: 50 },
+    (_, i) => `Reference ${i}: [Node ${i}](nodespace://node/node-${i})`
   ).join(' ');
-  
+
   const startTime = performance.now();
   const largeLinks = contentProcessor.detectNodespaceURIs(largeContent);
   const endTime = performance.now();
-  
+
   console.log(`Processed ${largeLinks.length} references in ${(endTime - startTime).toFixed(2)}ms`);
 
   // 7. AST Round-trip Test
@@ -115,7 +116,7 @@ export async function demonstrateNodespaceIntegration() {
   const originalText = 'Check [My Node](nodespace://node/test-123) for details.';
   const parsedAst = contentProcessor.parseMarkdown(originalText);
   const reconstructed = contentProcessor.astToMarkdown(parsedAst);
-  
+
   console.log('Original:', originalText);
   console.log('Reconstructed:', reconstructed);
   console.log('Round-trip successful:', originalText.trim() === reconstructed.trim());
@@ -126,7 +127,7 @@ export async function demonstrateNodespaceIntegration() {
 // Example: Real-time content processing with reference updates
 export function demonstrateRealTimeProcessing() {
   console.log('\n🔄 Real-time Processing Demo');
-  
+
   // Simulate real-time content updates
   const contentVersions = [
     'Initial content',
@@ -137,15 +138,15 @@ export function demonstrateRealTimeProcessing() {
 
   contentVersions.forEach((content, version) => {
     console.log(`\nVersion ${version + 1}: "${content}"`);
-    
+
     const ast = contentProcessor.parseMarkdown(content);
     const nodespaceRefs = contentProcessor.detectNodespaceURIs(content);
-    
+
     console.log(`  - AST nodes: ${ast.children.length}`);
     console.log(`  - Nodespace refs: ${nodespaceRefs.length}`);
-    
+
     if (nodespaceRefs.length > 0) {
-      console.log(`  - Reference URIs: ${nodespaceRefs.map(r => r.uri).join(', ')}`);
+      console.log(`  - Reference URIs: ${nodespaceRefs.map((r) => r.uri).join(', ')}`);
     }
   });
 }

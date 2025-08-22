@@ -92,10 +92,12 @@ describe('NodeManager Performance Tests', () => {
 
     // Performance regression detection: alert if > 15ms
     expect(duration).toBeLessThan(15);
-    
+
     // Issue performance warning if approaching limit
     if (duration > 12) {
-      console.warn(`⚠️  Performance Warning: combineNodes taking ${duration.toFixed(2)}ms (approaching 15ms limit)`);
+      console.warn(
+        `⚠️  Performance Warning: combineNodes taking ${duration.toFixed(2)}ms (approaching 15ms limit)`
+      );
     }
   });
 

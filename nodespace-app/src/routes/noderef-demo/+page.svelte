@@ -11,7 +11,10 @@
 
 <svelte:head>
   <title>NodeSpace - BaseNode Decoration System Demo</title>
-  <meta name="description" content="Interactive demonstration of the NodeSpace BaseNode decoration system with rich visual node references" />
+  <meta
+    name="description"
+    content="Interactive demonstration of the NodeSpace BaseNode decoration system with rich visual node references"
+  />
 </svelte:head>
 
 <main class="min-h-screen bg-background">

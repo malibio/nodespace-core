@@ -138,13 +138,17 @@ export class ContentProcessor {
   // Performance optimization: Cache frequently accessed patterns
   private readonly HEADER_REGEX = /^(#{1,6})\s+(.*)$/gm;
   private readonly WIKILINK_REGEX = /\[\[([^[\]]+(?:\[[^[\]]*\][^[\]]*)*)\]\]/g;
-  private readonly NODESPACE_REF_REGEX = /\[([^\]]+)\]\(nodespace:\/\/node\/([a-zA-Z0-9_-]+)(?:\?[^)]*)?\)/g;
+  private readonly NODESPACE_REF_REGEX =
+    /\[([^\]]+)\]\(nodespace:\/\/node\/([a-zA-Z0-9_-]+)(?:\?[^)]*)?\)/g;
   private readonly BOLD_REGEX = /\*\*(.*?)\*\*/g;
   private readonly ITALIC_REGEX = /(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g;
   private readonly CODE_REGEX = /`([^`]+)`/g;
 
   // Caching for nodespace references
-  private readonly referenceCache = new Map<string, { reference: NodeReference | null; timestamp: number }>();
+  private readonly referenceCache = new Map<
+    string,
+    { reference: NodeReference | null; timestamp: number }
+  >();
   private readonly cacheTimeout = 30000; // 30 seconds
 
   public static getInstance(): ContentProcessor {
@@ -177,7 +181,7 @@ export class ContentProcessor {
       if (refEvent.updateType === 'content' || refEvent.updateType === 'deletion') {
         // When content changes or nodes are deleted, we might need to update references
         this.emitCacheInvalidate('node', refEvent.nodeId, 'reference content changed');
-        
+
         // Clear reference cache for affected nodes
         this.invalidateReferenceCache(refEvent.nodeId);
       }
@@ -203,13 +207,13 @@ export class ContentProcessor {
    */
   private invalidateReferenceCache(nodeId: string): void {
     const urisToRemove: string[] = [];
-    
+
     for (const [uri, cached] of this.referenceCache) {
       if (cached.reference?.nodeId === nodeId) {
         urisToRemove.push(uri);
       }
     }
-    
+
     for (const uri of urisToRemove) {
       this.referenceCache.delete(uri);
     }
@@ -363,14 +367,17 @@ export class ContentProcessor {
    * Enhanced markdown to display with nodespace URI resolution
    * Resolves nodespace:// URIs and caches references for performance
    */
-  public async markdownToDisplayWithReferences(markdown: string, sourceNodeId?: string): Promise<string> {
+  public async markdownToDisplayWithReferences(
+    markdown: string,
+    sourceNodeId?: string
+  ): Promise<string> {
     const ast = this.parseMarkdown(markdown);
-    
+
     // Resolve any nodespace references if service is available
     if (this.nodeReferenceService) {
       await this.resolveNodespaceReferences(ast, sourceNodeId);
     }
-    
+
     return this.renderAST(ast);
   }
 
@@ -767,10 +774,10 @@ export class ContentProcessor {
         const refNode = node as NodespaceRefNode;
         const statusClass = refNode.isValid ? 'ns-noderef-valid' : 'ns-noderef-invalid';
         const title = refNode.reference?.title || refNode.displayText;
-        const tooltip = refNode.isValid 
-          ? `Navigate to: ${title}` 
+        const tooltip = refNode.isValid
+          ? `Navigate to: ${title}`
           : `Broken reference: ${refNode.nodeId}`;
-        
+
         return `<a class="ns-noderef ${statusClass}" 
                    href="${this.escapeHtml(refNode.uri)}" 
                    data-node-id="${this.escapeHtml(refNode.nodeId)}" 
@@ -881,7 +888,9 @@ export class ContentProcessor {
     count += (content.match(/\[\[([^\]]+)\]\]/g) || []).length;
 
     // Count nodespace references
-    count += (content.match(/\[([^\]]+)\]\(nodespace:\/\/node\/[a-zA-Z0-9_-]+(?:\?[^)]*)?\)/g) || []).length;
+    count += (
+      content.match(/\[([^\]]+)\]\(nodespace:\/\/node\/[a-zA-Z0-9_-]+(?:\?[^)]*)?\)/g) || []
+    ).length;
 
     return count;
   }
@@ -920,7 +929,7 @@ export class ContentProcessor {
   public detectNodespaceURIs(content: string): NodespaceLink[] {
     const links: NodespaceLink[] = [];
     const regex = /\[([^\]]+)\]\(nodespace:\/\/node\/([a-zA-Z0-9_-]+)(?:\?[^)]*)?\)/g;
-    
+
     let match;
     while ((match = regex.exec(content)) !== null) {
       const displayText = match[1];
@@ -928,14 +937,14 @@ export class ContentProcessor {
       const fullMatch = match[0];
       const uriMatch = fullMatch.match(/nodespace:\/\/node\/[a-zA-Z0-9_-]+(?:\?[^)]*)?/);
       const uri = uriMatch ? uriMatch[0] : `nodespace://node/${nodeId}`;
-      
+
       // Check if reference is valid using cache or NodeReferenceService
       let isValid = false;
       if (this.nodeReferenceService) {
         const resolved = this.nodeReferenceService.resolveNodespaceURI(uri);
         isValid = !!resolved;
       }
-      
+
       links.push({
         uri,
         startPos: match.index,
@@ -946,11 +955,14 @@ export class ContentProcessor {
         metadata: {
           fullMatch,
           contentBefore: content.substring(Math.max(0, match.index - 10), match.index),
-          contentAfter: content.substring(match.index + fullMatch.length, Math.min(content.length, match.index + fullMatch.length + 10))
+          contentAfter: content.substring(
+            match.index + fullMatch.length,
+            Math.min(content.length, match.index + fullMatch.length + 10)
+          )
         }
       });
     }
-    
+
     return links;
   }
 
@@ -980,14 +992,17 @@ export class ContentProcessor {
   /**
    * Resolve a single nodespace reference with caching
    */
-  private async resolveNodeReference(refNode: NodespaceRefNode, sourceNodeId?: string): Promise<void> {
+  private async resolveNodeReference(
+    refNode: NodespaceRefNode,
+    sourceNodeId?: string
+  ): Promise<void> {
     if (!this.nodeReferenceService) {
       return;
     }
 
     // Check cache first
     const cached = this.referenceCache.get(refNode.uri);
-    if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+    if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
       refNode.reference = cached.reference;
       refNode.isValid = !!cached.reference;
       return;
@@ -996,7 +1011,7 @@ export class ContentProcessor {
     try {
       // Parse and resolve URI
       const reference = this.nodeReferenceService.parseNodespaceURI(refNode.uri);
-      
+
       // Cache the result
       this.referenceCache.set(refNode.uri, {
         reference,
@@ -1030,18 +1045,25 @@ export class ContentProcessor {
         try {
           await this.nodeReferenceService.addReference(sourceNodeId, refNode.nodeId);
         } catch (error) {
-          console.warn('ContentProcessor: Failed to add bidirectional reference', { error, sourceNodeId, targetNodeId: refNode.nodeId });
+          console.warn('ContentProcessor: Failed to add bidirectional reference', {
+            error,
+            sourceNodeId,
+            targetNodeId: refNode.nodeId
+          });
         }
       }
     } catch (error) {
-      console.error('ContentProcessor: Error resolving nodespace reference', { error, uri: refNode.uri });
-      
+      console.error('ContentProcessor: Error resolving nodespace reference', {
+        error,
+        uri: refNode.uri
+      });
+
       // Cache null result to avoid repeated failed lookups
       this.referenceCache.set(refNode.uri, {
         reference: null,
         timestamp: Date.now()
       });
-      
+
       refNode.isValid = false;
     }
   }
@@ -1050,7 +1072,9 @@ export class ContentProcessor {
    * Count nodespace references in content
    */
   private countNodespaceRefs(content: string): number {
-    const matches = content.match(/\[([^\]]+)\]\(nodespace:\/\/node\/[a-zA-Z0-9_-]+(?:\?[^)]*)?\)/g);
+    const matches = content.match(
+      /\[([^\]]+)\]\(nodespace:\/\/node\/[a-zA-Z0-9_-]+(?:\?[^)]*)?\)/g
+    );
     return matches ? matches.length : 0;
   }
 
@@ -1067,13 +1091,13 @@ export class ContentProcessor {
   public getReferencesCacheStats(): { size: number; hitRate: number; oldestEntry: number } {
     const now = Date.now();
     let oldestTimestamp = now;
-    
+
     for (const [, cached] of this.referenceCache) {
       if (cached.timestamp < oldestTimestamp) {
         oldestTimestamp = cached.timestamp;
       }
     }
-    
+
     return {
       size: this.referenceCache.size,
       hitRate: 0, // Would need tracking to calculate
@@ -1181,17 +1205,20 @@ export class ContentProcessor {
    * Enhanced content processing with full nodespace:// support
    * Processes both wikilinks and nodespace references
    */
-  public async processContentWithReferences(content: string, nodeId: string): Promise<{
+  public async processContentWithReferences(
+    content: string,
+    nodeId: string
+  ): Promise<{
     prepared: PreparedContent;
     nodespaceLinks: NodespaceLink[];
     resolved: boolean;
   }> {
     // Process traditional wikilinks
     const prepared = this.prepareBacklinkSyntax(content);
-    
+
     // Process nodespace references
     const nodespaceLinks = this.detectNodespaceURIs(content);
-    
+
     // Resolve references if service is available
     let resolved = false;
     if (this.nodeReferenceService) {
@@ -1208,10 +1235,10 @@ export class ContentProcessor {
         }
       }
     }
-    
+
     // Emit events
     this.processContentWithEventEmission(content, nodeId);
-    
+
     return {
       prepared,
       nodespaceLinks,

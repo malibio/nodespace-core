@@ -17,8 +17,8 @@
   export let width = 0;
   export let multiline = false;
 
-  // Element reference for external access
-  let mockElement: HTMLDivElement;
+  // Element reference for external access (bound via bind:this)
+  let mockElement: HTMLDivElement | undefined = undefined;
 
   // Expose the element reference for position calculations
   export function getElement(): HTMLDivElement | undefined {
@@ -32,7 +32,7 @@
   // Update positioning on content or style changes
   let lastContent = '';
   let lastWidth = 0;
-  
+
   afterUpdate(() => {
     if (content !== lastContent || width !== lastWidth) {
       lastContent = content;
@@ -44,7 +44,7 @@
   export { mockElement };
 </script>
 
-<div 
+<div
   bind:this={mockElement}
   class="mock-text-element"
   style="
@@ -69,11 +69,7 @@
   aria-hidden="true"
 >
   {#each characters as { char, idx }}
-    <span 
-      id="mock-char-{idx}" 
-      data-position="{idx}"
-      class="mock-char"
-    >
+    <span id="mock-char-{idx}" data-position={idx} class="mock-char">
       {#if char === '\n'}
         <br />
       {:else if char === ' '}

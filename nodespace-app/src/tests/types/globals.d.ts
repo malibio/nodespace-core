@@ -11,7 +11,7 @@ declare global {
    * This allows tests to use both `global` and `globalThis` interchangeably
    */
   var global: typeof globalThis;
-  
+
   /**
    * Additional test-specific global extensions
    */
@@ -25,16 +25,12 @@ declare global {
         unobserve: (target: Element) => void;
         disconnect: () => void;
       };
-      MutationObserver: new (
-        callback: (mutations: unknown[]) => void
-      ) => {
+      MutationObserver: new (callback: (mutations: unknown[]) => void) => {
         observe: (target: Node, options?: unknown) => void;
         disconnect: () => void;
         takeRecords: () => unknown[];
       };
-      ResizeObserver: new (
-        callback: (entries: unknown[]) => void
-      ) => {
+      ResizeObserver: new (callback: (entries: unknown[]) => void) => {
         observe: (target: Element) => void;
         unobserve: (target: Element) => void;
         disconnect: () => void;

@@ -1,6 +1,6 @@
 /**
  * ContentProcessor Nodespace URI Integration Tests
- * 
+ *
  * Tests the enhanced ContentProcessor integration with nodespace:// URIs
  * and NodeReferenceService integration (Phase 2.1 Days 4-5)
  */
@@ -21,10 +21,10 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
   beforeEach(() => {
     // Reset all mocks
     vi.clearAllMocks();
-    
+
     // Set the mock service
     contentProcessor.setNodeReferenceService(mockNodeReferenceService);
-    
+
     // Clear cache
     contentProcessor.clearReferenceCache();
   });
@@ -33,7 +33,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     it('should detect nodespace:// URIs in markdown content', () => {
       const content = 'Check out [My Node](nodespace://node/test-123) for details.';
       const links = contentProcessor.detectNodespaceURIs(content);
-      
+
       expect(links).toHaveLength(1);
       expect(links[0]).toMatchObject({
         uri: 'nodespace://node/test-123',
@@ -51,9 +51,9 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         Second reference: [Node B](nodespace://node/node-b?hierarchy=true)
         Regular link: [External](https://example.com)
       `;
-      
+
       const links = contentProcessor.detectNodespaceURIs(content);
-      
+
       expect(links).toHaveLength(2);
       expect(links[0].nodeId).toBe('node-a');
       expect(links[1].nodeId).toBe('node-b');
@@ -63,7 +63,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     it('should handle complex URIs with query parameters', () => {
       const content = '[Complex Node](nodespace://node/abc-123?hierarchy=true&timestamp=123456)';
       const links = contentProcessor.detectNodespaceURIs(content);
-      
+
       expect(links).toHaveLength(1);
       expect(links[0]).toMatchObject({
         uri: 'nodespace://node/abc-123?hierarchy=true&timestamp=123456',
@@ -77,14 +77,14 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     it('should parse nodespace references into AST nodes', () => {
       const markdown = 'See [Related Node](nodespace://node/related-123) for more info.';
       const ast = contentProcessor.parseMarkdown(markdown);
-      
+
       // Should have a paragraph with nodespace-ref node
       expect(ast.children).toHaveLength(1);
       expect(ast.children[0].type).toBe('paragraph');
-      
+
       const paragraph = ast.children[0] as ParagraphNode;
       expect(paragraph.children).toHaveLength(3); // Text + NodespaceRef + Text
-      
+
       const refNode = paragraph.children[1];
       expect(refNode.type).toBe('nodespace-ref');
       expect(refNode.nodeId).toBe('related-123');
@@ -101,9 +101,9 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         Second ref: [Node B](nodespace://node/node-b)
         Wiki link: [[Traditional Wiki Link]]
       `;
-      
+
       const ast = contentProcessor.parseMarkdown(markdown);
-      
+
       expect(ast.metadata.hasNodespaceRefs).toBe(true);
       expect(ast.metadata.nodeRefCount).toBe(2);
       expect(ast.metadata.hasWikiLinks).toBe(true);
@@ -114,7 +114,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     it('should render nodespace references as anchor tags', () => {
       const markdown = 'Check [My Node](nodespace://node/test-123) here.';
       const html = contentProcessor.markdownToDisplay(markdown);
-      
+
       expect(html).toContain('class="ns-noderef ns-noderef-invalid"');
       expect(html).toContain('href="nodespace://node/test-123"');
       expect(html).toContain('data-node-id="test-123"');
@@ -134,12 +134,15 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         metadata: {}
       };
 
-(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
-        .mockReturnValue(mockReference);
+      (
+        mockNodeReferenceService.parseNodespaceURI as MockedFunction<
+          typeof mockNodeReferenceService.parseNodespaceURI
+        >
+      ).mockReturnValue(mockReference);
 
       const markdown = 'Check [My Node](nodespace://node/test-123) here.';
       const html = await contentProcessor.markdownToDisplayWithReferences(markdown, 'source-node');
-      
+
       expect(html).toContain('class="ns-noderef ns-noderef-valid"');
       expect(html).toContain('title="Navigate to: My Node"');
     });
@@ -151,9 +154,9 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         Wiki link: [[Traditional Link]]
         Nodespace ref: [Modern Link](nodespace://node/modern-123)
       `;
-      
+
       const result = await contentProcessor.processContentWithReferences(content, 'source-node');
-      
+
       expect(result.prepared.wikiLinks).toHaveLength(1);
       expect(result.nodespaceLinks).toHaveLength(1);
       expect(result.prepared.wikiLinks[0].target).toBe('Traditional Link');
@@ -172,16 +175,25 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         metadata: {}
       };
 
-(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
-        .mockReturnValue(mockReference);
-(mockNodeReferenceService.addReference as MockedFunction<typeof mockNodeReferenceService.addReference>)
-        .mockResolvedValue(undefined);
+      (
+        mockNodeReferenceService.parseNodespaceURI as MockedFunction<
+          typeof mockNodeReferenceService.parseNodespaceURI
+        >
+      ).mockReturnValue(mockReference);
+      (
+        mockNodeReferenceService.addReference as MockedFunction<
+          typeof mockNodeReferenceService.addReference
+        >
+      ).mockResolvedValue(undefined);
 
       const content = 'Reference to [Target](nodespace://node/target-node)';
       const result = await contentProcessor.processContentWithReferences(content, 'source-node');
-      
+
       expect(result.resolved).toBe(true);
-      expect(mockNodeReferenceService.addReference).toHaveBeenCalledWith('source-node', 'target-node');
+      expect(mockNodeReferenceService.addReference).toHaveBeenCalledWith(
+        'source-node',
+        'target-node'
+      );
     });
   });
 
@@ -197,15 +209,18 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         metadata: {}
       };
 
-(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
-        .mockReturnValue(mockReference);
+      (
+        mockNodeReferenceService.parseNodespaceURI as MockedFunction<
+          typeof mockNodeReferenceService.parseNodespaceURI
+        >
+      ).mockReturnValue(mockReference);
 
       const markdown = 'Check [Test Node](nodespace://node/test-123) here.';
-      
+
       // First call
       await contentProcessor.markdownToDisplayWithReferences(markdown, 'source-node');
       expect(mockNodeReferenceService.parseNodespaceURI).toHaveBeenCalledTimes(1);
-      
+
       // Second call should use cache
       await contentProcessor.markdownToDisplayWithReferences(markdown, 'source-node');
       expect(mockNodeReferenceService.parseNodespaceURI).toHaveBeenCalledTimes(1); // No additional calls
@@ -213,7 +228,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
 
     it('should provide cache statistics', () => {
       const stats = contentProcessor.getReferencesCacheStats();
-      
+
       expect(stats).toHaveProperty('size');
       expect(stats).toHaveProperty('hitRate');
       expect(stats).toHaveProperty('oldestEntry');
@@ -223,24 +238,30 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
 
   describe('Error Handling', () => {
     it('should handle broken references gracefully', async () => {
-(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
-        .mockReturnValue(null);
+      (
+        mockNodeReferenceService.parseNodespaceURI as MockedFunction<
+          typeof mockNodeReferenceService.parseNodespaceURI
+        >
+      ).mockReturnValue(null);
 
       const markdown = 'Broken [Reference](nodespace://node/nonexistent)';
       const html = await contentProcessor.markdownToDisplayWithReferences(markdown, 'source-node');
-      
+
       expect(html).toContain('class="ns-noderef ns-noderef-invalid"');
       expect(html).toContain('title="Broken reference: nonexistent"');
     });
 
     it('should handle service errors gracefully', async () => {
-(mockNodeReferenceService.parseNodespaceURI as MockedFunction<typeof mockNodeReferenceService.parseNodespaceURI>)
-        .mockImplementation(() => {
-          throw new Error('Service error');
-        });
+      (
+        mockNodeReferenceService.parseNodespaceURI as MockedFunction<
+          typeof mockNodeReferenceService.parseNodespaceURI
+        >
+      ).mockImplementation(() => {
+        throw new Error('Service error');
+      });
 
       const markdown = 'Error [Reference](nodespace://node/error-node)';
-      
+
       // Should not throw
       await expect(
         contentProcessor.markdownToDisplayWithReferences(markdown, 'source-node')
@@ -251,13 +272,13 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
   describe('Event Emission', () => {
     it('should emit events for detected nodespace references', () => {
       const content = 'Reference to [Target](nodespace://node/target-123)';
-      
-      // Mock event bus to capture events  
+
+      // Mock event bus to capture events
       vi.fn();
-      
+
       // Process content
       contentProcessor.processContentWithEventEmission(content, 'source-node');
-      
+
       // Would need to properly mock eventBus to test this
       // For now, we verify the method doesn't throw
       expect(() => {
@@ -269,10 +290,10 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
   describe('Round-trip Processing', () => {
     it('should maintain nodespace references through AST round-trip', () => {
       const original = 'Check [My Node](nodespace://node/test-123) for details.';
-      
+
       const ast = contentProcessor.parseMarkdown(original);
       const reconstructed = contentProcessor.astToMarkdown(ast);
-      
+
       expect(reconstructed).toContain('[My Node](nodespace://node/test-123)');
     });
 
@@ -286,10 +307,10 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
         
         More content.
       `.trim();
-      
+
       const ast = contentProcessor.parseMarkdown(original);
       const reconstructed = contentProcessor.astToMarkdown(ast);
-      
+
       expect(reconstructed).toContain('[[wiki link]]');
       expect(reconstructed).toContain('[My Node](nodespace://node/test-123)');
       expect(reconstructed).toContain('**bold**');
@@ -298,14 +319,15 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
 
   describe('Performance and Validation', () => {
     it('should handle large content with many references efficiently', () => {
-      const content = Array.from({ length: 100 }, (_, i) => 
-        `Reference ${i}: [Node ${i}](nodespace://node/node-${i})`
+      const content = Array.from(
+        { length: 100 },
+        (_, i) => `Reference ${i}: [Node ${i}](nodespace://node/node-${i})`
       ).join(' ');
-      
+
       const startTime = performance.now();
       const links = contentProcessor.detectNodespaceURIs(content);
       const endTime = performance.now();
-      
+
       expect(links).toHaveLength(100);
       expect(endTime - startTime).toBeLessThan(100); // Should be fast
     });
@@ -313,7 +335,7 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
     it('should validate content with nodespace references', () => {
       const content = 'Valid [Reference](nodespace://node/valid-123)';
       const validation = contentProcessor.validateContent(content);
-      
+
       expect(validation.isValid).toBe(true);
       expect(validation.errors).toHaveLength(0);
     });

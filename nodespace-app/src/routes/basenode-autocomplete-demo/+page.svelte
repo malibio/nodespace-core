@@ -40,7 +40,11 @@
           <h1>BaseNode + AutocompleteModal Integration</h1>
           <p>Complete @ Trigger System Demonstration</p>
         </div>
-        <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme ({$themePreference})">
+        <button
+          class="theme-toggle"
+          onclick={toggleTheme}
+          title="Toggle theme ({$themePreference})"
+        >
           {getThemeIcon($themePreference)}
           {$themePreference}
         </button>

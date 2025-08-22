@@ -335,154 +335,18 @@
       </div>
     </section>
 
-    <!-- NodeSpace Domain Components -->
-    <section class="example-section">
-      <h2>NodeSpace Domain Components</h2>
-      <p>Custom components built on the shadcn-svelte foundation, specifically designed for AI-native knowledge management.</p>
-      
-      <h3>BaseNode Component</h3>
-      <div class="component-live-demo">
-        <p><strong>The foundation of NodeSpace's hierarchical content system.</strong></p>
-        
-        <div class="hierarchy-demo">
-          <div class="node-demo">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--text"></span>
-            </div>
-            <div class="node__content">Welcome to NodeSpace</div>
-          </div>
-          
-          <div class="node-demo" style="padding-left: calc(0.25rem + 44px);">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--text"></span>
-            </div>
-            <div class="node__content">This is a child node</div>
-          </div>
-          
-          <div class="node-demo" style="padding-left: calc(0.25rem + 68px);">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--task"></span>
-            </div>
-            <div class="node__content">This is a task node (orange indicator)</div>
-          </div>
-          
-          <div class="node-demo" style="padding-left: calc(0.25rem + 44px);">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--ai"></span>
-            </div>
-            <div class="node__content">AI-generated content appears here (blue indicator)</div>
-          </div>
-        </div>
-        
-        <div class="example-code">
-          <pre><code>&lt;script&gt;
-  import BaseNode from "$lib/design/components/BaseNode.svelte";
-&lt;/script&gt;
-
-&lt;BaseNode 
-  nodeId="example"
-  nodeType="text"
-  content="Welcome to NodeSpace"
-  autoFocus={false}
-  headerLevel={0}
-  children={[]}
-/&gt;</code></pre>
-        </div>
-      </div>
-      
-      <h3>Node Type Differentiation</h3>
-      <div class="component-live-demo">
-        <p><strong>Visual indicators for different content types:</strong></p>
-        
-        <div style="display: flex; flex-direction: column; gap: 1rem;">
-          <div class="node-demo">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--text"></span>
-            </div>
-            <div class="node__content"><strong>Text Node</strong> - Primary content and documentation</div>
-          </div>
-          
-          <div class="node-demo">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--task"></span>
-            </div>
-            <div class="node__content"><strong>Task Node</strong> - Actionable items and todos</div>
-          </div>
-          
-          <div class="node-demo">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--ai"></span>
-            </div>
-            <div class="node__content"><strong>AI Chat Node</strong> - AI-generated content and conversations</div>
-          </div>
-          
-          <div class="node-demo">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--entity"></span>
-            </div>
-            <div class="node__content"><strong>Entity Node</strong> - Tags, metadata, and categorization</div>
-          </div>
-          
-          <div class="node-demo">
-            <div class="node__indicator">
-              <span class="node-icon node-icon--query"></span>
-            </div>
-            <div class="node__content"><strong>Query Node</strong> - Search queries and filters</div>
-          </div>
-        </div>
-        
-        <div class="example-code">
-          <pre><code>/* CSS for node type colors */
-.node--text .node__indicator { color: hsl(142 71% 45%); }    /* Green */
-.node--task .node__indicator { color: hsl(25 95% 53%); }     /* Orange */
-.node--ai-chat .node__indicator { color: hsl(221 83% 53%); } /* Blue */
-.node--entity .node__indicator { color: hsl(271 81% 56%); }  /* Purple */
-.node--query .node__indicator { color: hsl(330 81% 60%); }   /* Pink */</code></pre>
-        </div>
-      </div>
-      
-      <h3>Interactive Features</h3>
-      <div class="component-live-demo">
-        <p><strong>Advanced editing capabilities built into every node:</strong></p>
-        
-        <div style="
-          background: hsl(var(--muted));
-          border: 1px solid hsl(var(--border));
-          border-radius: var(--radius);
-          padding: 1.5rem;
-          margin: 1rem 0;
-        ">
-          <h4 style="margin: 0 0 1rem 0;">Keyboard Navigation</h4>
-          <ul style="margin: 0; padding-left: 1.5rem;">
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">↑↓</kbd> Navigate between nodes</li>
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">Tab</kbd> / <kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">Shift+Tab</kbd> Indent/outdent nodes</li>
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">Enter</kbd> Create new node</li>
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">@</kbd> Trigger autocomplete for node references</li>
-          </ul>
-        </div>
-        
-        <div style="
-          background: hsl(var(--muted));
-          border: 1px solid hsl(var(--border));
-          border-radius: var(--radius);
-          padding: 1.5rem;
-          margin: 1rem 0;
-        ">
-          <h4 style="margin: 0 0 1rem 0;">Markdown Support</h4>
-          <ul style="margin: 0; padding-left: 1.5rem;">
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">Cmd+B</kbd> Bold formatting</li>
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">Cmd+I</kbd> Italic formatting</li>
-            <li><kbd style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; border: 1px solid hsl(var(--border));">Cmd+U</kbd> Underline formatting</li>
-            <li><code style="background: hsl(var(--background)); padding: 0.125rem 0.25rem; border-radius: 0.25rem;"># ## ###</code> Header levels</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
     <!-- Component Integration -->
     <section class="example-section">
       <h2>Component Integration Patterns</h2>
-      <p>How to effectively combine shadcn-svelte foundation components with NodeSpace domain components.</p>
+      <p>How to effectively combine shadcn-svelte foundation components with custom application components.</p>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">📝 NodeSpace Domain Components</div>
+          <div class="component-demo">
+            <p>For comprehensive examples of NodeSpace's hierarchical node system with mathematical positioning precision, see the <a href="nodeviewer.html">NodeViewer showcase</a>.</p>
+          </div>
+        </div>
+      </div>
       
       <div class="example-code">
         <pre><code><!-- Example: Settings Panel with Node Editor -->
