@@ -181,7 +181,7 @@ class DebouncedProcessor<T, R> {
           }, this.maxDelay * 2);
           
           resolve(result);
-        } catch (_error) {
+        } catch (error) {
           this.timers.delete(key);
           reject(error);
         }
@@ -407,7 +407,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       );
       
       return result;
-    } catch (_error) {
+    } catch (error) {
       measurement.finish();
       this.performanceMonitor.recordMetric('operation-failure', 1);
       console.error('OptimizedNodeReferenceService: Error in trigger detection', error);
@@ -491,7 +491,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       
       measurement.finish();
       return result;
-    } catch (_error) {
+    } catch (error) {
       measurement.finish();
       this.performanceMonitor.recordMetric('operation-failure', 1);
       throw error;
@@ -572,7 +572,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       
       this.renderDecorations(element, links);
       measurement.finish();
-    } catch (_error) {
+    } catch (error) {
       measurement.finish();
       console.error('Error processing element references', error);
     }
@@ -607,7 +607,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
     let currentPos = 0;
     let node;
     
-    while (node = walker.nextNode()) {
+    while ((node = walker.nextNode())) {
       const text = node.textContent || '';
       if (currentPos <= link.startPos && currentPos + text.length > link.startPos) {
         return node.parentElement;
@@ -654,7 +654,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       console.debug('OptimizedNodeReferenceService: Cache stats', stats);
       
       measurement.finish();
-    } catch (_error) {
+    } catch (error) {
       measurement.finish();
       console.error('Error during memory cleanup', error);
     }
@@ -672,13 +672,14 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
       for (const query of commonQueries) {
         try {
           await this.searchNodes(query);
-        } catch (_error) {
-          // Ignore prewarming errors
+        } catch (error) {
+          // Ignore prewarming errors - intentionally unused
+          void error;
         }
       }
       
       console.debug('OptimizedNodeReferenceService: Cache prewarming completed');
-    } catch (_error) {
+    } catch (error) {
       console.warn('OptimizedNodeReferenceService: Cache prewarming failed', error);
     }
   }
