@@ -179,10 +179,10 @@ export class ContentEditableController {
   private markdownToLiveHtml(content: string): string {
     let result = '';
     let i = 0;
-    
+
     while (i < content.length) {
       const remaining = content.substring(i);
-      
+
       // Check for nested underline patterns first (most specific)
       if (remaining.startsWith('__***')) {
         const match = remaining.match(/^__\*\*\*([^*_]+)\*\*\*__/);
@@ -192,7 +192,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       if (remaining.startsWith('__**')) {
         const match = remaining.match(/^__\*\*([^*_]+)\*\*__/);
         if (match) {
@@ -201,7 +201,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       if (remaining.startsWith('__*')) {
         const match = remaining.match(/^__\*([^*_]+)\*__/);
         if (match) {
@@ -210,7 +210,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for triple stars (bold + italic)
       if (remaining.startsWith('***')) {
         const match = remaining.match(/^\*\*\*([^*]+)\*\*\*/);
@@ -220,7 +220,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for double stars (bold)
       if (remaining.startsWith('**')) {
         const match = remaining.match(/^\*\*([^*]+)\*\*/);
@@ -230,7 +230,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for single stars (italic) - make sure it's not part of ** or ***
       if (remaining.startsWith('*') && !remaining.startsWith('**')) {
         const match = remaining.match(/^\*([^*]+)\*/);
@@ -240,7 +240,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for simple underlines
       if (remaining.startsWith('__')) {
         const match = remaining.match(/^__([^_]+)__/);
@@ -250,12 +250,12 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // If no pattern matches, add the character as-is
       result += content[i];
       i++;
     }
-    
+
     return result;
   }
 
@@ -288,11 +288,11 @@ export class ContentEditableController {
     // Use a proper sequential parser instead of greedy regex replacements
     let result = '';
     let i = 0;
-    
+
     while (i < markdownContent.length) {
       // Check for each pattern at current position
       const remaining = markdownContent.substring(i);
-      
+
       // Check for nested underline patterns first (most specific)
       if (remaining.startsWith('__***')) {
         const match = remaining.match(/^__\*\*\*([^*_]+)\*\*\*__/);
@@ -302,7 +302,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       if (remaining.startsWith('__**')) {
         const match = remaining.match(/^__\*\*([^*_]+)\*\*__/);
         if (match) {
@@ -311,7 +311,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       if (remaining.startsWith('__*')) {
         const match = remaining.match(/^__\*([^*_]+)\*__/);
         if (match) {
@@ -320,7 +320,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for triple stars (bold + italic)
       if (remaining.startsWith('***')) {
         const match = remaining.match(/^\*\*\*([^*]+)\*\*\*/);
@@ -330,7 +330,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for double stars (bold)
       if (remaining.startsWith('**')) {
         const match = remaining.match(/^\*\*([^*]+)\*\*/);
@@ -340,7 +340,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for single stars (italic) - make sure it's not part of ** or ***
       if (remaining.startsWith('*') && !remaining.startsWith('**')) {
         const match = remaining.match(/^\*([^*]+)\*/);
@@ -350,7 +350,7 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // Check for simple underlines
       if (remaining.startsWith('__')) {
         const match = remaining.match(/^__([^_]+)__/);
@@ -360,12 +360,12 @@ export class ContentEditableController {
           continue;
         }
       }
-      
+
       // If no pattern matches, add the character as-is
       result += markdownContent[i];
       i++;
     }
-    
+
     return result;
   }
 
@@ -374,15 +374,33 @@ export class ContentEditableController {
 
     // Convert span classes to markdown syntax
     // Handle most complex combinations first (underline + others)
-    markdown = markdown.replace(/<span class="markdown-underline markdown-bold markdown-italic">(.*?)<\/span>/g, '__***$1***__');
-    markdown = markdown.replace(/<span class="markdown-underline markdown-italic markdown-bold">(.*?)<\/span>/g, '__***$1***__');
-    markdown = markdown.replace(/<span class="markdown-underline markdown-bold">(.*?)<\/span>/g, '__**$1**__');
-    markdown = markdown.replace(/<span class="markdown-underline markdown-italic">(.*?)<\/span>/g, '__*$1*__');
-    
+    markdown = markdown.replace(
+      /<span class="markdown-underline markdown-bold markdown-italic">(.*?)<\/span>/g,
+      '__***$1***__'
+    );
+    markdown = markdown.replace(
+      /<span class="markdown-underline markdown-italic markdown-bold">(.*?)<\/span>/g,
+      '__***$1***__'
+    );
+    markdown = markdown.replace(
+      /<span class="markdown-underline markdown-bold">(.*?)<\/span>/g,
+      '__**$1**__'
+    );
+    markdown = markdown.replace(
+      /<span class="markdown-underline markdown-italic">(.*?)<\/span>/g,
+      '__*$1*__'
+    );
+
     // Handle remaining bold + italic combinations
-    markdown = markdown.replace(/<span class="markdown-bold markdown-italic">(.*?)<\/span>/g, '***$1***');
-    markdown = markdown.replace(/<span class="markdown-italic markdown-bold">(.*?)<\/span>/g, '***$1***');
-    
+    markdown = markdown.replace(
+      /<span class="markdown-bold markdown-italic">(.*?)<\/span>/g,
+      '***$1***'
+    );
+    markdown = markdown.replace(
+      /<span class="markdown-italic markdown-bold">(.*?)<\/span>/g,
+      '***$1***'
+    );
+
     // Handle individual formatting
     markdown = markdown.replace(/<span class="markdown-bold">(.*?)<\/span>/g, '**$1**');
     markdown = markdown.replace(/<span class="markdown-italic">(.*?)<\/span>/g, '*$1*');
@@ -897,13 +915,13 @@ export class ContentEditableController {
 
     // Find all unmatched opening markers that need to be closed
     const unmatchedOpening = this.findUnmatchedOpeningMarkers(beforeCursor);
-    
+
     // Close the first part with all unmatched opening markers (in reverse order for proper nesting)
     const closingForBefore = unmatchedOpening.slice().reverse().join('');
-    
+
     // Open the second part with all unmatched opening markers (in original order)
     const openingForAfter = unmatchedOpening.join('');
-    
+
     const processedBefore = beforeCursor + closingForBefore;
     const processedAfter = openingForAfter + afterCursor;
 
@@ -920,17 +938,17 @@ export class ContentEditableController {
   private findUnmatchedOpeningMarkers(beforeCursor: string): string[] {
     const openMarkers: Array<{ marker: string; position: number }> = [];
     const closeMarkers: Array<{ marker: string; position: number }> = [];
-    
+
     // Find all markers in order of appearance
     const markers = ['***', '**', '__', '*'];
-    
+
     for (let i = 0; i < beforeCursor.length; i++) {
       for (const marker of markers) {
         if (beforeCursor.substring(i, i + marker.length) === marker) {
           // Check if this is an opening or closing marker by counting previous occurrences
           const before = beforeCursor.substring(0, i);
           const count = (before.match(new RegExp(this.escapeRegex(marker), 'g')) || []).length;
-          
+
           if (count % 2 === 0) {
             // Even count = opening marker
             openMarkers.push({ marker, position: i });
@@ -938,39 +956,41 @@ export class ContentEditableController {
             // Odd count = closing marker
             closeMarkers.push({ marker, position: i });
           }
-          
+
           i += marker.length - 1; // Skip ahead
           break;
         }
       }
     }
-    
+
     // Find unmatched opening markers
     const unmatchedOpening: string[] = [];
     const usedClosing = new Set<number>();
-    
+
     // Match opening markers with closing markers (in reverse order for proper nesting)
     for (let i = openMarkers.length - 1; i >= 0; i--) {
       const openMarker = openMarkers[i];
       let matched = false;
-      
+
       // Find the closest unused closing marker after this opening
       for (let j = 0; j < closeMarkers.length; j++) {
         const closeMarker = closeMarkers[j];
-        if (!usedClosing.has(j) && 
-            closeMarker.marker === openMarker.marker && 
-            closeMarker.position > openMarker.position) {
+        if (
+          !usedClosing.has(j) &&
+          closeMarker.marker === openMarker.marker &&
+          closeMarker.position > openMarker.position
+        ) {
           usedClosing.add(j);
           matched = true;
           break;
         }
       }
-      
+
       if (!matched) {
         unmatchedOpening.unshift(openMarker.marker); // Add to front to maintain order
       }
     }
-    
+
     return unmatchedOpening;
   }
 
