@@ -17,9 +17,7 @@
 import { NodeManager, type NodeManagerEvents, type Node } from './NodeManager';
 import { HierarchyService } from './HierarchyService';
 import { NodeOperationsService } from './NodeOperationsService';
-import { ContentProcessor } from './contentProcessor';
 import { eventBus } from './EventBus';
-import type { NodeUpdatedEvent, DebugEvent } from './EventTypes';
 // import type { NodeSpaceNode } from './MockDatabaseService';
 
 // ============================================================================

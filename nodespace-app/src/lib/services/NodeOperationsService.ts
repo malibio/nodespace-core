@@ -14,7 +14,6 @@
  */
 
 import { eventBus } from './EventBus';
-import type { ReferencesUpdateNeededEvent, BacklinkDetectedEvent, DebugEvent } from './EventTypes';
 import { ContentProcessor } from './contentProcessor';
 import type { NodeManager, Node } from './NodeManager';
 import type { HierarchyService } from './HierarchyService';
@@ -152,13 +151,13 @@ export class NodeOperationsService {
 
     if (isUpdate) {
       // Update existing node
-      this.nodeManager.updateNodeContent(nodeId, nodeManagerNode.content);
+      this.nodeManager.updateNodeContent(nodeId, nodeManagerNode.content || '');
 
       // Update other properties
       const node = this.nodeManager.findNode(nodeId);
       if (node) {
-        node.nodeType = nodeManagerNode.nodeType;
-        node.metadata = nodeManagerNode.metadata;
+        node.nodeType = nodeManagerNode.nodeType || 'text';
+        node.metadata = nodeManagerNode.metadata || {};
         // Update mentions after node exists
         if (opts.updateMentions && baseNodeData.mentions.length > 0) {
           node.mentions = baseNodeData.mentions;

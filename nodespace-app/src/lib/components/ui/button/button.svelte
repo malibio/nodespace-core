@@ -1,19 +1,8 @@
-<script lang="ts" module>
-  // Re-export types and variants from separate file for better TypeScript support
-  export {
-    buttonVariants,
-    type ButtonVariant,
-    type ButtonSize,
-    type ButtonProps
-  } from './types.js';
-</script>
 
 <script lang="ts">
   import { cn } from '$lib/utils.js';
   import {
     buttonVariants,
-    type ButtonVariant,
-    type ButtonSize,
     type ButtonProps
   } from './types.js';
 

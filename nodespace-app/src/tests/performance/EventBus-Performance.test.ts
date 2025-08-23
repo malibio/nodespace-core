@@ -261,6 +261,9 @@ describe('EventBus Performance', () => {
 
       // Non-batched events should be processed immediately
       expect(decorationClickCount).toBe(100);
+      
+      // Batched events should also be processed
+      expect(statusChangeCount).toBe(100);
     });
   });
 

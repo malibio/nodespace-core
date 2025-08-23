@@ -40,7 +40,7 @@ export interface TriggerContext {
   query: string; // Text after @
   startPosition: number; // Position in content where trigger starts
   endPosition: number; // Current cursor position
-  element: HTMLElement; // ContentEditable element
+  element: HTMLElement | null; // ContentEditable element (null in test scenarios)
   isValid: boolean; // Whether trigger context is valid
   metadata: Record<string, unknown>;
 }

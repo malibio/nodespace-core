@@ -452,7 +452,13 @@ export class HierarchyService {
     childrenCacheSize: number;
     siblingsCacheSize: number;
     hitRatio: number;
-    performance: typeof this.performanceMetrics;
+    performance: {
+      cacheHits: number;
+      cacheMisses: number;
+      avgDepthComputeTime: number;
+      avgChildrenComputeTime: number;
+      avgSiblingsComputeTime: number;
+    };
   } {
     const totalRequests = this.performanceMetrics.cacheHits + this.performanceMetrics.cacheMisses;
     const hitRatio = totalRequests > 0 ? this.performanceMetrics.cacheHits / totalRequests : 0;

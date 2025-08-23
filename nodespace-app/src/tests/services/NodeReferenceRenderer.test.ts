@@ -27,16 +27,6 @@ interface MockTreeWalker {
   nextNode: ReturnType<typeof vi.fn>;
 }
 
-interface MockDocument {
-  createElement: ReturnType<typeof vi.fn>;
-  createTreeWalker: ReturnType<typeof vi.fn>;
-  querySelectorAll: ReturnType<typeof vi.fn>;
-}
-
-interface MockWindow {
-  IntersectionObserver: ReturnType<typeof vi.fn>;
-  MutationObserver: ReturnType<typeof vi.fn>;
-}
 import {
   NodeReferenceRenderer,
   initializeNodeReferenceRenderer

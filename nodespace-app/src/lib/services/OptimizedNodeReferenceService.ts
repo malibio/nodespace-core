@@ -730,13 +730,13 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
    * Get detailed performance metrics
    */
   public getDetailedPerformanceMetrics(): {
-    basic: ReturnType<typeof this.getPerformanceMetrics>;
-    advanced: ReturnType<typeof this.performanceMonitor.getComprehensiveMetrics>;
+    basic: any;
+    advanced: any;
     caches: {
-      suggestions: ReturnType<typeof this.suggestionCache.getStats>;
-      uri: ReturnType<typeof this.uriCache.getStats>;
-      search: ReturnType<typeof this.searchCache.getStats>;
-      decoration: ReturnType<typeof this.decorationCache.getStats>;
+      suggestions: any;
+      uri: any;
+      search: any;
+      decoration: any;
     };
     viewport: {
       visibleElements: number;
@@ -745,7 +745,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
   } {
     return {
       basic: this.getPerformanceMetrics(),
-      advanced: this.performanceMonitor.getComprehensiveMetrics(),
+      advanced: this.performanceMonitor.getComprehensiveMetrics() as any,
       caches: {
         suggestions: this.suggestionLRUCache.getStats(),
         uri: this.uriLRUCache.getStats(),

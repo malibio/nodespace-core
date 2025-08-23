@@ -1,7 +1,3 @@
-<script lang="ts" module>
-  // Re-export types and variants from separate file for better TypeScript support
-  export { badgeVariants, type BadgeVariant } from './types.js';
-</script>
 
 <script lang="ts">
   import type { HTMLAnchorAttributes } from 'svelte/elements';

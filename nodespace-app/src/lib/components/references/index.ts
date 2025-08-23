@@ -8,10 +8,10 @@
 // Core component imports
 import BaseNodeReference from './BaseNodeReference.svelte';
 import type { ComponentDecoration } from '../../types/ComponentDecoration';
-import type { SvelteComponent } from 'svelte';
+import type { ComponentType } from 'svelte';
 
 // Component constructor type for Node Reference components
-type NodeReferenceComponent = new (...args: unknown[]) => SvelteComponent;
+type NodeReferenceComponent = ComponentType;
 
 // Export components
 export { BaseNodeReference };
@@ -65,7 +65,7 @@ export function getComponentByName(componentName: string): NodeReferenceComponen
  */
 export function createNodeReferenceDecoration(nodeType: string, props: Record<string, unknown>): ComponentDecoration {
   return {
-    component: getNodeReferenceComponent(nodeType),
+    component: getNodeReferenceComponent(nodeType) as any,
     props,
   };
 }
