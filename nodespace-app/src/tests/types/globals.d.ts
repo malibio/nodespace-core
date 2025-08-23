@@ -6,15 +6,15 @@
 /// <reference types="node" />
 /// <reference lib="dom" />
 
-interface TestDocument {
-  createElement: (tagName: string) => unknown;
+export interface TestDocument {
+  createElement: (tagName: string) => HTMLElement;
   createTreeWalker?: (
     root: Node,
     whatToShow?: number
   ) => {
     nextNode: () => Node | null;
   };
-  querySelectorAll?: (selector: string) => unknown[];
+  querySelectorAll?: (selector: string) => Element[];
   [key: string]: unknown;
 }
 
@@ -34,6 +34,11 @@ declare global {
     window?: TestWindow;
     [key: string]: unknown;
   };
+
+  /**
+   * Mock Svelte 5 $state rune for testing
+   */
+  var $state: <T>(initialValue: T) => T;
 
   /**
    * Additional test-specific global extensions

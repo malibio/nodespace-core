@@ -310,13 +310,19 @@ export class EnhancedNodeManager extends NodeManager {
     // Create analysis
     const analysis: NodeAnalysis = {
       nodeId,
-      contentType: contentResult.ast.metadata.hasWikiLinks ? 'linked' : node.nodeType,
+      contentType: (contentResult.ast as { metadata?: { hasWikiLinks?: boolean } })?.metadata
+        ?.hasWikiLinks
+        ? 'linked'
+        : node.nodeType,
       wordCount: contentResult.wordCount,
       hasWikiLinks: contentResult.wikiLinks.length > 0,
-      wikiLinks: contentResult.wikiLinks.map((link) => link.target),
+      wikiLinks: contentResult.wikiLinks.map(
+        (link: unknown) => (link as { target: string }).target
+      ),
       headerLevel: contentResult.headerLevel,
       formattingComplexity: contentResult.hasFormatting
-        ? contentResult.ast.metadata.inlineFormatCount
+        ? (contentResult.ast as { metadata?: { inlineFormatCount?: number } })?.metadata
+            ?.inlineFormatCount || 0
         : 0,
       mentionsCount: node.mentions?.length || 0,
       backlinksCount: this.getNodeBacklinks(nodeId).length,
@@ -550,7 +556,8 @@ export class EnhancedNodeManager extends NodeManager {
       nodeManager: {
         totalNodes: this.nodes.size,
         rootNodes: this.rootNodeIds.length,
-        collapsedNodes: this.collapsedNodes.size
+        highestDepth: Math.max(...Array.from(this.nodes.keys()).map(id => this.hierarchyService.getNodeDepth(id)), 0),
+        hierarchyUpdates: 0 // This would be tracked by the hierarchy service
       },
       hierarchyService: hierarchyStats,
       analysisCache: {
@@ -558,7 +565,40 @@ export class EnhancedNodeManager extends NodeManager {
         hitRatio: this.analysisCache.size / this.nodes.size,
         oldestEntry: this.getOldestAnalysisCacheEntry()
       },
-      contentAnalysis: this.analyzeAllNodes()
+      contentAnalysis: this.convertToContentAnalysisMetrics(this.analyzeAllNodes())
+    };
+  }
+
+  /**
+   * Convert analyzeAllNodes result to ContentAnalysisMetrics interface
+   */
+  private convertToContentAnalysisMetrics(analysisData: {
+    totalNodes: number;
+    byType: Record<string, number>;
+    avgDepth: number;
+    avgWordCount: number;
+    totalMentions: number;
+    mostLinkedNodes: { nodeId: string; links: number }[];
+  }): {
+    totalProcessed: number;
+    averageComplexity: number;
+    cacheHitRatio: number;
+  } & typeof analysisData {
+    // Calculate complexity as a composite score
+    const averageComplexity =
+      analysisData.avgDepth * 0.3 +
+      Math.min(analysisData.avgWordCount / 100, 10) * 0.4 +
+      (analysisData.totalMentions / analysisData.totalNodes) * 0.3;
+
+    // Calculate cache hit ratio based on analysis cache efficiency
+    const cacheHitRatio =
+      this.analysisCache.size > 0 ? Math.min(this.analysisCache.size / this.nodes.size, 1.0) : 0;
+
+    return {
+      totalProcessed: analysisData.totalNodes,
+      averageComplexity,
+      cacheHitRatio,
+      ...analysisData
     };
   }
 

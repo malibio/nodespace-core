@@ -98,9 +98,12 @@ export abstract class BaseNodeDecorator {
    */
   protected getBaseComponentDecoration(context: DecorationContext): ComponentDecoration {
     const config = NODE_TYPE_CONFIGS[context.nodeType] || NODE_TYPE_CONFIGS.default;
-    
+
+    // Get the appropriate component for this node type
+    const Component = getNodeReferenceComponent(context.nodeType);
+
     return {
-      component: getNodeReferenceComponent('base') as ComponentDecoration['component'],
+      component: Component,
       props: {
         nodeId: context.nodeId,
         nodeType: context.nodeType,
@@ -237,7 +240,7 @@ class DefaultNodeDecorator extends BaseNodeDecorator {
 // Node Type-Specific Decorators (Rich HTML-based implementations)
 // ============================================================================
 
-export class TaskNodeDecorator extends BaseNodeDecorator {
+class TaskNodeDecorator extends BaseNodeDecorator {
   constructor(nodeReferenceService: NodeReferenceService) {
     super(nodeReferenceService, 'task');
   }
@@ -283,7 +286,7 @@ export class TaskNodeDecorator extends BaseNodeDecorator {
   }
 }
 
-export class UserNodeDecorator extends BaseNodeDecorator {
+class UserNodeDecorator extends BaseNodeDecorator {
   constructor(nodeReferenceService: NodeReferenceService) {
     super(nodeReferenceService, 'user');
   }
@@ -327,7 +330,7 @@ export class UserNodeDecorator extends BaseNodeDecorator {
   }
 }
 
-export class DateNodeDecorator extends BaseNodeDecorator {
+class DateNodeDecorator extends BaseNodeDecorator {
   constructor(nodeReferenceService: NodeReferenceService) {
     super(nodeReferenceService, 'date');
   }
@@ -390,7 +393,7 @@ export class DateNodeDecorator extends BaseNodeDecorator {
   }
 }
 
-export class DocumentNodeDecorator extends BaseNodeDecorator {
+class DocumentNodeDecorator extends BaseNodeDecorator {
   constructor(nodeReferenceService: NodeReferenceService) {
     super(nodeReferenceService, 'document');
   }
@@ -477,7 +480,7 @@ export class DocumentNodeDecorator extends BaseNodeDecorator {
   }
 }
 
-export class AINodeDecorator extends BaseNodeDecorator {
+class AINodeDecorator extends BaseNodeDecorator {
   constructor(nodeReferenceService: NodeReferenceService) {
     super(nodeReferenceService, 'ai_chat');
   }
@@ -634,19 +637,19 @@ export class NodeDecoratorFactory {
   }
 
   private initializeDecorators(): void {
-    // Rich HTML-based decorators for specific node types
-    this.decorators.set('task', new TaskNodeDecorator(this.nodeReferenceService));
-    this.decorators.set('user', new UserNodeDecorator(this.nodeReferenceService));
-    this.decorators.set('date', new DateNodeDecorator(this.nodeReferenceService));
-    this.decorators.set('document', new DocumentNodeDecorator(this.nodeReferenceService));
-    this.decorators.set('ai_chat', new AINodeDecorator(this.nodeReferenceService));
-
-    // Component-based decorators for fallback and basic node types
+    // Initialize default component-based decorator for all node types
     const defaultDecorator = new DefaultNodeDecorator(this.nodeReferenceService);
     this.decorators.set('default', defaultDecorator);
     this.decorators.set('text', defaultDecorator);
     this.decorators.set('entity', defaultDecorator);
     this.decorators.set('query', defaultDecorator);
+
+    // Rich HTML-based decorators for specific node types (additional functionality)
+    this.decorators.set('task', new TaskNodeDecorator(this.nodeReferenceService));
+    this.decorators.set('user', new UserNodeDecorator(this.nodeReferenceService));
+    this.decorators.set('date', new DateNodeDecorator(this.nodeReferenceService));
+    this.decorators.set('document', new DocumentNodeDecorator(this.nodeReferenceService));
+    this.decorators.set('ai_chat', new AINodeDecorator(this.nodeReferenceService));
   }
 
   public getDecorator(nodeType: string): BaseNodeDecorator {
