@@ -15,10 +15,10 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 - **Real-time Updates**: EventBus-driven UI reactivity with live query synchronization
 
 #### Text Editing Architecture (2025 Decisions)
-- **ADR-001**: Always-Editing Mode - No focused/unfocused states, always show active editor
-- **ADR-002**: Component Composition Inheritance - TextNode extends BaseNode via prop overrides  
-- **ADR-003**: Universal CodeMirror Strategy - All nodes use CodeMirror with different configurations
-- **ADR-004**: Debounced Events Architecture - Use CodeMirror's native debouncing, not manual timers
+- **ADR-001**: ContentEditable Pivot - Replace CodeMirror with ContentEditable for cursor positioning reliability
+- **ADR-002**: Dual-Representation System - Focus shows markdown syntax, blur shows formatted content
+- **ADR-003**: ContentEditableController Pattern - Separate DOM manipulation from Svelte reactivity
+- **ADR-004**: Native Selection API - Use browser's Selection API for precise cursor positioning
 - **ADR-005**: Node Reference Decoration System - Universal `@` triggers with `nodespace://` URIs and extensible decorations
 
 ---
@@ -67,13 +67,13 @@ NodeSpace includes sophisticated user interface capabilities that rival modern I
 - **Progressive Indentation**: Consistent 24px indentation per hierarchy level
 - **Theme Integration**: Seamless integration with light/dark themes
 
-#### Advanced Text Rendering (CodeMirror-Based)
-- **Universal CodeMirror Foundation**: All nodes use CodeMirror 6 with configuration-based specialization
-- **Always-Editing Mode**: No edit/display mode switching - native editor always active
-- **Hybrid Markdown Rendering**: Live syntax highlighting with formatting (syntax + visual styles simultaneously)
-- **Native Click-to-Cursor**: CodeMirror's built-in positioning eliminates custom cursor logic
-- **Debounced Events**: Native CodeMirror debouncing (~300-500ms) for optimal performance
-- **Component Composition Inheritance**: TextNode extends BaseNode via explicit prop overrides
+#### Advanced Text Rendering (ContentEditable-Based)
+- **ContentEditableController Foundation**: All nodes use ContentEditableController for DOM management
+- **Dual-Representation Mode**: Focus shows markdown syntax, blur shows formatted display
+- **Live Markdown Formatting**: Real-time formatting with syntax visibility during editing
+- **Native Selection API**: Browser's built-in Selection API for precise cursor positioning
+- **Event-Driven Architecture**: Clean separation between DOM manipulation and Svelte reactivity
+- **Component Composition Pattern**: TextNode extends BaseNode via prop overrides and event delegation
 
 ### Repository Structure
 
@@ -101,8 +101,8 @@ nodespace-core/                    # Main repository with workspace
 │   │   ├── entity_node.rs         # Custom structured entities
 │   │   └── query_node.rs          # Live data views
 │   └── ui/                        # Core Svelte components
-│       ├── CodeMirrorEditor.svelte # Universal editor foundation (CodeMirror 6 wrapper)
-│       ├── BaseNode.svelte        # Always-editing foundation with CodeMirror integration
+│       ├── ContentEditableController.ts # Universal DOM management and event handling
+│       ├── BaseNode.svelte        # ContentEditable foundation with dual-representation
 │       ├── TextNode.svelte        # Extends BaseNode: multiline + markdown
 │       ├── TaskNode.svelte        # Extends BaseNode: single-line + task features
 │       ├── PersonNode.svelte      # Extends BaseNode: read-only + computed content
@@ -416,14 +416,13 @@ NodeSpace frontend uses **Svelte component composition** to implement node type 
   export let contentEditable: boolean = true; // Editable by default
 </script>
 
-<!-- Always-editing mode: CodeMirror always visible -->
-<CodeMirrorEditor 
-  {content}
-  {multiline}
-  {markdown}
-  editable={contentEditable}
-  on:contentChanged={handleContentChanged}
-/>
+<!-- ContentEditable with dual-representation -->
+<div
+  bind:this={contentEditableElement}
+  contenteditable="true"
+  class="node__content"
+  role="textbox"
+></div>
 ```
 
 #### Specialized Node Types
@@ -459,22 +458,22 @@ NodeSpace frontend uses **Svelte component composition** to implement node type 
 />
 ```
 
-### CodeMirror Integration
+### ContentEditable Integration
 
-#### Universal Editor Strategy
-- **All nodes use CodeMirror** with different configurations
-- **Always-editing mode** - no focused/unfocused states
-- **Native positioning** - eliminates custom cursor positioning code
-- **Debounced events** - uses CodeMirror's native debouncing (~300-500ms)
+#### ContentEditableController Pattern
+- **All nodes use ContentEditableController** for consistent DOM management
+- **Dual-representation mode** - focus/blur switches between syntax and display
+- **Native Selection API** - eliminates custom cursor positioning code
+- **Event-driven debouncing** - clean separation of concerns
 
-#### CodeMirrorEditor Component
+#### ContentEditableController Interface
 ```typescript
-interface CodeMirrorEditorProps {
-  content: string;              // Text content (reactive)
-  multiline: boolean;           // Single-line vs multiline
-  markdown: boolean;            // Syntax highlighting on/off
-  editable: boolean;            // Read-only vs editable
-  on:contentChanged: Function;  // Debounced content changes
+interface ContentEditableEvents {
+  contentChanged: (content: string) => void;
+  headerLevelChanged: (level: number) => void;
+  focus: () => void;
+  blur: () => void;
+  // ... navigation and editing events
 }
 ```
 
@@ -504,10 +503,10 @@ const personNodeConfig = {
 
 ### Event Architecture
 
-#### Debounced Content Flow
+#### Event-Driven Content Flow
 ```
-User Types → CodeMirror Debouncing → contentChanged → BaseNode → SpecificNode → Save
-   (immediate)     (~300-500ms)         (debounced)     (relay)    (handle)    (API)
+User Types → ContentEditable → Controller → Event → BaseNode → SpecificNode → Save
+   (immediate)    (native)      (process)   (emit)    (relay)    (handle)    (API)
 ```
 
 #### Event Bubbling Pattern
@@ -536,8 +535,8 @@ User Types → CodeMirror Debouncing → contentChanged → BaseNode → Specifi
 
 #### Code Reduction
 - **~300+ lines eliminated** - MockTextElement and CursorPositioning systems removed
-- **Single editor system** - No dual textarea/CodeMirror implementations
-- **Simplified state management** - No focused/unfocused complexity
+- **Single editor system** - ContentEditableController replaces complex hybrid approaches
+- **Simplified state management** - Controller pattern eliminates reactive conflicts
 
 #### Consistency & Maintainability  
 - **Uniform editing experience** - All nodes behave predictably

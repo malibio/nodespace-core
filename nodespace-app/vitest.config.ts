@@ -9,7 +9,7 @@ export default defineConfig({
 
   test: {
     include: ['src/tests/**/*.{test,spec}.{js,ts}'],
-    environment: 'node',
+    environment: 'happy-dom', // Fast, modern DOM for Bun compatibility
     globals: true,
     setupFiles: ['src/tests/setup-svelte-mocks.ts', 'src/tests/setup.ts'],
 
