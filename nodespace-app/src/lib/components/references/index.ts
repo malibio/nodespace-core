@@ -65,7 +65,7 @@ export function getComponentByName(componentName: string): NodeReferenceComponen
  */
 export function createNodeReferenceDecoration(nodeType: string, props: Record<string, unknown>): ComponentDecoration {
   return {
-    component: getNodeReferenceComponent(nodeType) as any,
+    component: getNodeReferenceComponent(nodeType) as ComponentDecoration['component'],
     props,
   };
 }

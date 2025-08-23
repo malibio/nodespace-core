@@ -87,10 +87,20 @@ describe('ContentProcessor - Nodespace URI Integration', () => {
 
       const refNode = paragraph.children[1];
       expect(refNode.type).toBe('nodespace-ref');
-      expect((refNode as any).nodeId).toBe('related-123');
-      expect((refNode as any).uri).toBe('nodespace://node/related-123');
-      expect((refNode as any).displayText).toBe('Related Node');
-      expect((refNode as any).isValid).toBe(false); // Not resolved yet
+      
+      // Type assertion for nodespace reference node properties
+      interface NodespaceRefNode {
+        nodeId: string;
+        uri: string;
+        displayText: string;
+        isValid: boolean;
+      }
+      
+      const typedRefNode = refNode as unknown as NodespaceRefNode;
+      expect(typedRefNode.nodeId).toBe('related-123');
+      expect(typedRefNode.uri).toBe('nodespace://node/related-123');
+      expect(typedRefNode.displayText).toBe('Related Node');
+      expect(typedRefNode.isValid).toBe(false); // Not resolved yet
     });
 
     it('should count nodespace references in metadata', () => {

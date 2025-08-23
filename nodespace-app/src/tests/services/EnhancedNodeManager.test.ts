@@ -18,6 +18,12 @@ import { EnhancedNodeManager } from '../../lib/services/EnhancedNodeManager.js';
 import type { NodeManagerEvents } from '../../lib/services/NodeManager.js';
 import { eventBus } from '../../lib/services/EventBus.js';
 
+// Debug event interface for typed access to event data
+interface DebugEvent {
+  type: string;
+  message?: string;
+}
+
 describe('EnhancedNodeManager', () => {
   let enhancedNodeManager: EnhancedNodeManager;
   let events: NodeManagerEvents;
@@ -499,11 +505,11 @@ describe('EnhancedNodeManager', () => {
 
       const recentEvents = eventBus.getRecentEvents();
       const debugEvents = recentEvents.filter(
-        (e) => e.type === 'debug:log' && (e as any).message?.includes('Bulk operation')
+        (e) => e.type === 'debug:log' && (e as DebugEvent).message?.includes('Bulk operation')
       );
 
       expect(debugEvents.length).toBeGreaterThan(0);
-      expect((debugEvents[0] as any).message).toContain('2 success');
+      expect((debugEvents[0] as DebugEvent).message).toContain('2 success');
     });
   });
 

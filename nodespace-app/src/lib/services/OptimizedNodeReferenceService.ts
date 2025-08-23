@@ -492,7 +492,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
 
     try {
       const { query } = triggerContext;
-      const cacheKey = `autocomplete:${query}:${JSON.stringify((this as any).autocompleteConfig)}`;
+      const cacheKey = `autocomplete:${query}:${JSON.stringify((this as unknown as { autocompleteConfig: { minQueryLength: number } }).autocompleteConfig)}`;
 
       // Check advanced cache first
       const cached = this.suggestionLRUCache.get(cacheKey);
@@ -533,7 +533,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
    * Optimized node search with caching and debouncing
    */
   public async searchNodes(query: string, nodeType?: string): Promise<NodeSpaceNode[]> {
-    if (!query || query.length < (this as any).autocompleteConfig.minQueryLength) {
+    if (!query || query.length < (this as unknown as { autocompleteConfig: { minQueryLength: number } }).autocompleteConfig.minQueryLength) {
       return [];
     }
 
@@ -730,13 +730,13 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
    * Get detailed performance metrics
    */
   public getDetailedPerformanceMetrics(): {
-    basic: any;
-    advanced: any;
+    basic: ReturnType<NodeReferenceService['getPerformanceMetrics']>;
+    advanced: ReturnType<PerformanceMonitor['getComprehensiveMetrics']>;
     caches: {
-      suggestions: any;
-      uri: any;
-      search: any;
-      decoration: any;
+      suggestions: { size: number; memoryUsage: number; hitRatio: number };
+      uri: { size: number; memoryUsage: number; hitRatio: number };
+      search: { size: number; memoryUsage: number; hitRatio: number };
+      decoration: { size: number; memoryUsage: number; hitRatio: number };
     };
     viewport: {
       visibleElements: number;
@@ -745,7 +745,7 @@ export class OptimizedNodeReferenceService extends NodeReferenceService {
   } {
     return {
       basic: this.getPerformanceMetrics(),
-      advanced: this.performanceMonitor.getComprehensiveMetrics() as any,
+      advanced: this.performanceMonitor.getComprehensiveMetrics(),
       caches: {
         suggestions: this.suggestionLRUCache.getStats(),
         uri: this.uriLRUCache.getStats(),

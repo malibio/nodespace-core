@@ -27,6 +27,7 @@ interface MockTreeWalker {
   nextNode: ReturnType<typeof vi.fn>;
 }
 
+
 import {
   NodeReferenceRenderer,
   initializeNodeReferenceRenderer
@@ -75,7 +76,7 @@ describe('NodeReferenceRenderer', () => {
     // Mock DOM environment - Setup global for test compatibility
     (globalThis as Record<string, unknown>).global = globalThis;
 
-    (globalThis as any).document = {
+    (globalThis as Record<string, unknown>).document = {
       createElement: vi.fn(
         (tagName: string): MockElement => ({
           tagName: tagName.toUpperCase(),
@@ -100,7 +101,7 @@ describe('NodeReferenceRenderer', () => {
       querySelectorAll: vi.fn(() => [])
     };
 
-    (globalThis as any).window = {
+    (globalThis as Record<string, unknown>).window = {
       IntersectionObserver: vi.fn(),
       MutationObserver: vi.fn()
     };
@@ -166,7 +167,7 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn()
-      } as any as HTMLElement);
+      } as unknown as HTMLElement);
     });
 
     it('should render a single task reference correctly', async () => {
@@ -245,7 +246,7 @@ describe('NodeReferenceRenderer', () => {
         setAttribute: vi.fn(),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn()
-      } as any as HTMLElement);
+      } as unknown as HTMLElement);
     });
 
     it('should render container without viewport optimization', async () => {
@@ -295,7 +296,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any as HTMLElement;
+      } as unknown as HTMLElement;
 
       // Render to populate cache
       await renderer.renderReference(mockElement, testNode.id, 'inline');
@@ -318,7 +319,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any as HTMLElement;
+      } as unknown as HTMLElement;
 
       // Initial render
       await renderer.renderReference(mockElement, testNode.id, 'inline');
@@ -347,7 +348,7 @@ describe('NodeReferenceRenderer', () => {
           throw new Error('Mock error');
         }),
         addEventListener: vi.fn()
-      } as any as HTMLElement;
+      } as unknown as HTMLElement;
 
       // Should not throw, should render error state
       await expect(
@@ -360,7 +361,7 @@ describe('NodeReferenceRenderer', () => {
       const errorService = {
         ...nodeReferenceService,
         resolveNodespaceURI: vi.fn().mockRejectedValue(new Error('Service error'))
-      } as any;
+      } as unknown as NodeReferenceService;
 
       const errorRenderer = initializeNodeReferenceRenderer(
         errorService as NodeReferenceService
@@ -372,7 +373,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any as HTMLElement;
+      } as unknown as HTMLElement;
 
       await errorRenderer.renderReference(mockElement, 'test-id', 'inline');
 
@@ -412,7 +413,7 @@ describe('NodeReferenceRenderer', () => {
         dataset: {},
         setAttribute: vi.fn(),
         addEventListener: vi.fn()
-      } as any as HTMLElement;
+      } as unknown as HTMLElement;
 
       const beforeMetrics = renderer.getMetrics();
 

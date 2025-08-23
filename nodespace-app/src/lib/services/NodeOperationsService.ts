@@ -215,7 +215,7 @@ export class NodeOperationsService {
     }
 
     // Emit events for coordination
-    (eventBus.emit as any)({
+    eventBus.emit<import('./EventTypes').ReferencesUpdateNeededEvent>({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: this.serviceName,
@@ -595,7 +595,7 @@ export class NodeOperationsService {
   private async addBacklinkReference(targetNodeId: string, sourceNodeId: string): Promise<void> {
     // In the NodeManager system, this would update the target node's backlink list
     // For now, we emit an event for coordination
-    (eventBus.emit as any)({
+    eventBus.emit<import('./EventTypes').BacklinkDetectedEvent>({
       type: 'backlink:detected',
       namespace: 'phase2',
       source: this.serviceName,
@@ -612,7 +612,7 @@ export class NodeOperationsService {
    */
   private async removeBacklinkReference(targetNodeId: string, sourceNodeId: string): Promise<void> {
     // Emit event for backlink removal
-    (eventBus.emit as any)({
+    eventBus.emit<import('./EventTypes').ReferencesUpdateNeededEvent>({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: this.serviceName,
@@ -695,7 +695,7 @@ export class NodeOperationsService {
     data: unknown,
     metadata?: Record<string, unknown>
   ): void {
-    (eventBus.emit as any)({
+    eventBus.emit<import('./EventTypes').DebugEvent>({
       type: 'debug:log',
       namespace: 'debug',
       source: this.serviceName,

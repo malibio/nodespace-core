@@ -185,15 +185,15 @@ export class ComponentHydrationSystem {
   private resolveComponent(
     componentName: string,
     nodeType: string
-  ): new (...args: any[]) => SvelteComponent {
+  ): new (...args: unknown[]) => SvelteComponent {
     // Try exact component name first (for plugin components)
     const exactComponent = NODE_REFERENCE_COMPONENTS[componentName];
     if (exactComponent) {
-      return exactComponent as any;
+      return exactComponent as new (...args: unknown[]) => SvelteComponent;
     }
 
     // Fall back to node type resolution (for core components)
-    return getNodeReferenceComponent(nodeType) as any;
+    return getNodeReferenceComponent(nodeType) as new (...args: unknown[]) => SvelteComponent;
   }
 
   /**
@@ -213,7 +213,7 @@ export class ComponentHydrationSystem {
 
       // Try mounting BaseNodeReference as fallback
       const fallbackDecoration: ComponentDecoration = {
-        component: getNodeReferenceComponent('base') as any,
+        component: getNodeReferenceComponent('base') as ComponentDecoration['component'],
         props: {
           ...decoration.props,
           className: `${decoration.props.className || ''} ns-fallback-component`.trim()
@@ -268,7 +268,7 @@ export class ComponentHydrationSystem {
       // Set up event forwarding if needed
       if (decoration.events) {
         for (const [eventName, handler] of Object.entries(decoration.events)) {
-          (component as any).$on(eventName, handler);
+          (component as SvelteComponent & { $on: (event: string, handler: unknown) => void }).$on(eventName, handler);
         }
       }
 

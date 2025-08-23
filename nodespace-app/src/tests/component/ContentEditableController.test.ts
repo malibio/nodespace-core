@@ -42,7 +42,7 @@ interface EventCallRecord {
   combineWithPrevious?: Array<{ nodeId: string; currentContent: string }>;
   deleteNode?: Array<{ nodeId: string }>;
   triggerDetected?: Array<{
-    triggerContext: any;
+    triggerContext: unknown;
     cursorPosition: { x: number; y: number };
   }>;
   triggerHidden?: boolean[];

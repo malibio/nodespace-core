@@ -20,7 +20,7 @@ const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
 
 // Make DOM globally available
 globalThis.document = dom.window.document;
-globalThis.window = dom.window as any;
+globalThis.window = dom.window as unknown as Window & typeof globalThis;
 globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.Element = dom.window.Element;
 globalThis.Node = dom.window.Node;

@@ -151,7 +151,7 @@ export class NodeReferenceRenderer {
       this.metrics.lastRender = Date.now();
 
       // Emit completion event
-      (eventBus.emit as any)({
+      (eventBus.emit as (event: unknown) => void)({
         type: 'references:rendered',
         namespace: 'coordination',
         source: this.serviceName,
@@ -263,7 +263,7 @@ export class NodeReferenceRenderer {
       }
 
       // Emit update event
-      (eventBus.emit as any)({
+      (eventBus.emit as (event: unknown) => void)({
         type: 'decoration:updated',
         namespace: 'coordination',
         source: this.serviceName,
@@ -564,7 +564,7 @@ export class NodeReferenceRenderer {
         event.preventDefault();
 
         // Emit click event
-        (eventBus.emit as any)({
+        eventBus.emit<import('./EventTypes').DecorationClickedEvent>({
           type: 'decoration:clicked',
           namespace: 'interaction',
           source: this.serviceName,

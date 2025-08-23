@@ -18,6 +18,12 @@ import { ContentProcessor } from '../../lib/services/contentProcessor.js';
 import { eventBus } from '../../lib/services/EventBus.js';
 import type { NodeSpaceNode } from '../../lib/services/MockDatabaseService.js';
 
+// Wiki link interface for content analysis
+interface WikiLink {
+  target: string;
+  displayText?: string;
+}
+
 describe('NodeOperationsService', () => {
   let nodeManager: NodeManager;
   let hierarchyService: HierarchyService;
@@ -128,7 +134,7 @@ describe('NodeOperationsService', () => {
       expect(result.content).toBe('# Header with [[link]] and **bold** text');
       expect(result.headerLevel).toBe(1);
       expect(result.wikiLinks).toHaveLength(1);
-      expect((result.wikiLinks[0] as any).target).toBe('link');
+      expect((result.wikiLinks[0] as WikiLink).target).toBe('link');
       expect(result.hasFormatting).toBe(true);
       expect(result.wordCount).toBe(7); // "Header", "with", "link", "and", "bold", "text" = 6 words + "link" in wikilink = 7
       expect(result.ast).toBeDefined();
@@ -156,9 +162,9 @@ const x = 42;
       });
 
       expect(result.wikiLinks).toHaveLength(2);
-      expect((result.wikiLinks[0] as any).target).toBe('first-link');
-      expect((result.wikiLinks[1] as any).target).toBe('second-link');
-      expect((result.wikiLinks[1] as any).displayText).toBe('Display Text');
+      expect((result.wikiLinks[0] as WikiLink).target).toBe('first-link');
+      expect((result.wikiLinks[1] as WikiLink).target).toBe('second-link');
+      expect((result.wikiLinks[1] as WikiLink).displayText).toBe('Display Text');
       expect(result.headerLevel).toBe(1); // First header level
       expect(result.hasFormatting).toBe(true);
       expect(result.wordCount).toBeGreaterThan(10);

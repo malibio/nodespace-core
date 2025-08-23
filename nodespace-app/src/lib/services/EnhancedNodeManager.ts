@@ -85,7 +85,7 @@ export class EnhancedNodeManager extends NodeManager {
     super(events);
 
     // Override service name for enhanced manager
-    (this as any).serviceName = 'EnhancedNodeManager';
+    (this as unknown as { serviceName: string }).serviceName = 'EnhancedNodeManager';
 
     // Initialize enhanced services
     this.hierarchyService = new HierarchyService(this as NodeManager);
@@ -278,7 +278,7 @@ export class EnhancedNodeManager extends NodeManager {
     const nodeUpdatedEvent: Omit<import('./EventTypes').NodeUpdatedEvent, 'timestamp'> = {
       type: 'node:updated',
       namespace: 'lifecycle',
-      source: (this as any).serviceName,
+      source: (this as unknown as { serviceName: string }).serviceName,
       nodeId,
       updateType: 'metadata',
       previousValue: oldMentions,
@@ -322,13 +322,13 @@ export class EnhancedNodeManager extends NodeManager {
     // Create analysis
     const analysis: NodeAnalysis = {
       nodeId,
-      contentType: (contentResult.ast as any)?.metadata?.hasWikiLinks ? 'linked' : node.nodeType,
+      contentType: (contentResult.ast as { metadata?: { hasWikiLinks?: boolean } })?.metadata?.hasWikiLinks ? 'linked' : node.nodeType,
       wordCount: contentResult.wordCount,
       hasWikiLinks: contentResult.wikiLinks.length > 0,
-      wikiLinks: contentResult.wikiLinks.map((link: any) => link.target),
+      wikiLinks: contentResult.wikiLinks.map((link: unknown) => (link as { target: string }).target),
       headerLevel: contentResult.headerLevel,
       formattingComplexity: contentResult.hasFormatting
-        ? (contentResult.ast as any)?.metadata?.inlineFormatCount || 0
+        ? (contentResult.ast as { metadata?: { inlineFormatCount?: number } })?.metadata?.inlineFormatCount || 0
         : 0,
       mentionsCount: node.mentions?.length || 0,
       backlinksCount: this.getNodeBacklinks(nodeId).length,
@@ -436,7 +436,7 @@ export class EnhancedNodeManager extends NodeManager {
     const debugEvent: Omit<import('./EventTypes').DebugEvent, 'timestamp'> = {
       type: 'debug:log',
       namespace: 'debug',
-      source: (this as any).serviceName,
+      source: (this as unknown as { serviceName: string }).serviceName,
       level: 'info',
       message: `Bulk operation completed: ${result.successCount} success, ${result.failureCount} failed`,
       metadata: result

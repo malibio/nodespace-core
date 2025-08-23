@@ -64,7 +64,7 @@ export abstract class BaseNodeDecorator {
     const config = NODE_TYPE_CONFIGS[context.nodeType] || NODE_TYPE_CONFIGS.default;
     
     return {
-      component: getNodeReferenceComponent('base') as any,
+      component: getNodeReferenceComponent('base') as ComponentDecoration['component'],
       props: {
         nodeId: context.nodeId,
         nodeType: context.nodeType,

@@ -365,21 +365,30 @@
   }
 
   function highlightMatches(text: string, positions: number[]): string {
-    if (!positions.length) return text;
+    if (!positions.length) return escapeHtml(text);
 
     let highlighted = '';
     let lastIndex = 0;
 
     for (const pos of positions) {
-      highlighted += text.substring(lastIndex, pos);
+      highlighted += escapeHtml(text.substring(lastIndex, pos));
       highlighted += `<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">`;
-      highlighted += text[pos];
+      highlighted += escapeHtml(text[pos]);
       highlighted += '</mark>';
       lastIndex = pos + 1;
     }
 
-    highlighted += text.substring(lastIndex);
+    highlighted += escapeHtml(text.substring(lastIndex));
     return highlighted;
+  }
+
+  function escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // ============================================================================
