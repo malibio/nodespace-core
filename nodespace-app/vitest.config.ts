@@ -1,5 +1,6 @@
 /// <reference types="vitest" />
 /// <reference types="./src/tests/types/globals.d.ts" />
+/// <reference types="./src/tests/types/vitest-env.d.ts" />
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
 
@@ -8,18 +9,12 @@ export default defineConfig({
 
   test: {
     include: ['src/tests/**/*.{test,spec}.{js,ts}'],
-    environment: 'jsdom',
+    environment: 'happy-dom', // Fast, modern DOM for Bun compatibility
     globals: true,
     setupFiles: ['src/tests/setup.ts'],
 
-    // Ensure proper global environment
+    // Optimized for Bun runtime performance
     globalSetup: undefined,
-    environmentOptions: {
-      node: {
-        // Ensure global object is available
-        global: true
-      }
-    },
 
     // Simple coverage configuration
     coverage: {

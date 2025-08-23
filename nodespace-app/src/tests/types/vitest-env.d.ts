@@ -3,6 +3,10 @@
  * Provides proper typing for test globals and utilities
  */
 
+/// <reference types="vitest/globals" />
+/// <reference types="@testing-library/jest-dom" />
+/// <reference types="node" />
+
 import type { TestingLibraryMatchers } from '@testing-library/jest-dom/matchers';
 
 declare global {
@@ -20,6 +24,19 @@ declare global {
    * In Node.js/Vitest, this should be equivalent to globalThis
    */
   var global: typeof globalThis;
+
+  /**
+   * Node.js process object available in test environment
+   */
+  var process: {
+    memoryUsage?: () => {
+      heapUsed: number;
+      heapTotal: number;
+      external: number;
+      arrayBuffers: number;
+    };
+    [key: string]: unknown;
+  };
 }
 
 export {};

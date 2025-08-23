@@ -2,11 +2,12 @@
  * BaseNode Decoration System - Rich Visual Node References (Phase 2.2)
  *
  * Implements the decorateReference() pattern for creating rich visual decorations
- * for different node types in the universal node reference system.
+ * and component-based decorations for different node types in the universal node reference system.
  *
  * Key Features:
  * - Base decorateReference() method for default styling
  * - Node type-specific decoration classes (TaskNode, UserNode, DateNode, etc.)
+ * - Component-based rendering with rich decorator functionality
  * - Content-driven decoration system with XSS-safe rendering
  * - Performance-optimized viewport-based processing
  * - Full accessibility support with ARIA labels
@@ -14,6 +15,8 @@
  */
 
 import type { NodeReferenceService } from './NodeReferenceService';
+import type { ComponentDecoration } from '../types/ComponentDecoration';
+import { getNodeReferenceComponent } from '../components/references';
 
 // ============================================================================
 // Core Types and Interfaces
@@ -42,11 +45,11 @@ export interface NodeTypeConfig {
   icon: string;
   label: string;
   color: string;
-  defaultDecoration: (context: DecorationContext) => DecorationResult;
+  defaultDecoration: (context: DecorationContext) => DecorationResult | ComponentDecoration;
 }
 
 // ============================================================================
-// Base Node Decoration Class
+// Base Node Decorator (Supporting Both Architectures)
 // ============================================================================
 
 export abstract class BaseNodeDecorator {
@@ -60,12 +63,12 @@ export abstract class BaseNodeDecorator {
 
   /**
    * Abstract method that must be implemented by each node type
-   * This is the core decorateReference() pattern
+   * This is the core decorateReference() pattern (supports both HTML and Component decorations)
    */
-  public abstract decorateReference(context: DecorationContext): DecorationResult;
+  public abstract decorateReference(context: DecorationContext): DecorationResult | ComponentDecoration;
 
   /**
-   * Base implementation with safe defaults
+   * Base implementation with safe defaults (HTML-based decoration)
    */
   protected getBaseDecoration(context: DecorationContext): DecorationResult {
     const { nodeType, title, uri } = context;
@@ -87,6 +90,29 @@ export abstract class BaseNodeDecorator {
       ariaLabel: `Reference to ${nodeConfig.label}: ${safeTitle}`,
       metadata: { nodeType, decorationType: this.decorationType },
       interactive: true
+    };
+  }
+
+  /**
+   * Creates a base component decoration for any node type
+   */
+  protected getBaseComponentDecoration(context: DecorationContext): ComponentDecoration {
+    const config = NODE_TYPE_CONFIGS[context.nodeType] || NODE_TYPE_CONFIGS.default;
+    
+    return {
+      component: getNodeReferenceComponent('base') as ComponentDecoration['component'],
+      props: {
+        nodeId: context.nodeId,
+        nodeType: context.nodeType,
+        title: context.title,
+        content: context.content,
+        uri: context.uri,
+        icon: config.icon,
+        color: config.color,
+        ariaLabel: `${config.label}: ${context.title}`,
+        metadata: context.metadata,
+        displayContext: context.displayContext
+      }
     };
   }
 
@@ -191,7 +217,24 @@ export abstract class BaseNodeDecorator {
 }
 
 // ============================================================================
-// Node Type-Specific Decorators
+// Default Decorator Implementation  
+// ============================================================================
+
+/**
+ * Default decorator that provides basic component-based decoration for all node types
+ */
+class DefaultNodeDecorator extends BaseNodeDecorator {
+  constructor(nodeReferenceService: NodeReferenceService) {
+    super(nodeReferenceService, 'default');
+  }
+
+  public decorateReference(context: DecorationContext): ComponentDecoration {
+    return this.getBaseComponentDecoration(context);
+  }
+}
+
+// ============================================================================
+// Node Type-Specific Decorators (Rich HTML-based implementations)
 // ============================================================================
 
 export class TaskNodeDecorator extends BaseNodeDecorator {
@@ -509,16 +552,23 @@ export class AINodeDecorator extends BaseNodeDecorator {
 // ============================================================================
 
 export const NODE_TYPE_CONFIGS: Record<string, NodeTypeConfig> = {
+  default: {
+    icon: '📝',
+    label: 'Node',
+    color: 'var(--node-default)',
+    defaultDecoration: (context) => {
+      const decorator = new DefaultNodeDecorator(null!);
+      return decorator.decorateReference(context);
+    }
+  },
   text: {
-    icon: '📄',
+    icon: '📝',
     label: 'Text',
     color: 'var(--node-text)',
-    defaultDecoration: (context) =>
-      new (class extends BaseNodeDecorator {
-        constructor() {
-          super(null!, 'text');
-        }
-      })().getBaseDecoration(context)
+    defaultDecoration: (context) => {
+      const decorator = new DefaultNodeDecorator(null!);
+      return decorator.decorateReference(context);
+    }
   },
   task: {
     icon: '☐',
@@ -554,44 +604,29 @@ export const NODE_TYPE_CONFIGS: Record<string, NodeTypeConfig> = {
     icon: '🏷️',
     label: 'Entity',
     color: 'var(--node-entity)',
-    defaultDecoration: (context) =>
-      new (class extends BaseNodeDecorator {
-        constructor() {
-          super(null!, 'entity');
-        }
-      })().getBaseDecoration(context)
+    defaultDecoration: (context) => {
+      const decorator = new DefaultNodeDecorator(null!);
+      return decorator.decorateReference(context);
+    }
   },
   query: {
     icon: '🔍',
     label: 'Query',
     color: 'var(--node-query)',
-    defaultDecoration: (context) =>
-      new (class extends BaseNodeDecorator {
-        constructor() {
-          super(null!, 'query');
-        }
-      })().getBaseDecoration(context)
-  },
-  default: {
-    icon: '📄',
-    label: 'Node',
-    color: 'var(--node-text)',
-    defaultDecoration: (context) =>
-      new (class extends BaseNodeDecorator {
-        constructor() {
-          super(null!, 'default');
-        }
-      })().getBaseDecoration(context)
+    defaultDecoration: (context) => {
+      const decorator = new DefaultNodeDecorator(null!);
+      return decorator.decorateReference(context);
+    }
   }
 };
 
 // ============================================================================
-// Decorator Factory
+// Hybrid Decorator Factory (Supporting Both Rich Decorators and Components)
 // ============================================================================
 
 export class NodeDecoratorFactory {
-  private decorators = new Map<string, BaseNodeDecorator>();
   private nodeReferenceService: NodeReferenceService;
+  private decorators: Map<string, BaseNodeDecorator> = new Map();
 
   constructor(nodeReferenceService: NodeReferenceService) {
     this.nodeReferenceService = nodeReferenceService;
@@ -599,35 +634,52 @@ export class NodeDecoratorFactory {
   }
 
   private initializeDecorators(): void {
+    // Rich HTML-based decorators for specific node types
     this.decorators.set('task', new TaskNodeDecorator(this.nodeReferenceService));
     this.decorators.set('user', new UserNodeDecorator(this.nodeReferenceService));
     this.decorators.set('date', new DateNodeDecorator(this.nodeReferenceService));
     this.decorators.set('document', new DocumentNodeDecorator(this.nodeReferenceService));
     this.decorators.set('ai_chat', new AINodeDecorator(this.nodeReferenceService));
 
-    // Base decorator for other types
-    this.decorators.set(
-      'default',
-      new (class extends BaseNodeDecorator {
-        constructor(service: NodeReferenceService) {
-          super(service, 'default');
-        }
-
-        public decorateReference(context: DecorationContext): DecorationResult {
-          return this.getBaseDecoration(context);
-        }
-      })(this.nodeReferenceService)
-    );
+    // Component-based decorators for fallback and basic node types
+    const defaultDecorator = new DefaultNodeDecorator(this.nodeReferenceService);
+    this.decorators.set('default', defaultDecorator);
+    this.decorators.set('text', defaultDecorator);
+    this.decorators.set('entity', defaultDecorator);
+    this.decorators.set('query', defaultDecorator);
   }
 
   public getDecorator(nodeType: string): BaseNodeDecorator {
     return this.decorators.get(nodeType) || this.decorators.get('default')!;
   }
 
-  public decorateReference(context: DecorationContext): DecorationResult {
+  /**
+   * Creates decoration for the specified node type (supports both HTML and Component returns)
+   */
+  public decorateReference(context: DecorationContext): DecorationResult | ComponentDecoration {
     const decorator = this.getDecorator(context.nodeType);
     return decorator.decorateReference(context);
   }
+
+  /**
+   * Gets the configuration for a node type
+   */
+  public getNodeTypeConfig(nodeType: string): NodeTypeConfig {
+    return NODE_TYPE_CONFIGS[nodeType] || NODE_TYPE_CONFIGS.default;
+  }
 }
+
+// ============================================================================
+// Exports
+// ============================================================================
+
+export {
+  DefaultNodeDecorator,
+  TaskNodeDecorator,
+  UserNodeDecorator,
+  DateNodeDecorator,
+  DocumentNodeDecorator,
+  AINodeDecorator
+};
 
 export default NodeDecoratorFactory;
