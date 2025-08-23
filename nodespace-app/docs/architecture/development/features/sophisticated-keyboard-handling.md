@@ -295,6 +295,10 @@ testAutoExpansion();
 testReactivityTriggers();
 ```
 
+## Related Documentation
+
+🔗 **See Also**: [`../lessons/text-editing-issues-resolved.md`](../lessons/text-editing-issues-resolved.md) - Technical implementation challenges and solutions for formatting behavior, cursor positioning, and rendering issues.
+
 ---
 
 _This sophisticated keyboard handling provides a professional editing experience that intelligently manages hierarchy, preserves formatting, and maintains user intent throughout complex document operations._

@@ -9,6 +9,10 @@ NodeSpace development follows modern patterns with sophisticated keyboard handli
 - **Smart Text Splitting**: Format-preserving content division on Enter key
 - **Intelligent Cursor Positioning**: Optimal placement after inherited syntax
 - **Dual Representation**: Markdown source ↔ AST ↔ Display HTML
+- **Cumulative Formatting**: Additive formatting behavior (`**text**` + Cmd+I → `***text***`)
+- **Sequential Parser**: Robust nested formatting handling without regex conflicts
+
+🔗 **See**: [`lessons/text-editing-issues-resolved.md`](lessons/text-editing-issues-resolved.md) - Technical issues and solutions
 
 ### Sophisticated Keyboard Handling
 
