@@ -30,13 +30,6 @@ export interface DecorationContext {
   displayContext: 'inline' | 'popup' | 'preview';
 }
 
-export interface DecorationResult {
-  html: string;
-  cssClasses: string[];
-  ariaLabel: string;
-  metadata: Record<string, unknown>;
-}
-
 export interface NodeTypeConfig {
   icon: string;
   label: string;
@@ -62,9 +55,12 @@ export abstract class BaseNodeDecorator {
    */
   protected getBaseComponentDecoration(context: DecorationContext): ComponentDecoration {
     const config = NODE_TYPE_CONFIGS[context.nodeType] || NODE_TYPE_CONFIGS.default;
-    
+
+    // Get the appropriate component for this node type
+    const Component = getNodeReferenceComponent(context.nodeType);
+
     return {
-      component: getNodeReferenceComponent('base') as ComponentDecoration['component'],
+      component: Component,
       props: {
         nodeId: context.nodeId,
         nodeType: context.nodeType,
@@ -184,7 +180,7 @@ export class NodeDecoratorFactory {
 
   constructor(nodeReferenceService: NodeReferenceService) {
     this.nodeReferenceService = nodeReferenceService;
-    
+
     // Initialize default decorator for all node types
     const defaultDecorator = new DefaultNodeDecorator(this.nodeReferenceService);
     this.decorators.set('default', defaultDecorator);
@@ -216,6 +212,4 @@ export class NodeDecoratorFactory {
 // Exports
 // ============================================================================
 
-export {
-  DefaultNodeDecorator
-};
+export { DefaultNodeDecorator };

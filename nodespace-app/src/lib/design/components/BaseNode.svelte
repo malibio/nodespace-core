@@ -22,7 +22,7 @@
     nodeId,
     nodeType = 'text',
     autoFocus = false,
-    content = '',
+    content = $bindable(''),
     headerLevel = 0,
     children = [],
     nodeReferenceService = null

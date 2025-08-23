@@ -11,7 +11,7 @@ export default defineConfig({
     include: ['src/tests/**/*.{test,spec}.{js,ts}'],
     environment: 'node',
     globals: true,
-    setupFiles: ['src/tests/setup.ts'],
+    setupFiles: ['src/tests/setup-svelte-mocks.ts', 'src/tests/setup.ts'],
 
     // Ensure proper global environment
     globalSetup: undefined,

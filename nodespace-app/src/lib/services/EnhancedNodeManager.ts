@@ -322,13 +322,19 @@ export class EnhancedNodeManager extends NodeManager {
     // Create analysis
     const analysis: NodeAnalysis = {
       nodeId,
-      contentType: (contentResult.ast as { metadata?: { hasWikiLinks?: boolean } })?.metadata?.hasWikiLinks ? 'linked' : node.nodeType,
+      contentType: (contentResult.ast as { metadata?: { hasWikiLinks?: boolean } })?.metadata
+        ?.hasWikiLinks
+        ? 'linked'
+        : node.nodeType,
       wordCount: contentResult.wordCount,
       hasWikiLinks: contentResult.wikiLinks.length > 0,
-      wikiLinks: contentResult.wikiLinks.map((link: unknown) => (link as { target: string }).target),
+      wikiLinks: contentResult.wikiLinks.map(
+        (link: unknown) => (link as { target: string }).target
+      ),
       headerLevel: contentResult.headerLevel,
       formattingComplexity: contentResult.hasFormatting
-        ? (contentResult.ast as { metadata?: { inlineFormatCount?: number } })?.metadata?.inlineFormatCount || 0
+        ? (contentResult.ast as { metadata?: { inlineFormatCount?: number } })?.metadata
+            ?.inlineFormatCount || 0
         : 0,
       mentionsCount: node.mentions?.length || 0,
       backlinksCount: this.getNodeBacklinks(nodeId).length,
@@ -582,16 +588,14 @@ export class EnhancedNodeManager extends NodeManager {
     mostLinkedNodes: { nodeId: string; links: number }[];
   }): ContentAnalysisMetrics {
     // Calculate complexity as a composite score
-    const averageComplexity = (
+    const averageComplexity =
       analysisData.avgDepth * 0.3 +
       Math.min(analysisData.avgWordCount / 100, 10) * 0.4 +
-      (analysisData.totalMentions / analysisData.totalNodes) * 0.3
-    );
+      (analysisData.totalMentions / analysisData.totalNodes) * 0.3;
 
     // Calculate cache hit ratio based on analysis cache efficiency
-    const cacheHitRatio = this.analysisCache.size > 0 
-      ? Math.min(this.analysisCache.size / this.nodes.size, 1.0)
-      : 0;
+    const cacheHitRatio =
+      this.analysisCache.size > 0 ? Math.min(this.analysisCache.size / this.nodes.size, 1.0) : 0;
 
     return {
       totalProcessed: analysisData.totalNodes,
