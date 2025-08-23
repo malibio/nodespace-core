@@ -1,6 +1,6 @@
 /**
  * Cursor Positioning Tests
- * 
+ *
  * Tests for the precision cursor positioning functionality that maps
  * click coordinates to correct cursor positions in markdown content.
  */
@@ -46,18 +46,18 @@ describe('Cursor Positioning System', () => {
     if (controller && typeof controller.destroy === 'function') {
       controller.destroy();
     }
-    
+
     if (mockElement && mockElement.parentNode) {
       document.body.removeChild(mockElement);
     }
-    
+
     vi.restoreAllMocks();
   });
 
   describe('Character Mapping Algorithm', () => {
     it('should create correct mapping for identical text', () => {
       if (!controller) return; // Skip if controller failed to initialize
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, 'Hello World', 'Hello World');
 
@@ -66,7 +66,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle header syntax mapping', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, 'Hello World', '# Hello World');
 
@@ -78,7 +78,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle bold formatting mapping', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, 'Hello World', '**Hello** World');
 
@@ -90,7 +90,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle italic formatting mapping', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, 'Hello World', '*Hello* World');
 
@@ -102,7 +102,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle nested formatting mapping', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, 'Hello', '***Hello***');
 
@@ -114,7 +114,7 @@ describe('Cursor Positioning System', () => {
 
     it('should map remaining characters to end position', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, 'Hello World', 'Hello');
 
@@ -124,7 +124,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle empty content', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, '', '');
 
@@ -133,7 +133,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle content with only markdown syntax', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const mapping = buildMapping.call(controller, '', '**');
 
@@ -144,7 +144,7 @@ describe('Cursor Positioning System', () => {
   describe('HTML to Markdown Position Mapping', () => {
     it('should handle identical content', () => {
       if (!controller) return;
-      
+
       const mapPosition = (controller as any).mapHtmlPositionToMarkdown;
       const position = mapPosition.call(controller, 5, 'Hello World', 'Hello World');
 
@@ -153,7 +153,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle header syntax offset', () => {
       if (!controller) return;
-      
+
       const mapPosition = (controller as any).mapHtmlPositionToMarkdown;
       const position = mapPosition.call(controller, 5, 'Hello World', '# Hello World');
 
@@ -163,9 +163,9 @@ describe('Cursor Positioning System', () => {
 
     it('should handle multiple header levels', () => {
       if (!controller) return;
-      
+
       const mapPosition = (controller as any).mapHtmlPositionToMarkdown;
-      
+
       const h2Position = mapPosition.call(controller, 5, 'Hello World', '## Hello World');
       expect(h2Position).toBe(8); // "## " = 3 characters
 
@@ -175,7 +175,7 @@ describe('Cursor Positioning System', () => {
 
     it('should clamp position to content length', () => {
       if (!controller) return;
-      
+
       const mapPosition = (controller as any).mapHtmlPositionToMarkdown;
       const position = mapPosition.call(controller, 100, 'Hello', '# Hi');
 
@@ -186,7 +186,7 @@ describe('Cursor Positioning System', () => {
   describe('Edge Cases', () => {
     it('should handle Unicode characters', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const text = 'Hello 🌟 World';
       const mapping = buildMapping.call(controller, text, text);
@@ -199,7 +199,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle very long content efficiently', () => {
       if (!controller) return;
-      
+
       const longText = 'a'.repeat(1000); // Reduced for test performance
       const longMarkdown = '# ' + longText;
 
@@ -216,7 +216,7 @@ describe('Cursor Positioning System', () => {
   describe('Pre-calculation Strategy', () => {
     it('should return null when character position detection fails', () => {
       if (!controller) return;
-      
+
       // Mock character position detection to return null
       const getCharPosition = vi.fn().mockReturnValue(null);
       (controller as any).getCharacterPositionFromCoordinates = getCharPosition;
@@ -229,7 +229,7 @@ describe('Cursor Positioning System', () => {
 
     it('should handle errors gracefully', () => {
       if (!controller) return;
-      
+
       const getCharPosition = vi.fn().mockImplementation(() => {
         throw new Error('Test error');
       });
@@ -245,9 +245,9 @@ describe('Cursor Positioning System', () => {
   describe('Text Extraction', () => {
     it('should extract plain text from HTML content', () => {
       if (!controller) return;
-      
+
       const extractText = (controller as any).extractTextFromHtml;
-      
+
       expect(extractText.call(controller, 'Hello World')).toBe('Hello World');
       expect(extractText.call(controller, '<span>Hello</span> World')).toBe('Hello World');
       expect(extractText.call(controller, '<b>Bold</b> and <i>italic</i>')).toBe('Bold and italic');
@@ -258,7 +258,7 @@ describe('Cursor Positioning System', () => {
   describe('Performance Requirements', () => {
     it('should perform character mapping within performance requirements', () => {
       if (!controller) return;
-      
+
       const buildMapping = (controller as any).buildCharacterMapping;
       const text = 'a'.repeat(100);
       const markdown = '# ' + text;
@@ -273,7 +273,7 @@ describe('Cursor Positioning System', () => {
 
     it('should perform position mapping within performance requirements', () => {
       if (!controller) return;
-      
+
       const mapPosition = (controller as any).mapHtmlPositionToMarkdown;
       const text = 'a'.repeat(100);
       const markdown = '# ' + text;

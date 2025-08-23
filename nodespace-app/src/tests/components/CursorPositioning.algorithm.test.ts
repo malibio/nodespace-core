@@ -1,6 +1,6 @@
 /**
  * Cursor Positioning Algorithm Tests
- * 
+ *
  * Tests for the core cursor positioning algorithms without requiring DOM.
  * These tests validate the character mapping and position calculation logic.
  */
@@ -9,17 +9,16 @@ import { describe, it, expect } from 'vitest';
 
 // Test the core algorithm logic by creating mock controller methods
 describe('Cursor Positioning Algorithm Core Logic', () => {
-  
   // Mock implementation of buildCharacterMapping algorithm
   function buildCharacterMapping(htmlText: string, markdownText: string): number[] {
     const mapping: number[] = [];
     let htmlIndex = 0;
     let markdownIndex = 0;
-    
+
     while (htmlIndex < htmlText.length && markdownIndex < markdownText.length) {
       const htmlChar = htmlText[htmlIndex];
       const markdownChar = markdownText[markdownIndex];
-      
+
       if (htmlChar === markdownChar) {
         // Characters match - direct mapping
         mapping[htmlIndex] = markdownIndex;
@@ -31,13 +30,13 @@ describe('Cursor Positioning Algorithm Core Logic', () => {
         markdownIndex++;
       }
     }
-    
+
     // Handle remaining HTML characters (map to end)
     while (htmlIndex < htmlText.length) {
       mapping[htmlIndex] = markdownText.length;
       htmlIndex++;
     }
-    
+
     return mapping;
   }
 
@@ -73,7 +72,7 @@ describe('Cursor Positioning Algorithm Core Logic', () => {
 
     // For content with inline formatting, use character mapping
     const mapping = buildCharacterMapping(htmlText, markdownContent.substring(headerSyntaxLength));
-    
+
     // Get the markdown position from our mapping
     const markdownPosition =
       mapping[htmlPosition] !== undefined
@@ -252,7 +251,9 @@ describe('Cursor Positioning Algorithm Core Logic', () => {
       expect(extractTextFromHtml('<span>Hello</span> World')).toBe('Hello World');
       expect(extractTextFromHtml('<b>Bold</b> and <i>italic</i>')).toBe('Bold and italic');
       expect(extractTextFromHtml('')).toBe('');
-      expect(extractTextFromHtml('<div><p>Nested <span>content</span></p></div>')).toBe('Nested content');
+      expect(extractTextFromHtml('<div><p>Nested <span>content</span></p></div>')).toBe(
+        'Nested content'
+      );
     });
   });
 });
