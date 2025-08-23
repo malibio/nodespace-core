@@ -87,11 +87,11 @@ interface BaseNodeEvents {
 ```
 
 ### Default Behavior
-- **Dual-representation mode:** Focus shows syntax, blur shows formatted content
-- **ContentEditable foundation:** All editing through ContentEditableController
+- **Always-editing mode:** CodeMirror always visible, no mode switching
+- **Single-line editing:** Default for most node types
 - **Plain text:** No markdown highlighting by default
 - **Editable:** Users can modify content by default
-- **Event-driven updates:** contentChanged fires through controller events
+- **Debounced events:** contentChanged fires when user pauses typing
 
 ## Node Type Implementations
 
@@ -272,9 +272,9 @@ interface BaseNodeEvents {
 Events flow naturally through the component hierarchy:
 
 ```
-ContentEditable → Controller → BaseNode → SpecificNode → Parent Component
-       ↓             ↓           ↓           ↓              ↓
-   (native)     (process)   (dispatch)  (bubble)      (handle)
+CodeMirror → BaseNode → SpecificNode → Parent Component
+    ↓           ↓           ↓              ↓
+  (native)  (dispatch)  (bubble)      (handle)
 ```
 
 Example event flow for content changes:
@@ -366,6 +366,6 @@ test('PersonNode is read-only', () => {
 
 - **ADR-001:** Always-Editing Mode Architecture
 - **ADR-002:** Component Composition Inheritance Pattern
-- **ADR-003:** ContentEditableController Pattern
+- **ADR-003:** Universal CodeMirror Strategy
 - **Design System:** Component styling guidelines
 - **Testing Guide:** Component testing patterns
