@@ -24,14 +24,20 @@ We have successfully implemented a complete **Logseq-style dual-representation t
 - **Consistent Behavior**: Works for all inline formatting types
 - **Performance Optimized**: Smooth typing with zero lag
 
-#### **3. Complete Keyboard Shortcuts**
+#### **3. Simplified Keyboard Shortcuts**
 - **Cmd+B**: Toggle bold formatting with smart selection handling
 - **Cmd+I**: Toggle italic formatting with perfect cursor management
-- **Cmd+U**: Toggle underline with marker-aware selection
+- **Cmd+U**: **REMOVED** - Underline support discontinued (see decision rationale below)
 - **Smart Toggle Logic**: Detects existing formatting and removes/adds appropriately
 
+**Decision: Underline Support Removal**
+- **Rationale**: Underline (`__text__`) conflicts with bold markdown syntax in many parsers
+- **Standards Compliance**: Underline is not part of CommonMark specification
+- **Simplified Logic**: Focusing on core markdown formatting reduces complexity and edge cases
+- **User Experience**: Bold and italic provide sufficient inline formatting options
+
 #### **4. Advanced Selection Management**
-- **Marker-Aware Selection**: Double-clicking `__word__` properly toggles underline
+- **Context-Aware Selection**: Advanced nested formatting detection for complex scenarios
 - **Cursor Preservation**: No more cursor jumping during typing
 - **Selection Restoration**: Maintains selection after formatting operations
 - **Cross-Browser Compatible**: Works perfectly in Chrome, Firefox, Safari
