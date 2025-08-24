@@ -502,6 +502,150 @@ class LegacyAdapter {
 - **Risk**: User-facing bugs during development
 - **Mitigation**: Use feature flags and gradual rollout
 
+---
+
+## ✅ IMPLEMENTED: Advanced Nested Formatting System
+
+**Status**: **COMPLETED** - Revolutionary keyboard shortcut formatting with advanced nested markdown support
+
+### Overview
+
+A comprehensive formatting system that provides intelligent, context-aware keyboard shortcuts (Cmd+B, Cmd+I) with support for complex nested markdown scenarios. This implementation solves the fundamental issues with previous toggle detection and establishes a robust foundation for advanced text editing.
+
+### Key Features
+
+#### **🧠 Context-Aware Toggle Detection**
+- Analyzes surrounding text context instead of just selected content
+- Properly handles nested formatting scenarios like `*__bold__*` → select "bold" → Cmd+B → `*bold*`
+- Uses actual DOM selection positions for precise formatting application
+
+#### **🔄 Cross-Marker Compatibility** 
+- Unified handling of equivalent markdown syntax: `**bold**` and `__bold__` both work with Cmd+B
+- Italic support for both `*italic*` and `_italic_` with Cmd+I
+- Consistent behavior regardless of which syntax variant is used
+
+#### **🎯 Advanced Nested Scenarios**
+Perfect handling of complex formatting combinations:
+- `*__bold__*` → select "bold" → Cmd+B → `*bold*` (removes inner `__`)
+- `**_italic_**` → select "italic" → Cmd+I → `**italic**` (removes inner `_`)
+- `***text***` → Cmd+I → `**text**` (removes italic, keeps bold)
+- `**text**` → Cmd+I → `***text***` (adds italic to existing bold)
+
+### Technical Implementation
+
+#### **Core Files**
+- **Main Controller**: `/src/lib/design/components/ContentEditableController.ts`
+- **Library Integration**: `/src/lib/utils/markedConfig.ts` (marked.js configuration)
+- **Test Suite**: `/src/tests/components/ContentEditableController-toggle.test.ts`
+
+#### **Revolutionary Algorithm**
+
+**Context-Aware Selection Analysis:**
+```typescript
+private shouldRemoveInnerFormatting(selectedText: string, marker: string, 
+    textContent: string, selectionStartOffset: number, selectionEndOffset: number): boolean {
+  
+  if (marker === '**') {
+    // Cmd+B: Check if selection is inside *__text__* pattern (bold inside italic)
+    const beforeSelection = textContent.substring(0, selectionStartOffset);
+    const afterSelection = textContent.substring(selectionEndOffset);
+    
+    let isInsideStarUnderscore = false;
+    
+    if (selectedText.startsWith('__') && selectedText.endsWith('__')) {
+      // Case 1: Selection includes the __ markers, look for * around
+      isInsideStarUnderscore = beforeSelection.endsWith('*') && afterSelection.startsWith('*');
+    } else {
+      // Case 2: Selection is just text, look for *__ before and __* after
+      isInsideStarUnderscore = !!beforeSelection.match(/\*__[^_]*$/) && !!afterSelection.match(/^[^_]*__\*/);
+    }
+    
+    return isInsideStarUnderscore;
+  }
+  // Similar logic for italic...
+}
+```
+
+**Cross-Marker Compatibility:**
+```typescript
+private isTextAlreadyFormatted(text: string, marker: string): boolean {
+  if (marker === '**') {
+    // Bold: Recognize both ** and __ variants
+    return (text.startsWith('**') && text.endsWith('**')) || 
+           (text.startsWith('__') && text.endsWith('__'));
+  } else if (marker === '*') {
+    // Italic: Recognize both * and _ variants  
+    return (text.startsWith('*') && text.endsWith('*')) || 
+           (text.startsWith('_') && text.endsWith('_'));
+  }
+  return false;
+}
+```
+
+### marked.js Integration
+
+#### **Purpose & Benefits**
+- **Robust Parsing**: Leverages battle-tested markdown library to eliminate edge cases
+- **Consistency**: Provides predictable behavior across all formatting scenarios
+- **Maintainability**: Reduces custom parsing logic and associated bugs
+
+#### **Custom Configuration** (`markedConfig.ts`)
+```typescript
+// Custom renderer for NodeSpace-specific CSS classes
+const renderer = new marked.Renderer();
+renderer.strong = (text) => `<span class="markdown-bold">${text}</span>`;
+renderer.em = (text) => `<span class="markdown-italic">${text}</span>`;
+
+// Headers preserved as plain text (NodeSpace handles separately)
+renderer.heading = (text, level) => `${'#'.repeat(level)} ${text}`;
+```
+
+### Quality Assurance
+
+#### **Comprehensive Test Coverage**
+- **19+ Test Scenarios**: Covering nested, sequential, cross-marker, and edge cases
+- **Integration Tests**: marked.js library integration validation
+- **Round-trip Testing**: Markdown → HTML → Markdown consistency
+- **Performance Testing**: Efficient handling of large text blocks
+
+#### **Supported Scenarios Matrix**
+
+| Input State | User Selection | Keyboard Action | Expected Result | Status |
+|-------------|----------------|-----------------|-----------------|---------|
+| `*__bold__*` | `__bold__` or `bold` | Cmd+B | `*bold*` | ✅ |
+| `**_italic_**` | `_italic_` or `italic` | Cmd+I | `**italic**` | ✅ |
+| `__standalone__` | `standalone` | Cmd+B | `standalone` | ✅ |
+| `*italic*` | `italic` | Cmd+I | `italic` | ✅ |
+| `**existing**` | `existing` | Cmd+I | `***existing***` | ✅ |
+| `***both***` | `both` | Cmd+I | `**both**` | ✅ |
+| `***both***` | `both` | Cmd+B | `*both*` | ✅ |
+
+### Developer Experience Improvements
+
+#### **Enhanced Debugging**
+- Comprehensive inline documentation explaining complex logic
+- Clear method naming and parameter descriptions  
+- Detailed comments for edge case handling
+
+#### **Maintainable Architecture**
+- Separation of concerns: formatting logic vs DOM manipulation
+- Testable methods with clear input/output contracts
+- Integration with existing NodeSpace component lifecycle
+
+### Performance & Reliability
+
+#### **Optimized Implementation**
+- **O(n) Complexity**: Linear time relative to text length (same as previous)
+- **Minimal DOM Queries**: Uses existing selection API efficiently
+- **Memory Efficient**: No additional storage overhead
+
+#### **Robust Error Handling**
+- Graceful handling of malformed markdown input
+- Protection against infinite loops in complex nested scenarios
+- Comprehensive input validation and sanitization
+
+---
+
 ## Next Steps
 
 1. **Create GitHub Issues** for each phase (see next section)
