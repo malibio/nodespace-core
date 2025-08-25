@@ -8,11 +8,11 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 
 - **Framework**: Svelte + Tauri desktop application with frontend-centric architecture
 - **Core Services**: TypeScript services (migrated from Rust) with embedded LanceDB
-- **Data Architecture**: Universal node schema with JSON metadata and single-pointer hierarchy
+- **Data Architecture**: Local-first with embedded LanceDB + future sync protocol for collaboration ([ADR-015](../decisions/015-data-layer-architecture.md))
 - **Node Types**: Core types (Text, Task, AI Chat, Entity, Query) + extensible plugin system
 - **AI Integration**: Native LLM integration for CRUD operations, validation, and content generation
 - **Build Strategy**: Service extension pattern with simplified in-memory caching
-- **Real-time Updates**: EventBus-driven UI reactivity with live query synchronization
+- **Real-time Updates**: Svelte stores for UI reactivity + optional real-time collaboration
 
 #### Text Editing Architecture (2025 Decisions)
 - **ADR-001**: ContentEditable Pivot - Replace CodeMirror with ContentEditable for cursor positioning reliability
@@ -143,6 +143,45 @@ nodespace-pdf-node/                # PDF plugin repository
 nodespace-image-node/              # Image plugin repository
 nodespace-code-node/               # Code plugin repository
 ```
+
+---
+
+## Data Architecture Strategy
+
+NodeSpace employs a **local-first data architecture** optimized for AI-native knowledge management with optional collaborative features.
+
+### Local-First Design Principles
+
+1. **Instant Operations**: All user operations work locally without network dependency
+2. **Offline Complete**: Full functionality available offline with background sync
+3. **User Data Control**: Users own and control their data with local storage
+4. **AI-Optimized**: Native vector storage for embeddings and semantic search
+
+### Storage Architecture Evolution
+
+#### Current: Single-User Local-First
+```
+Desktop App → TypeScript Services → LanceDB (embedded) → Local AI Models
+```
+
+#### Future: Multi-User with Sync
+```
+User A LanceDB ↔ Sync Protocol ↔ Cloud PostgreSQL ↔ Sync Protocol ↔ User B LanceDB
+```
+
+#### Future: Real-Time Collaboration  
+```
+User A: Local + CRDT ↔ WebSocket ↔ CRDT + Local: User B
+```
+
+### Key Technology Choices
+
+- **[LanceDB Embedded](../data/storage-architecture.md)**: Vector-native database perfect for AI workloads
+- **[Sync Protocol](../data/sync-protocol.md)**: Database synchronization rather than shared cloud database
+- **[Collaboration Strategy](../data/collaboration-strategy.md)**: Progressive enhancement from local to real-time
+- **[Architecture Decision Record](../decisions/015-data-layer-architecture.md)**: Why local-first vs. cloud-first reactive
+
+This approach provides instant performance for individual users while supporting future collaborative features without compromising the core local-first benefits.
 
 ---
 
