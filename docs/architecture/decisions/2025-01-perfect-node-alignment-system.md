@@ -4,11 +4,37 @@
 **Status**: ✅ COMPLETED  
 **Impact**: 🎯 PRECISION ACHIEVEMENT - Sub-pixel perfect visual alignment
 
+> **🔄 IMPLEMENTATION NOTE (Latest Update)**: 
+> This document contains historical implementation details. The **current active implementation** uses a **CSS-first approach** as documented in the "CSS-First Dynamic Positioning" section. Previous empirical correction approaches are preserved for historical reference but are no longer in use.
+
 ## Executive Summary
 
 We successfully implemented a **mathematically precise alignment system** for NodeSpace's visual hierarchy indicators (circles and chevrons) that achieves sub-pixel accuracy across all header levels and nesting depths. This system provides the visual foundation for NodeSpace's sophisticated node hierarchy display.
 
-## What We Accomplished
+## Current Implementation (CSS-First Approach)
+
+**Active Implementation as of Latest Update:**
+
+The circle positioning system now uses a **CSS-first dynamic approach** that converts the proven JavaScript formula into pure CSS calculations:
+
+### Key Components:
+1. **CSS Variables System**: Each node type defines `--font-size` and `--line-height`
+2. **Dynamic Calculation**: `--line-height-px: calc(var(--font-size) * var(--line-height))`  
+3. **Positioning Formula**: `top: calc(0.25rem + (var(--line-height-px) / 2))`
+4. **Fallback Support**: `top: 1.05rem` for older browsers
+5. **Shared Classes**: Eliminated code duplication with shared header styling
+
+### Benefits:
+- **Performance**: CSS calculations at parse-time instead of runtime JavaScript
+- **Maintainable**: Reduced from 60+ lines of duplicated code to shared selectors  
+- **Browser Support**: Graceful fallback for IE 11 and older browsers
+- **Responsive**: Works with browser zoom and font scaling automatically
+
+**Location**: `/packages/desktop-app/src/lib/design/components/BaseNode.svelte`
+
+---
+
+## What We Accomplished (Historical Journey)
 
 ### 🎯 **Perfect Visual Alignment**
 
@@ -58,17 +84,24 @@ We successfully implemented a **mathematically precise alignment system** for No
 }
 ```
 
-#### **Header-Level Text Center Calculations**
+#### **UPDATED: CSS-First Dynamic Positioning (Current Implementation)**
 ```css
-.node--h1 {
-  /* 2rem * 1.2 * 0.5 + empirical corrections = true visual center */
-  --text-visual-center: calc(1.2em + var(--baseline-correction) + 0.053125em);
+/* CSS-first approach using proven JavaScript formula converted to CSS */
+.node {
+  --line-height: 1.6;
+  --font-size: 1rem;
+  --line-height-px: calc(var(--font-size) * var(--line-height));
 }
 
-.node--h2 {
-  /* 1.5rem * 1.3 * 0.5 + empirical corrections = true visual center */
-  --text-visual-center: calc(0.975em + var(--baseline-correction) + 0.0542em);
+.node__indicator {
+  /* Formula: containerPaddingPx + (lineHeightPx / 2) */
+  top: calc(0.25rem + (var(--line-height-px) / 2));
 }
+
+/* Header levels define their own font-size and line-height */
+.node--h1 { --font-size: 2rem; --line-height: 1.2; }
+.node--h2 { --font-size: 1.5rem; --line-height: 1.3; }
+/* etc... */
 ```
 
 #### **Mathematical Chevron Positioning**
