@@ -68,6 +68,41 @@ mistral.rs: Local LLM inference
   - Metal GPU acceleration (macOS)
 ```
 
+### Phase 1.5: Workflow Canvas System (Planned)
+
+**Overview**: Visual workflow interface for creating AI-powered mini-applications within NodeSpace, inspired by Google Opal's approach but deeply integrated with our existing node architecture.
+
+**Technology Integration**:
+```typescript
+// Extends existing node architecture
+Svelvet: Node-based workflow canvas
+  - Svelte-native workflow visualization
+  - Drag & drop workflow creation
+  - Visual connection management
+
+Enhanced Node Types:
+  - WorkflowNode extends BaseNode
+  - Input/Process/Output/Control node types
+  - Integration with existing TextNode system
+
+AI Workflow Engine:
+  - Natural language workflow generation
+  - Gemma-powered node suggestions
+  - Smart workflow optimization
+  - Executable mini-app creation
+```
+
+**Key Capabilities**:
+- **Visual Workflow Design**: Drag & drop canvas for creating connected AI workflows
+- **AI-Powered Creation**: Natural language workflow generation using existing Gemma integration
+- **Node Integration**: Seamless connection between knowledge nodes and workflow nodes
+- **Mini-App Generation**: Create shareable, executable workflows similar to Google Opal
+- **Knowledge Base Integration**: Workflow results automatically integrated into NodeSpace hierarchy
+
+**Implementation Timeline**: Post Enhanced ContentEditable (Phase 3-4 of current roadmap)
+
+**Reference**: See [Workflow Canvas System](../components/workflow-canvas-system.md) for complete technical specification.
+
 ## Phase 2: Collaborative Sync (Multi-User)
 
 ### Architecture Addition
