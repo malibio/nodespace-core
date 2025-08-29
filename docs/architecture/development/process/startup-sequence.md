@@ -133,6 +133,7 @@ Before proceeding to implementation, verify ALL of the following:
 - **Agent Guidelines**: See [CLAUDE.md](../../../CLAUDE.md) for detailed agent selection and usage
 - **Code Review Process**: See [PR Review](pr-review.md) for review requirements
 - **Quality Standards**: See [Code Quality](../standards/code-quality.md) for linting and formatting
+- **File Naming**: See [File Naming Conventions](../standards/file-naming-conventions.md) for consistent naming standards
 
 **Quick Command Reference (BUN API COMMANDS):**
 ```bash
