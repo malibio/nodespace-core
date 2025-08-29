@@ -2,13 +2,13 @@
 
 ## Executive Summary
 
-NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded LanceDB** and **TypeScript services**, providing a unified frontend-centric approach. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
+NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded Turso database** and **TypeScript services**, providing a unified frontend-centric approach. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
 
 ### Key Architectural Decisions
 
 - **Framework**: Svelte + Tauri desktop application with frontend-centric architecture
-- **Core Services**: TypeScript services (migrated from Rust) with embedded LanceDB
-- **Data Architecture**: Local-first with embedded LanceDB + future sync protocol for collaboration ([ADR-015](../decisions/015-data-layer-architecture.md))
+- **Core Services**: TypeScript services (migrated from Rust) with embedded Turso database
+- **Data Architecture**: Local-first with embedded Turso + managed cloud sync for collaboration ([ADR-017](../decisions/017-sync-strategy-simplification.md))
 - **Node Types**: Core types (Text, Task, AI Chat, Entity, Query) + extensible plugin system
 - **AI Integration**: Native LLM integration for CRUD operations, validation, and content generation
 - **Build Strategy**: Service extension pattern with simplified in-memory caching
@@ -44,7 +44,7 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 │  └─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                     Data Layer                              │
-│  ├── Embedded LanceDB (universal node schema)               │
+│  ├── Embedded Turso (universal node schema with vector search) │
 │  ├── File System (raw content)                              │
 │  └── NLP Engine (mistral.rs)                                │
 └─────────────────────────────────────────────────────────────┘
@@ -148,40 +148,43 @@ nodespace-code-node/               # Code plugin repository
 
 ## Data Architecture Strategy
 
-NodeSpace employs a **local-first data architecture** optimized for AI-native knowledge management with optional collaborative features.
+NodeSpace employs a **local-first data architecture** with **Turso embedded database** and **managed cloud sync** for optimal AI-native knowledge management.
 
 ### Local-First Design Principles
 
 1. **Instant Operations**: All user operations work locally without network dependency
-2. **Offline Complete**: Full functionality available offline with background sync
-3. **User Data Control**: Users own and control their data with local storage
-4. **AI-Optimized**: Native vector storage for embeddings and semantic search
+2. **Offline Complete**: Full functionality available offline with automatic background sync
+3. **User Data Control**: Users own and control their data with E2E encryption
+4. **AI-Optimized**: Native vector storage with Turso's built-in vector search capabilities
 
-### Storage Architecture Evolution
+### Three-Tier Architecture Evolution
 
-#### Current: Single-User Local-First
+#### Tier 1: Local-Only (Open Source)
 ```
-Desktop App → TypeScript Services → LanceDB (embedded) → Local AI Models
+Desktop App → TypeScript Services → Turso (embedded) → Local AI Models
 ```
+**Features**: Unlimited local usage, all core functionality, no sync, free forever
 
-#### Future: Multi-User with Sync
+#### Tier 2: Cloud Sync (Managed Service)
 ```
-User A LanceDB ↔ Sync Protocol ↔ Cloud PostgreSQL ↔ Sync Protocol ↔ User B LanceDB
+Desktop App → Turso (local) ↔ Turso Cloud Sync ↔ Multi-device Access
 ```
+**Features**: Real-time multi-device sync, cloud backup, usage-based limits
 
-#### Future: Real-Time Collaboration  
+#### Tier 3: Collaboration (Team Service)
 ```
-User A: Local + CRDT ↔ WebSocket ↔ CRDT + Local: User B
+User A: Turso (local) ↔ Turso Cloud + Real-time ↔ Turso (local): User B
 ```
+**Features**: Multi-user workspaces, real-time collaborative editing, team management
 
-### Key Technology Choices
+### Key Technology Decisions
 
-- **[LanceDB Embedded](../data/storage-architecture.md)**: Vector-native database perfect for AI workloads
-- **[Sync Protocol](../data/sync-protocol.md)**: Database synchronization rather than shared cloud database
-- **[Collaboration Strategy](../data/collaboration-strategy.md)**: Progressive enhancement from local to real-time
-- **[Architecture Decision Record](../decisions/015-data-layer-architecture.md)**: Why local-first vs. cloud-first reactive
+- **[Turso Database](https://turso.tech)**: SQLite-compatible with native vector search and embedded replicas
+- **[Managed Sync Only](../decisions/017-sync-strategy-simplification.md)**: No user cloud folder sync - managed service only
+- **[E2E Encryption](../data/collaboration-strategy.md)**: Workspace-level encryption keys with user control
+- **[Progressive Enhancement](../future/tech-stack-roadmap.md)**: Local → Sync → Collaboration without architectural rewrites
 
-This approach provides instant performance for individual users while supporting future collaborative features without compromising the core local-first benefits.
+This approach provides instant performance for individual users, seamless sync for multi-device usage, and real-time collaboration for teams while maintaining local-first benefits and simplifying technical complexity.
 
 ---
 
@@ -212,7 +215,7 @@ export class EnhancedNodeManager extends NodeManager {
 - **EventBus Integration**: UI reactivity coordination (not cache invalidation)
 
 #### Simplified Caching Strategy
-For desktop applications with embedded LanceDB, caching focuses on **computed values only**:
+For desktop applications with embedded Turso, caching focuses on **computed values only**:
 
 ```typescript
 interface SimplifiedCache {
@@ -224,7 +227,7 @@ interface SimplifiedCache {
 ```
 
 **Desktop-Optimized Benefits:**
-- **Direct LanceDB queries** are fast enough without data caching layers
+- **Direct Turso queries** are fast enough without data caching layers
 - **In-memory computation caching** for expensive calculations only
 - **EventBus coordination** for reactive UI updates
 - **Simplified architecture** with fewer cache consistency issues

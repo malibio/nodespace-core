@@ -2,7 +2,7 @@
 
 ## Overview
 
-NodeSpace's technology stack is carefully chosen to provide optimal performance, developer experience, and maintainability for an AI-native desktop application. The architecture centers on a **Tauri desktop application** with **embedded LanceDB** and **TypeScript services**, creating a unified frontend-centric approach for sophisticated knowledge management capabilities.
+NodeSpace's technology stack is carefully chosen to provide optimal performance, developer experience, and maintainability for an AI-native desktop application. The architecture centers on a **Tauri desktop application** with **embedded Turso database** and **TypeScript services**, creating a unified frontend-centric approach for sophisticated knowledge management capabilities.
 
 ## Core Architecture
 
@@ -46,8 +46,8 @@ NodeSpace's technology stack is carefully chosen to provide optimal performance,
     "typescript": "~5.6.2",
     
     // Database integration
-    "@lancedb/lancedb": "^0.16.0",
-    "apache-arrow": "^17.0.0",
+    "@turso/client": "latest",
+    "@turso/libsql": "latest",
     
     // AI Integration (via Rust bindings)
     "@mistralrs/node": "latest",
@@ -209,16 +209,16 @@ pub enum AIBackend {
 
 ## Database Architecture
 
-### Embedded LanceDB
+### Embedded Turso Database
 
-**Why Embedded LanceDB:**
-- **Desktop Optimization**: Runs in-process with no network overhead
-- **Unified Storage**: Single database for structured data and vector embeddings
-- **Performance**: Columnar storage with SIMD optimizations, fast enough without complex caching
-- **TypeScript Integration**: Native JavaScript/Node.js client library
-- **Vector-Optimized**: Purpose-built for embedding storage and semantic search
-- **Simplified Architecture**: No separate backend deployment or coordination
-- **ACID Support**: Transactional guarantees for data consistency
+**Why Embedded Turso:**
+- **Desktop Optimization**: SQLite-compatible embedded database with no network overhead
+- **Unified Storage**: Single database with native vector search for structured data and embeddings
+- **Performance**: Optimized SQLite engine, fast enough without complex caching
+- **TypeScript Integration**: Excellent JavaScript/Node.js client library
+- **Vector Search**: Built-in F32_BLOB vector support with similarity search
+- **Sync Ready**: Embedded replicas enable seamless cloud sync when needed
+- **SQLite Compatibility**: Standard SQL interface with vector search extensions
 
 **Universal Node Schema:**
 ```typescript
@@ -237,12 +237,12 @@ interface NodeSpaceNode {
 }
 
 // Database adapter interface
-interface LanceDBAdapter {
+interface TursoAdapter {
     async getNode(id: string): Promise<NodeSpaceNode | null>;
     async upsertNode(node: NodeSpaceNode): Promise<void>;
     async getNodesByParent(parentId: string): Promise<NodeSpaceNode[]>;
     async searchByContent(query: string): Promise<NodeSpaceNode[]>;
-    async similaritySearch(embedding: Float32Array): Promise<NodeSpaceNode[]>;
+    async vectorSearch(embedding: Float32Array): Promise<NodeSpaceNode[]>;
 }
 ```
 
@@ -309,7 +309,7 @@ mod tests {
 // Integration tests with real services
 #[tokio::test]
 async fn test_ai_integration() {
-    let services = create_test_services().await;  // Real LanceDB, AI model
+    let services = create_test_services().await;  // Real Turso, AI model
     // ... test with actual services
 }
 
@@ -348,7 +348,7 @@ huggingface-hub (for model downloads)
 **IDE Integration:**
 - **rust-analyzer**: Language server for excellent IDE support
 - **Svelte for VS Code**: Frontend development tooling
-- **Database extensions**: LanceDB tooling and data viewers
+- **Database extensions**: SQLite tooling and Turso dashboard
 - **AI model viewers**: Tools for inspecting and debugging model behavior
 
 ## Performance Characteristics
