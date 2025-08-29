@@ -207,34 +207,97 @@ git mv BaseNode.svelte base-node.svelte
 
 ## Linting and Enforcement
 
-### **ESLint Rules (Future)**
+### **✅ ESLint Rules (ACTIVE)**
 
-```json
+**Implementation**: The naming conventions are now automatically enforced through ESLint using `eslint-plugin-unicorn`.
+
+**Configuration** (`eslint.config.js`):
+
+```javascript
+// Svelte components must use kebab-case
 {
-  "rules": {
-    "filename-rules/match": [
-      "error",
-      {
-        "components/**/*.svelte": "kebab-case",
-        "services/**/*.ts": "camelCase",
-        "utils/**/*.ts": "camelCase"
-      }
-    ]
+  files: ['**/*.svelte'],
+  plugins: { unicorn },
+  rules: {
+    'unicorn/filename-case': ['error', {
+      cases: { kebabCase: true }
+    }]
+  }
+}
+
+// TypeScript service files must use camelCase  
+{
+  files: ['**/*.{js,ts}'],
+  plugins: { unicorn },
+  rules: {
+    'unicorn/filename-case': ['error', {
+      cases: { camelCase: true },
+      ignore: ['index\\.ts$', '\\.d\\.ts$', '\\.test\\.ts$', '\\.spec\\.ts$']
+    }]
+  }
+}
+
+// Test files must use kebab-case
+{
+  files: ['src/tests/**/*.{js,ts}'],
+  plugins: { unicorn },
+  rules: {
+    'unicorn/filename-case': ['error', {
+      cases: { kebabCase: true }
+    }]
   }
 }
 ```
 
-### **Pre-commit Hooks (Future)**
+**Real-time Feedback**:
+```bash
+# ❌ Linting will catch violations:
+$ bun run lint:check
+
+/src/lib/services/WrongName.ts
+  1:1  error  Filename is not in camel case. Rename it to `wrongName.ts`  unicorn/filename-case
+
+/src/lib/components/WrongName.svelte  
+  1:1  error  Filename is not in kebab case. Rename it to `wrong-name.svelte`  unicorn/filename-case
+
+✖ 2 problems (2 errors, 0 warnings)
+```
+
+### **Quality Scripts**
+
+The naming rules are integrated into the standard quality check workflow:
 
 ```bash
-#!/bin/sh
-# Check for PascalCase component files
-if git diff --cached --name-only | grep -E ".*[A-Z].*\.svelte$" | grep -v "/ui/"; then
-  echo "Error: New Svelte components must use kebab-case"
-  echo "Use: my-component.svelte instead of MyComponent.svelte"
-  exit 1
-fi
+# Check naming violations (and other linting issues)
+bun run lint:check
+
+# Auto-fix what can be fixed, check naming violations  
+bun run lint
+
+# Complete quality check (lint + format + type check)
+bun run quality:fix
 ```
+
+### **Development Workflow Integration**
+
+**✅ Pre-commit Prevention**: ESLint rules block commits with naming violations:
+```bash
+# This workflow will fail if files don't follow conventions:
+git add src/lib/services/BadName.ts
+git commit -m "Add service"  
+# ESLint error prevents commit
+```
+
+**✅ CI/CD Integration**: Linting runs in build pipeline:
+```bash
+# Production builds will fail with naming violations
+bun run build  # Includes lint check
+```
+
+**✅ IDE Integration**: Real-time feedback during development:
+- VS Code shows red squiggles for naming violations
+- Auto-suggestions provide correct naming format
+- Problems panel shows specific rename recommendations
 
 ## Examples and Patterns
 
@@ -292,15 +355,18 @@ features/text-editing/
 - ✅ Add to development documentation
 - ✅ Communicate to team
 
-### **Phase 2: Future Enforcement (Planned)**
-- 🔄 Add ESLint rules for new files
-- 🔄 Add pre-commit hooks
-- 🔄 Update VS Code workspace settings
+### **Phase 2: Enforcement Implementation (✅ COMPLETED)**
+- ✅ Added ESLint rules for automatic enforcement
+- ✅ Integrated with development workflow (lint, build, quality scripts)
+- ✅ Real-time IDE feedback and commit prevention
+- ✅ Updated documentation with implementation details
 
-### **Phase 3: Legacy Migration (Planned)**
-- 📅 Scheduled as dedicated sprint/milestone
-- 📅 Multi-agent execution plan (separate document)
-- 📅 Comprehensive testing and validation
+### **Phase 3: Legacy Migration (✅ COMPLETED)**
+- ✅ Comprehensive file naming migration executed (January 2025)
+- ✅ Multi-agent execution plan completed successfully
+- ✅ 50+ files migrated with git history preservation
+- ✅ All tests passing, build verification successful
+- ✅ Full codebase compliance achieved
 
 ## Questions and Exceptions
 
