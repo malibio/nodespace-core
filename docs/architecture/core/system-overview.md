@@ -10,6 +10,7 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 - **Core Services**: TypeScript services (migrated from Rust) with embedded Turso database
 - **Data Architecture**: Local-first with embedded Turso + managed cloud sync for collaboration ([ADR-017](../decisions/017-sync-strategy-simplification.md))
 - **Node Types**: Core types (Text, Task, AI Chat, Entity, Query) + extensible plugin system
+- **Future Extensions**: Workflow Canvas System for visual AI workflow creation (Phase 1.5 - see [Workflow Canvas System](../components/workflow-canvas-system.md))
 - **AI Integration**: Native LLM integration for CRUD operations, validation, and content generation
 - **Build Strategy**: Service extension pattern with simplified in-memory caching
 - **Real-time Updates**: Svelte stores for UI reactivity + optional real-time collaboration
