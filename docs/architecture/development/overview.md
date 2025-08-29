@@ -39,6 +39,7 @@
 
 ### 📋 Standards & Quality
 - **[Code Quality](standards/code-quality.md)** - Linting policy, quality gates, and enforcement
+- **[File Naming Conventions](standards/file-naming-conventions.md)** - Consistent naming standards for all files and components
 - **[Testing Guidelines](standards/testing.md)** - Testing requirements and strategies
 - **[Package Management](standards/package-management.md)** - Bun enforcement and dependency management
 - **[Technical Debt](technical-debt.md)** - Known limitations, workarounds, and future improvements
