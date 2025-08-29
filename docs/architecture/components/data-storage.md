@@ -2,7 +2,7 @@
 
 ## Overview
 
-NodeSpace uses a **universal node schema** with embedded LanceDB for simplified desktop architecture. This design provides flexibility, performance, and maintainability while supporting the hierarchical knowledge management system.
+NodeSpace uses a **universal node schema** with embedded Turso for simplified desktop architecture. This design provides flexibility, performance, and maintainability while supporting the hierarchical knowledge management system.
 
 ## Universal Node Schema
 
@@ -271,7 +271,7 @@ const queryMetadata = {
 
 ## Database Integration Patterns
 
-### LanceDB Operations
+### Turso Operations
 
 ```typescript
 interface DatabaseAdapter {
