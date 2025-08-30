@@ -213,17 +213,19 @@ pub enum AIBackend {
 
 **Why Embedded Turso:**
 - **Desktop Optimization**: SQLite-compatible embedded database with no network overhead
-- **Unified Storage**: Single database with native vector search for structured data and embeddings
-- **Performance**: Optimized SQLite engine, fast enough without complex caching
+- **LLM-Driven Schema Design**: AI analyzes natural language to optimize table structures
+- **Hybrid Hot/Cold Storage**: Frequently queried fields in normalized columns, flexible data in JSON
+- **Dynamic Index Management**: LLM creates indexes based on QueryNode usage patterns
+- **Performance**: Native column indexes (1-10ms) + JSON flexibility (20-100ms)
 - **TypeScript Integration**: Excellent JavaScript/Node.js client library
 - **Vector Search**: Built-in F32_BLOB vector support with similarity search
 - **Sync Ready**: Embedded replicas enable seamless cloud sync when needed
-- **SQLite Compatibility**: Standard SQL interface with vector search extensions
+- **SQLite Compatibility**: Standard SQL interface with JSON operations and vector extensions
 
-**Universal Node Schema:**
+**Hybrid Database Schema:**
 ```typescript
-// Single unified table for all node types
-interface NodeSpaceNode {
+// Universal nodes table (foundation)
+interface UniversalNode {
     id: string;                             // Unique node identifier
     type: string;                           // Node type identifier
     content: string;                        // Primary content/text
@@ -232,17 +234,24 @@ interface NodeSpaceNode {
     before_sibling_id: string | null;       // Single-pointer sibling ordering
     created_at: string;                     // ISO 8601 timestamp
     mentions: string[];                     // Referenced node IDs (backlink system)
-    metadata: Record<string, unknown>;      // Type-specific JSON properties
     embedding_vector: Float32Array | null;  // AI/ML embeddings
 }
 
-// Database adapter interface
-interface TursoAdapter {
-    async getNode(id: string): Promise<NodeSpaceNode | null>;
-    async upsertNode(node: NodeSpaceNode): Promise<void>;
-    async getNodesByParent(parentId: string): Promise<NodeSpaceNode[]>;
-    async searchByContent(query: string): Promise<NodeSpaceNode[]>;
-    async vectorSearch(embedding: Float32Array): Promise<NodeSpaceNode[]>;
+// Entity-specific tables (LLM-optimized hot fields)
+interface TaskProperties {
+    node_id: string;                        // Foreign key to UniversalNode
+    priority: 'low' | 'medium' | 'high' | 'urgent';  // Hot field (frequent queries)
+    due_date: Date;                         // Hot field (date range queries)
+    status: 'todo' | 'in_progress' | 'completed';    // Hot field (status filtering)
+    assignee_id: string;                    // Hot field (user-based filtering)
+    metadata: Record<string, unknown>;      // Cold fields (rare queries)
+}
+
+// LLM-driven schema manager
+interface LLMSchemaManager {
+    async analyzeEntityRequest(userDescription: string): Promise<SchemaDesign>;
+    async optimizeFieldPlacement(usage: FieldUsageStats): Promise<SchemaChanges>;
+    async createDynamicIndexes(queryPattern: QueryDefinition): Promise<IndexStrategy>;
 }
 ```
 
