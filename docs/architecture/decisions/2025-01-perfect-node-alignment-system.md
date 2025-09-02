@@ -73,11 +73,14 @@ The circle positioning system now uses a **CSS-first dynamic approach** that con
 
 ### **CSS Variable Architecture**
 
-#### **Core Positioning System**
+#### **Dynamic Circle Positioning System (Updated)**
 ```css
 .node-viewer {
-  /* Node indentation system - defines consistent spacing */
-  --node-indent: 2.5rem; /* 40px indentation between parent and child circles */
+  /* Dynamic Circle Positioning System - All values configurable from here */
+  --circle-offset: 26px;           /* Circle center distance from container left edge */
+  --circle-diameter: 20px;         /* Circle size (width and height) */
+  --circle-text-gap: 8px;          /* Gap between circle edge and text content */
+  --node-indent: 2.5rem;           /* Indentation distance between parent and child levels */
   
   /* Base correction factor for text visual center alignment */
   --baseline-correction: -0.06375em;
@@ -94,8 +97,17 @@ The circle positioning system now uses a **CSS-first dynamic approach** that con
 }
 
 .node__indicator {
+  /* Dynamic positioning using CSS variables */
+  left: var(--circle-offset, 26px); /* Dynamic circle positioning */
+  width: var(--circle-diameter, 20px); /* Dynamic circle size */
+  height: var(--circle-diameter, 20px); /* Dynamic circle size */
   /* Formula: containerPaddingPx + (lineHeightPx / 2) */
   top: calc(0.25rem + (var(--line-height-px) / 2));
+}
+
+.node {
+  /* Dynamic padding calculation */
+  padding-left: calc(var(--circle-offset, 26px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
 }
 
 /* Header levels define their own font-size and line-height */
@@ -104,19 +116,27 @@ The circle positioning system now uses a **CSS-first dynamic approach** that con
 /* etc... */
 ```
 
-#### **Mathematical Chevron Positioning**
+#### **Mathematical Chevron Positioning (Updated)**
 ```css
 .node-chevron {
   position: absolute;
-  left: calc(-1 * var(--node-indent) / 2); /* Exactly half indentation back */
-  top: 50%; /* Center vertically relative to text content area */
-  transform: translateY(-50%); /* Vertical centering only - no horizontal interference */
+  left: calc(-1 * var(--node-indent) / 2 + var(--circle-offset)); /* Halfway between parent and child circles */
+  /* Formula: (-1 * indentation / 2) + parent_circle_offset */
+  /* Example: (-1 * 2.5rem / 2) + 26px = -20px + 26px = 6px */
+  top: calc(0.25rem + (var(--line-height-px) / 2)); /* Same formula as circles */
+  transform: translate(-50%, -50%); /* Center on coordinates */
 }
 ```
 
 ### **Key Design Principles**
 
-#### **1. Mathematical Precision Over Hardcoding**
+#### **1. Dynamic Configuration System (New)**
+- **Before**: Multiple hardcoded values scattered across components
+- **After**: Centralized CSS variables with automatic propagation
+- **Benefit**: Change entire layout from single configuration point
+- **Example**: Modify `--circle-offset: 40px` to move all circles and chevrons together
+
+#### **2. Mathematical Precision Over Hardcoding**  
 - **Before**: Hardcoded pixel values with 47px positioning errors
 - **After**: CSS calc() functions with 0.3px accuracy
 - **Benefit**: Automatically adjusts if indentation or font sizes change
@@ -421,6 +441,48 @@ function calculateSpineHeight(rootNode, lastNode) {
 - **Vertical Relationships**: Connectors show clear parent-child relationships
 - **Theme Integration**: Works with any color scheme through CSS variables
 - **Scalable Architecture**: Easy to extend to new node types and layouts
+
+## Dynamic Configuration Examples
+
+### **Layout Customization**
+
+The positioning system is now fully configurable via CSS variables. All measurements update automatically when variables change:
+
+#### **Compact Layout**
+```css
+.node-viewer {
+  --circle-offset: 20px;      /* Closer to edge */
+  --circle-diameter: 16px;    /* Smaller circles */
+  --circle-text-gap: 6px;     /* Tighter spacing */
+  --node-indent: 2rem;        /* Less indentation */
+}
+/* Result: Automatic chevron repositioning to maintain perfect midpoint */
+```
+
+#### **Spacious Layout**
+```css
+.node-viewer {
+  --circle-offset: 40px;      /* Further from edge */
+  --circle-diameter: 24px;    /* Larger circles */
+  --circle-text-gap: 12px;    /* More spacing */
+  --node-indent: 3.5rem;      /* Greater indentation */
+}
+/* Result: All elements maintain proportional relationships */
+```
+
+#### **Mathematical Formula Verification**
+```javascript
+// The chevron positioning automatically adjusts:
+// Formula: calc(-1 * var(--node-indent) / 2 + var(--circle-offset))
+
+// Compact example: calc(-1 * 2rem / 2 + 20px) = calc(-16px + 20px) = 4px
+// Spacious example: calc(-1 * 3.5rem / 2 + 40px) = calc(-28px + 40px) = 12px
+
+// Chevron always positions exactly halfway between parent and child circles
+```
+
+### **Real-time Configuration**
+All changes take effect immediately without requiring component restarts or page reloads. The mathematical relationships ensure perfect alignment is maintained regardless of the values chosen.
 
 ## Future Applications
 
