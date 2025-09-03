@@ -74,9 +74,9 @@
       flex-shrink: 0;
     }
     
-    .hierarchy-indicator--text { background: hsl(142 71% 45%); }
-    .hierarchy-indicator--task { background: hsl(25 95% 53%); }
-    .hierarchy-indicator--ai { background: hsl(221 83% 53%); }
+    .hierarchy-indicator--text { background: hsl(var(--node-text)); }
+    .hierarchy-indicator--task { background: hsl(var(--node-task)); }
+    .hierarchy-indicator--ai { background: hsl(var(--node-ai-chat)); }
     
     .interaction-demo {
       border: 2px dashed hsl(var(--border));
@@ -132,6 +132,177 @@
       background: hsl(var(--primary));
       flex-shrink: 0;
     }
+    
+    /* Navigation Shell Styles */
+    .shell-demo {
+      display: flex;
+      height: 400px;
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin: 1rem 0;
+    }
+    
+    .sidebar-collapsed {
+      width: 48px;
+      background: hsl(var(--card));
+      border-right: 1px solid hsl(var(--border));
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem 0;
+    }
+    
+    .sidebar-expanded {
+      width: 280px;
+      background: hsl(var(--card));
+      border-right: 1px solid hsl(var(--border));
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+    }
+    
+    .hamburger-icon {
+      width: 20px;
+      height: 20px;
+      margin-bottom: 1rem;
+      cursor: pointer;
+    }
+    
+    .main-content {
+      flex: 1;
+      background: hsl(var(--background));
+      padding: 1rem;
+    }
+    
+    .nav-item {
+      padding: 0.5rem;
+      margin: 0.25rem 0;
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    
+    .nav-item:hover {
+      background: hsl(var(--muted));
+    }
+    
+    .nav-item.active {
+      background: hsl(var(--primary));
+      color: hsl(var(--primary-foreground));
+    }
+    
+    .nav-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+    
+    /* TaskNode Circle Icon System */
+    .task-icon-demo {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      margin: 1rem 0;
+      padding: 1rem;
+      background: hsl(var(--card));
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+    }
+    
+    .task-state-example {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      text-align: center;
+    }
+    
+    /* CSS-based task icons for consistent cross-browser rendering */
+    .task-icon {
+      width: 20px;
+      height: 20px;
+      position: relative;
+      display: block;
+    }
+    
+    .task-icon-with-ring {
+      width: 24px;
+      height: 24px;
+    }
+    
+    /* Basic circle states */
+    .task-circle {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+    }
+    
+    .task-circle-pending {
+      background: transparent;
+      border: 1px solid hsl(var(--primary));
+      box-sizing: border-box;
+    }
+    
+    .task-circle-in-progress {
+      background: linear-gradient(90deg, hsl(var(--primary)) 50%, transparent 50%);
+      border: 1px solid hsl(var(--primary));
+      box-sizing: border-box;
+    }
+    
+    .task-circle-completed {
+      background: hsl(var(--primary));
+    }
+    
+    /* Checkmark for completed tasks - single continuous stroke */
+    .task-circle-completed::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 10px;
+      height: 8px;
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: contain;
+      color: hsl(var(--background)); /* This sets the stroke color */
+      transform: translate(-50%, -50%);
+    }
+    
+    /* Parent task rings */
+    .task-ring {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid hsl(var(--primary) / 0.5);
+      box-sizing: border-box;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    
+    /* Text Node circles - solid filled */
+    .text-circle {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: hsl(var(--primary));
+      position: absolute;
+      top: 2px;
+      left: 2px;
+    }
+    
+    .task-state-label {
+      font-size: 0.75rem;
+      color: hsl(var(--muted-foreground));
+      font-weight: 500;
+    }
   </style>
 </head>
 <body class="no-transitions">
@@ -155,63 +326,641 @@
       </div>
     </nav>
 
+    <!-- Navigation Shell -->
+    <section class="example-section">
+      <h2>Navigation Shell</h2>
+      <p>Collapsible sidebar navigation with hamburger menu, matching the design from your application screenshots.</p>
+      
+      <h3>Collapsed Sidebar</h3>
+      <div class="shell-demo">
+        <div class="sidebar-collapsed">
+          <!-- Hamburger Icon SVG -->
+          <svg class="hamburger-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+          
+          <!-- Navigation Icons -->
+          <div class="nav-item active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            </svg>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="15" x2="15" y2="15"></line>
+            </svg>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </div>
+        </div>
+        <div class="main-content">
+          <p>Main content area with collapsed sidebar (48px width)</p>
+        </div>
+      </div>
+      
+      <h3>Expanded Sidebar</h3>
+      <div class="shell-demo">
+        <div class="sidebar-expanded">
+          <!-- Hamburger Icon SVG -->
+          <svg class="hamburger-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+          
+          <!-- Navigation Items with Labels -->
+          <div class="nav-item active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            </svg>
+            <span>Daily Journal</span>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="15" x2="15" y2="15"></line>
+            </svg>
+            <span>Dashboard</span>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <span>Search</span>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"></polygon>
+            </svg>
+            <span>Favorites</span>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12,6 12,12 16,14"></polyline>
+            </svg>
+            <span>Recent</span>
+          </div>
+          <div class="nav-item">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+            </svg>
+            <span>Library</span>
+          </div>
+        </div>
+        <div class="main-content">
+          <p>Main content area with expanded sidebar (280px width)</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- BaseNode/TextNode Icon System -->
+    <section class="example-section">
+      <h2>BaseNode/TextNode Icon System</h2>
+      <p>Solid circle icons with ring effects for nodes that have children.</p>
+      
+      <h3>Text Node States</h3>
+      <div class="task-icon-demo">
+        <!-- Regular Text Node -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="text-circle"></div>
+          </div>
+          <div class="task-state-label">Text Node</div>
+        </div>
+        
+        <!-- Text Node with Children (Ring Effect) -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-ring"></div>
+            <div class="text-circle"></div>
+          </div>
+          <div class="task-state-label">Text Node (Parent)</div>
+        </div>
+      </div>
+      
+      <h3>Implementation Code</h3>
+      <div class="example-code">
+        <pre><code><!-- Regular Text Node -->
+&lt;div class="task-icon"&gt;
+  &lt;div class="text-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- Text Node with Children (Ring Effect) -->
+&lt;div class="task-icon"&gt;
+  &lt;div class="task-ring"&gt;&lt;/div&gt;
+  &lt;div class="text-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;</code></pre>
+      </div>
+    </section>
+
+    <!-- TaskNode Icon System -->
+    <section class="example-section">
+      <h2>TaskNode Icon System</h2>
+      <p>Circle-based icons for TaskNode states with punch-hole checkmark design and ring effects for parent nodes.</p>
+      
+      <h3>Basic Task States</h3>
+      <div class="task-icon-demo">
+        <!-- Pending Task -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-circle task-circle-pending"></div>
+          </div>
+          <div class="task-state-label">Pending</div>
+        </div>
+        
+        <!-- In Progress Task -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-circle task-circle-in-progress"></div>
+          </div>
+          <div class="task-state-label">In Progress</div>
+        </div>
+        
+        <!-- Completed Task -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-circle task-circle-completed"></div>
+          </div>
+          <div class="task-state-label">Completed</div>
+        </div>
+      </div>
+      
+      <h3>Parent Task States (with Ring Effect)</h3>
+      <div class="task-icon-demo">
+        <!-- Pending Parent Task -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-ring"></div>
+            <div class="task-circle task-circle-pending"></div>
+          </div>
+          <div class="task-state-label">Pending Parent</div>
+        </div>
+        
+        <!-- In Progress Parent Task -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-ring"></div>
+            <div class="task-circle task-circle-in-progress"></div>
+          </div>
+          <div class="task-state-label">In Progress Parent</div>
+        </div>
+        
+        <!-- Completed Parent Task -->
+        <div class="task-state-example">
+          <div class="task-icon">
+            <div class="task-ring"></div>
+            <div class="task-circle task-circle-completed"></div>
+          </div>
+          <div class="task-state-label">Completed Parent</div>
+        </div>
+      </div>
+      
+      <h3>Implementation Code (CSS-based for Cross-Browser Consistency)</h3>
+      <div class="example-code">
+        <pre><code><!-- Pending Task -->
+&lt;div class="task-icon"&gt;
+  &lt;div class="task-circle task-circle-pending"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- In Progress Task -->
+&lt;div class="task-icon"&gt;
+  &lt;div class="task-circle task-circle-in-progress"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- Completed Task -->
+&lt;div class="task-icon"&gt;
+  &lt;div class="task-circle task-circle-completed"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- Task with Children (Ring Effect) -->
+&lt;div class="task-icon"&gt;
+  &lt;div class="task-ring"&gt;&lt;/div&gt;
+  &lt;div class="task-circle task-circle-pending"&gt;&lt;/div&gt;
+&lt;/div&gt;</code></pre>
+      </div>
+    </section>
+
+    <!-- Icon System Specifications -->
+    <section class="example-section">
+      <h2>Icon System Specifications</h2>
+      <p>Standardized sizing and effects for all NodeSpace icons across the application.</p>
+      
+      <h3>Standard Dimensions</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Icon Container</div>
+          <div class="component-demo">
+            <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+              <thead>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <th style="padding: 0.5rem; text-align: left;">Element</th>
+                  <th style="padding: 0.5rem; text-align: left;">Size</th>
+                  <th style="padding: 0.5rem; text-align: left;">Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Container</td>
+                  <td style="padding: 0.5rem;"><code>20x20px</code></td>
+                  <td style="padding: 0.5rem;">Standard icon container size</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">TextNode (regular)</td>
+                  <td style="padding: 0.5rem;"><code>r="7.5" (15x15px)</code></td>
+                  <td style="padding: 0.5rem;">Solid filled circle, centered in 20x20 container</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">TaskNode (regular)</td>
+                  <td style="padding: 0.5rem;"><code>r="7.5" + 1px stroke (16x16px)</code></td>
+                  <td style="padding: 0.5rem;">Stroked circle, centered in 20x20 container</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">TextNode (with children)</td>
+                  <td style="padding: 0.5rem;"><code>r="7.5" inner + r="8.5" ring</code></td>
+                  <td style="padding: 0.5rem;">Solid inner with 50% opacity ring</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">TaskNode (with children)</td>
+                  <td style="padding: 0.5rem;"><code>r="7.5" inner + r="8.5" ring</code></td>
+                  <td style="padding: 0.5rem;">Stroked/filled inner with 50% opacity ring</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.5rem;">Ring Opacity</td>
+                  <td style="padding: 0.5rem;"><code>50%</code></td>
+                  <td style="padding: 0.5rem;">Semi-transparent ring effect</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      
+      <h3>Cross-Browser Rendering Behavior</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">SVG Circle Rendering Notes</div>
+          <div class="component-demo">
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Universal Rendering Solution</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li>Single implementation works consistently across all browsers</li>
+                <li>Hardware acceleration prevents Safari's aggressive anti-aliasing</li>
+                <li>All circles render at exactly 16x16 pixels</li>
+                <li>Parent rings fit perfectly within 20x20 containers without clipping</li>
+              </ul>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+              <thead>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <th style="padding: 0.5rem; text-align: left;">Browser</th>
+                  <th style="padding: 0.5rem; text-align: left;">Rendering Approach</th>
+                  <th style="padding: 0.5rem; text-align: left;">CSS Fix Applied</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Chrome/Edge</td>
+                  <td style="padding: 0.5rem;">Larger radius (r=8) to achieve same 16x16 visual</td>
+                  <td style="padding: 0.5rem;"><code>Dual-circle with browser detection</code></td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Firefox</td>
+                  <td style="padding: 0.5rem;">Crisp edges without positioning offset</td>
+                  <td style="padding: 0.5rem;"><code>shape-rendering: crispEdges</code></td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Safari</td>
+                  <td style="padding: 0.5rem;">Hardware acceleration optimization</td>
+                  <td style="padding: 0.5rem;"><code>will-change: transform</code></td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <p style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin: 1rem 0 0 0;">
+              <strong>Technical Solution:</strong> Universal dimensions with hardware acceleration (<code>transform: translateZ(0)</code>)
+              prevent Safari's aggressive anti-aliasing. All circles use r="8" for 16x16 rendering, parent rings use r="9" 
+              with stroke-width="2" for perfect 20x20 boundaries. Integer positioning (cx="10" cy="10") eliminates 
+              sub-pixel rendering inconsistencies.
+            </p>
+          </div>
+        </div>
+      </div>
+      
+      <h3>Border Specifications</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Stroke Weights</div>
+          <div class="component-demo">
+            <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+              <thead>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <th style="padding: 0.5rem; text-align: left;">Element</th>
+                  <th style="padding: 0.5rem; text-align: left;">Stroke Width</th>
+                  <th style="padding: 0.5rem; text-align: left;">Usage</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">TaskNode Border</td>
+                  <td style="padding: 0.5rem;"><code>1px</code></td>
+                  <td style="padding: 0.5rem;">Clean task circle outline</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Parent Ring</td>
+                  <td style="padding: 0.5rem;"><code>2px</code></td>
+                  <td style="padding: 0.5rem;">Prominent ring for parent indication</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.5rem;">Checkmark</td>
+                  <td style="padding: 0.5rem;"><code>2px</code></td>
+                  <td style="padding: 0.5rem;">Bold checkmark for completed tasks</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Layout Patterns -->
     <section class="example-section">
-      <h2>Layout Patterns</h2>
-      <p>Foundational layout structures for NodeSpace interfaces, inspired by research on leading block-based note-taking tools.</p>
+      <h2>Multi-Pane Layout System</h2>
+      <p>Advanced layout patterns for NodeSpace's desktop application featuring sidebar navigation and up to 3 content panes with tab management.</p>
       
-      <h3>Two-Panel Layout</h3>
+      <h3>Application Layout Structure</h3>
+      <div class="layout-demo" style="
+        background: hsl(var(--card));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        padding: 1rem;
+        margin: 1.5rem 0;
+        font-family: monospace;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        height: auto;
+      ">
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">┌─[Sidebar 280px]──┬─[Pane 1]────┬─[Pane 2]────┬─[Pane 3]────┐</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Daily Journal     │ [Today]     │ [Tasks]     │ [Library]   │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Dashboard         │ [Project ▼] │ [Notes]     │ [Team]      │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Search            │─────────────┼─────────────┼─────────────┤</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Favorites         │ Content     │ Task List   │ Resources   │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Recent            │             │             │             │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│                  │ ● Morning   │ ☐ Review    │ Projects    │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Library           │   Planning  │   Designs   │ Team        │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│   ├─ Clients      │ AI Help     │ ◒ Client    │ Links       │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│   └─ Projects     │             │   Feedback  │             │</div>
+        <div style="color: hsl(var(--muted-foreground));">└───────────────────┴─────────────┴─────────────┴─────────────┘</div>
+      </div>
+      
+      <h3>Browser-Like Tab System</h3>
+      <p>Each content pane supports multiple tabs with intelligent title management and browser-like behaviors.</p>
+      
+      <div class="pattern-demo" style="padding: 0; overflow: hidden;">
+        <!-- Tab Bar Example -->
+        <div style="
+          height: 40px;
+          background: hsl(var(--muted));
+          border-bottom: 1px solid hsl(var(--border));
+          display: flex;
+          align-items: stretch;
+        ">
+          <div style="
+            padding: 0 1rem;
+            background: hsl(var(--background));
+            border-right: 1px solid hsl(var(--border));
+            display: flex;
+            align-items: center;
+            font-size: 0.875rem;
+            color: hsl(var(--foreground));
+          ">Today</div>
+          <div style="
+            padding: 0 1rem;
+            background: hsl(var(--muted));
+            border-right: 1px solid hsl(var(--border));
+            display: flex;
+            align-items: center;
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+            cursor: pointer;
+          ">Acme Corp Strategy</div>
+          <div style="
+            padding: 0 1rem;
+            background: hsl(var(--muted));
+            border-right: 1px solid hsl(var(--border));
+            display: flex;
+            align-items: center;
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+            cursor: pointer;
+          ">Q2 Tasks (Truncated...)</div>
+        </div>
+        
+        <!-- Content Area -->
+        <div style="padding: 1.5rem;">
+          <h4 style="margin: 0 0 1rem 0; color: hsl(var(--foreground));">Tab Content Management</h4>
+          <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); line-height: 1.6;">
+            <p><strong>Single Tab:</strong> No tab bar shown, just content</p>
+            <p><strong>Multiple Tabs:</strong> Tab bar appears with truncated titles (~25 characters)</p>
+            <p><strong>Active Tab:</strong> White background, full opacity text</p>
+            <p><strong>Inactive Tabs:</strong> Muted background, reduced opacity</p>
+            <p><strong>New Tab Creation:</strong> Cmd+click opens links in new tab</p>
+            <p><strong>Tab Titles:</strong></p>
+            <ul style="margin: 0.5rem 0 0 1rem;">
+              <li>DateNodes: "Today", "Yesterday", "Jan 27, 2025"</li>
+              <li>TaskNodes: Task title/content (truncated)</li>
+              <li>EntityNodes: Entity name + type (e.g., "Acme Corp (Customer)")</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      <h3>@Mention System Pattern</h3>
+      <p>Universal node referencing system for creating and linking content across the application.</p>
+      
       <div class="pattern-demo">
-        <div class="layout-demo">
-          <div class="main-area">
-            <h4 style="margin: 0 0 1rem 0;">Main Content Area</h4>
-            <div class="hierarchy-example">
-              <div class="hierarchy-node">
-                <span class="hierarchy-indicator hierarchy-indicator--text"></span>
-                Welcome to NodeSpace
+        <h4 style="margin: 0 0 1rem 0;">Autocomplete Dropdown</h4>
+        <div style="
+          position: relative;
+          max-width: 400px;
+          margin: 1rem 0;
+        ">
+          <input style="
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+            font-size: 0.875rem;
+          " value="@acme" readonly />
+          
+          <div style="
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: hsl(var(--background));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+            margin-top: 4px;
+          ">
+            <div style="padding: 0.5rem; border-bottom: 1px solid hsl(var(--border)); font-size: 0.75rem; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase;">Search: "acme"</div>
+            
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="font-weight: 500; margin-bottom: 0.25rem;">Acme Corporation</div>
+              <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Client profile • Premium tier</div>
+            </div>
+            
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="font-weight: 500; margin-bottom: 0.25rem;">Acme Corp Campaign Strategy</div>
+              <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Campaign planning • 3 days ago</div>
+            </div>
+            
+            <div style="padding: 0.75rem; cursor: pointer; color: hsl(var(--primary));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="font-weight: 500;">+ Create new "Acme..." node</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <h3>Slash Commands Pattern</h3>
+      <p>Quick commands for creating different node types and templates.</p>
+      
+      <div class="pattern-demo">
+        <h4 style="margin: 0 0 1rem 0;">Command Palette</h4>
+        <div style="
+          position: relative;
+          max-width: 400px;
+          margin: 1rem 0;
+        ">
+          <input style="
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+            font-size: 0.875rem;
+          " value="/task" readonly />
+          
+          <div style="
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: hsl(var(--background));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+            margin-top: 4px;
+          ">
+            <div style="padding: 0.5rem; border-bottom: 1px solid hsl(var(--border)); font-size: 0.75rem; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase;">Quick Commands</div>
+            
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer; background: hsl(var(--muted));">
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="color: hsl(var(--node-task));">☐</span>
+                <div>
+                  <div style="font-weight: 500;">/task - Create task</div>
+                  <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Actionable item with due dates</div>
+                </div>
               </div>
-              <div class="hierarchy-node">
-                <span class="hierarchy-indent"></span>
-                <span class="hierarchy-indicator hierarchy-indicator--text"></span>
-                Child node content
+            </div>
+            
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="color: hsl(var(--node-text));">●</span>
+                <div>
+                  <div style="font-weight: 500;">/text - Create text node</div>
+                  <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Foundation content block</div>
+                </div>
               </div>
-              <div class="hierarchy-node">
-                <span class="hierarchy-indent"></span>
-                <span class="hierarchy-indent"></span>
-                <span class="hierarchy-indicator hierarchy-indicator--task"></span>
-                Task: Review documentation
-              </div>
-              <div class="hierarchy-node">
-                <span class="hierarchy-indent"></span>
-                <span class="hierarchy-indicator hierarchy-indicator--ai"></span>
-                AI-generated summary
-              </div>
-              <div class="hierarchy-node">
-                <span class="hierarchy-indicator hierarchy-indicator--text"></span>
-                Another top-level node
+            </div>
+            
+            <div style="padding: 0.75rem; cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="color: hsl(var(--node-ai-chat));">AI</span>
+                <div>
+                  <div style="font-weight: 500;">/ai - Start AI chat</div>
+                  <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Conversational AI interface</div>
+                </div>
               </div>
             </div>
           </div>
-          <div class="side-panel">
-            <h4 style="margin: 0 0 1rem 0;">Properties Panel</h4>
-            <div style="margin-bottom: 1rem;">
-              <label style="display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem;">Node Type</label>
-              <select style="
-                width: 100%;
-                padding: 0.5rem;
-                border: 1px solid hsl(var(--border));
-                border-radius: var(--radius);
-                background: hsl(var(--background));
-                color: hsl(var(--foreground));
-              ">
-                <option>Text</option>
-                <option>Task</option>
-                <option>AI Chat</option>
-              </select>
-            </div>
-            <div style="margin-bottom: 1rem;">
-              <label style="display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem;">Tags</label>
-              <input style="
+        </div>
+      </div>
+    </section>
+
+    <!-- Hierarchical Node Patterns -->
+    <section class="example-section">
+      <h2>Hierarchical Node Structure</h2>
+      <p>Mathematical precision in node positioning with support for all 5 node types in hierarchical relationships.</p>
+      
+      <h3>Mixed Node Type Hierarchy</h3>
+      <div class="pattern-demo">
+        <div style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6;">
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem;">
+            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 1rem;">●</span>
+            <span style="font-size: 1.25rem; font-weight: 600;">Product Launch Campaign Strategy</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
+            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 0.875rem;">●</span>
+            <span>This comprehensive product launch plan provides the strategic framework...</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem;">
+            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 1.125rem;">●</span>
+            <span style="font-size: 1.125rem; font-weight: 600;">Launch Overview</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
+            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 0.875rem;">●</span>
+            <span><strong>Product:</strong> EcoSmart Professional Series</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
+            <span style="color: hsl(var(--status-completed)); margin-right: 0.5rem; font-size: 0.875rem;">✓</span>
+            <span style="text-decoration: line-through; opacity: 0.7;"><strong>Launch Date:</strong> July 15, 2025</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
+            <span style="color: hsl(var(--status-in-progress)); margin-right: 0.5rem; font-size: 0.875rem;">◒</span>
+            <span><strong>Total Budget:</strong> $180,000</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem;">
+            <span style="color: hsl(var(--node-ai-chat)); margin-right: 0.5rem; font-size: 1rem;">AI</span>
+            <span style="background: hsl(var(--muted)); padding: 0.5rem; border-radius: var(--radius); font-style: italic;">What should I focus on for this campaign launch?</span>
+          </div>
+          
+          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
+            <span style="color: hsl(var(--node-ai-chat)); margin-right: 0.5rem; font-size: 0.875rem;">AI</span>
+            <span style="background: hsl(var(--muted)); padding: 0.5rem; border-radius: var(--radius); font-size: 0.875rem;">Based on your budget and timeline, I recommend prioritizing digital channels...</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interaction Patterns -->
+    <section class="example-section">
+      <h2>Keyboard & Interaction Patterns</h2>
+      <p>Comprehensive keyboard shortcuts and interaction behaviors for efficient knowledge management.</p>
+      
+      <div class="keyboard-shortcuts">
                 width: 100%;
                 padding: 0.5rem;
                 border: 1px solid hsl(var(--border));
@@ -231,7 +980,7 @@
                 color: hsl(var(--foreground));
                 border-radius: var(--radius);
                 cursor: pointer;
-              ">🤖 AI Assist</button>
+              ">AI Assist</button>
               <button style="
                 width: 100%;
                 padding: 0.5rem;
@@ -374,7 +1123,7 @@
         
         <div class="component-showcase">
           <div class="component-example">
-            <div class="component-title">🎯 Focus States</div>
+            <div class="component-title">Focus States</div>
             <div class="component-demo">
               <ul>
                 <li><strong>Focused:</strong> Clear 2px blue outline, full opacity</li>
