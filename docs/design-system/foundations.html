@@ -9,13 +9,13 @@
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
   <style>
-    /* Node type color definitions */
+    /* Node type color definitions - Pastel Blue System */
     :root {
-      --node-text: 142 71% 45%;    /* Green for text nodes */
-      --node-task: 25 95% 53%;     /* Orange for tasks */
-      --node-ai-chat: 221 83% 53%; /* Blue for AI chat */
-      --node-entity: 271 81% 56%;  /* Purple for entities */
-      --node-query: 330 81% 60%;   /* Pink for queries */
+      --node-text: 199 95% 74%;    /* #7dd3fc - Soft pastel blue */
+      --node-task: 199 89% 48%;    /* #0284c7 - Medium blue for tasks */
+      --node-ai-chat: 220 91% 70%; /* #60a5fa - AI blue with sparkle */
+      --node-entity: 213 94% 68%;  /* #3b82f6 - Entity blue */
+      --node-query: 217 91% 60%;   /* #2563eb - Query blue */
     }
     
     /* Node type color swatches */
@@ -91,13 +91,13 @@
 
     <!-- Color System -->
     <section class="example-section">
-      <h2>Color System</h2>
-      <p>NodeSpace uses <strong>shadcn-svelte color variables</strong> as the foundation with custom node type colors for semantic differentiation.</p>
+      <h2>Professional Blue Color System</h2>
+      <p>NodeSpace uses a <strong>professional blue color system</strong> that creates a clean, modern interface perfect for extended knowledge work sessions.</p>
       
-      <h3>shadcn-svelte Foundation Colors</h3>
+      <h3>Primary Color Palette</h3>
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">🎨 Primary Colors</div>
+          <div class="component-title">Primary Colors</div>
           <div class="component-demo">
             <div class="color-example">
               <div style="width: 40px; height: 40px; background: hsl(var(--primary)); border-radius: 50%; margin-right: 1rem;"></div>
@@ -162,46 +162,81 @@
       
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">📝 Node Type Colors</div>
+          <div class="component-title">Node Type Colors</div>
           <div class="component-demo">
             <div class="color-example">
-              <div class="node-color-swatch node-color-text">📝</div>
+              <div class="node-color-swatch node-color-text">●</div>
               <div>
                 <strong>Text Node</strong><br>
-                <code>hsl(142 71% 45%)</code><br>
-                <small>Green - Primary content and text nodes</small>
+                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
+                <small>Professional blue - Foundation content blocks</small>
               </div>
             </div>
             <div class="color-example">
-              <div class="node-color-swatch node-color-task">✅</div>
+              <div class="node-color-swatch node-color-task">☐</div>
               <div>
                 <strong>Task Node</strong><br>
-                <code>hsl(25 95% 53%)</code><br>
-                <small>Orange - Tasks, todos, and actionable items</small>
+                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
+                <small>Medium blue - Tasks, todos, and actionable items</small>
               </div>
             </div>
             <div class="color-example">
-              <div class="node-color-swatch node-color-ai">🤖</div>
+              <div class="node-color-swatch node-color-ai">AI</div>
               <div>
                 <strong>AI Chat Node</strong><br>
-                <code>hsl(221 83% 53%)</code><br>
-                <small>Blue - AI-generated content and conversations</small>
+                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
+                <small>Professional blue - Conversational AI interface</small>
               </div>
             </div>
             <div class="color-example">
-              <div class="node-color-swatch node-color-entity">🏷️</div>
+              <div class="node-color-swatch node-color-entity">◆</div>
               <div>
                 <strong>Entity Node</strong><br>
-                <code>hsl(271 81% 56%)</code><br>
-                <small>Purple - Entities, tags, and metadata</small>
+                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
+                <small>Entity blue - Structured data records and metadata</small>
               </div>
             </div>
             <div class="color-example">
-              <div class="node-color-swatch node-color-query">🔍</div>
+              <div class="node-color-swatch node-color-query">⬢</div>
               <div>
                 <strong>Query Node</strong><br>
-                <code>hsl(330 81% 60%)</code><br>
-                <small>Pink - Search queries and filters</small>
+                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
+                <small>Professional blue - Live data views and real-time analysis</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <h3>Status Colors</h3>
+      <p>Consistent colors for indicating states across all node types and interface elements.</p>
+      
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Status System</div>
+          <div class="component-demo">
+            <div class="color-example">
+              <div style="width: 40px; height: 40px; background: hsl(var(--status-completed)); border-radius: 50%; margin-right: 1rem;"></div>
+              <div>
+                <strong>Completed</strong><br>
+                <code>hsl(185 57% 50%)</code> - #22d3ee<br>
+                <small>Blue-green for success states and completed items</small>
+              </div>
+            </div>
+            <div class="color-example">
+              <div style="width: 40px; height: 40px; background: hsl(var(--status-in-progress)); border-radius: 50%; margin-right: 1rem;"></div>
+              <div>
+                <strong>In Progress</strong><br>
+                <code>hsl(45 93% 47%)</code> - #fbbf24<br>
+                <small>Warm amber for active and in-progress states</small>
+              </div>
+            </div>
+            <div class="color-example">
+              <div style="width: 40px; height: 40px; background: hsl(var(--status-pending)); border-radius: 50%; margin-right: 1rem;"></div>
+              <div>
+                <strong>Pending</strong><br>
+                <code>hsl(215 20% 65%)</code> - #94a3b8<br>
+                <small>Cool gray for pending and inactive states</small>
               </div>
             </div>
           </div>
@@ -212,7 +247,7 @@
     <!-- Typography -->
     <section class="example-section">
       <h2>Typography</h2>
-      <p>Clean, readable typography with a monospace foundation for precise cursor navigation and code readability.</p>
+      <p>Clean, readable typography with <strong>Inter font family</strong> optimized for extended knowledge work sessions and professional interfaces.</p>
       
       <div class="typography-specimen">
         <h1 style="margin: 0 0 1rem 0;">Heading Level 1 (2rem)</h1>
@@ -222,9 +257,9 @@
         <h5 style="margin: 0 0 1rem 0;">Heading Level 5 (1rem)</h5>
         <h6 style="margin: 0 0 1rem 0;">Heading Level 6 (0.875rem)</h6>
         
-        <p style="margin: 1rem 0;">
+        <p style="margin: 1rem 0; font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
           <strong>Body Text (1rem):</strong> Regular paragraph text with comfortable line-height of 1.6 for optimal readability.
-          This typography system uses system fonts with monospace fallbacks for precise cursor positioning in text editors.
+          This typography system uses <strong>Inter font family</strong> with clean sans-serif fallbacks for professional knowledge management.
         </p>
         
         <p style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin: 1rem 0;">
@@ -240,10 +275,10 @@
       </div>
       
       <div class="example-code">
-        <pre><code>/* Typography System */
+        <pre><code>/* Typography System - Inter Font Family */
 :root {
   /* Font Families */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
   
   /* Font Sizes */

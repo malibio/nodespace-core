@@ -5,12 +5,12 @@
 
 /* Base style guide layout */
 body {
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   margin: 0;
   padding: 0;
   line-height: 1.6;
-  background-color: hsl(var(--background, 0 0% 100%));
-  color: hsl(var(--foreground, 220 13% 10%));
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
 }
 
 /* Style guide container */
@@ -465,3 +465,119 @@ pre code {
     border: 1px solid #ccc;
   }
 }
+
+/* Multi-Pane Layout Utilities */
+.layout-demo {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 1.5rem 0;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.multi-pane-container {
+  display: flex;
+  height: 100vh;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  background: hsl(var(--card));
+  border-right: var(--pane-border);
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.pane-container {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.content-pane {
+  flex: 1;
+  min-width: var(--pane-min-width);
+  border-right: var(--pane-border);
+  display: flex;
+  flex-direction: column;
+}
+
+.content-pane:last-child {
+  border-right: none;
+}
+
+.content-pane.active {
+  border: var(--active-pane-border);
+  box-shadow: var(--active-pane-shadow);
+}
+
+.tab-bar {
+  height: var(--tab-height);
+  background: var(--tab-background);
+  border-bottom: 1px solid hsl(var(--border));
+  display: flex;
+  align-items: stretch;
+}
+
+.tab {
+  padding: 0 1rem;
+  background: var(--tab-background);
+  border-right: 1px solid hsl(var(--border));
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  max-width: 200px;
+  min-width: 120px;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+  transition: background-color 0.15s ease;
+}
+
+.tab:hover {
+  background: var(--tab-hover-background);
+}
+
+.tab.active {
+  background: var(--tab-active-background);
+  color: hsl(var(--foreground));
+}
+
+.tab-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-content {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+/* Node Type Styling */
+.node-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.node-text { color: hsl(var(--node-text)); }
+.node-task { color: hsl(var(--node-task)); }
+.node-ai-chat { color: hsl(var(--node-ai-chat)); }
+.node-entity { color: hsl(var(--node-entity)); }
+.node-query { color: hsl(var(--node-query)); }
+.node-date { color: hsl(var(--node-date)); }
+.node-person { color: hsl(var(--node-person)); }
+
+/* Status indicators */
+.status-completed { color: hsl(var(--status-completed)); }
+.status-in-progress { color: hsl(var(--status-in-progress)); }
+.status-pending { color: hsl(var(--status-pending)); }

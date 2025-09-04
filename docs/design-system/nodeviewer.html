@@ -18,7 +18,7 @@
       margin: 2rem 0;
       max-height: 600px;
       overflow-y: auto;
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: hsl(var(--foreground));
     }
     
@@ -35,7 +35,7 @@
       padding-left: 3rem;
       overflow-y: auto;
       height: 536px;
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: hsl(var(--foreground));
     }
     
@@ -177,14 +177,31 @@
     }
 
     /* Node type colors */
-    .node-color-green svg circle { fill: #22c55e !important; }
-    .node-color-green svg path { fill: rgba(34, 197, 94, 0.5) !important; }
+    /* Pastel Blue Node Color System */
+    .node-color-text svg circle { fill: hsl(var(--node-text)) !important; }
+    .node-color-text svg path { fill: hsl(var(--node-text) / 0.5) !important; }
 
-    .node-color-orange svg circle { fill: #f97316 !important; }
-    .node-color-orange svg path { fill: rgba(249, 115, 22, 0.5) !important; }
+    .node-color-task svg circle { fill: hsl(var(--node-task)) !important; }
+    .node-color-task svg path { fill: hsl(var(--node-task) / 0.5) !important; }
 
-    .node-color-blue svg circle { fill: #3b82f6 !important; }
-    .node-color-blue svg path { fill: rgba(59, 130, 246, 0.5) !important; }
+    .node-color-ai svg circle { fill: hsl(var(--node-ai-chat)) !important; }
+    .node-color-ai svg path { fill: hsl(var(--node-ai-chat) / 0.5) !important; }
+    
+    .node-color-entity svg circle { fill: hsl(var(--node-entity)) !important; }
+    .node-color-entity svg path { fill: hsl(var(--node-entity) / 0.5) !important; }
+    
+    .node-color-query svg circle { fill: hsl(var(--node-query)) !important; }
+    .node-color-query svg path { fill: hsl(var(--node-query) / 0.5) !important; }
+    
+    /* Legacy color mappings for existing content */
+    .node-color-green svg circle { fill: hsl(var(--node-text)) !important; }
+    .node-color-green svg path { fill: hsl(var(--node-text) / 0.5) !important; }
+
+    .node-color-orange svg circle { fill: hsl(var(--node-task)) !important; }
+    .node-color-orange svg path { fill: hsl(var(--node-task) / 0.5) !important; }
+
+    .node-color-blue svg circle { fill: hsl(var(--node-ai-chat)) !important; }
+    .node-color-blue svg path { fill: hsl(var(--node-ai-chat) / 0.5) !important; }
 
     /* Vertical connector lines between expanded sibling parents */
     .vertical-connector {
@@ -269,7 +286,7 @@
     <!-- Header -->
     <header>
       <h1>NodeViewer Interface</h1>
-      <p>Complete nodeviewer interface with mathematical precision positioning and realistic content examples.</p>
+      <p>Complete NodeViewer showcase with pastel blue design system, mathematical precision positioning, and all 5 node types in hierarchical relationships.</p>
     </header>
 
     <!-- Navigation -->
