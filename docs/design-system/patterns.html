@@ -261,7 +261,7 @@
       gap: 2rem;
       margin: 1rem 0;
       padding: 1rem;
-      background: hsl(var(--card));
+      background: hsl(var(--background));
       border: 1px solid hsl(var(--border));
       border-radius: var(--radius);
     }
@@ -469,6 +469,92 @@
     .shell-demo .nav-icon {
       width: 16px;
       height: 16px;
+    }
+    
+    /* AI Chat Node Icon System - Square with punch-hole "AI" text */
+    .ai-icon {
+      width: var(--circle-diameter, 20px);
+      height: var(--circle-diameter, 20px);
+      position: relative;
+      display: block;
+    }
+    
+    .ai-square {
+      width: 16px;
+      height: 16px;
+      background: hsl(var(--primary));
+      border-radius: 0.5px;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      overflow: hidden;
+    }
+    
+    /* AI punch-hole effect using background image with blend mode */
+    .ai-square::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='white'/%3E%3C/svg%3E");
+      background-size: 14px 14px;
+      background-position: center;
+      background-repeat: no-repeat;
+      mix-blend-mode: multiply;
+    }
+    
+    /* Alternative approach for better browser support */
+    .ai-square-alt {
+      width: 16px;
+      height: 16px;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      border-radius: 0.5px;
+      overflow: hidden;
+    }
+    
+    .ai-square-alt::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: hsl(var(--primary));
+    }
+    
+    .ai-square-alt::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 14px;
+      height: 14px;
+      transform: translate(-50%, -50%);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23FAF9F5'/%3E%3C/svg%3E");
+      background-size: contain;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+    
+    /* Dark theme version */
+    .dark .ai-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23252523'/%3E%3C/svg%3E");
+    }
+    
+    /* AI Square Ring for parent nodes */
+    .ai-square-ring {
+      width: 20px;
+      height: 20px;
+      border-radius: 1px;
+      border: 2px solid hsl(var(--primary) / 0.5);
+      box-sizing: border-box;
+      position: absolute;
+      top: 0;
+      left: 0;
     }
   </style>
 </head>
@@ -703,6 +789,110 @@
       </div>
     </section>
 
+    <!-- AI Chat Node Icon System -->
+    <section class="example-section">
+      <h2>AI Chat Node Icon System</h2>
+      <p>Square-based icons for AI Chat Nodes with punch-hole "AI" text design and ring effects for parent nodes.</p>
+      
+      <h3>Basic AI Chat States</h3>
+      <div class="task-icon-demo">
+        <!-- Regular AI Chat Node -->
+        <div class="task-state-example">
+          <div class="ai-icon">
+            <div class="ai-square-alt"></div>
+          </div>
+          <div class="task-state-label">AI Chat Node</div>
+        </div>
+        
+        <!-- AI Chat Node with Children (Ring Effect) -->
+        <div class="task-state-example">
+          <div class="ai-icon">
+            <div class="ai-square-ring"></div>
+            <div class="ai-square-alt"></div>
+          </div>
+          <div class="task-state-label">AI Chat Node (Parent)</div>
+        </div>
+      </div>
+      
+      <h3>Implementation Code (CSS-based with Punch-hole Effect)</h3>
+      <div class="example-code">
+        <pre><code><!-- Regular AI Chat Node -->
+&lt;div class="ai-icon"&gt;
+  &lt;div class="ai-square-alt"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- AI Chat Node with Children (Ring Effect) -->
+&lt;div class="ai-icon"&gt;
+  &lt;div class="ai-square-ring"&gt;&lt;/div&gt;
+  &lt;div class="ai-square-alt"&gt;&lt;/div&gt;
+&lt;/div&gt;</code></pre>
+      </div>
+      
+      <h3>Technical Implementation Details</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Punch-hole Effect</div>
+          <div class="component-demo">
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">CSS Mask Implementation</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li>16x16px filled square with primary color (#A8C7FA)</li>
+                <li>0.5px border-radius for subtle rounded corners</li>
+                <li>14x14px "AI" text with punch-hole effect (1px spacing on each side)</li>
+                <li>Background color shows through AI letters (like task checkmarks)</li>
+                <li>Cross-browser compatibility with -webkit-mask fallback</li>
+              </ul>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+              <thead>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <th style="padding: 0.5rem; text-align: left;">Element</th>
+                  <th style="padding: 0.5rem; text-align: left;">Size</th>
+                  <th style="padding: 0.5rem; text-align: left;">Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">AI Icon Container</td>
+                  <td style="padding: 0.5rem;"><code>20x20px</code></td>
+                  <td style="padding: 0.5rem;">Standard icon container size</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">AI Square (regular)</td>
+                  <td style="padding: 0.5rem;"><code>16x16px + 0.5px radius</code></td>
+                  <td style="padding: 0.5rem;">Filled square with punch-hole AI text</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">AI Square (with children)</td>
+                  <td style="padding: 0.5rem;"><code>16x16px inner + 20x20px ring</code></td>
+                  <td style="padding: 0.5rem;">Filled square with 50% opacity ring</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.5rem;">Ring Border</td>
+                  <td style="padding: 0.5rem;"><code>2px + 1px radius</code></td>
+                  <td style="padding: 0.5rem;">Semi-transparent square ring effect</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">Design Rationale</div>
+          <div class="component-demo">
+            <ul>
+              <li><strong>Square Shape:</strong> Distinguishes AI nodes from circular text/task nodes</li>
+              <li><strong>Punch-hole Text:</strong> "AI" letters cut out to show background, similar to task checkmarks</li>
+              <li><strong>Bold 'A' vs Thin 'I':</strong> Original icon design maintains visual hierarchy</li>
+              <li><strong>Consistent Sizing:</strong> 16x16 active area within 20x20 container matches other icons</li>
+              <li><strong>Theme Adaptive:</strong> Works in both light and dark modes automatically</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Icon System Specifications -->
     <section class="example-section">
       <h2>Icon System Specifications</h2>
@@ -746,6 +936,16 @@
                   <td style="padding: 0.5rem;">TaskNode (with children)</td>
                   <td style="padding: 0.5rem;"><code>r="7.5" inner + r="8.5" ring</code></td>
                   <td style="padding: 0.5rem;">Stroked/filled inner with 50% opacity ring</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">AI Chat Node (regular)</td>
+                  <td style="padding: 0.5rem;"><code>16x16px square + 0.5px radius</code></td>
+                  <td style="padding: 0.5rem;">Filled square with punch-hole AI text</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">AI Chat Node (with children)</td>
+                  <td style="padding: 0.5rem;"><code>16x16px inner + 20x20px square ring</code></td>
+                  <td style="padding: 0.5rem;">Filled square with 50% opacity square ring</td>
                 </tr>
                 <tr>
                   <td style="padding: 0.5rem;">Ring Opacity</td>
@@ -1422,12 +1622,12 @@
               </svg>
             </span>
             <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="task-ring"></div>
-                <div class="text-circle"></div>
+              <div class="ai-icon">
+                <div class="ai-square-ring"></div>
+                <div class="ai-square-alt"></div>
               </div>
             </div>
-            Child node 2 (with ring - has children, chevron halfway to parent)
+            Child node 2 - AI Chat (with ring - has children, chevron halfway to parent)
           </div>
           <div class="hierarchy-node child-2">
             <div class="hierarchy-indicator">
