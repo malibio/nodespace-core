@@ -49,13 +49,45 @@ padding-left = 26px + 20px + 8px = 54px
 
 ### Chevron Positioning Formula
 
-**Mathematical Formula:**
+**Horizontal Formula:**
 ```
 left = var(--circle-offset) + (var(--circle-diameter) / 2) - (var(--node-indent) / 2)
 left = 26px + (20px / 2) - (2.5rem / 2) = 16px
 ```
 
-**Purpose:** Positions chevrons exactly halfway between parent and child circle centers.
+**Vertical Formula:**
+```
+top = calc(0.25rem + (var(--line-height-px) / 2))
+```
+
+**Purpose:** Positions chevrons exactly halfway between parent and child circle centers, with perfect vertical alignment to corresponding text baselines.
+
+### Vertical Alignment System
+
+**Circle and Chevron Positioning:**
+Both use the same CSS variable system for consistent vertical alignment:
+```css
+top: calc(0.25rem + (var(--line-height-px) / 2))
+```
+
+**Font-Size Responsive Variables:**
+- **Default nodes**: `--line-height-px: 1.6rem` (1rem × 1.6)
+- **H1 headers**: `--line-height-px: 2.4rem` (2rem × 1.2)  
+- **H2 headers**: `--line-height-px: 1.95rem` (1.5rem × 1.3)
+- **H3 headers**: `--line-height-px: 1.75rem` (1.25rem × 1.4)
+
+### Baseline Correction System
+
+**Header Text Alignment:**
+Different font sizes require different baseline corrections to prevent text floating:
+
+```css
+.hierarchy-node.h1 { transform: translateY(-0.05em); }
+.hierarchy-node.h2 { transform: translateY(-0.03em); }
+.hierarchy-node.h3 { transform: translateY(-0.02em); }
+```
+
+**Purpose:** Ensures text sits properly within its container regardless of font size, preventing visual misalignment between text and positioning indicators.
 
 ## Font Measurement Standards
 
@@ -80,6 +112,12 @@ left = 26px + (20px / 2) - (2.5rem / 2) = 16px
 
 ## Version History
 
+- **v1.1** (2025-01-08): Enhanced positioning system with vertical alignment
+  - Added vertical alignment system for chevrons and circles
+  - Introduced baseline correction system for header nodes
+  - CSS variable-based responsive font sizing
+  - Consolidated hierarchy display patterns
+  
 - **v1.0** (2024-09-04): Initial positioning system documentation
   - Autocomplete dropdown positioning: 9.713rem after "@" symbol
   - Node hierarchy mathematical system
