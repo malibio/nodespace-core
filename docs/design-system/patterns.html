@@ -9,10 +9,23 @@
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
   <style>
-    /* Pattern demo specific styles */
-    .pattern-demo {
-      /* Add any pattern demo styles here if needed */
+    
+    /* Content demo container - same structure as shell-demo */
+    .content-demo-container {
+      display: flex;
+      height: 400px;
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin: 1rem 0;
     }
+    
+    /* Blinking cursor animation for demo */
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    
     
     /* Perfect Node Alignment System - CSS Variables Architecture */
     .node-viewer {
@@ -75,7 +88,6 @@
       --line-height-px: calc(var(--font-size) * var(--line-height));
     }
     
-    /* Removed hover background - nodes should not have hover backgrounds */
     
     /* Child Node Indentation System - Match Svelte implementation exactly */
     .hierarchy-node.child-1 {
@@ -90,7 +102,7 @@
     .hierarchy-indicator {
       position: absolute;
       left: var(--circle-offset, 26px);
-      top: calc(0.25rem + (1rem * 1.6 / 2));
+      top: calc(0.25rem + (var(--line-height-px) / 2));
       transform: translateY(-50%);
       width: var(--circle-diameter, 20px);
       height: var(--circle-diameter, 20px);
@@ -413,18 +425,33 @@
       --font-size: 2rem;
       --line-height: 1.2;
       --line-height-px: calc(var(--font-size) * var(--line-height));
+      font-size: var(--font-size);
+      line-height: var(--line-height);
+      font-weight: 600;
+      /* Baseline correction for H1 - larger fonts need more correction */
+      transform: translateY(-0.05em);
     }
     
     .hierarchy-node.h2 {
       --font-size: 1.5rem;
       --line-height: 1.3;
       --line-height-px: calc(var(--font-size) * var(--line-height));
+      font-size: var(--font-size);
+      line-height: var(--line-height);
+      font-weight: 600;
+      /* Baseline correction for H2 - moderate correction */
+      transform: translateY(-0.03em);
     }
     
     .hierarchy-node.h3 {
       --font-size: 1.25rem;
       --line-height: 1.4;
       --line-height-px: calc(var(--font-size) * var(--line-height));
+      font-size: var(--font-size);
+      line-height: var(--line-height);
+      font-weight: 600;
+      /* Baseline correction for H3 - smaller correction */
+      transform: translateY(-0.02em);
     }
     
     /* Chevron positioning now handled automatically via CSS variables - no header-specific overrides needed */
@@ -1143,31 +1170,23 @@
       
       <div class="pattern-demo">
         <h4 style="margin: 0 0 1rem 0;">Inline Autocomplete Dropdown</h4>
-        <div style="
-          position: relative;
-          max-width: 500px;
-          margin: 1rem 0;
-        ">
-          <!-- Inline editing context without text input box -->
-          <textarea style="
-            width: 100%;
-            height: 220px;
-            background: hsl(var(--background));
-            color: hsl(var(--foreground));
-            border: 1px solid hsl(var(--border));
-            border-radius: var(--radius);
-            padding: 1rem;
-            font-size: 1rem;
-            line-height: 1.6;
-            position: relative;
-            resize: none;
-            font-family: inherit;
-          " readonly>I need to contact @acme| about the project.</textarea>
+        <div class="content-demo-container" style="position: relative;">
+          <div class="main-content" style="position: relative;">
+            <!-- Node content with autocomplete trigger -->
+            <div class="hierarchy-node">
+              <div class="hierarchy-indicator">
+                <div class="task-icon">
+                  <div class="text-circle"></div>
+                </div>
+              </div>
+              I need to contact @acme<span style="animation: blink 1s infinite;">|</span>
+            </div>
           
+          <!-- Autocomplete dropdown positioned right after @ character -->
           <div style="
             position: absolute;
-            top: 2.8rem;
-            left: 9.713rem;
+            top: 44px;
+            left: calc(54px + 16ch);
             min-width: 300px;
             background: hsl(var(--background));
             border: 1px solid hsl(var(--border));
@@ -1185,12 +1204,13 @@
             </div>
             
             <div style="padding: 0.75rem; cursor: pointer; color: hsl(var(--foreground)); background: hsl(var(--muted) / 0.5); font-weight: 600; border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'; this.style.color='hsl(var(--foreground))';" onmouseout="this.style.background='hsl(var(--muted) / 0.5)'; this.style.color='hsl(var(--foreground))';">
-              + Create new "<span class="search-highlight">Acme</span>" node
+              + Create new "<span class="search-highlight">acme</span>" node
             </div>
+          </div>
           </div>
         </div>
         <p style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 1rem;">
-          <strong>Key Features:</strong> Autocomplete dropdown positioned precisely after the "@" character (9.713rem), 
+          <strong>Key Features:</strong> Autocomplete dropdown positioned precisely after the "@acme" text using character-based positioning (54px + 16ch), 
           no input box for seamless inline editing, search term highlighting with proper contrast, 
           and high-contrast create action.
         </p>
@@ -1201,32 +1221,29 @@
       
       <div class="pattern-demo">
         <h4 style="margin: 0 0 1rem 0;">Command Palette</h4>
-        <div style="
-          position: relative;
-          max-width: 400px;
-          margin: 1rem 0;
-        ">
-          <input style="
-            width: 100%;
-            padding: 0.75rem;
-            border: 1px solid hsl(var(--border));
-            border-radius: var(--radius);
-            background: hsl(var(--background));
-            color: hsl(var(--foreground));
-            font-size: 0.875rem;
-          " value="/task" readonly />
+        <div class="content-demo-container" style="position: relative;">
+          <div class="main-content" style="position: relative;">
+            <!-- Node content with slash command trigger -->
+            <div class="hierarchy-node">
+              <div class="hierarchy-indicator">
+                <div class="task-icon">
+                  <div class="text-circle"></div>
+                </div>
+              </div>
+              /task<span style="animation: blink 1s infinite;">|</span>
+            </div>
           
           <div style="
             position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
+            top: calc(0.25rem + 1.6rem + 4px);
+            left: calc(54px + 5ch);
+            min-width: 300px;
+            max-width: 400px;
             background: hsl(var(--background));
             border: 1px solid hsl(var(--border));
             border-radius: var(--radius);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             z-index: 10;
-            margin-top: 4px;
           ">
             <div style="padding: 0.5rem; border-bottom: 1px solid hsl(var(--border)); font-size: 0.75rem; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase;">Quick Commands</div>
             
@@ -1260,60 +1277,11 @@
               </div>
             </div>
           </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- Hierarchical Node Patterns -->
-    <section class="example-section">
-      <h2>Hierarchical Node Structure</h2>
-      <p>Mathematical precision in node positioning with support for all 5 node types in hierarchical relationships.</p>
-      
-      <h3>Mixed Node Type Hierarchy</h3>
-      <div class="pattern-demo">
-        <div style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6;">
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem;">
-            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 1rem;">●</span>
-            <span style="font-size: 1.25rem; font-weight: 600;">Product Launch Campaign Strategy</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
-            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 0.875rem;">●</span>
-            <span>This comprehensive product launch plan provides the strategic framework...</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem;">
-            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 1.125rem;">●</span>
-            <span style="font-size: 1.125rem; font-weight: 600;">Launch Overview</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
-            <span style="color: hsl(var(--node-text)); margin-right: 0.5rem; font-size: 0.875rem;">●</span>
-            <span><strong>Product:</strong> EcoSmart Professional Series</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
-            <span style="color: hsl(var(--status-completed)); margin-right: 0.5rem; font-size: 0.875rem;">✓</span>
-            <span style="text-decoration: line-through; opacity: 0.7;"><strong>Launch Date:</strong> July 15, 2025</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
-            <span style="color: hsl(var(--status-in-progress)); margin-right: 0.5rem; font-size: 0.875rem;">◒</span>
-            <span><strong>Total Budget:</strong> $180,000</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem;">
-            <span style="color: hsl(var(--node-ai-chat)); margin-right: 0.5rem; font-size: 1rem;">AI</span>
-            <span style="background: hsl(var(--muted)); padding: 0.5rem; border-radius: var(--radius); font-style: italic;">What should I focus on for this campaign launch?</span>
-          </div>
-          
-          <div style="display: flex; align-items: flex-start; margin-bottom: 0.5rem; margin-left: 1.5rem;">
-            <span style="color: hsl(var(--node-ai-chat)); margin-right: 0.5rem; font-size: 0.875rem;">AI</span>
-            <span style="background: hsl(var(--muted)); padding: 0.5rem; border-radius: var(--radius); font-size: 0.875rem;">Based on your budget and timeline, I recommend prioritizing digital channels...</span>
-          </div>
-        </div>
-      </div>
-    </section>
 
     <!-- Multi-Pane Layout Pattern -->
     <section class="example-section">
@@ -1363,7 +1331,7 @@
       
       <h3>Single-Column Layout</h3>
       <div class="pattern-demo">
-        <div style="max-width: 800px; margin: 0 auto;">
+        <div class="main-content">
           <div class="hierarchy-example">
             <div class="hierarchy-node">
               <span class="hierarchy-indicator hierarchy-indicator--text"></span>
@@ -1515,46 +1483,141 @@
     <!-- Hierarchical Display -->
     <section class="example-section">
       <h2>Hierarchical Display Patterns</h2>
-      <p>Visual patterns for representing nested content structures, optimized for knowledge management workflows.</p>
+      <p>Mathematical precision in nested content structures with chevron-based collapse/expand controls, optimized for knowledge management workflows.</p>
       
-      <h3>Mathematical Indentation System</h3>
+      <h3>Mathematical Indentation System with Chevron Positioning</h3>
       <div class="pattern-demo">
-        <div class="hierarchy-example node-viewer">
+        <div class="content-demo-container">
+          <div class="main-content">
+            <div class="hierarchy-example node-viewer">
+          <!-- H1 Text Node Parent (Expanded) -->
+          <div class="hierarchy-node has-children h1">
+            <span class="chevron-icon expanded">
+              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+              </svg>
+            </span>
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="task-ring"></div>
+                <div class="text-circle"></div>
+              </div>
+            </div>
+            Product Launch Campaign Strategy
+          </div>
+          
+          <!-- Child Text Node -->
+          <div class="hierarchy-node child-1">
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="text-circle"></div>
+              </div>
+            </div>
+            This comprehensive product launch plan provides the strategic framework...
+          </div>
+          
+          <!-- H2 Text Node Parent (Expanded) -->
+          <div class="hierarchy-node has-children h2 child-1">
+            <span class="chevron-icon expanded">
+              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+              </svg>
+            </span>
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="task-ring"></div>
+                <div class="text-circle"></div>
+              </div>
+            </div>
+            Launch Overview
+          </div>
+          
+          <!-- Child Text Node -->
+          <div class="hierarchy-node child-2">
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="text-circle"></div>
+              </div>
+            </div>
+            <strong>Product:</strong> EcoSmart Professional Series
+          </div>
+          
+          <!-- Completed Task Node -->
+          <div class="hierarchy-node child-2">
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="task-circle task-circle-completed"></div>
+              </div>
+            </div>
+            <span style="text-decoration: line-through; opacity: 0.7;">Finalize product launch timeline and key milestones</span>
+          </div>
+          
+          <!-- In Progress Task Node -->
+          <div class="hierarchy-node child-2">
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="task-circle task-circle-in-progress"></div>
+              </div>
+            </div>
+            Secure approval for marketing budget allocation
+          </div>
+          
+          <!-- AI Chat Node Parent (Expanded) -->
+          <div class="hierarchy-node has-children child-1">
+            <span class="chevron-icon expanded">
+              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+              </svg>
+            </span>
+            <div class="hierarchy-indicator">
+              <div class="ai-icon">
+                <div class="ai-square-ring"></div>
+                <div class="ai-square-alt"></div>
+              </div>
+            </div>
+            What should I focus on for this campaign launch?
+          </div>
+          
+          <!-- Child Text Node (AI Response) -->
+          <div class="hierarchy-node child-2">
+            <div class="hierarchy-indicator">
+              <div class="task-icon">
+                <div class="text-circle"></div>
+              </div>
+            </div>
+            Based on your budget and timeline, I recommend prioritizing digital channels...
+          </div>
+          
+          <!-- Collapsed parent node for comparison -->
           <div class="hierarchy-node has-children">
+            <span class="chevron-icon">
+              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+              </svg>
+            </span>
             <div class="hierarchy-indicator">
               <div class="task-icon">
                 <div class="task-ring"></div>
                 <div class="text-circle"></div>
               </div>
             </div>
-            Level 0: Root content (parent node with ring)
+            Collapsed parent (chevron points right, children hidden)
           </div>
-          <div class="hierarchy-node child-1 has-children">
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="task-ring"></div>
-                <div class="text-circle"></div>
-              </div>
             </div>
-            Level 1: 44px additional margin (parent node with ring)
-          </div>
-          <div class="hierarchy-node child-2">
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="text-circle"></div>
-              </div>
-            </div>
-            Level 2: 86px additional margin (child node without ring)
-          </div>
-          <div class="hierarchy-node child-2">
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="task-circle task-circle-pending"></div>
-              </div>
-            </div>
-            Task node with pending state (no ring - child node)
           </div>
         </div>
+        
+        <p><strong>Mathematical Chevron Positioning:</strong></p>
+        <ul>
+          <li><strong>Position Formula:</strong> <code>left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2)</code></li>
+          <li><strong>Example Calculation:</strong> <code>26px + (20px / 2) - (2.5rem / 2) = 16px</code></li>
+          <li><strong>Precision Result:</strong> Chevron positioned exactly halfway between parent and child circles</li>
+          <li><strong>Vertical Alignment:</strong> Uses same mathematical formula as circles for perfect alignment</li>
+          <li><strong>Color Consistency:</strong> Theme-adaptive blue (#A8C7FA) matching node circle indicators</li>
+          <li><strong>Animation:</strong> Smooth 90° rotation with transform: <code>translate(-50%, -50%) rotate(90deg)</code></li>
+          <li><strong>Interaction:</strong> Click chevron to toggle, Space/Enter keyboard support</li>
+          <li><strong>Z-index Layering:</strong> <code>z-index: 3</code> ensures clickable over all content</li>
+        </ul>
         
         <div class="example-code">
           <pre><code>/* Perfect Node Alignment System - CSS Variables Architecture */
@@ -1579,101 +1642,16 @@
 .hierarchy-indicator {
   position: absolute;
   left: var(--circle-offset);
-  top: calc(0.25rem + (var(--font-size) * var(--line-height) / 2));
+  top: calc(0.25rem + (var(--line-height-px) / 2));
 }
 
-/* Mathematical chevron positioning - exactly halfway */
-.chevron-icon {
-  left: calc(-1 * var(--node-indent) / 2 + var(--circle-offset));
-  /* Formula: (-2.5rem / 2) + 26px = -20px + 26px = 6px */
-}</code></pre>
-        </div>
-      </div>
-      
-      <h3>Collapse/Expand States with Mathematical Chevron Positioning</h3>
-      <div class="pattern-demo">
-        <div class="hierarchy-example node-viewer">
-          <div class="hierarchy-node has-children">
-            <span class="chevron-icon expanded">
-              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
-              </svg>
-            </span>
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="task-ring"></div>
-                <div class="text-circle"></div>
-              </div>
-            </div>
-            Expanded parent node (with ring, chevron at mathematical midpoint)
-          </div>
-          <div class="hierarchy-node child-1">
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="text-circle"></div>
-              </div>
-            </div>
-            Child node 1 (no ring, 40px margin-left indentation)
-          </div>
-          <div class="hierarchy-node child-1 has-children">
-            <span class="chevron-icon expanded">
-              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
-              </svg>
-            </span>
-            <div class="hierarchy-indicator">
-              <div class="ai-icon">
-                <div class="ai-square-ring"></div>
-                <div class="ai-square-alt"></div>
-              </div>
-            </div>
-            Child node 2 - AI Chat (with ring - has children, chevron halfway to parent)
-          </div>
-          <div class="hierarchy-node child-2">
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="task-circle task-circle-pending"></div>
-              </div>
-            </div>
-            Child of child node 2 (task node at level 3, 80px additional margin)
-          </div>
-          
-          <div class="hierarchy-node has-children">
-            <span class="chevron-icon">
-              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
-              </svg>
-            </span>
-            <div class="hierarchy-indicator">
-              <div class="task-icon">
-                <div class="task-ring"></div>
-                <div class="text-circle"></div>
-              </div>
-            </div>
-            Collapsed parent node (with ring, chevron vertically centered with circle)
-          </div>
-        </div>
-        
-        <p><strong>Mathematical Chevron Positioning:</strong></p>
-        <ul>
-          <li><strong>Position Formula:</strong> <code>left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2)</code></li>
-          <li><strong>Example Calculation:</strong> <code>26px + (20px / 2) - (2.5rem / 2) = 16px</code></li>
-          <li><strong>Precision Result:</strong> Chevron positioned exactly halfway between parent and child circles</li>
-          <li><strong>Vertical Alignment:</strong> Uses same mathematical formula as circles for perfect alignment</li>
-          <li><strong>Color Consistency:</strong> Theme-adaptive blue (#A8C7FA) matching node circle indicators</li>
-          <li><strong>Animation:</strong> Smooth 90° rotation with transform: <code>translate(-50%, -50%) rotate(90deg)</code></li>
-          <li><strong>Interaction:</strong> Click chevron to toggle, Space/Enter keyboard support</li>
-          <li><strong>Z-index Layering:</strong> <code>z-index: 3</code> ensures clickable over all content</li>
-        </ul>
-        
-        <div class="example-code">
-          <pre><code>/* Mathematical chevron positioning system - Corrected Formula */
+/* Mathematical chevron positioning - corrected formula */
 .chevron-icon {
   position: absolute;
   /* This formula correctly calculates the midpoint between parent and child circle centers */
   left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2);
   /* Same vertical formula as circles for perfect alignment */
-  top: calc(0.25rem + (var(--font-size) * var(--line-height) / 2));
+  top: calc(0.25rem + (var(--line-height-px) / 2));
   transform: translate(-50%, -50%); /* Center on coordinates */
   z-index: 3; /* Above all content */
 }
@@ -1696,6 +1674,7 @@
 }</code></pre>
         </div>
       </div>
+      
     </section>
 
     <!-- Responsive Patterns -->
