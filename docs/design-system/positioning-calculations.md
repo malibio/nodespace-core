@@ -34,7 +34,7 @@ Final position: 7.65rem + 2.063rem = 9.713rem
 **CSS Variables Architecture:**
 ```css
 .node-viewer {
-  --circle-offset: 26px;        /* Circle position from left edge */
+  --circle-offset: 22px;        /* Circle position from left edge - reserves space for chevrons */
   --circle-diameter: 20px;      /* Circle container size */
   --circle-text-gap: 8px;       /* Gap between circle and text */
   --node-indent: 2.5rem;        /* Parent-child indentation */
@@ -44,7 +44,7 @@ Final position: 7.65rem + 2.063rem = 9.713rem
 **Content Padding Calculation:**
 ```
 padding-left = circle-offset + circle-diameter + circle-text-gap
-padding-left = 26px + 20px + 8px = 54px
+padding-left = 22px + 20px + 8px = 50px
 ```
 
 ### Chevron Positioning Formula
@@ -52,7 +52,7 @@ padding-left = 26px + 20px + 8px = 54px
 **Horizontal Formula:**
 ```
 left = var(--circle-offset) + (var(--circle-diameter) / 2) - (var(--node-indent) / 2)
-left = 26px + (20px / 2) - (2.5rem / 2) = 16px
+left = 22px + (20px / 2) - (2.5rem / 2) = 12px
 ```
 
 **Vertical Formula:**
@@ -112,6 +112,13 @@ Different font sizes require different baseline corrections to prevent text floa
 
 ## Version History
 
+- **v1.2** (2025-01-09): Optimized node alignment with chevron space reservation
+  - Updated circle-offset from 26px to 22px for improved root node positioning
+  - Adjusted content padding calculation: 50px total (22px + 20px + 8px)
+  - Refined chevron positioning formula: 12px horizontal offset
+  - Enhanced consistency across @Mention, Slash Commands, and Mathematical sections
+  - All root nodes now reserve consistent space for potential chevrons
+  
 - **v1.1** (2025-01-08): Enhanced positioning system with vertical alignment
   - Added vertical alignment system for chevrons and circles
   - Introduced baseline correction system for header nodes

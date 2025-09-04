@@ -30,7 +30,7 @@
     /* Perfect Node Alignment System - CSS Variables Architecture */
     .node-viewer {
       /* Dynamic Circle Positioning System - All values configurable from here */
-      --circle-offset: 26px;           /* Circle center distance from container left edge */
+      --circle-offset: 22px;           /* Circle center distance from container left edge - reserves space for chevrons */
       --circle-diameter: 20px;         /* Circle size (width and height) */
       --circle-text-gap: 8px;          /* Gap between circle edge and text content */
       --node-indent: 2.5rem;           /* Indentation distance between parent and child levels */
@@ -66,7 +66,7 @@
       font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segue UI', Roboto, sans-serif;
       line-height: 1.6;
       margin: 1rem 0;
-      padding-left: 2rem; /* Add left padding to accommodate chevrons positioned at negative left */
+      padding-left: 1rem; /* Optimized padding for consistent node alignment */
       position: relative;
     }
     
@@ -77,7 +77,7 @@
       border-radius: 0.25rem;
       transition: background-color 0.15s ease;
       /* Dynamic padding calculation: circle-offset + circle-diameter + circle-text-gap */
-      padding-left: calc(var(--circle-offset, 26px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
+      padding-left: calc(var(--circle-offset, 22px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
       padding-top: 0.25rem;
       padding-bottom: 0.25rem;
       min-height: calc(var(--circle-diameter, 20px) + 0.5rem); /* Ensure minimum height for circle */
@@ -101,7 +101,7 @@
     /* Circle Indicators - Use same system as BaseNode/TextNode sections */
     .hierarchy-indicator {
       position: absolute;
-      left: var(--circle-offset, 26px);
+      left: var(--circle-offset, 22px);
       top: calc(0.25rem + (var(--line-height-px) / 2));
       transform: translateY(-50%);
       width: var(--circle-diameter, 20px);
@@ -396,7 +396,7 @@
     /* Chevron positioned exactly halfway between parent and current node - match working implementation */
     /* All chevrons use the same positioning formula - they position relative to their own node */
         .hierarchy-node .chevron-icon {
-      left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2); /* 26px + 10px - 20px = 16px */
+      left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2); /* 22px + 10px - 20px = 12px */
     }
     
     .chevron-icon svg {
@@ -1170,7 +1170,7 @@
       
       <div class="pattern-demo">
         <h4 style="margin: 0 0 1rem 0;">Inline Autocomplete Dropdown</h4>
-        <div class="content-demo-container" style="position: relative;">
+        <div class="content-demo-container node-viewer" style="position: relative;">
           <div class="main-content" style="position: relative;">
             <!-- Node content with autocomplete trigger -->
             <div class="hierarchy-node">
@@ -1221,7 +1221,7 @@
       
       <div class="pattern-demo">
         <h4 style="margin: 0 0 1rem 0;">Command Palette</h4>
-        <div class="content-demo-container" style="position: relative;">
+        <div class="content-demo-container node-viewer" style="position: relative;">
           <div class="main-content" style="position: relative;">
             <!-- Node content with slash command trigger -->
             <div class="hierarchy-node">
@@ -1487,9 +1487,8 @@
       
       <h3>Mathematical Indentation System with Chevron Positioning</h3>
       <div class="pattern-demo">
-        <div class="content-demo-container">
-          <div class="main-content">
-            <div class="hierarchy-example node-viewer">
+        <div class="content-demo-container node-viewer">
+          <div class="hierarchy-example main-content">
           <!-- H1 Text Node Parent (Expanded) -->
           <div class="hierarchy-node has-children h1">
             <span class="chevron-icon expanded">
@@ -1604,13 +1603,12 @@
             Collapsed parent (chevron points right, children hidden)
           </div>
             </div>
-          </div>
         </div>
         
         <p><strong>Mathematical Chevron Positioning:</strong></p>
         <ul>
           <li><strong>Position Formula:</strong> <code>left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2)</code></li>
-          <li><strong>Example Calculation:</strong> <code>26px + (20px / 2) - (2.5rem / 2) = 16px</code></li>
+          <li><strong>Example Calculation:</strong> <code>22px + (20px / 2) - (2.5rem / 2) = 12px</code></li>
           <li><strong>Precision Result:</strong> Chevron positioned exactly halfway between parent and child circles</li>
           <li><strong>Vertical Alignment:</strong> Uses same mathematical formula as circles for perfect alignment</li>
           <li><strong>Color Consistency:</strong> Theme-adaptive blue (#A8C7FA) matching node circle indicators</li>
@@ -1622,7 +1620,7 @@
         <div class="example-code">
           <pre><code>/* Perfect Node Alignment System - CSS Variables Architecture */
 .node-viewer {
-  --circle-offset: 26px;        /* Circle position from left edge */
+  --circle-offset: 22px;        /* Circle position from left edge - reserves space for chevrons */
   --circle-diameter: 20px;      /* Circle container size */
   --circle-text-gap: 8px;       /* Gap between circle and text */
   --node-indent: 2.5rem;        /* Parent-child indentation */
@@ -1631,7 +1629,7 @@
 /* Dynamic content padding calculation */
 .hierarchy-node {
   padding-left: calc(var(--circle-offset) + var(--circle-diameter) + var(--circle-text-gap));
-  /* Result: 26px + 20px + 8px = 54px */
+  /* Result: 22px + 20px + 8px = 50px */
 }
 
 /* Child indentation system - consistent 2.5rem like Svelte */
@@ -1659,13 +1657,13 @@
 /* Formula explanation:
    The goal is to find the midpoint between the parent and child circle centers.
    Parent Circle Center = var(--circle-offset) + (var(--circle-diameter) / 2)
-                        = 26px + 10px = 36px
+                        = 22px + 10px = 32px
    Child Circle Center  = var(--node-indent) + Parent Circle Center
-                        = 40px + 36px = 76px
+                        = 40px + 32px = 72px
    Midpoint             = (Parent Circle Center + Child Circle Center) / 2
-                        = (36px + 76px) / 2 = 56px (absolute position)
+                        = (32px + 72px) / 2 = 52px (absolute position)
    Chevron Left         = Midpoint - Child Indent
-                        = 56px - 40px = 16px (relative to child container)
+                        = 52px - 40px = 12px (relative to child container)
 */
 
 /* Rotation animation preserves centering */
