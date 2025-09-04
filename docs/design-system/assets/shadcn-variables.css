@@ -1,84 +1,143 @@
 /* NodeSpace Design System - shadcn-svelte Variables
  * 
- * This file mirrors the actual CSS variables from the NodeSpace application
- * for use in the design system documentation.
+ * Pastel blue-focused design system matching the NodeSpace application
+ * Clean, modern aesthetic with AI-native knowledge management focus
  */
 
 @layer base {
   :root {
-    /* shadcn-svelte color variables (light theme) */
-    --primary: 210 100% 40%;           /* #007acc - Professional Blue */
+    /* Color system matching screenshots (light theme) */
+    --primary: 214 42% 78%;            /* #A8C7FA - Anthropic's pastel blue */
     --primary-foreground: 0 0% 100%;   /* White */
     
-    --secondary: 210 40% 98%;          /* #f8f9fa - Light gray */
-    --secondary-foreground: 215 16% 47%; /* Medium gray */
+    --secondary: 43 14% 96%;           /* #F7F6F4 - Warm very light gray */
+    --secondary-foreground: 45 5% 35%;  /* #5C5A56 - Warm medium gray */
     
-    --accent: 210 40% 98%;             /* Same as secondary */
-    --accent-foreground: 215 16% 47%;
+    --accent: 214 42% 78%;             /* #A8C7FA - Same pastel blue */
+    --accent-foreground: 0 0% 100%;    /* White */
     
-    --background: 0 0% 100%;           /* White */
-    --foreground: 220 13% 10%;         /* #1a1a1a - Dark text */
+    --background: 51 25% 97%;           /* #FAF9F5 - Light theme background */
+    --foreground: 45 5% 15%;           /* #272624 - Warm black text */
     
-    --card: 0 0% 100%;                 /* White cards */
-    --card-foreground: 220 13% 10%;
+    --card: 48 20% 99%;                /* #FDFCFB - Off-white cards */
+    --card-foreground: 45 5% 15%;      /* #272624 - Warm black text */
     
-    --popover: 0 0% 100%;
-    --popover-foreground: 220 13% 10%;
+    --popover: 48 20% 99%;             /* #FDFCFB - Same as cards */
+    --popover-foreground: 45 5% 15%;
     
-    --muted: 210 40% 98%;              /* #f8f9fa - Light gray */
-    --muted-foreground: 215 16% 47%;   /* #737a83 - Medium gray */
+    --muted: 43 14% 96%;               /* #F7F6F4 - Warm very light gray */
+    --muted-foreground: 45 5% 55%;     /* #908D87 - Warm light gray */
     
-    --border: 214 32% 91%;             /* #e1e5e9 - Light border */
-    --input: 214 32% 91%;
-    --ring: 210 100% 40%;              /* Focus ring matches primary */
+    --border: 43 14% 89%;              /* #E8E6E1 - Warm light gray borders */
+    --input: 43 14% 89%;
+    --ring: 214 42% 78%;               /* Focus ring matches primary */
     
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
     
-    --radius: 0.5rem;                  /* Border radius */
+    --success: 142 76% 36%;            /* #22c55e - Green for completed items */
+    --success-foreground: 0 0% 100%;
+    
+    --warning: 45 93% 47%;             /* #eab308 - Yellow/orange for in-progress */
+    --warning-foreground: 0 0% 100%;
+    
+    --radius: 0.5rem;
   }
 
   .dark {
-    /* shadcn-svelte color variables (dark theme) */
-    --primary: 210 100% 50%;           /* Brighter blue for dark mode */
-    --primary-foreground: 220 13% 10%; /* Dark text on bright primary */
+    /* Color system matching screenshots (dark theme) */
+    --primary: 214 42% 78%;            /* #A8C7FA - Same pastel blue */
+    --primary-foreground: 0 0% 100%;   /* White */
     
-    --secondary: 223 47% 11%;          /* Dark gray */
-    --secondary-foreground: 215 20% 65%;
+    --secondary: 45 5% 20%;            /* #333231 - Warm dark gray */
+    --secondary-foreground: 43 8% 75%;  /* #C4C1BA - Warm light gray */
     
-    --accent: 223 47% 11%;
-    --accent-foreground: 215 20% 65%;
+    --accent: 214 42% 78%;             /* #A8C7FA - Same pastel blue */
+    --accent-foreground: 0 0% 100%;    /* White */
     
-    --background: 224 71% 4%;          /* Very dark blue-gray */
-    --foreground: 213 31% 91%;         /* Light text for dark mode */
+    --background: 49 5% 14%;            /* #252523 - Dark theme background */
+    --foreground: 43 10% 92%;          /* #EFEDE9 - Warm white text */
     
-    --card: 224 71% 4%;
-    --card-foreground: 213 31% 91%;
+    --card: 45 5% 18%;                 /* #2E2D2B - Elevated dark cards */
+    --card-foreground: 43 10% 92%;     /* #EFEDE9 - Warm white text */
     
-    --popover: 224 71% 4%;
-    --popover-foreground: 213 31% 91%;
+    --popover: 45 5% 18%;              /* #2E2D2B - Same as cards */
+    --popover-foreground: 43 10% 92%;
     
-    --muted: 223 47% 11%;              /* Dark muted background */
-    --muted-foreground: 215 20% 65%;   /* Light muted text */
+    --muted: 45 5% 20%;                /* #333231 - Warm dark muted */
+    --muted-foreground: 43 5% 55%;     /* #908D87 - Medium warm gray */
     
-    --border: 223 47% 11%;             /* Dark borders */
-    --input: 223 47% 11%;
-    --ring: 210 100% 50%;
+    --border: 45 5% 22%;               /* #3A3937 - Warm dark gray borders */
+    --input: 45 5% 25%;                /* #403E3C - Slightly lighter for inputs */
+    --ring: 214 42% 78%;               /* Same pastel blue focus */
     
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 213 31% 91%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --success: 142 76% 36%;            /* #22c55e - Same green */
+    --success-foreground: 0 0% 100%;
+    
+    --warning: 45 93% 47%;             /* #eab308 - Same yellow/orange */
+    --warning-foreground: 0 0% 100%;
   }
 }
 
-/* NodeSpace Extensions - Node type colors */
+/* NodeSpace Node Type Colors - Based on Screenshots */
 @layer base {
   :root {
-    --node-text: 142 71% 45%;          /* Green for text nodes */
-    --node-task: 25 95% 53%;           /* Orange for task nodes */  
-    --node-ai-chat: 221 83% 53%;       /* Blue for AI chat nodes */
-    --node-entity: 271 81% 56%;        /* Purple for entity nodes */
-    --node-query: 330 81% 60%;         /* Pink for query nodes */
+    /* Node Type Indicators - Anthropic's pastel blue */
+    --node-text: 214 42% 78%;          /* #A8C7FA - Anthropic pastel blue */
+    --node-task: 214 42% 78%;          /* #A8C7FA - Same pastel blue */
+    --node-ai-chat: 214 42% 78%;       /* #A8C7FA - Same pastel blue */
+    --node-entity: 214 42% 78%;        /* #A8C7FA - Same pastel blue */
+    --node-query: 214 42% 78%;         /* #A8C7FA - Same pastel blue */
+    --node-date: 214 42% 78%;          /* #A8C7FA - Same pastel blue */
+    --node-person: 214 42% 78%;        /* #A8C7FA - Same pastel blue */
+    
+    /* Status Colors - From screenshots */
+    --status-completed: 142 76% 36%;   /* #22c55e - Green for completed */
+    --status-in-progress: 45 93% 47%;  /* #eab308 - Yellow/orange for progress */
+    --status-pending: 215 16% 47%;     /* #6b7280 - Gray for pending */
+    
+    /* Interactive States */
     --processing-opacity: 0.7;
+    --hover-opacity: 0.8;
+    --active-opacity: 0.9;
+  }
+  
+  .dark {
+    /* Same pastel blue colors work in dark theme */
+    --node-text: 214 42% 78%;          
+    --node-task: 214 42% 78%;
+    --node-ai-chat: 214 42% 78%;
+    --node-entity: 214 42% 78%;
+    --node-query: 214 42% 78%;
+    --node-date: 214 42% 78%;
+    --node-person: 214 42% 78%;
+    
+    --status-completed: 142 76% 36%;
+    --status-in-progress: 45 93% 47%;
+    --status-pending: 215 16% 47%;
+  }
+}
+
+/* Multi-Pane System Variables */
+@layer base {
+  :root {
+    /* Layout dimensions */
+    --sidebar-width: 280px;
+    --pane-min-width: 300px;
+    --tab-height: 40px;
+    --pane-border: 1px solid hsl(var(--border));
+    
+    /* Active pane indicator */
+    --active-pane-border: 2px solid hsl(var(--primary));
+    --active-pane-shadow: 0 0 0 1px hsl(var(--primary) / 0.2);
+    
+    /* Tab styling */
+    --tab-background: hsl(var(--muted));
+    --tab-active-background: hsl(var(--background));
+    --tab-hover-background: hsl(var(--muted) / 0.7);
   }
 }
 

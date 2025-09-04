@@ -66,36 +66,140 @@
       </div>
     </section>
 
+    <!-- Multi-Pane Layout System -->
+    <section class="example-section">
+      <h2>Multi-Pane Desktop Layout</h2>
+      <p>NodeSpace features a sophisticated multi-pane system designed for side-by-side knowledge work with browser-like tab management.</p>
+      
+      <div class="layout-demo" style="
+        background: hsl(var(--card));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        padding: 1rem;
+        margin: 1.5rem 0;
+        font-family: monospace;
+        font-size: 0.875rem;
+        line-height: 1.4;
+      ">
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">┌─[Sidebar 280px]─┬─[Pane 1]─────┬─[Pane 2]─────┬─[Pane 3]─────┐</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Daily Journal    │ Today │ Tasks │ Acme Corp     │ Library      │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Dashboard        │ ▼─────┼───────┼───────────────┼──────────────┤</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Search           │ Content Area  │ Task List     │ Client Docs  │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Favorites        │              │               │              │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Recent/History   │ Morning      │ Review        │ Project      │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│                  │   Planning   │   Designs     │   Timeline   │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│ Library          │ AI Help      │ Client        │ Deadlines    │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│   ├─ Clients     │              │   Feedback    │              │</div>
+        <div style="color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem;">│   └─ Projects    │              │ Logo Done     │              │</div>
+        <div style="color: hsl(var(--muted-foreground));">└──────────────────┴──────────────┴───────────────┴──────────────┘</div>
+      </div>
+      
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Multi-Pane System</div>
+          <div class="component-demo">
+            <p><strong>Up to 3 content panes</strong> for side-by-side viewing. Each pane supports multiple tabs with browser-like behavior. Active pane indicated by subtle pastel blue border.</p>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">Browser-Like Tabs</div>
+          <div class="component-demo">
+            <p><strong>Tab management per pane.</strong> Single tab shows no tab bar. Multiple tabs appear with truncated titles (~25 chars). Cmd+click opens in new tab.</p>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">Contextual Sidebar</div>
+          <div class="component-demo">
+            <p><strong>280px fixed sidebar</strong> with organized navigation: Daily Journal, Dashboard, Search, Favorites, Recent, Library structure, and Team collaboration.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Node Type System -->
+    <section class="example-section">
+      <h2>AI-Native Node System</h2>
+      <p>NodeSpace supports 5 core node types, each with distinct visual indicators and behaviors for comprehensive knowledge management.</p>
+      
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Text Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-text)); padding-left: 1rem;">
+            <p><strong>Foundation content blocks.</strong> Markdown support, hierarchical structure, collapsible sections. Perfect alignment with soft pastel blue circles.</p>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">Task Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-task)); padding-left: 1rem;">
+            <p><strong>Actionable items.</strong> Three states: ☐ pending, ◒ in-progress, ✓ completed. Due dates, assignees, priority ordering.</p>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">AI Chat Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-ai-chat)); padding-left: 1rem;">
+            <p><strong>Conversational AI interface.</strong> Context-aware responses, intent classification, smart linking. Gradient blue with AI sparkle indicator.</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Entity Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-entity)); padding-left: 1rem;">
+            <p><strong>Structured data records.</strong> Custom entity types (Customer, Invoice, Project). Field validation, calculated fields, cross-entity relationships.</p>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">Query Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-query)); padding-left: 1rem;">
+            <p><strong>Live data views.</strong> Real-time queries with auto-refresh. Filter and sort controls, complex cross-node analysis and reporting.</p>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">@Mention System</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--primary)); padding-left: 1rem;">
+            <p><strong>Universal references.</strong> Link to any node or create new ones on-demand. Smart autocomplete with fuzzy search across all content.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Design Principles -->
     <section class="example-section">
       <h2>Design Principles</h2>
       
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">🎯 Purpose-Driven</div>
+          <div class="component-title">Clean Blue Aesthetic</div>
           <div class="component-demo">
-            <p>Every design decision serves the user's knowledge management goals. Clean interfaces that get out of the way of thinking and learning.</p>
+            <p>Professional blue (#3b82f6) with consistent application across interface elements. Clean, modern design that reduces cognitive load during knowledge work.</p>
           </div>
         </div>
         
         <div class="component-example">
-          <div class="component-title">🤝 AI-Human Collaboration</div>
+          <div class="component-title">AI-Human Collaboration</div>
           <div class="component-demo">
             <p>Seamless integration between human input and AI assistance. Visual patterns that distinguish but don't separate AI-generated and human-created content.</p>
           </div>
         </div>
         
         <div class="component-example">
-          <div class="component-title">♿ Accessible by Default</div>
+          <div class="component-title">Mathematical Precision</div>
           <div class="component-demo">
-            <p>WCAG 2.1 AA compliance built into every component. High contrast, keyboard navigation, and screen reader support are non-negotiable.</p>
+            <p>Perfect circle alignment, precise indentation, consistent spacing. Every visual element calculated for optimal readability and hierarchical clarity.</p>
           </div>
         </div>
         
         <div class="component-example">
-          <div class="component-title">🔧 Developer Experience</div>
+          <div class="component-title">Accessible by Default</div>
           <div class="component-demo">
-            <p>TypeScript-first design tokens, comprehensive documentation, and clear component APIs that make building consistent interfaces effortless.</p>
+            <p>WCAG 2.1 AA compliance built into every component. High contrast, keyboard navigation, and screen reader support are non-negotiable.</p>
           </div>
         </div>
       </div>
@@ -130,35 +234,37 @@
       </div>
     </section>
 
-    <!-- Design Tokens -->
+    <!-- Pastel Blue Color System -->
     <section class="example-section">
-      <h2>Unified Color System</h2>
-      <p>NodeSpace uses <strong>shadcn-svelte color variables</strong> as the single source of truth. Your existing NodeSpace colors have been mapped to this professional system for consistency and maintainability.</p>
+      <h2>Pastel Blue Color System</h2>
+      <p>NodeSpace uses a <strong>pastel blue-focused design system</strong> that creates a calming, professional atmosphere perfect for extended knowledge work sessions.</p>
       
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">🎨 Color Variables</div>
+          <div class="component-title">Primary Palette</div>
           <div class="component-demo">
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-              <div style="width: 24px; height: 24px; background-color: hsl(var(--primary, 210 100% 40%)); border-radius: 4px;"></div>
-              <div style="width: 24px; height: 24px; background-color: hsl(var(--background, 0 0% 100%)); border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 4px;"></div>
-              <div style="width: 24px; height: 24px; background-color: hsl(var(--foreground, 220 13% 10%)); border-radius: 4px;"></div>
+              <div style="width: 32px; height: 32px; background-color: hsl(var(--primary)); border-radius: 6px; border: 1px solid hsl(var(--border));"></div>
+              <div style="width: 32px; height: 32px; background-color: hsl(var(--accent)); border-radius: 6px; border: 1px solid hsl(var(--border));"></div>
+              <div style="width: 32px; height: 32px; background-color: hsl(var(--success)); border-radius: 6px; border: 1px solid hsl(var(--border));"></div>
+              <div style="width: 32px; height: 32px; background-color: hsl(var(--warning)); border-radius: 6px; border: 1px solid hsl(var(--border));"></div>
             </div>
-            <p><strong>shadcn-svelte variables:</strong> <code>--primary</code>, <code>--background</code>, <code>--foreground</code>, <code>--border</code></p>
-            <p>Your NodeSpace colors mapped to industry-standard variable names.</p>
+            <p><strong>Professional color palette:</strong> Primary (#3b82f6), Success (#22c55e), Warning (#eab308)</p>
+            <p>Clean colors matching your screenshot with excellent contrast for extended use.</p>
           </div>
         </div>
         
         <div class="component-example">
-          <div class="component-title">📝 Typography</div>
+          <div class="component-title">Typography</div>
           <div class="component-demo">
-            <div style="font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; margin-bottom: 0.5rem;">
-              <div style="font-size: 0.75rem; color: hsl(var(--foreground, 220 13% 10%));">Extra Small (12px)</div>
-              <div style="font-size: 0.875rem; color: hsl(var(--foreground, 220 13% 10%));">Small (14px)</div>
-              <div style="font-size: 1rem; color: hsl(var(--foreground, 220 13% 10%));">Base (16px)</div>
-              <div style="font-size: 1.125rem; color: hsl(var(--foreground, 220 13% 10%));">Large (18px)</div>
+            <div style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin-bottom: 0.5rem;">
+              <div style="font-size: 0.75rem; color: hsl(var(--foreground)); font-weight: 400;">Caption (12px) - Supporting text</div>
+              <div style="font-size: 0.875rem; color: hsl(var(--foreground)); font-weight: 400;">Body Small (14px) - Secondary content</div>
+              <div style="font-size: 1rem; color: hsl(var(--foreground)); font-weight: 400;">Body (16px) - Primary content</div>
+              <div style="font-size: 1.125rem; color: hsl(var(--foreground)); font-weight: 500;">Large (18px) - Emphasized content</div>
+              <div style="font-size: 1.5rem; color: hsl(var(--foreground)); font-weight: 600; margin-top: 0.5rem;">Heading (24px) - Section titles</div>
             </div>
-            <p>Consistent typography scale with monospace font stacks for precise cursor navigation and optimal code readability.</p>
+            <p><strong>Inter font family</strong> with clean sans-serif fallbacks. Optimized for readability during extended knowledge work sessions.</p>
           </div>
         </div>
         
@@ -176,14 +282,14 @@
         </div>
         
         <div class="component-example">
-          <div class="component-title">🎭 Themes</div>
+          <div class="component-title">Theme System</div>
           <div class="component-demo">
             <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
-              <button onclick="window.NodeSpaceStyleGuide?.setTheme('light')" style="padding: 0.5rem; border: 1px solid hsl(var(--border, 214 32% 91%)); background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); border-radius: var(--radius, 0.5rem); cursor: pointer;">☀️ Light</button>
-              <button onclick="window.NodeSpaceStyleGuide?.setTheme('dark')" style="padding: 0.5rem; border: 1px solid hsl(var(--border, 214 32% 91%)); background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); border-radius: var(--radius, 0.5rem); cursor: pointer;">🌙 Dark</button>
-              <button onclick="window.NodeSpaceStyleGuide?.setTheme('system')" style="padding: 0.5rem; border: 1px solid hsl(var(--border, 214 32% 91%)); background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 220 13% 10%)); border-radius: var(--radius, 0.5rem); cursor: pointer;">🖥️ System</button>
+              <button onclick="window.NodeSpaceStyleGuide?.setTheme('light')" style="padding: 0.5rem 0.75rem; border: 1px solid hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); border-radius: var(--radius); cursor: pointer; font-size: 0.875rem;">☀️ Light</button>
+              <button onclick="window.NodeSpaceStyleGuide?.setTheme('dark')" style="padding: 0.5rem 0.75rem; border: 1px solid hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); border-radius: var(--radius); cursor: pointer; font-size: 0.875rem;">🌙 Dark</button>
+              <button onclick="window.NodeSpaceStyleGuide?.setTheme('system')" style="padding: 0.5rem 0.75rem; border: 1px solid hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); border-radius: var(--radius); cursor: pointer; font-size: 0.875rem;">🖥️ System</button>
             </div>
-            <p>Automatic theme switching with user preference support and system detection.</p>
+            <p><strong>Sophisticated theme system.</strong> Professional colors work seamlessly in both light and dark modes with optimal contrast ratios for extended use.</p>
           </div>
         </div>
       </div>

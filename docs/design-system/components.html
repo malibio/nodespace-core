@@ -335,18 +335,91 @@
       </div>
     </section>
 
-    <!-- Component Integration -->
+    <!-- NodeSpace Domain Components -->
     <section class="example-section">
-      <h2>Component Integration Patterns</h2>
-      <p>How to effectively combine shadcn-svelte foundation components with custom application components.</p>
+      <h2>NodeSpace Domain Components</h2>
+      <p>Custom components built on shadcn-svelte foundation for AI-native knowledge management. All 5 node types with consistent visual language.</p>
+      
+      <h3>Node Type Components</h3>
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">📝 NodeSpace Domain Components</div>
-          <div class="component-demo">
-            <p>For comprehensive examples of NodeSpace's hierarchical node system with mathematical positioning precision, see the <a href="nodeviewer.html">NodeViewer showcase</a>.</p>
+          <div class="component-title">● Text Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-text)); padding-left: 1rem;">
+            <div class="component-live-demo" style="margin-bottom: 1rem;">
+              <div style="display: flex; align-items: flex-start; margin-bottom: 0.75rem;">
+                <span style="color: hsl(var(--node-text)); margin-right: 0.75rem; font-size: 1.25rem;">●</span>
+                <div style="flex: 1;">
+                  <div style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem;">Campaign Strategy Overview</div>
+                  <div style="color: hsl(var(--muted-foreground));">Foundation content blocks with markdown support, hierarchical structure, and collapsible sections.</div>
+                </div>
+              </div>
+              
+              <div style="display: flex; align-items: flex-start; margin-left: 2rem; margin-bottom: 0.5rem;">
+                <span style="color: hsl(var(--node-text)); margin-right: 0.75rem; font-size: 1rem;">●</span>
+                <div>Our comprehensive approach focuses on digital transformation messaging...</div>
+              </div>
+            </div>
+            <div class="example-code" style="font-size: 0.75rem;">
+              <pre><code>&lt;TextNode 
+  nodeId="strategy-overview"
+  title="Campaign Strategy Overview"
+  content="Our comprehensive approach..."
+  hasChildren={true}
+  collapsible={true}
+/&gt;</code></pre>
+            </div>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">☐ Task Nodes</div>
+          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-task)); padding-left: 1rem;">
+            <div class="component-live-demo" style="margin-bottom: 1rem;">
+              <div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">
+                <span style="color: hsl(var(--status-pending)); font-size: 1rem;">☐</span>
+                <div style="flex: 1;">
+                  <div style="font-weight: 500;">Review client feedback on logo concepts</div>
+                  <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">
+                    Due: Jan 25, 2025 | Assigned: Sarah M.
+                  </div>
+                </div>
+              </div>
+              
+              <div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">
+                <span style="color: hsl(var(--status-in-progress)); font-size: 1rem;">◒</span>
+                <div style="flex: 1;">
+                  <div style="font-weight: 500;">Develop social media asset templates</div>
+                  <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">
+                    Progress: 60% complete
+                  </div>
+                </div>
+              </div>
+              
+              <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                <span style="color: hsl(var(--status-completed)); font-size: 1rem;">✓</span>
+                <div style="flex: 1; opacity: 0.7;">
+                  <div style="font-weight: 500; text-decoration: line-through;">Complete brand guidelines document</div>
+                  <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">
+                    Completed: Jan 18, 2025
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="example-code" style="font-size: 0.75rem;">
+              <pre><code>&lt;TaskNode 
+  nodeId="review-feedback"
+  title="Review client feedback on logo concepts"
+  status="pending"
+  dueDate="2025-01-25"
+  assignee="Sarah M."
+/&gt;</code></pre>
+            </div>
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- Component Integration -->
       
       <div class="example-code">
         <pre><code><!-- Example: Settings Panel with Node Editor -->
@@ -401,7 +474,7 @@
         </div>
         
         <div class="component-example">
-          <div class="component-title">🎨 High Contrast</div>
+          <div class="component-title">High Contrast</div>
           <div class="component-demo">
             <p>Color combinations meet minimum 4.5:1 contrast ratios across all themes.</p>
           </div>
