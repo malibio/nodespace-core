@@ -102,6 +102,49 @@ Different font sizes require different baseline corrections to prevent text floa
 3. Convert pixels to rem (divide by 16)
 4. Apply to positioning calculations
 
+## Design Decisions
+
+### Chevron Space Reservation (22px Circle Offset)
+
+**Decision:** Maintain 22px circle offset even though chevrons only appear on hover.
+
+**Rationale:**
+- **Predictable Layout**: Users develop spatial memory for interactive elements. Consistent positioning reduces cognitive load and improves usability.
+- **Accessibility**: Screen readers and keyboard navigation depend on predictable element positioning. Dynamic layouts can disrupt assistive technology.
+- **Visual Rhythm**: Reserved space creates consistent visual hierarchy that helps users scan content quickly.
+- **Industry Standards**: Follows patterns used by macOS Finder, VS Code Explorer, and other professional interfaces that reserve space for disclosure controls.
+- **Future-Proofing**: Prevents layout shifts when interaction affordances are added or removed.
+
+**UX Impact:** The 22px reservation ensures nodes maintain consistent alignment whether chevrons are visible or not, prioritizing interface predictability over space optimization.
+
+## Systematic Hover State Implementation
+
+### Global Contrast Fix (v1.3)
+
+**Problem Solved:** Previous use of `--accent` color for hover states created poor 2.28:1 contrast ratios that failed WCAG accessibility standards.
+
+**Solution:** Implemented systematic hover state variables in `shadcn-variables.css`:
+
+```css
+/* Systematic hover states - WCAG-compliant 6.47:1 contrast */
+--hover-background: var(--muted);
+--hover-foreground: var(--muted-foreground);
+```
+
+**Implementation Guidelines:**
+1. **Always use hover variables** - Never use `--accent` for hover states
+2. **Apply universally** - All interactive elements should use these variables
+3. **Test contrast ratios** - Verify 4.5:1 minimum for normal text, 3:1 for large text
+4. **Consistent behavior** - Hover states work identically across light/dark themes
+
+**Example Usage:**
+```css
+.date-nav-button:hover {
+  background: hsl(var(--hover-background));
+  color: hsl(var(--hover-foreground));
+}
+```
+
 ## Usage Guidelines
 
 1. **Always use calculated values** - Don't estimate or guess positions
@@ -111,6 +154,15 @@ Different font sizes require different baseline corrections to prevent text floa
 5. **Update this document** - When adding new positioning calculations
 
 ## Version History
+
+- **v1.3** (2025-01-04): Container alignment standardization and systematic hover states
+  - **Critical Fix**: Resolved 1px horizontal alignment discrepancy between pattern sections
+  - **Browser Tab Demo**: Changed from `.pattern-demo` to `.node-viewer` container class for consistency
+  - **Systematic Hover States**: Added permanent `--hover-background` and `--hover-foreground` CSS variables
+  - **Contrast Compliance**: Fixed poor 2.28:1 contrast ratio to WCAG-compliant 6.47:1 ratio
+  - **Date Navigation**: Implemented proper button styling with cohesive 0.5rem gap and consistent hover states
+  - **Perfect Alignment**: All pattern section containers now positioned at exactly 101.5px
+  - **Layered Architecture**: Established clear separation between outer container styling and inner content consistency
 
 - **v1.2** (2025-01-09): Optimized node alignment with chevron space reservation
   - Updated circle-offset from 26px to 22px for improved root node positioning
