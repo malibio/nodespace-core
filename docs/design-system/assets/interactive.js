@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadDesignTokens();
   initializeTheme();
   initializeInteractiveFeatures();
+  initializeKeyboardShortcuts();
   updateAllExamples();
 });
 
@@ -225,6 +226,20 @@ function updateThemeToggle() {
 
 // Note: CSS properties are now handled by shadcn-variables.css
 // The actual shadcn-svelte variables are used directly
+
+// Initialize keyboard shortcuts
+function initializeKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    // Cmd/Ctrl + \: Toggle between light and dark theme (backslash is safe from browser conflicts)
+    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      e.preventDefault();
+      
+      // Toggle between light and dark (skip system for this shortcut)
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      setTheme(newTheme);
+    }
+  });
+}
 
 // Initialize interactive features
 function initializeInteractiveFeatures() {

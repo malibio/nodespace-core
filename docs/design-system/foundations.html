@@ -8,6 +8,21 @@
   <link rel="stylesheet" href="assets/shadcn-variables.css">
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+  
+  <!-- Prevent flash of unstyled content by applying theme immediately -->
+  <script>
+    (function() {
+      // Apply theme before page renders to prevent flash
+      const savedTheme = localStorage.getItem('nodespace-style-guide-theme') || 'system';
+      const resolvedTheme = savedTheme === 'system' 
+        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : savedTheme;
+      
+      if (resolvedTheme === 'dark') {
+        document.documentElement.className = 'dark';
+      }
+    })();
+  </script>
   <style>
     /* Node type colors inherit from shadcn-variables.css - Warm Gray System */
     
@@ -84,8 +99,8 @@
 
     <!-- Color System -->
     <section class="example-section">
-      <h2>Professional Blue Color System</h2>
-      <p>NodeSpace uses a <strong>professional blue color system</strong> that creates a clean, modern interface perfect for extended knowledge work sessions.</p>
+      <h2>Professional Warm Gray Color System</h2>
+      <p>NodeSpace uses a <strong>professional warm gray color system</strong> that creates a clean, modern interface perfect for extended knowledge work sessions and reduces visual fatigue.</p>
       
       <h3>Primary Color Palette</h3>
       <div class="component-showcase">
@@ -375,6 +390,7 @@
               ">🖥️ System</button>
             </div>
             <p>Theme preference is automatically saved and restored across sessions.</p>
+            <p><strong>Keyboard Shortcut:</strong> <kbd>Cmd</kbd>+<kbd>\</kbd> (Mac) or <kbd>Ctrl</kbd>+<kbd>\</kbd> (Windows/Linux) to toggle between light and dark themes</p>
           </div>
         </div>
         

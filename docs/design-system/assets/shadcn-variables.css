@@ -9,6 +9,8 @@
     /* Color system - Warm Gray theme (light mode) */
     --primary: 25 25% 55%;             /* Warm gray primary */
     --primary-foreground: 0 0% 98%;    /* Off-white for primary text */
+    --primary-subtle: 25 15% 60%;      /* Lighter warm gray for secondary actions */
+    --primary-intense: 25 35% 45%;     /* Darker warm gray for emphasis states */
     
     --secondary: 25 15% 94%;           /* Light warm gray secondary */
     --secondary-foreground: 25 15% 45%; /* Medium warm gray for secondary text */
@@ -46,12 +48,18 @@
     --warning-foreground: 0 0% 100%;
     
     --radius: 0.5rem;
+    
+    /* Animation tokens for subtle interactions */
+    --motion-expand-collapse: 200ms ease-out;   /* Node expand/collapse animations */
+    --motion-error-flash: 150ms ease-in-out;   /* Error state feedback animations */
   }
 
   .dark {
     /* Color system - Warm Gray theme (dark mode) */
     --primary: 25 25% 65%;             /* Lighter warm gray primary for dark theme */
     --primary-foreground: 0 0% 95%;    /* Very light gray for primary text */
+    --primary-subtle: 25 15% 70%;      /* Lighter warm gray for secondary actions in dark mode */
+    --primary-intense: 25 35% 55%;     /* Darker warm gray for emphasis states in dark mode */
     
     --secondary: 25 15% 12%;           /* Very dark warm gray secondary */
     --secondary-foreground: 25 15% 60%; /* Light warm gray for secondary text */
