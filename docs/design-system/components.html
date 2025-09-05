@@ -68,11 +68,11 @@
       display: inline-block;
     }
     
-    .node-icon--text { background: hsl(142 71% 45%); }
-    .node-icon--task { background: hsl(25 95% 53%); }
-    .node-icon--ai { background: hsl(221 83% 53%); }
-    .node-icon--entity { background: hsl(271 81% 56%); }
-    .node-icon--query { background: hsl(330 81% 60%); }
+    .node-icon--text { background: hsl(var(--node-text)); }
+    .node-icon--task { background: hsl(var(--node-task)); }
+    .node-icon--ai { background: hsl(var(--node-ai-chat)); }
+    .node-icon--entity { background: hsl(var(--node-entity)); }
+    .node-icon--query { background: hsl(var(--node-query)); }
     
     /* Hierarchy demo */
     .hierarchy-demo {

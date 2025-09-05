@@ -9,14 +9,7 @@
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
   <style>
-    /* Node type color definitions - Pastel Blue System */
-    :root {
-      --node-text: 199 95% 74%;    /* #7dd3fc - Soft pastel blue */
-      --node-task: 199 89% 48%;    /* #0284c7 - Medium blue for tasks */
-      --node-ai-chat: 220 91% 70%; /* #60a5fa - AI blue with sparkle */
-      --node-entity: 213 94% 68%;  /* #3b82f6 - Entity blue */
-      --node-query: 217 91% 60%;   /* #2563eb - Query blue */
-    }
+    /* Node type colors inherit from shadcn-variables.css - Warm Gray System */
     
     /* Node type color swatches */
     .node-color-swatch {
@@ -168,40 +161,40 @@
               <div class="node-color-swatch node-color-text">●</div>
               <div>
                 <strong>Text Node</strong><br>
-                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
-                <small>Professional blue - Foundation content blocks</small>
+                <code>hsl(25 25% 55%)</code> - Warm Gray<br>
+                <small>Unified warm gray - Foundation content blocks</small>
               </div>
             </div>
             <div class="color-example">
               <div class="node-color-swatch node-color-task">☐</div>
               <div>
                 <strong>Task Node</strong><br>
-                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
-                <small>Medium blue - Tasks, todos, and actionable items</small>
+                <code>hsl(25 25% 55%)</code> - Warm Gray<br>
+                <small>Unified warm gray - Tasks, todos, and actionable items</small>
               </div>
             </div>
             <div class="color-example">
               <div class="node-color-swatch node-color-ai">AI</div>
               <div>
                 <strong>AI Chat Node</strong><br>
-                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
-                <small>Professional blue - Conversational AI interface</small>
+                <code>hsl(25 25% 55%)</code> - Warm Gray<br>
+                <small>Unified warm gray - Conversational AI interface</small>
               </div>
             </div>
             <div class="color-example">
               <div class="node-color-swatch node-color-entity">◆</div>
               <div>
                 <strong>Entity Node</strong><br>
-                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
-                <small>Entity blue - Structured data records and metadata</small>
+                <code>hsl(25 25% 55%)</code> - Warm Gray<br>
+                <small>Unified warm gray - Structured data records and metadata</small>
               </div>
             </div>
             <div class="color-example">
               <div class="node-color-swatch node-color-query">⬢</div>
               <div>
                 <strong>Query Node</strong><br>
-                <code>hsl(213 94% 68%)</code> - #3b82f6<br>
-                <small>Professional blue - Live data views and real-time analysis</small>
+                <code>hsl(25 25% 55%)</code> - Warm Gray<br>
+                <small>Unified warm gray - Live data views and real-time analysis</small>
               </div>
             </div>
           </div>
@@ -219,24 +212,24 @@
               <div style="width: 40px; height: 40px; background: hsl(var(--status-completed)); border-radius: 50%; margin-right: 1rem;"></div>
               <div>
                 <strong>Completed</strong><br>
-                <code>hsl(185 57% 50%)</code> - #22d3ee<br>
-                <small>Blue-green for success states and completed items</small>
+                <code>hsl(142 76% 36%)</code> - #22c55e<br>
+                <small>Green for success states and completed items</small>
               </div>
             </div>
             <div class="color-example">
               <div style="width: 40px; height: 40px; background: hsl(var(--status-in-progress)); border-radius: 50%; margin-right: 1rem;"></div>
               <div>
                 <strong>In Progress</strong><br>
-                <code>hsl(45 93% 47%)</code> - #fbbf24<br>
-                <small>Warm amber for active and in-progress states</small>
+                <code>hsl(45 93% 47%)</code> - #eab308<br>
+                <small>Warm yellow-orange for active and in-progress states</small>
               </div>
             </div>
             <div class="color-example">
               <div style="width: 40px; height: 40px; background: hsl(var(--status-pending)); border-radius: 50%; margin-right: 1rem;"></div>
               <div>
                 <strong>Pending</strong><br>
-                <code>hsl(215 20% 65%)</code> - #94a3b8<br>
-                <small>Cool gray for pending and inactive states</small>
+                <code>hsl(215 16% 47%)</code> - #6b7280<br>
+                <small>Medium gray for pending and inactive states</small>
               </div>
             </div>
           </div>

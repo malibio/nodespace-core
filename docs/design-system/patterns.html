@@ -9,6 +9,90 @@
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
   <style>
+    /* Apply Warm Gray color scheme to entire document */
+    :root {
+      /* Color system - Warm Gray theme (light mode) */
+      --primary: 25 25% 55%;             /* Warm gray primary */
+      --primary-foreground: 0 0% 98%;    /* Off-white for primary text */
+      
+      --secondary: 25 15% 94%;           /* Light warm gray secondary */
+      --secondary-foreground: 25 15% 45%; /* Medium warm gray for secondary text */
+      
+      --accent: 25 25% 55%;              /* Same as primary for consistency */
+      --accent-foreground: 0 0% 98%;     /* Off-white for accent text */
+      
+      --background: 0 0% 98%;            /* Clean off-white background */
+      --foreground: 25 25% 15%;          /* Dark warm gray text */
+      
+      --card: 0 0% 100%;                 /* Pure white cards */
+      --card-foreground: 25 25% 15%;     /* Dark warm gray text */
+      
+      --popover: 0 0% 100%;              /* Same as cards */
+      --popover-foreground: 25 25% 15%;
+      
+      --muted: 25 15% 94%;               /* Light warm gray muted areas */
+      --muted-foreground: 25 15% 45%;    /* Medium warm gray for muted text */
+      
+      /* Systematic hover states - WCAG-compliant contrast */
+      --hover-background: var(--muted);
+      --hover-foreground: var(--muted-foreground);
+      
+      --border: 25 15% 88%;              /* Light warm gray borders */
+      --input: 25 15% 88%;
+      --ring: 25 25% 55%;                /* Focus ring matches primary */
+      
+      --destructive: 0 84% 60%;
+      --destructive-foreground: 0 0% 100%;
+      
+      --success: 142 76% 36%;            /* #22c55e - Green for completed items */
+      --success-foreground: 0 0% 100%;
+      
+      --warning: 45 93% 47%;             /* #eab308 - Yellow/orange for in-progress */
+      --warning-foreground: 0 0% 100%;
+      
+      --radius: 0.5rem;
+    }
+
+    .dark {
+      /* Color system - Warm Gray theme (dark mode) */
+      --primary: 25 25% 65%;             /* Lighter warm gray primary for dark theme */
+      --primary-foreground: 0 0% 95%;    /* Very light gray for primary text */
+      
+      --secondary: 25 15% 12%;           /* Very dark warm gray secondary */
+      --secondary-foreground: 25 15% 60%; /* Light warm gray for secondary text */
+      
+      --accent: 25 25% 65%;              /* Same as primary for consistency */
+      --accent-foreground: 0 0% 95%;     /* Very light gray for accent text */
+      
+      --background: 0 0% 8%;             /* Very dark background */
+      --foreground: 25 25% 90%;          /* Light warm gray text */
+      
+      --card: 25 15% 10%;                /* Slightly elevated dark cards */
+      --card-foreground: 25 25% 90%;     /* Light warm gray text */
+      
+      --popover: 25 15% 10%;             /* Same as cards */
+      --popover-foreground: 25 25% 90%;
+      
+      --muted: 25 15% 12%;               /* Dark warm gray muted areas */
+      --muted-foreground: 25 15% 60%;    /* Light warm gray for muted text */
+      
+      /* Systematic hover states - WCAG-compliant contrast */
+      --hover-background: var(--muted);
+      --hover-foreground: var(--muted-foreground);
+      
+      --border: 25 15% 20%;              /* Dark warm gray borders */
+      --input: 25 15% 22%;               /* Slightly lighter for inputs */
+      --ring: 25 25% 65%;                /* Focus ring matches primary */
+      
+      --destructive: 0 84% 60%;
+      --destructive-foreground: 0 0% 100%;
+      
+      --success: 142 76% 36%;            /* #22c55e - Same green */
+      --success-foreground: 0 0% 100%;
+      
+      --warning: 45 93% 47%;             /* #eab308 - Same yellow/orange */
+      --warning-foreground: 0 0% 100%;
+    }
     
     /* Content demo container - same structure as shell-demo */
     .content-demo-container {
@@ -183,7 +267,7 @@
       align-items: center;
       justify-content: space-between;
       padding: 0.75rem;
-      background: hsl(var(--card));
+      background: hsl(var(--background));
       border: 1px solid hsl(var(--border));
       border-radius: var(--radius);
     }
@@ -203,10 +287,29 @@
       align-items: center;
       gap: 1rem;
       padding: 1rem;
-      background: hsl(var(--card));
+      background: hsl(var(--background));
       border: 1px solid hsl(var(--border));
       border-radius: var(--radius);
       margin: 0.5rem 0;
+    }
+    
+    /* Date navigation buttons - subtle hover effect */
+    .date-nav-button {
+      padding: 0.5rem;
+      border: 1px solid hsl(var(--border));
+      border-radius: var(--radius);
+      background: hsl(var(--background));
+      color: hsl(var(--muted-foreground));
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .date-nav-button:hover {
+      background: hsl(var(--muted));
+      color: hsl(var(--foreground));
     }
     
     .breakpoint-indicator {
@@ -229,7 +332,7 @@
     
     .sidebar-collapsed {
       width: 48px;
-      background: hsl(var(--card));
+      background: hsl(var(--background));
       border-right: 1px solid hsl(var(--border));
       display: flex;
       flex-direction: column;
@@ -239,7 +342,7 @@
     
     .sidebar-expanded {
       width: 240px; /* Good balance between functionality and size */
-      background: hsl(var(--card));
+      background: hsl(var(--background));
       border-right: 1px solid hsl(var(--border));
       display: flex;
       flex-direction: column;
@@ -273,6 +376,7 @@
     
     .nav-item:hover {
       background: hsl(var(--muted));
+      color: hsl(var(--foreground));
     }
     
     .nav-item.active {
@@ -492,16 +596,16 @@
       border-radius: 0.125rem;
     }
     
-    /* Light mode: dark text on light blue background */
+    /* Light mode: warm gray search highlight */
     :root .search-highlight {
-      background: hsl(220 70% 85%);
-      color: hsl(220 70% 25%);
+      background: hsl(25 15% 88%);
+      color: hsl(25 25% 25%);
     }
     
-    /* Dark mode: light text on darker blue background */
+    /* Dark mode: warm gray search highlight */
     .dark .search-highlight {
-      background: hsl(220 70% 35%);
-      color: hsl(220 70% 90%);
+      background: hsl(25 15% 25%);
+      color: hsl(25 25% 80%);
     }
     
     /* Blinking cursor animation */
@@ -639,7 +743,7 @@
     
     /* Ensure copy button is visible in dark mode */
     .dark .example-code .copy-button {
-      background: hsl(var(--card));
+      background: hsl(var(--background));
       border: 1px solid hsl(var(--border));
       color: hsl(var(--foreground));
     }
@@ -1146,7 +1250,7 @@
       
       <h3>Application Layout Structure</h3>
       <div class="layout-demo" style="
-        background: hsl(var(--card));
+        background: hsl(var(--background));
         border: 1px solid hsl(var(--border));
         border-radius: var(--radius);
         padding: 1rem;
@@ -1172,7 +1276,7 @@
       <h3>Browser-Like Tab System</h3>
       <p>Each content pane supports multiple tabs with intelligent title management and browser-like behaviors.</p>
       
-      <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 500px; overflow: hidden; padding: 0; background: hsl(var(--background));">
+      <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 500px; overflow: hidden; padding: 0; background: transparent;">
         <!-- Tab Bar Example -->
         <div style="
           height: 40px;
@@ -1190,10 +1294,22 @@
             align-items: center;
             font-size: 0.875rem;
             color: hsl(var(--foreground));
+            font-weight: 600;
             position: relative;
             z-index: 2;
             margin-bottom: -1px;
-          ">Today</div>
+            padding-top: calc(1rem - 4px);
+          ">
+            Today
+            <div style="
+              position: absolute;
+              top: 0;
+              left: 0;
+              right: 0;
+              height: 4px;
+              background: hsl(var(--primary));
+            "></div>
+          </div>
           <!-- Inactive tab: "Acme Corp Strategy" -->
           <div style="
             padding: 0 1rem;
@@ -1209,6 +1325,7 @@
           <div style="
             padding: 0 1rem;
             background: hsl(var(--muted));
+            border-right: 1px solid hsl(var(--border));
             display: flex;
             align-items: center;
             font-size: 0.875rem;
@@ -1391,7 +1508,7 @@
       
       <div class="pattern-demo">
         <h4 style="margin: 0 0 1rem 0;">Inline Autocomplete Dropdown</h4>
-        <div class="node-viewer" style="position: relative; border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 400px; overflow: hidden; padding: 1.5rem; background: hsl(var(--background));">
+        <div class="node-viewer" style="position: relative; border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 400px; overflow: hidden; padding: 1.5rem; background: transparent;">
           <div class="hierarchy-example">
             <!-- Node content with autocomplete trigger -->
             <div class="hierarchy-node">
@@ -1441,7 +1558,7 @@
       
       <div class="pattern-demo">
         <h4 style="margin: 0 0 1rem 0;">Command Palette</h4>
-        <div class="node-viewer" style="position: relative; border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 400px; overflow: hidden; padding: 1.5rem; background: hsl(var(--background));">
+        <div class="node-viewer" style="position: relative; border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 400px; overflow: hidden; padding: 1.5rem; background: transparent;">
           <div class="hierarchy-example">
             <!-- Node content with slash command trigger -->
             <div class="hierarchy-node">
@@ -1550,7 +1667,7 @@
       
       <h3>Single-Column Layout</h3>
       <div class="pattern-demo">
-        <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.5rem; background: hsl(var(--background));">
+        <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.5rem; background: transparent;">
           <div class="hierarchy-example">
             <div class="hierarchy-node">
               <div class="hierarchy-indicator">
@@ -1720,7 +1837,7 @@
       
       <h3>Mathematical Indentation System with Chevron Positioning</h3>
       <div class="pattern-demo">
-        <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 400px; overflow: hidden; padding: 1.5rem; background: hsl(var(--background));">
+        <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 400px; overflow: hidden; padding: 1.5rem; background: transparent;">
           <div class="hierarchy-example">
           <!-- H1 Text Node Parent (Expanded) -->
           <div class="hierarchy-node has-children h1">
