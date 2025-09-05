@@ -8,6 +8,21 @@
   <link rel="stylesheet" href="assets/shadcn-variables.css">
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+  
+  <!-- Prevent flash of unstyled content by applying theme immediately -->
+  <script>
+    (function() {
+      // Apply theme before page renders to prevent flash
+      const savedTheme = localStorage.getItem('nodespace-style-guide-theme') || 'system';
+      const resolvedTheme = savedTheme === 'system' 
+        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : savedTheme;
+      
+      if (resolvedTheme === 'dark') {
+        document.documentElement.className = 'dark';
+      }
+    })();
+  </script>
 </head>
 <body class="no-transitions">
   <div class="style-guide">
@@ -98,7 +113,7 @@
         <div class="component-example">
           <div class="component-title">Multi-Pane System</div>
           <div class="component-demo">
-            <p><strong>Up to 3 content panes</strong> for side-by-side viewing. Each pane supports multiple tabs with browser-like behavior. Active pane indicated by subtle pastel blue border.</p>
+            <p><strong>Up to 3 content panes</strong> for side-by-side viewing. Each pane supports multiple tabs with browser-like behavior. Active pane indicated by subtle warm gray accent.</p>
           </div>
         </div>
         
@@ -127,7 +142,7 @@
         <div class="component-example">
           <div class="component-title">Text Nodes</div>
           <div class="component-demo" style="border-left: 4px solid hsl(var(--node-text)); padding-left: 1rem;">
-            <p><strong>Foundation content blocks.</strong> Markdown support, hierarchical structure, collapsible sections. Perfect alignment with soft pastel blue circles.</p>
+            <p><strong>Foundation content blocks.</strong> Markdown support, hierarchical structure, collapsible sections. Perfect alignment with warm gray circles.</p>
           </div>
         </div>
         
@@ -141,7 +156,7 @@
         <div class="component-example">
           <div class="component-title">AI Chat Nodes</div>
           <div class="component-demo" style="border-left: 4px solid hsl(var(--node-ai-chat)); padding-left: 1rem;">
-            <p><strong>Conversational AI interface.</strong> Context-aware responses, intent classification, smart linking. Gradient blue with AI sparkle indicator.</p>
+            <p><strong>Conversational AI interface.</strong> Context-aware responses, intent classification, smart linking. Consistent warm gray design with AI sparkle indicator.</p>
           </div>
         </div>
       </div>
@@ -176,9 +191,9 @@
       
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">Clean Blue Aesthetic</div>
+          <div class="component-title">Clean Warm Gray Aesthetic</div>
           <div class="component-demo">
-            <p>Professional blue (#3b82f6) with consistent application across interface elements. Clean, modern design that reduces cognitive load during knowledge work.</p>
+            <p>Professional warm gray (hsl(25 25% 55%)) with consistent application across interface elements. Clean, modern design that reduces cognitive load during knowledge work.</p>
           </div>
         </div>
         
@@ -234,10 +249,10 @@
       </div>
     </section>
 
-    <!-- Pastel Blue Color System -->
+    <!-- Warm Gray Color System -->
     <section class="example-section">
-      <h2>Pastel Blue Color System</h2>
-      <p>NodeSpace uses a <strong>pastel blue-focused design system</strong> that creates a calming, professional atmosphere perfect for extended knowledge work sessions.</p>
+      <h2>Warm Gray Color System</h2>
+      <p>NodeSpace uses a <strong>warm gray-focused design system</strong> that creates a calming, professional atmosphere perfect for extended knowledge work sessions.</p>
       
       <div class="component-showcase">
         <div class="component-example">
@@ -464,7 +479,7 @@
 }
 
 /* NodeSpace color system (mapped to shadcn-svelte) */
---primary: 210 100% 40%;           /* Professional blue #007acc */
+--primary: 25 25% 55%;             /* Professional warm gray */
 --background: 0 0% 100%;           /* Clean white backgrounds */
 --foreground: 220 13% 10%;         /* Dark text #1a1a1a */
 --muted: 210 40% 98%;              /* Light gray #f8f9fa */

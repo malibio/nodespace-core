@@ -8,6 +8,21 @@
   <link rel="stylesheet" href="assets/shadcn-variables.css">
   <link rel="stylesheet" href="assets/style-guide.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+  
+  <!-- Prevent flash of unstyled content by applying theme immediately -->
+  <script>
+    (function() {
+      // Apply theme before page renders to prevent flash
+      const savedTheme = localStorage.getItem('nodespace-style-guide-theme') || 'system';
+      const resolvedTheme = savedTheme === 'system' 
+        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : savedTheme;
+      
+      if (resolvedTheme === 'dark') {
+        document.documentElement.className = 'dark';
+      }
+    })();
+  </script>
   <style>
     /* Apply Warm Gray color scheme to entire document */
     :root {
@@ -336,8 +351,38 @@
       border-right: 1px solid hsl(var(--border));
       display: flex;
       flex-direction: column;
+      align-items: center; /* Center all content within the 48px panel */
+      padding: 1rem 0; /* Remove left padding - center everything */
+    }
+    
+    /* Collapsed sidebar specific nav items - perfect icon centering */
+    .sidebar-collapsed .nav-item {
+      display: flex;
       align-items: center;
-      padding: 1rem 0;
+      justify-content: center; /* Center the icons within the nav item */
+      margin: 0;
+      width: 100%; /* Full width for background highlights */
+      padding: 0.5rem 0; /* Vertical padding only - NO horizontal padding */
+      position: relative;
+    }
+    
+    /* Collapsed sidebar active item - overlay accent without affecting icon position */
+    .sidebar-collapsed .nav-item.active {
+      /* DO NOT add padding-left - keep icon perfectly centered */
+      border-left: none; /* Remove default border */
+      padding-left: 0; /* Override general .nav-item.active padding-left */
+      padding-right: 0; /* Ensure no horizontal padding */
+    }
+    
+    .sidebar-collapsed .nav-item.active::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0; /* Accent at the very left edge of the sidebar */
+      width: 4px;
+      background: hsl(var(--primary));
+      /* Accent overlays without pushing content */
     }
     
     .sidebar-expanded {
@@ -354,6 +399,19 @@
       height: 20px;
       margin-bottom: 1rem;
       cursor: pointer;
+      flex-shrink: 0;
+    }
+    
+    /* Consistent hamburger positioning - perfectly centered in collapsed sidebar */
+    .sidebar-collapsed .hamburger-icon {
+      margin-bottom: 0.5rem;
+      /* Centered automatically by container align-items: center */
+      /* Ensure consistent alignment with nav items */
+    }
+    
+    .sidebar-expanded .hamburger-icon {
+      margin-bottom: 0.5rem;
+      align-self: flex-start;
     }
     
     .main-content {
@@ -370,7 +428,10 @@
       cursor: pointer;
       display: flex;
       align-items: center;
+      justify-content: flex-start;
       gap: 0.75rem;
+      height: 40px; /* Fixed height for consistent alignment */
+      box-sizing: border-box;
       transition: background-color 0.2s, color 0.2s;
     }
     
@@ -855,6 +916,56 @@
         </div>
         <div class="main-content">
           <p>Main content with expanded sidebar (240px width)</p>
+        </div>
+      </div>
+      
+      <h3>Technical Implementation Details</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Perfect Icon Alignment System</div>
+          <div class="component-demo">
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">DOM-Measured Precision Alignment</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li><strong>Collapsed State:</strong> Icons perfectly centered at 24.0px within 48px sidebar container</li>
+                <li><strong>Active Accent:</strong> Left border overlay with zero horizontal padding to preserve centering</li>
+                <li><strong>Expanded Consistency:</strong> Icons maintain exact collapsed positions when sidebar expands</li>
+                <li><strong>Mathematical Precision:</strong> Used Playwright DOM measurements to achieve pixel-perfect alignment</li>
+              </ul>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+              <thead>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <th style="padding: 0.5rem; text-align: left;">Element</th>
+                  <th style="padding: 0.5rem; text-align: left;">Position</th>
+                  <th style="padding: 0.5rem; text-align: left;">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Hamburger Icon</td>
+                  <td style="padding: 0.5rem;"><code>center: 24.0px</code></td>
+                  <td style="padding: 0.5rem;">Perfect centering within 48px sidebar</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Active Nav Item</td>
+                  <td style="padding: 0.5rem;"><code>center: 24.0px</code></td>
+                  <td style="padding: 0.5rem;">No offset from accent border (overlay method)</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Inactive Nav Items</td>
+                  <td style="padding: 0.5rem;"><code>center: 24.0px</code></td>
+                  <td style="padding: 0.5rem;">Consistent alignment across all nav items</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.5rem;">Left Accent Border</td>
+                  <td style="padding: 0.5rem;"><code>position: absolute; left: 0</code></td>
+                  <td style="padding: 0.5rem;">Overlays without affecting icon position</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -1969,7 +2080,7 @@
           <li><strong>Example Calculation:</strong> <code>22px + (20px / 2) - (2.5rem / 2) = 12px</code></li>
           <li><strong>Precision Result:</strong> Chevron positioned exactly halfway between parent and child circles</li>
           <li><strong>Vertical Alignment:</strong> Uses same mathematical formula as circles for perfect alignment</li>
-          <li><strong>Color Consistency:</strong> Theme-adaptive blue (#A8C7FA) matching node circle indicators</li>
+          <li><strong>Color Consistency:</strong> Theme-adaptive warm gray matching node circle indicators</li>
           <li><strong>Animation:</strong> Smooth 90° rotation with transform: <code>translate(-50%, -50%) rotate(90deg)</code></li>
           <li><strong>Interaction:</strong> Click chevron to toggle, Space/Enter keyboard support</li>
           <li><strong>Z-index Layering:</strong> <code>z-index: 3</code> ensures clickable over all content</li>
