@@ -1,0 +1,1996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Color Scheme Explorations - NodeSpace Design System</title>
+  <meta name="description" content="Multiple color scheme options for the NodeSpace tab system.">
+  <link rel="stylesheet" href="assets/shadcn-variables.css">
+  <link rel="stylesheet" href="assets/style-guide.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+  
+  <style>
+    /* Base styles from patterns.html */
+    .content-demo-container {
+      display: flex;
+      height: 400px;
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin: 1rem 0;
+    }
+
+    /* Simplified scheme demo structure */
+    .scheme-demo {
+      height: 500px;
+      background: hsl(var(--background));
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .tab-bar {
+      height: 40px;
+      background: hsl(var(--muted));
+      border-bottom: 1px solid hsl(var(--border));
+      display: flex;
+      align-items: stretch;
+      flex-shrink: 0;
+    }
+
+    .tab {
+      padding: 0 1rem;
+      display: flex;
+      align-items: center;
+      font-size: 0.875rem;
+      cursor: pointer;
+      border-right: 1px solid hsl(var(--border));
+    }
+
+    .tab.active {
+      background: hsl(var(--background));
+      color: hsl(var(--foreground));
+      position: relative;
+      z-index: 2;
+      margin-bottom: -1px;
+    }
+
+    .tab.inactive {
+      background: hsl(var(--muted));
+      color: hsl(var(--muted-foreground));
+    }
+
+    .content-area {
+      flex: 1;
+      background: hsl(var(--background));
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .date-header {
+      background: hsl(var(--background));
+      padding: 1.5rem;
+      border-bottom: 1px solid hsl(var(--border));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .date-display {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .date-nav {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .main-content {
+      padding: 1rem 1.5rem 1.5rem 1.5rem;
+      flex: 1;
+    }
+
+    .date-nav-button {
+      width: 32px;
+      height: 32px;
+      border: 1px solid hsl(var(--border));
+      border-radius: 0.375rem;
+      background: hsl(var(--background));
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      color: hsl(var(--foreground));
+    }
+
+    .date-nav-button:hover {
+      background: hsl(var(--hover-background));
+      color: hsl(var(--hover-foreground));
+    }
+
+    .date-nav-button:active {
+      transform: translateY(1px);
+    }
+
+    /* Dark mode base styles */
+    body {
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+    
+    body.dark {
+      background: #0f0f0f;
+      color: #f5f5f5;
+    }
+
+    /* Color scheme variables - we'll override these */
+    .scheme-container {
+      margin: 2rem 0;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+      transition: border-color 0.3s ease;
+    }
+
+    .dark .scheme-container {
+      border-color: #374151;
+    }
+
+    .scheme-title {
+      background: #f9fafb;
+      padding: 1rem;
+      font-weight: 600;
+      font-size: 1.1rem;
+      border-bottom: 1px solid #e5e7eb;
+      margin: 0;
+      color: #374151;
+      transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .dark .scheme-title {
+      background: #1f1f1f;
+      color: #f5f5f5;
+      border-bottom-color: #374151;
+    }
+
+    /* Original Pastel Blue Scheme */
+    .scheme-pastel-blue {
+      --primary: 217 70% 70%;
+      --primary-foreground: 220 70% 20%;
+      --background: 40 20% 98%;
+      --foreground: 40 20% 15%;
+      --muted: 40 15% 95%;
+      --muted-foreground: 40 15% 45%;
+      --border: 40 15% 88%;
+    }
+
+    .dark .scheme-pastel-blue {
+      --primary: 217 70% 65%;
+      --primary-foreground: 220 70% 95%;
+      --background: 40 20% 8%;
+      --foreground: 40 20% 90%;
+      --muted: 40 15% 12%;
+      --muted-foreground: 40 15% 60%;
+      --border: 40 15% 20%;
+    }
+
+    /* Warm Gray Scheme - Clean and professional */
+    .scheme-warm-gray {
+      --primary: 25 25% 55%;
+      --primary-foreground: 0 0% 98%;
+      --background: 0 0% 98%;
+      --foreground: 25 25% 15%;
+      --muted: 25 15% 94%;
+      --muted-foreground: 25 15% 45%;
+      --border: 25 15% 88%;
+    }
+
+    .dark .scheme-warm-gray {
+      --primary: 25 25% 65%;
+      --primary-foreground: 0 0% 95%;
+      --background: 0 0% 8%;
+      --foreground: 25 25% 90%;
+      --muted: 25 15% 12%;
+      --muted-foreground: 25 15% 60%;
+      --border: 25 15% 20%;
+    }
+
+    /* Soft Green Scheme - Easy on eyes */
+    .scheme-soft-green {
+      --primary: 142 35% 50%;
+      --primary-foreground: 0 0% 98%;
+      --background: 120 20% 98%;
+      --foreground: 142 35% 15%;
+      --muted: 120 15% 95%;
+      --muted-foreground: 120 15% 45%;
+      --border: 120 15% 88%;
+    }
+
+    .dark .scheme-soft-green {
+      --primary: 142 35% 60%;
+      --primary-foreground: 0 0% 95%;
+      --background: 120 20% 8%;
+      --foreground: 142 35% 90%;
+      --muted: 120 15% 12%;
+      --muted-foreground: 120 15% 60%;
+      --border: 120 15% 20%;
+    }
+
+    /* Cool Slate Scheme - Modern and calm */
+    .scheme-cool-slate {
+      --primary: 215 25% 50%;
+      --primary-foreground: 0 0% 98%;
+      --background: 210 20% 98%;
+      --foreground: 215 25% 15%;
+      --muted: 210 15% 95%;
+      --muted-foreground: 210 15% 45%;
+      --border: 210 15% 88%;
+    }
+
+    .dark .scheme-cool-slate {
+      --primary: 215 25% 60%;
+      --primary-foreground: 0 0% 95%;
+      --background: 210 20% 8%;
+      --foreground: 215 25% 90%;
+      --muted: 210 15% 12%;
+      --muted-foreground: 210 15% 60%;
+      --border: 210 15% 20%;
+    }
+
+    /* Minimal Monochrome Scheme - Ultra clean */
+    .scheme-monochrome {
+      --primary: 0 0% 40%;
+      --primary-foreground: 0 0% 98%;
+      --background: 0 0% 99%;
+      --foreground: 0 0% 10%;
+      --muted: 0 0% 96%;
+      --muted-foreground: 0 0% 45%;
+      --border: 0 0% 90%;
+    }
+
+    .dark .scheme-monochrome {
+      --primary: 0 0% 70%;
+      --primary-foreground: 0 0% 10%;
+      --background: 0 0% 6%;
+      --foreground: 0 0% 95%;
+      --muted: 0 0% 10%;
+      --muted-foreground: 0 0% 60%;
+      --border: 0 0% 18%;
+    }
+
+    /* Soft Purple Scheme - Creative but professional */
+    .scheme-soft-purple {
+      --primary: 260 30% 55%;
+      --primary-foreground: 0 0% 98%;
+      --background: 260 15% 98%;
+      --foreground: 260 30% 15%;
+      --muted: 260 10% 95%;
+      --muted-foreground: 260 10% 45%;
+      --border: 260 10% 88%;
+    }
+
+    .dark .scheme-soft-purple {
+      --primary: 260 30% 65%;
+      --primary-foreground: 0 0% 95%;
+      --background: 260 15% 8%;
+      --foreground: 260 30% 90%;
+      --muted: 260 10% 12%;
+      --muted-foreground: 260 10% 60%;
+      --border: 260 10% 20%;
+    }
+
+    /* Neobrutalist Scheme - Bold contrasts and vibrant colors */
+    .scheme-neobrutalist {
+      --primary: 45 100% 51%;
+      --primary-foreground: 0 0% 0%;
+      --background: 0 0% 100%;
+      --foreground: 0 0% 0%;
+      --muted: 0 0% 95%;
+      --muted-foreground: 0 0% 40%;
+      --border: 0 0% 0%;
+    }
+
+    .dark .scheme-neobrutalist {
+      --primary: 45 100% 60%;
+      --primary-foreground: 0 0% 0%;
+      --background: 0 0% 5%;
+      --foreground: 45 100% 60%;
+      --muted: 0 0% 10%;
+      --muted-foreground: 45 100% 70%;
+      --border: 45 100% 60%;
+    }
+
+    /* Dark Brown Scheme - Warm earth tones */
+    .scheme-dark-brown {
+      --primary: 25 70% 55%;
+      --primary-foreground: 0 0% 98%;
+      --background: 25 15% 96%;
+      --foreground: 25 70% 15%;
+      --muted: 25 10% 92%;
+      --muted-foreground: 25 10% 45%;
+      --border: 25 10% 85%;
+    }
+
+    .dark .scheme-dark-brown {
+      --primary: 25 70% 65%;
+      --primary-foreground: 25 70% 10%;
+      --background: 25 25% 8%;
+      --foreground: 25 70% 85%;
+      --muted: 25 20% 12%;
+      --muted-foreground: 25 20% 60%;
+      --border: 25 20% 20%;
+    }
+
+    /* High Contrast Scheme - Maximum accessibility */
+    .scheme-high-contrast {
+      --primary: 240 100% 50%;
+      --primary-foreground: 0 0% 100%;
+      --background: 0 0% 100%;
+      --foreground: 0 0% 0%;
+      --muted: 0 0% 96%;
+      --muted-foreground: 0 0% 30%;
+      --border: 0 0% 0%;
+    }
+
+    .dark .scheme-high-contrast {
+      --primary: 60 100% 60%;
+      --primary-foreground: 0 0% 0%;
+      --background: 0 0% 0%;
+      --foreground: 0 0% 100%;
+      --muted: 0 0% 8%;
+      --muted-foreground: 0 0% 80%;
+      --border: 0 0% 100%;
+    }
+
+    /* Retro Terminal Scheme - Green on black vibes */
+    .scheme-retro-terminal {
+      --primary: 120 100% 50%;
+      --primary-foreground: 0 0% 0%;
+      --background: 0 0% 98%;
+      --foreground: 120 100% 25%;
+      --muted: 120 30% 95%;
+      --muted-foreground: 120 30% 40%;
+      --border: 120 30% 80%;
+    }
+
+    .dark .scheme-retro-terminal {
+      --primary: 120 100% 60%;
+      --primary-foreground: 0 0% 0%;
+      --background: 0 0% 5%;
+      --foreground: 120 100% 70%;
+      --muted: 120 50% 8%;
+      --muted-foreground: 120 50% 60%;
+      --border: 120 50% 20%;
+    }
+
+    /* Deep Ocean Scheme - Rich blues and teals */
+    .scheme-deep-ocean {
+      --primary: 195 100% 60%;
+      --primary-foreground: 0 0% 0%;
+      --background: 220 30% 97%;
+      --foreground: 220 100% 15%;
+      --muted: 220 20% 94%;
+      --muted-foreground: 220 30% 40%;
+      --border: 220 20% 85%;
+    }
+
+    .dark .scheme-deep-ocean {
+      --primary: 195 100% 70%;
+      --primary-foreground: 220 100% 10%;
+      --background: 220 100% 3%;
+      --foreground: 195 100% 80%;
+      --muted: 220 80% 6%;
+      --muted-foreground: 195 80% 65%;
+      --border: 220 60% 15%;
+    }
+
+    /* Sunset Scheme - Warm oranges and reds */
+    .scheme-sunset {
+      --primary: 15 100% 60%;
+      --primary-foreground: 0 0% 100%;
+      --background: 30 50% 97%;
+      --foreground: 15 100% 15%;
+      --muted: 30 30% 94%;
+      --muted-foreground: 15 50% 35%;
+      --border: 30 30% 85%;
+    }
+
+    .dark .scheme-sunset {
+      --primary: 15 100% 70%;
+      --primary-foreground: 15 100% 10%;
+      --background: 15 60% 5%;
+      --foreground: 30 100% 85%;
+      --muted: 15 40% 8%;
+      --muted-foreground: 15 60% 65%;
+      --border: 15 40% 18%;
+    }
+
+    /* Rust Brown Scheme - Using #803514 as base */
+    .scheme-rust-brown {
+      --primary: 18 70% 29%; /* #803514 converted to HSL */
+      --primary-foreground: 30 100% 97%;
+      --background: 30 25% 96%;
+      --foreground: 18 70% 15%;
+      --muted: 25 15% 91%;
+      --muted-foreground: 18 45% 40%;
+      --border: 25 20% 82%;
+      --hover-background: 18 45% 88%;
+      --hover-foreground: 18 70% 25%;
+    }
+
+    .dark .scheme-rust-brown {
+      --primary: 18 75% 45%; /* Brighter version of #803514 for dark mode */
+      --primary-foreground: 18 75% 5%;
+      --background: 18 40% 6%; /* Very dark brown background */
+      --foreground: 25 60% 90%;
+      --muted: 18 30% 10%;
+      --muted-foreground: 18 45% 65%;
+      --border: 18 35% 18%;
+      --hover-background: 18 40% 12%;
+      --hover-foreground: 18 75% 95%;
+    }
+
+    /* Tab system styles */
+    .node-viewer {
+      --circle-offset: 22px;
+      --circle-diameter: 20px;
+      --circle-text-gap: 8px;
+      --node-indent: 2.5rem;
+      --baseline-correction: -0.06375em;
+    }
+
+    .hierarchy-example {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      margin: 1rem 0;
+      padding-left: 0;
+      position: relative;
+    }
+
+    .hierarchy-node {
+      position: relative;
+      cursor: pointer;
+      border-radius: 0.25rem;
+      transition: background-color 0.15s ease;
+      padding-left: calc(var(--circle-offset, 22px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
+      padding-top: 0.25rem;
+      padding-bottom: 0.25rem;
+      min-height: calc(var(--circle-diameter, 20px) + 0.5rem);
+      --line-height: 1.6;
+      --font-size: 1rem;
+      --line-height-px: calc(var(--font-size) * var(--line-height));
+    }
+
+    .hierarchy-node.child-1 {
+      margin-left: 2.5rem;
+    }
+
+    .hierarchy-node.child-2 {
+      margin-left: 5rem;
+    }
+
+    .hierarchy-indicator {
+      position: absolute;
+      left: var(--circle-offset, 22px);
+      top: calc(0.25rem + (var(--line-height-px) / 2));
+      transform: translateY(-50%);
+      width: var(--circle-diameter, 20px);
+      height: var(--circle-diameter, 20px);
+      flex-shrink: 0;
+      z-index: 2;
+    }
+
+    .task-icon {
+      width: var(--circle-diameter, 20px);
+      height: var(--circle-diameter, 20px);
+      position: relative;
+      display: block;
+    }
+
+    .text-circle {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: hsl(var(--primary));
+      position: absolute;
+      top: 2px;
+      left: 2px;
+    }
+
+    .task-ring {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid hsl(var(--primary) / 0.5);
+      box-sizing: border-box;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    .task-circle {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+    }
+
+    .task-circle-pending {
+      background: transparent;
+      border: 1px solid hsl(var(--primary));
+      box-sizing: border-box;
+    }
+
+    .task-circle-in-progress {
+      background: linear-gradient(90deg, hsl(var(--primary)) 50%, transparent 50%);
+      border: 1px solid hsl(var(--primary));
+      box-sizing: border-box;
+    }
+
+    .task-circle-completed {
+      background: hsl(var(--primary));
+    }
+
+    .task-circle-completed::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 10px;
+      height: 8px;
+      transform: translate(-50%, -50%);
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: contain;
+    }
+
+    .dark .task-circle-completed::after {
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23000000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+
+    .chevron-icon {
+      position: absolute;
+      top: calc(0.25rem + (var(--line-height-px) / 2));
+      transform: translate(-50%, -50%);
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s ease;
+      z-index: 3;
+      background: none;
+      border: none;
+      cursor: pointer;
+    }
+
+    .hierarchy-node .chevron-icon {
+      left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2);
+    }
+
+    .chevron-icon svg {
+      width: 16px;
+      height: 16px;
+      fill: hsl(var(--primary));
+    }
+
+    .chevron-icon.expanded {
+      transform: translate(-50%, -50%) rotate(90deg);
+    }
+
+    .ai-icon {
+      width: var(--circle-diameter, 20px);
+      height: var(--circle-diameter, 20px);
+      position: relative;
+      display: block;
+    }
+
+    .ai-square-alt {
+      width: 16px;
+      height: 16px;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      border-radius: 0.5px;
+      overflow: hidden;
+    }
+
+    .ai-square-alt::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: hsl(var(--primary));
+    }
+
+    .ai-square-alt::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 14px;
+      height: 14px;
+      transform: translate(-50%, -50%);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23FFFFFF'/%3E%3C/svg%3E");
+      background-size: contain;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+
+    .dark .ai-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23000000'/%3E%3C/svg%3E");
+    }
+
+    .ai-square-ring {
+      width: 20px;
+      height: 20px;
+      border-radius: 1px;
+      border: 2px solid hsl(var(--primary) / 0.5);
+      box-sizing: border-box;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+  </style>
+</head>
+<body class="no-transitions">
+  <div class="style-guide">
+    <!-- Header -->
+    <header>
+      <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <div>
+          <h1>Color Scheme Explorations</h1>
+          <p>Clean, professional color schemes for NodeSpace's browser-like tab system.</p>
+        </div>
+        <div class="theme-toggle" style="margin-top: 0.5rem;">
+          <button id="theme-toggle-btn" style="
+            padding: 0.5rem 1rem;
+            border: 1px solid #d1d5db;
+            background: #ffffff;
+            color: #374151;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+          " onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background='#ffffff'">
+            🌙 Dark Mode
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Original Pastel Blue -->
+    <div class="scheme-container scheme-pastel-blue">
+      <h2 class="scheme-title">Current: Pastel Blue</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+            <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+              <div class="hierarchy-example">
+                <div class="hierarchy-node has-children">
+                  <span class="chevron-icon expanded">
+                    <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                    </svg>
+                  </span>
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="task-ring"></div>
+                      <div class="text-circle"></div>
+                    </div>
+                  </div>
+                  Morning Planning
+                </div>
+                
+                <div class="hierarchy-node child-1">
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="task-circle task-circle-completed"></div>
+                    </div>
+                  </div>
+                  <span style="text-decoration: line-through; opacity: 0.7;">Review yesterday's progress</span>
+                </div>
+                
+                <div class="hierarchy-node child-1">
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="task-circle task-circle-in-progress"></div>
+                    </div>
+                  </div>
+                  Set priorities for today's development work
+                </div>
+                
+                <div class="hierarchy-node has-children">
+                  <span class="chevron-icon expanded">
+                    <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                    </svg>
+                  </span>
+                  <div class="hierarchy-indicator">
+                    <div class="ai-icon">
+                      <div class="ai-square-ring"></div>
+                      <div class="ai-square-alt"></div>
+                    </div>
+                  </div>
+                  What should I prioritize for the project?
+                </div>
+                
+                <div class="hierarchy-node child-1">
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="text-circle"></div>
+                    </div>
+                  </div>
+                  Based on your timeline, I'd focus on the user research phase first...
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Warm Gray Scheme -->
+    <div class="scheme-container scheme-warm-gray">
+      <h2 class="scheme-title">Option 1: Warm Gray - Professional & Clean</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+            <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+              <div class="hierarchy-example">
+                <div class="hierarchy-node has-children">
+                  <span class="chevron-icon expanded">
+                    <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                    </svg>
+                  </span>
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="task-ring"></div>
+                      <div class="text-circle"></div>
+                    </div>
+                  </div>
+                  Morning Planning
+                </div>
+                
+                <div class="hierarchy-node child-1">
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="task-circle task-circle-completed"></div>
+                    </div>
+                  </div>
+                  <span style="text-decoration: line-through; opacity: 0.7;">Review yesterday's progress</span>
+                </div>
+                
+                <div class="hierarchy-node child-1">
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="task-circle task-circle-pending"></div>
+                    </div>
+                  </div>
+                  Set priorities for development work
+                </div>
+                
+                <div class="hierarchy-node has-children">
+                  <span class="chevron-icon expanded">
+                    <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                    </svg>
+                  </span>
+                  <div class="hierarchy-indicator">
+                    <div class="ai-icon">
+                      <div class="ai-square-ring"></div>
+                      <div class="ai-square-alt"></div>
+                    </div>
+                  </div>
+                  What should I prioritize?
+                </div>
+                
+                <div class="hierarchy-node child-1">
+                  <div class="hierarchy-indicator">
+                    <div class="task-icon">
+                      <div class="text-circle"></div>
+                    </div>
+                  </div>
+                  Focus on user research first for better insights...
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Soft Green Scheme -->
+    <div class="scheme-container scheme-soft-green">
+      <h2 class="scheme-title">Option 2: Soft Green - Easy on Eyes</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Morning Planning
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Review yesterday's progress</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-in-progress"></div>
+                  </div>
+                </div>
+                Set priorities for development work
+              </div>
+              
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-ring"></div>
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                What should I prioritize?
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Focus on user research first for better insights...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Cool Slate Scheme -->
+    <div class="scheme-container scheme-cool-slate">
+      <h2 class="scheme-title">Option 3: Cool Slate - Modern & Calm</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Morning Planning
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Review yesterday's progress</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-pending"></div>
+                  </div>
+                </div>
+                Set priorities for development work
+              </div>
+              
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-ring"></div>
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                What should I prioritize?
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Focus on user research first for better insights...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Minimal Monochrome Scheme -->
+    <div class="scheme-container scheme-monochrome">
+      <h2 class="scheme-title">Option 4: Minimal Monochrome - Ultra Clean</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Morning Planning
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Review yesterday's progress</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-in-progress"></div>
+                  </div>
+                </div>
+                Set priorities for development work
+              </div>
+              
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-ring"></div>
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                What should I prioritize?
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Focus on user research first for better insights...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Soft Purple Scheme -->
+    <div class="scheme-container scheme-soft-purple">
+      <h2 class="scheme-title">Option 5: Soft Purple - Creative & Professional</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Morning Planning
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Review yesterday's progress</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-pending"></div>
+                  </div>
+                </div>
+                Set priorities for development work
+              </div>
+              
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-ring"></div>
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                What should I prioritize?
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Focus on user research first for better insights...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Neobrutalist Scheme -->
+    <div class="scheme-container scheme-neobrutalist">
+      <h2 class="scheme-title">Bold Option 1: Neobrutalist - High Impact</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                BOLD PLANNING SESSION
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Maximize contrast and impact</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-in-progress"></div>
+                  </div>
+                </div>
+                High-energy design system implementation
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Dark Brown Scheme -->
+    <div class="scheme-container scheme-dark-brown">
+      <h2 class="scheme-title">Bold Option 2: Dark Brown - Warm Earth Tones</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Coffee & Strategy Session
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Rich, warm workspace setup</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                How does this earthy palette feel?
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- High Contrast Scheme -->
+    <div class="scheme-container scheme-high-contrast">
+      <h2 class="scheme-title">Bold Option 3: High Contrast - Maximum Accessibility</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Accessibility Planning
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-pending"></div>
+                  </div>
+                </div>
+                Maximum contrast ratios for readability
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Retro Terminal Scheme -->
+    <div class="scheme-container scheme-retro-terminal">
+      <h2 class="scheme-title">Bold Option 4: Retro Terminal - Hacker Vibes</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                > System.initialize()
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">$ run diagnostics --verbose</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Deep Ocean Scheme -->
+    <div class="scheme-container scheme-deep-ocean">
+      <h2 class="scheme-title">Bold Option 5: Deep Ocean - Immersive Blues</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Deep Dive Research
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-in-progress"></div>
+                  </div>
+                </div>
+                Immersive workspace design exploration
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Sunset Scheme -->
+    <div class="scheme-container scheme-sunset">
+      <h2 class="scheme-title">Bold Option 6: Sunset - Warm Energy</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Golden Hour Planning
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">Warm, energizing color palette</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                How does this fiery palette inspire creativity?
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Rust Brown Scheme -->
+    <div class="scheme-container scheme-rust-brown">
+      <h2 class="scheme-title">Bold Option 7: Rust Brown - Earthy Developer</h2>
+      
+      <div class="scheme-demo">
+        <div class="tab-bar">
+          <div class="tab active">Today</div>
+          <div class="tab inactive">Acme Corp Strategy</div>
+          <div class="tab inactive">Q2 Tasks</div>
+        </div>
+        
+        <div class="content-area">
+          <div class="date-header">
+            <div class="date-display">
+              <svg style="width: 18px; height: 18px; opacity: 0.8; color: hsl(var(--muted-foreground));" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span style="font-size: 1rem; font-weight: 500; color: hsl(var(--muted-foreground));">
+                Today, September 4, 2025
+              </span>
+            </div>
+            
+            <div class="date-nav">
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15,18 9,12 15,6"></polyline>
+                </svg>
+              </button>
+              <button class="date-nav-button">
+                <svg style="width: 16px; height: 16px; color: currentColor;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9,18 15,12 9,6"></polyline>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="main-content">
+          <div class="node-viewer" style="border: none; padding: 0; background: transparent;">
+            <div class="hierarchy-example">
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-ring"></div>
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Rust Development Session
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-completed"></div>
+                  </div>
+                </div>
+                <span style="text-decoration: line-through; opacity: 0.7;">cargo build --release completed</span>
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="task-circle task-circle-in-progress"></div>
+                  </div>
+                </div>
+                Implementing async/await patterns
+              </div>
+              
+              <div class="hierarchy-node has-children">
+                <span class="chevron-icon expanded">
+                  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+                  </svg>
+                </span>
+                <div class="hierarchy-indicator">
+                  <div class="ai-icon">
+                    <div class="ai-square-ring"></div>
+                    <div class="ai-square-alt"></div>
+                  </div>
+                </div>
+                How can I optimize memory usage?
+              </div>
+              
+              <div class="hierarchy-node child-1">
+                <div class="hierarchy-indicator">
+                  <div class="task-icon">
+                    <div class="text-circle"></div>
+                  </div>
+                </div>
+                Consider using Arc&lt;Mutex&lt;T&gt;&gt; for shared state and Box&lt;dyn Trait&gt; for trait objects...
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Section -->
+    <section id="summary-section" style="margin: 3rem 0; padding: 2rem; background: #f9fafb; border-radius: 8px; transition: background-color 0.3s ease;">
+      <h2 id="summary-title" style="margin: 0 0 1rem 0; color: #374151; transition: color 0.3s ease;">Color Scheme Analysis</h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+        <div>
+          <h3 style="color: #6b7280; font-size: 0.875rem; text-transform: uppercase; margin: 0 0 0.5rem 0; transition: color 0.3s ease;">Most Professional</h3>
+          <p class="summary-text" style="margin: 0; color: #374151; transition: color 0.3s ease;"><strong>Warm Gray:</strong> Clean, corporate feel. Great for business environments and long reading sessions.</p>
+        </div>
+        <div>
+          <h3 style="color: #6b7280; font-size: 0.875rem; text-transform: uppercase; margin: 0 0 0.5rem 0; transition: color 0.3s ease;">Easiest on Eyes</h3>
+          <p class="summary-text" style="margin: 0; color: #374151; transition: color 0.3s ease;"><strong>Soft Green:</strong> Natural, calming. Reduces eye strain during extended use.</p>
+        </div>
+        <div>
+          <h3 style="color: #6b7280; font-size: 0.875rem; text-transform: uppercase; margin: 0 0 0.5rem 0; transition: color 0.3s ease;">Most Modern</h3>
+          <p class="summary-text" style="margin: 0; color: #374151; transition: color 0.3s ease;"><strong>Cool Slate:</strong> Contemporary tech aesthetic. Popular in developer tools and design apps.</p>
+        </div>
+        <div>
+          <h3 style="color: #6b7280; font-size: 0.875rem; text-transform: uppercase; margin: 0 0 0.5rem 0; transition: color 0.3s ease;">Ultra Minimal</h3>
+          <p class="summary-text" style="margin: 0; color: #374151; transition: color 0.3s ease;"><strong>Monochrome:</strong> Pure focus on content. Maximum clarity and contrast.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Theme Toggle Info -->
+    <div id="theme-info" style="margin: 2rem 0; text-align: center; padding: 2rem; background: #f9fafb; border-radius: 8px; transition: background-color 0.3s ease;">
+      <p id="theme-info-text" style="margin: 0; color: #6b7280; font-size: 0.875rem; transition: color 0.3s ease;">
+        All schemes are designed to work seamlessly with light/dark mode switching and maintain excellent accessibility standards. 
+        <strong>Try the dark mode toggle above!</strong>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    // Dark mode toggle functionality
+    document.addEventListener('DOMContentLoaded', function() {
+      const toggleBtn = document.getElementById('theme-toggle-btn');
+      const body = document.body;
+      const summarySection = document.getElementById('summary-section');
+      const summaryTitle = document.getElementById('summary-title');
+      const summaryTexts = document.querySelectorAll('.summary-text');
+      const themeInfo = document.getElementById('theme-info');
+      const themeInfoText = document.getElementById('theme-info-text');
+      
+      // Check for saved theme preference or default to light
+      const currentTheme = localStorage.getItem('theme') || 'light';
+      
+      // Apply initial theme
+      if (currentTheme === 'dark') {
+        body.classList.add('dark');
+        updateToggleButton('light');
+        updateSummaryColors('dark');
+      } else {
+        updateToggleButton('dark');
+        updateSummaryColors('light');
+      }
+      
+      // Toggle theme on button click
+      toggleBtn.addEventListener('click', function() {
+        body.classList.toggle('dark');
+        
+        const isDark = body.classList.contains('dark');
+        const newTheme = isDark ? 'dark' : 'light';
+        
+        // Save preference
+        localStorage.setItem('theme', newTheme);
+        
+        // Update button text
+        updateToggleButton(isDark ? 'light' : 'dark');
+        
+        // Update summary section colors
+        updateSummaryColors(newTheme);
+      });
+      
+      function updateToggleButton(nextMode) {
+        if (nextMode === 'dark') {
+          toggleBtn.innerHTML = '🌙 Dark Mode';
+          toggleBtn.style.background = '#ffffff';
+          toggleBtn.style.color = '#374151';
+          toggleBtn.style.borderColor = '#d1d5db';
+        } else {
+          toggleBtn.innerHTML = '☀️ Light Mode';
+          toggleBtn.style.background = '#374151';
+          toggleBtn.style.color = '#ffffff';
+          toggleBtn.style.borderColor = '#6b7280';
+        }
+      }
+      
+      function updateSummaryColors(theme) {
+        if (theme === 'dark') {
+          summarySection.style.background = '#1f1f1f';
+          summaryTitle.style.color = '#f5f5f5';
+          themeInfo.style.background = '#1f1f1f';
+          themeInfoText.style.color = '#9ca3af';
+          summaryTexts.forEach(text => {
+            text.style.color = '#f5f5f5';
+          });
+          // Update h3 elements
+          document.querySelectorAll('#summary-section h3').forEach(h3 => {
+            h3.style.color = '#9ca3af';
+          });
+          document.querySelectorAll('#theme-info h3').forEach(h3 => {
+            h3.style.color = '#9ca3af';
+          });
+        } else {
+          summarySection.style.background = '#f9fafb';
+          summaryTitle.style.color = '#374151';
+          themeInfo.style.background = '#f9fafb';
+          themeInfoText.style.color = '#6b7280';
+          summaryTexts.forEach(text => {
+            text.style.color = '#374151';
+          });
+          // Update h3 elements
+          document.querySelectorAll('#summary-section h3').forEach(h3 => {
+            h3.style.color = '#6b7280';
+          });
+          document.querySelectorAll('#theme-info h3').forEach(h3 => {
+            h3.style.color = '#6b7280';
+          });
+        }
+      }
+      
+      console.log('Color scheme exploration with dark mode loaded');
+    });
+  </script>
+</body>
+</html>

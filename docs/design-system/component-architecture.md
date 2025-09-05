@@ -452,4 +452,115 @@ test('provides proper ARIA attributes', () => {
 </DataProvider>
 ```
 
+## Navigation Patterns
+
+### Tab Navigation System
+
+NodeSpace uses a consistent tab system across all navigation contexts with unified accent patterns:
+
+#### **Design Principles**
+- **Consistent Accent System**: All navigation uses accent borders to indicate active states
+- **Contextual Direction**: Vertical navigation (sidebars) use left accents, horizontal navigation (tabs) use top accents
+- **Clean Edges**: No border-radius on navigation items for professional appearance
+- **Subtle Hover States**: Background color transitions using `hsl(var(--muted))`
+
+#### **Implementation Pattern**
+```css
+/* Container Styling */
+.nav-container {
+  display: flex;
+  background: hsl(var(--muted));
+  border-bottom: 1px solid hsl(var(--border));
+  align-items: stretch;
+}
+
+/* Navigation Items */
+.nav-item {
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+  color: hsl(var(--muted-foreground));
+  border-radius: 0 !important; /* Override inherited radius */
+  transition: background-color 0.2s, color 0.2s;
+  background: hsl(var(--muted));
+  border-right: 1px solid hsl(var(--border));
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Hover States */
+.nav-item:hover {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* Active State with Top Accent */
+.nav-item.active {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  z-index: 2;
+}
+
+/* Accent Border Implementation */
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0; /* Full width for clean appearance */
+  height: 4px;
+  background: hsl(var(--primary));
+}
+```
+
+#### **Usage Examples**
+
+**Horizontal Tab Navigation:**
+```svelte
+<nav class="tab-navigation">
+  <a href="/overview" class="nav-item" class:active={$page.url.pathname === '/overview'}>
+    Overview
+  </a>
+  <a href="/patterns" class="nav-item active">
+    Patterns
+  </a>
+  <a href="/components" class="nav-item">
+    Components
+  </a>
+</nav>
+```
+
+**Vertical Sidebar Navigation:**
+```svelte
+<nav class="sidebar-navigation">
+  <a href="/dashboard" class="nav-item sidebar-item active">
+    Dashboard
+  </a>
+  <a href="/projects" class="nav-item sidebar-item">
+    Projects  
+  </a>
+</nav>
+
+<style>
+  .sidebar-item.active::before {
+    left: 0;
+    right: auto;
+    width: 4px;
+    height: 100%;
+    top: 0;
+  }
+</style>
+```
+
+#### **Key Implementation Details**
+1. **Accent Border Positioning**: Use `::before` pseudo-element with `right: 0` for full-width top accents
+2. **Border Radius Override**: Always use `border-radius: 0 !important` to prevent inherited rounding
+3. **Z-Index Management**: Active tabs use `z-index: 2` for proper layering
+4. **Container Border Overlap**: Use `margin-bottom: -1px` on tabs to connect with content area
+
+This tab system provides consistent, professional navigation that matches modern web application patterns while maintaining NodeSpace's design identity.
+
+## Component Integration Summary
+
 This architecture ensures consistency, maintainability, and excellent developer experience across all NodeSpace components.

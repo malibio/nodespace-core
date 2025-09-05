@@ -1,40 +1,40 @@
 /* NodeSpace Design System - shadcn-svelte Variables
  * 
- * Pastel blue-focused design system matching the NodeSpace application
- * Clean, modern aesthetic with AI-native knowledge management focus
+ * Warm Gray color scheme - Clean, professional aesthetic
+ * Designed for productivity and easy reading with reduced eye strain
  */
 
 @layer base {
   :root {
-    /* Color system matching screenshots (light theme) */
-    --primary: 214 42% 78%;            /* #A8C7FA - Anthropic's pastel blue */
-    --primary-foreground: 0 0% 100%;   /* White */
+    /* Color system - Warm Gray theme (light mode) */
+    --primary: 25 25% 55%;             /* Warm gray primary */
+    --primary-foreground: 0 0% 98%;    /* Off-white for primary text */
     
-    --secondary: 43 14% 96%;           /* #F7F6F4 - Warm very light gray */
-    --secondary-foreground: 45 5% 35%;  /* #5C5A56 - Warm medium gray */
+    --secondary: 25 15% 94%;           /* Light warm gray secondary */
+    --secondary-foreground: 25 15% 45%; /* Medium warm gray for secondary text */
     
-    --accent: 214 42% 78%;             /* #A8C7FA - Same pastel blue */
-    --accent-foreground: 220 13% 20%; /* #2A303C - Dark gray for 12.8:1 contrast */
+    --accent: 25 25% 55%;              /* Same as primary for consistency */
+    --accent-foreground: 0 0% 98%;     /* Off-white for accent text */
     
-    --background: 51 25% 97%;           /* #FAF9F5 - Light theme background */
-    --foreground: 45 5% 15%;           /* #272624 - Warm black text */
+    --background: 0 0% 98%;            /* Clean off-white background */
+    --foreground: 25 25% 15%;          /* Dark warm gray text */
     
-    --card: 48 20% 99%;                /* #FDFCFB - Off-white cards */
-    --card-foreground: 45 5% 15%;      /* #272624 - Warm black text */
+    --card: 0 0% 100%;                 /* Pure white cards */
+    --card-foreground: 25 25% 15%;     /* Dark warm gray text */
     
-    --popover: 48 20% 99%;             /* #FDFCFB - Same as cards */
-    --popover-foreground: 45 5% 15%;
+    --popover: 0 0% 100%;              /* Same as cards */
+    --popover-foreground: 25 25% 15%;
     
-    --muted: 43 14% 96%;               /* #F7F6F4 - Warm very light gray */
-    --muted-foreground: 45 5% 55%;     /* #908D87 - Warm light gray */
+    --muted: 25 15% 94%;               /* Light warm gray muted areas */
+    --muted-foreground: 25 15% 45%;    /* Medium warm gray for muted text */
     
-    /* Systematic hover states - WCAG-compliant 6.47:1 contrast */
+    /* Systematic hover states - WCAG-compliant contrast */
     --hover-background: var(--muted);
     --hover-foreground: var(--muted-foreground);
     
-    --border: 43 14% 89%;              /* #E8E6E1 - Warm light gray borders */
-    --input: 43 14% 89%;
-    --ring: 214 42% 78%;               /* Focus ring matches primary */
+    --border: 25 15% 88%;              /* Light warm gray borders */
+    --input: 25 15% 88%;
+    --ring: 25 25% 55%;                /* Focus ring matches primary */
     
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
@@ -49,35 +49,35 @@
   }
 
   .dark {
-    /* Color system matching screenshots (dark theme) */
-    --primary: 214 42% 78%;            /* #A8C7FA - Same pastel blue */
-    --primary-foreground: 0 0% 100%;   /* White */
+    /* Color system - Warm Gray theme (dark mode) */
+    --primary: 25 25% 65%;             /* Lighter warm gray primary for dark theme */
+    --primary-foreground: 0 0% 95%;    /* Very light gray for primary text */
     
-    --secondary: 45 5% 20%;            /* #333231 - Warm dark gray */
-    --secondary-foreground: 43 8% 75%;  /* #C4C1BA - Warm light gray */
+    --secondary: 25 15% 12%;           /* Very dark warm gray secondary */
+    --secondary-foreground: 25 15% 60%; /* Light warm gray for secondary text */
     
-    --accent: 214 42% 78%;             /* #A8C7FA - Same pastel blue */
-    --accent-foreground: 220 13% 20%; /* #2A303C - Dark gray for 12.8:1 contrast */
+    --accent: 25 25% 65%;              /* Same as primary for consistency */
+    --accent-foreground: 0 0% 95%;     /* Very light gray for accent text */
     
-    --background: 49 5% 14%;            /* #252523 - Dark theme background */
-    --foreground: 43 10% 92%;          /* #EFEDE9 - Warm white text */
+    --background: 0 0% 8%;             /* Very dark background */
+    --foreground: 25 25% 90%;          /* Light warm gray text */
     
-    --card: 45 5% 18%;                 /* #2E2D2B - Elevated dark cards */
-    --card-foreground: 43 10% 92%;     /* #EFEDE9 - Warm white text */
+    --card: 25 15% 10%;                /* Slightly elevated dark cards */
+    --card-foreground: 25 25% 90%;     /* Light warm gray text */
     
-    --popover: 45 5% 18%;              /* #2E2D2B - Same as cards */
-    --popover-foreground: 43 10% 92%;
+    --popover: 25 15% 10%;             /* Same as cards */
+    --popover-foreground: 25 25% 90%;
     
-    --muted: 45 5% 20%;                /* #333231 - Warm dark muted */
-    --muted-foreground: 43 5% 55%;     /* #908D87 - Medium warm gray */
+    --muted: 25 15% 12%;               /* Dark warm gray muted areas */
+    --muted-foreground: 25 15% 60%;    /* Light warm gray for muted text */
     
     /* Systematic hover states - WCAG-compliant contrast */
     --hover-background: var(--muted);
     --hover-foreground: var(--muted-foreground);
     
-    --border: 45 5% 22%;               /* #3A3937 - Warm dark gray borders */
-    --input: 45 5% 25%;                /* #403E3C - Slightly lighter for inputs */
-    --ring: 214 42% 78%;               /* Same pastel blue focus */
+    --border: 25 15% 20%;              /* Dark warm gray borders */
+    --input: 25 15% 22%;               /* Slightly lighter for inputs */
+    --ring: 25 25% 65%;                /* Focus ring matches primary */
     
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
@@ -93,14 +93,14 @@
 /* NodeSpace Node Type Colors - Based on Screenshots */
 @layer base {
   :root {
-    /* Node Type Indicators - Anthropic's pastel blue */
-    --node-text: 214 42% 78%;          /* #A8C7FA - Anthropic pastel blue */
-    --node-task: 214 42% 78%;          /* #A8C7FA - Same pastel blue */
-    --node-ai-chat: 214 42% 78%;       /* #A8C7FA - Same pastel blue */
-    --node-entity: 214 42% 78%;        /* #A8C7FA - Same pastel blue */
-    --node-query: 214 42% 78%;         /* #A8C7FA - Same pastel blue */
-    --node-date: 214 42% 78%;          /* #A8C7FA - Same pastel blue */
-    --node-person: 214 42% 78%;        /* #A8C7FA - Same pastel blue */
+    /* Node Type Indicators - Warm Gray theme */
+    --node-text: 25 25% 55%;           /* Primary warm gray */
+    --node-task: 25 25% 55%;           /* Primary warm gray */
+    --node-ai-chat: 25 25% 55%;        /* Primary warm gray */
+    --node-entity: 25 25% 55%;         /* Primary warm gray */
+    --node-query: 25 25% 55%;          /* Primary warm gray */
+    --node-date: 25 25% 55%;           /* Primary warm gray */
+    --node-person: 25 25% 55%;         /* Primary warm gray */
     
     /* Status Colors - From screenshots */
     --status-completed: 142 76% 36%;   /* #22c55e - Green for completed */
@@ -114,14 +114,14 @@
   }
   
   .dark {
-    /* Same pastel blue colors work in dark theme */
-    --node-text: 214 42% 78%;          
-    --node-task: 214 42% 78%;
-    --node-ai-chat: 214 42% 78%;
-    --node-entity: 214 42% 78%;
-    --node-query: 214 42% 78%;
-    --node-date: 214 42% 78%;
-    --node-person: 214 42% 78%;
+    /* Warm gray colors for dark theme */
+    --node-text: 25 25% 65%;          
+    --node-task: 25 25% 65%;
+    --node-ai-chat: 25 25% 65%;
+    --node-entity: 25 25% 65%;
+    --node-query: 25 25% 65%;
+    --node-date: 25 25% 65%;
+    --node-person: 25 25% 65%;
     
     --status-completed: 142 76% 36%;
     --status-in-progress: 45 93% 47%;
