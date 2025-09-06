@@ -1632,11 +1632,11 @@
               I need to contact @acme<span style="animation: blink 1s infinite;">|</span>
             </div>
           
-          <!-- Autocomplete dropdown positioned right after @ character -->
+          <!-- Autocomplete dropdown positioned after @ character -->
           <div style="
             position: absolute;
-            top: 44px;
-            left: calc(54px + 16ch);
+            top: calc(1.75rem + 0.6rem);
+            left: 11.88rem;
             min-width: 300px;
             background: hsl(var(--background));
             border: 1px solid hsl(var(--border));
@@ -1659,11 +1659,53 @@
           </div>
           </div>
         </div>
-        <p style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 1rem;">
-          <strong>Key Features:</strong> Autocomplete dropdown positioned precisely after the "@acme" text using character-based positioning (54px + 16ch), 
-          no input box for seamless inline editing, search term highlighting with proper contrast, 
-          and high-contrast create action.
-        </p>
+      </div>
+      
+      <!-- Features Description -->
+      <div style="margin-top: 1.5rem; padding: 1.5rem; background: hsl(var(--muted)); border-radius: var(--radius);">
+        <h4 style="margin: 0 0 1rem 0; color: hsl(var(--foreground));">@Mention System Features</h4>
+        <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); line-height: 1.6;">
+          <p><strong>Inline Autocomplete:</strong> Dropdown positioned precisely after the "@" character</p>
+          <p><strong>Seamless Editing:</strong> No input box required, direct text insertion</p>
+          <p><strong>Search Highlighting:</strong> Matching text highlighted with proper contrast</p>
+          <p><strong>Node Creation:</strong> High-contrast create action for new nodes</p>
+          <p><strong>Universal References:</strong> Links any content type across the application</p>
+        </div>
+      </div>
+
+      <h3>@Mention Positioning Specifications</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Dropdown Positioning</div>
+          <div class="component-demo">
+            <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+              <thead>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <th style="padding: 0.5rem; text-align: left;">Direction</th>
+                  <th style="padding: 0.5rem; text-align: left;">Position</th>
+                  <th style="padding: 0.5rem; text-align: left;">Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Horizontal</td>
+                  <td style="padding: 0.5rem;"><code>cursor position</code></td>
+                  <td style="padding: 0.5rem;">Aligned exactly with '@' character</td>
+                </tr>
+                <tr style="border-bottom: 1px solid hsl(var(--border));">
+                  <td style="padding: 0.5rem;">Vertical</td>
+                  <td style="padding: 0.5rem;"><code>cursor position + 0.6rem</code></td>
+                  <td style="padding: 0.5rem;">Natural line spacing below text</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.5rem;">Min Width</td>
+                  <td style="padding: 0.5rem;"><code>300px</code></td>
+                  <td style="padding: 0.5rem;">Ensures readable content width</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
       
       <h3>Slash Commands Pattern</h3>
