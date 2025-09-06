@@ -763,6 +763,70 @@
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23252523'/%3E%3C/svg%3E");
     }
     
+    /* Header Square Icons - H1, H2, H3 with punch-hole text effect */
+    .h1-square-alt,
+    .h2-square-alt,
+    .h3-square-alt {
+      width: 16px;
+      height: 16px;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      border-radius: 0.5px;
+      overflow: hidden;
+    }
+    
+    .h1-square-alt::before,
+    .h2-square-alt::before,
+    .h3-square-alt::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: hsl(var(--primary));
+    }
+    
+    .h1-square-alt::after,
+    .h2-square-alt::after,
+    .h3-square-alt::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 14px;
+      height: 14px;
+      transform: translate(-50%, -50%);
+      background-size: contain;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+    
+    .h1-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23FAF9F5' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH1%3C/text%3E%3C/svg%3E");
+    }
+    
+    .h2-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23FAF9F5' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH2%3C/text%3E%3C/svg%3E");
+    }
+    
+    .h3-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23FAF9F5' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH3%3C/text%3E%3C/svg%3E");
+    }
+    
+    .dark .h1-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23252523' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH1%3C/text%3E%3C/svg%3E");
+    }
+    
+    .dark .h2-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23252523' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH2%3C/text%3E%3C/svg%3E");
+    }
+    
+    .dark .h3-square-alt::after {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23252523' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH3%3C/text%3E%3C/svg%3E");
+    }
+    
     /* AI Square Ring for parent nodes */
     .ai-square-ring {
       width: 20px;
@@ -1727,53 +1791,131 @@
                   <div class="text-circle"></div>
                 </div>
               </div>
-              /task<span style="animation: blink 1s infinite;">|</span>
+              /<span style="animation: blink 1s infinite;">|</span>
             </div>
           
           <div style="
             position: absolute;
-            top: calc(0.25rem + 1.6rem + 4px);
-            left: calc(54px + 5ch);
+            top: calc(1.75rem + 0.6rem);
+            left: calc(54px + 1ch);
             min-width: 300px;
-            max-width: 400px;
             background: hsl(var(--background));
             border: 1px solid hsl(var(--border));
             border-radius: var(--radius);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             z-index: 10;
           ">
-            <div style="padding: 0.5rem; border-bottom: 1px solid hsl(var(--border)); font-size: 0.75rem; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase;">Quick Commands</div>
-            
-            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer; background: hsl(var(--muted));">
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer; border-top-left-radius: var(--radius); border-top-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
               <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="color: hsl(var(--node-task));">☐</span>
-                <div>
-                  <div style="font-weight: 500;">/task - Create task</div>
-                  <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Actionable item with due dates</div>
+                <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                  <div class="task-icon">
+                    <div class="text-circle"></div>
+                  </div>
                 </div>
+                <div style="font-weight: 500;">Text</div>
               </div>
             </div>
             
             <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
-              <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="color: hsl(var(--node-text));">●</span>
-                <div>
-                  <div style="font-weight: 500;">/text - Create text node</div>
-                  <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Foundation content block</div>
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                    <div class="ai-icon">
+                      <div class="h1-square-alt"></div>
+                    </div>
+                  </div>
+                  <div style="font-weight: 500;">Header 1</div>
                 </div>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.75rem;">#</code>
               </div>
             </div>
             
-            <div style="padding: 0.75rem; cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
-              <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="color: hsl(var(--node-ai-chat));">AI</span>
-                <div>
-                  <div style="font-weight: 500;">/ai - Start AI chat</div>
-                  <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Conversational AI interface</div>
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                    <div class="ai-icon">
+                      <div class="h2-square-alt"></div>
+                    </div>
+                  </div>
+                  <div style="font-weight: 500;">Header 2</div>
                 </div>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.75rem;">##</code>
+              </div>
+            </div>
+            
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                    <div class="ai-icon">
+                      <div class="h3-square-alt"></div>
+                    </div>
+                  </div>
+                  <div style="font-weight: 500;">Header 3</div>
+                </div>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.75rem;">###</code>
+              </div>
+            </div>
+            
+            <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                    <div class="task-icon">
+                      <div class="task-circle task-circle-completed"></div>
+                    </div>
+                  </div>
+                  <div style="font-weight: 500;">Task</div>
+                </div>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.75rem;">[ ]</code>
+              </div>
+            </div>
+            
+            <div style="padding: 0.75rem; cursor: pointer; border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                    <div class="ai-icon">
+                      <div class="ai-square-alt"></div>
+                    </div>
+                  </div>
+                  <div style="font-weight: 500;">AI Chat</div>
+                </div>
+                <code style="background: hsl(var(--muted)); padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.75rem;">⌘ + k</code>
               </div>
             </div>
           </div>
+          </div>
+        </div>
+      </div>
+
+      <h3>Slash Command Icon System</h3>
+      <div class="component-showcase">
+        <div class="component-example">
+          <div class="component-title">Icon Implementation</div>
+          <div class="component-demo">
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Consistent Design System Integration</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li><strong>Text:</strong> Uses existing <code>task-icon</code> + <code>text-circle</code> classes</li>
+                <li><strong>Headers:</strong> Custom <code>h1-square-alt</code>, <code>h2-square-alt</code>, <code>h3-square-alt</code> classes</li>
+                <li><strong>Task:</strong> Uses existing <code>task-icon</code> + <code>task-circle-completed</code> classes</li>
+                <li><strong>AI Chat:</strong> Uses existing <code>ai-icon</code> + <code>ai-square-alt</code> classes</li>
+                <li><strong>Container:</strong> All icons centered in 20x20px containers within established node system</li>
+              </ul>
+            </div>
+            
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius);">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Header Icon Specifications</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li><strong>Size:</strong> 16x16px squares with 0.5px border-radius</li>
+                <li><strong>Punch-hole Effect:</strong> 14x14px SVG text with background showing through</li>
+                <li><strong>Typography:</strong> 16px font-size, 400 weight, system font stack</li>
+                <li><strong>Positioning:</strong> Centered at x="10" y="12.5" with dominant-baseline="middle"</li>
+                <li><strong>Theme Support:</strong> Light (#FAF9F5) and dark (#252523) text colors</li>
+                <li><strong>SVG ViewBox:</strong> 0 0 20 20 for consistent scaling</li>
+              </ul>
+            </div>
           </div>
         </div>
       </div>
