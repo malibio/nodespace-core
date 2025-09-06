@@ -13,17 +13,27 @@ This document maintains the precise positioning calculations used throughout Nod
 
 **Current Implementation:**
 ```
-Base position (after 'a' in "contact"): 7.65rem
-Width of "ct @" (4 characters): 2.063rem  
-Final position: 7.65rem + 2.063rem = 9.713rem
+Text measurement: "I need to contact " = 17 characters
+Character width: ~0.515rem per character
+Text width: 17 × 0.515rem = 8.755rem
+Node padding: 3.125rem (50px from hierarchy system)
+Horizontal position: 3.125rem + 8.755rem = 11.88rem
+```
+
+**Vertical Positioning:**
+```
+Text baseline position: 1.75rem from container top
+Line height: 1.6rem (font: 1rem + spacing: 0.6rem)
+Inter-line spacing: 0.6rem (space between wrapped lines)
+Dropdown position: text baseline + inter-line spacing = 1.75rem + 0.6rem
 ```
 
 **CSS Implementation:**
 ```css
 .autocomplete-dropdown {
   position: absolute;
-  left: 9.713rem;
-  top: 2.8rem;
+  left: 11.88rem;
+  top: calc(1.75rem + 0.6rem); /* Positioned with natural line spacing */
 }
 ```
 
