@@ -1712,15 +1712,24 @@
             z-index: 10;
           ">
             <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer; border-top-left-radius: var(--radius); border-top-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
-              <div style="font-weight: 500;"><span class="search-highlight">Acme</span> Corporation</div>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <div style="width: 20px; height: 20px;"></div>
+                <div style="font-weight: 500;"><span class="search-highlight">Acme</span> Corporation</div>
+              </div>
             </div>
             
             <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
-              <div style="font-weight: 500;"><span class="search-highlight">Acme</span> Corp Campaign Strategy</div>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <div style="width: 20px; height: 20px;"></div>
+                <div style="font-weight: 500;"><span class="search-highlight">Acme</span> Corp Campaign Strategy</div>
+              </div>
             </div>
             
             <div style="padding: 0.75rem; cursor: pointer; color: hsl(var(--foreground)); background: hsl(var(--muted) / 0.5); font-weight: 600; border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'; this.style.color='hsl(var(--foreground))';" onmouseout="this.style.background='hsl(var(--muted) / 0.5)'; this.style.color='hsl(var(--foreground))';">
-              + Create new "<span class="search-highlight">acme</span>" node
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <div style="width: 20px; height: 20px;"></div>
+                <div>+ Create new "<span class="search-highlight">acme</span>" node</div>
+              </div>
             </div>
           </div>
           </div>
