@@ -1901,31 +1901,60 @@
         </div>
       </div>
 
-      <h3>Slash Command Icon System</h3>
+      <h3>Autocomplete System Documentation</h3>
       <div class="component-showcase">
         <div class="component-example">
-          <div class="component-title">Icon Implementation</div>
+          <div class="component-title">Dropdown Consistency</div>
           <div class="component-demo">
             <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
-              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Consistent Design System Integration</p>
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Unified Dropdown Specifications</p>
               <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
-                <li><strong>Text:</strong> Uses existing <code>task-icon</code> + <code>text-circle</code> classes</li>
-                <li><strong>Headers:</strong> Custom <code>h1-square-alt</code>, <code>h2-square-alt</code>, <code>h3-square-alt</code> classes</li>
-                <li><strong>Task:</strong> Uses existing <code>task-icon</code> + <code>task-circle-completed</code> classes</li>
-                <li><strong>AI Chat:</strong> Uses existing <code>ai-icon</code> + <code>ai-square-alt</code> classes</li>
-                <li><strong>Container:</strong> All icons centered in 20x20px containers within established node system</li>
+                <li><strong>Width:</strong> <code>min-width: 300px</code> for both @mention and slash command dropdowns</li>
+                <li><strong>Item Padding:</strong> <code>0.75rem</code> consistent across all items</li>
+                <li><strong>Layout Structure:</strong> <code>display: flex; align-items: center; gap: 0.5rem</code></li>
+                <li><strong>Icon Space:</strong> <code>20x20px</code> reserved container (filled for content, empty for actions)</li>
+                <li><strong>Typography:</strong> <code>font-weight: 500</code> for content, <code>600</code> for actions</li>
+                <li><strong>Positioning:</strong> Precise alignment after trigger characters ("/" and "@")</li>
+              </ul>
+            </div>
+            
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">@Mention System</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li><strong>Content Items:</strong> Circle text node icons for existing nodes</li>
+                <li><strong>Create Actions:</strong> Centered text without icons, highlighted background</li>
+                <li><strong>Positioning:</strong> <code>left: 11.88rem</code> - precisely after "@" character</li>
+                <li><strong>Content:</strong> Clean titles without sub-descriptions</li>
               </ul>
             </div>
             
             <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius);">
-              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Header Icon Specifications</p>
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Slash Command System</p>
+              <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                <li><strong>Text:</strong> Uses <code>task-icon</code> + <code>text-circle</code> (16x16px circle)</li>
+                <li><strong>Headers:</strong> Custom <code>h1/h2/h3-square-alt</code> (16x16px squares with punch-holed text)</li>
+                <li><strong>Task:</strong> Uses <code>task-icon</code> + <code>task-circle-completed</code> (checkmark)</li>
+                <li><strong>AI Chat:</strong> Uses <code>ai-icon</code> + <code>ai-square-alt</code> ("AI" text)</li>
+                <li><strong>Positioning:</strong> <code>left: 54px</code> - precisely after "/" character</li>
+                <li><strong>Layout:</strong> Icons with labels and keyboard shortcuts</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        
+        <div class="component-example">
+          <div class="component-title">Header Icon Technical Details</div>
+          <div class="component-demo">
+            <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius);">
+              <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Custom Header Icon Implementation</p>
               <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
                 <li><strong>Size:</strong> 16x16px squares with 0.5px border-radius</li>
                 <li><strong>Punch-hole Effect:</strong> 14x14px SVG text with background showing through</li>
                 <li><strong>Typography:</strong> 16px font-size, 400 weight, system font stack</li>
                 <li><strong>Positioning:</strong> Centered at x="10" y="12.5" with dominant-baseline="middle"</li>
                 <li><strong>Theme Support:</strong> Light (#FAF9F5) and dark (#252523) text colors</li>
-                <li><strong>SVG ViewBox:</strong> 0 0 20 20 for consistent scaling</li>
+                <li><strong>SVG ViewBox:</strong> 0 0 20 20 for consistent scaling within 14x14px container</li>
+                <li><strong>CSS Classes:</strong> <code>.h1-square-alt</code>, <code>.h2-square-alt</code>, <code>.h3-square-alt</code></li>
               </ul>
             </div>
           </div>
