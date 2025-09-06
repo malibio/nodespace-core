@@ -411,7 +411,10 @@
     
     .sidebar-expanded .hamburger-icon {
       margin-bottom: 0.5rem;
+      width: 20px;
+      height: 20px;
       align-self: flex-start;
+      margin-left: calc(1rem - 18px); /* Move left to align with nav icons at same position */
     }
     
     .main-content {
@@ -841,6 +844,7 @@
     <section class="example-section">
       <h2>Navigation Shell</h2>
       <p>Collapsible sidebar navigation with hamburger menu, matching the design from your application screenshots.</p>
+      <p><strong>Recent Fix:</strong> Hamburger icons in both collapsed and expanded sidebars now align perfectly with navigation icons below using calculated margins and consistent 20x20px sizing.</p>
       
       <h3>Collapsed Sidebar</h3>
       <div class="shell-demo">
@@ -1386,6 +1390,7 @@
       
       <h3>Browser-Like Tab System</h3>
       <p>Each content pane supports multiple tabs with intelligent title management and browser-like behaviors.</p>
+      <p><strong>Recent Fix:</strong> Tab titles are now properly vertically centered within tabs using <code>display: flex</code> and <code>align-items: center</code> without extra padding offsets.</p>
       
       <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 500px; overflow: hidden; padding: 0; background: transparent;">
         <!-- Tab Bar Example -->
@@ -1409,7 +1414,6 @@
             position: relative;
             z-index: 2;
             margin-bottom: -1px;
-            padding-top: calc(1rem - 4px);
           ">
             Today
             <div style="
