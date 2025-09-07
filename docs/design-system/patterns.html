@@ -232,8 +232,9 @@
       z-index: 2;
     }
     
-    /* Use the exact same circle system from task icons */
-    .hierarchy-indicator .task-icon {
+    /* Use the exact same circle system for all node types */
+    .hierarchy-indicator .task-icon,
+    .hierarchy-indicator .node-icon {
       width: var(--circle-diameter, 20px);
       height: var(--circle-diameter, 20px);
       position: relative;
@@ -479,6 +480,14 @@
     
     /* CSS-based task icons for consistent cross-browser rendering */
     .task-icon {
+      width: var(--circle-diameter, 20px);
+      height: var(--circle-diameter, 20px);
+      position: relative;
+      display: block;
+    }
+    
+    /* Node icons - same styling as task icons but semantic naming */
+    .node-icon {
       width: var(--circle-diameter, 20px);
       height: var(--circle-diameter, 20px);
       position: relative;
@@ -1043,11 +1052,23 @@
       <h2>BaseNode/TextNode Icon System</h2>
       <p>Solid circle icons with ring effects for nodes that have children.</p>
       
+      <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+        <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Icon Container Classes</p>
+        <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+          <li><strong>node-icon:</strong> Use for text nodes and other general node types (16x16px circle)</li>
+          <li><strong>task-icon:</strong> Use specifically for task nodes with state indicators</li>
+          <li><strong>ai-icon:</strong> Use specifically for AI chat nodes with square design</li>
+        </ul>
+        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+          <strong>Important:</strong> Text nodes should use <code>node-icon</code> + <code>text-circle</code>, not <code>task-icon</code> wrapper classes.
+        </p>
+      </div>
+      
       <h3>Text Node States</h3>
       <div class="task-icon-demo">
         <!-- Regular Text Node -->
         <div class="task-state-example">
-          <div class="task-icon">
+          <div class="node-icon">
             <div class="text-circle"></div>
           </div>
           <div class="task-state-label">Text Node</div>
@@ -1055,7 +1076,7 @@
         
         <!-- Text Node with Children (Ring Effect) -->
         <div class="task-state-example">
-          <div class="task-icon">
+          <div class="node-icon">
             <div class="task-ring"></div>
             <div class="text-circle"></div>
           </div>
@@ -1066,12 +1087,12 @@
       <h3>Implementation Code</h3>
       <div class="example-code">
         <pre><code><!-- Regular Text Node -->
-&lt;div class="task-icon"&gt;
+&lt;div class="node-icon"&gt;
   &lt;div class="text-circle"&gt;&lt;/div&gt;
 &lt;/div&gt;
 
 <!-- Text Node with Children (Ring Effect) -->
-&lt;div class="task-icon"&gt;
+&lt;div class="node-icon"&gt;
   &lt;div class="task-ring"&gt;&lt;/div&gt;
   &lt;div class="text-circle"&gt;&lt;/div&gt;
 &lt;/div&gt;</code></pre>
@@ -1573,7 +1594,7 @@
               </svg>
             </span>
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="task-ring"></div>
                 <div class="text-circle"></div>
               </div>
@@ -1627,7 +1648,7 @@
           
           <div class="hierarchy-node child-1">
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="text-circle"></div>
               </div>
             </div>
@@ -1637,7 +1658,7 @@
           <!-- Notes Section -->
           <div class="hierarchy-node child-1">
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="text-circle"></div>
               </div>
             </div>
@@ -1652,7 +1673,7 @@
               </svg>
             </span>
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="task-ring"></div>
                 <div class="text-circle"></div>
               </div>
@@ -1714,7 +1735,7 @@
             <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer; border-top-left-radius: var(--radius); border-top-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
               <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
-                  <div class="task-icon">
+                  <div class="node-icon">
                     <div class="text-circle"></div>
                   </div>
                 </div>
@@ -1725,7 +1746,7 @@
             <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer;" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
               <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
-                  <div class="task-icon">
+                  <div class="node-icon">
                     <div class="text-circle"></div>
                   </div>
                 </div>
@@ -1819,7 +1840,7 @@
             <div style="padding: 0.75rem; border-bottom: 1px solid hsl(var(--border)); cursor: pointer; border-top-left-radius: var(--radius); border-top-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
               <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
-                  <div class="task-icon">
+                  <div class="node-icon">
                     <div class="text-circle"></div>
                   </div>
                 </div>
@@ -1931,7 +1952,7 @@
             <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius);">
               <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Slash Command System</p>
               <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
-                <li><strong>Text:</strong> Uses <code>task-icon</code> + <code>text-circle</code> (16x16px circle)</li>
+                <li><strong>Text:</strong> Uses <code>node-icon</code> + <code>text-circle</code> (16x16px circle)</li>
                 <li><strong>Headers:</strong> Custom <code>h1/h2/h3-square-alt</code> (16x16px squares with punch-holed text)</li>
                 <li><strong>Task:</strong> Uses <code>task-icon</code> + <code>task-circle-completed</code> (checkmark)</li>
                 <li><strong>AI Chat:</strong> Uses <code>ai-icon</code> + <code>ai-square-alt</code> ("AI" text)</li>
@@ -2133,7 +2154,7 @@
       <div class="pattern-demo">
         <div style="padding: 1rem; margin: 1rem 0;">
           <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <div class="task-icon">
+            <div class="node-icon">
               <div class="text-circle"></div>
             </div>
             <span>This node is directly editable (TextNode, TaskNode)</span>
@@ -2141,7 +2162,7 @@
         </div>
         <div style="padding: 1rem; margin: 1rem 0; opacity: 0.7;">
           <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <div class="task-icon">
+            <div class="node-icon">
               <div class="text-circle"></div>
             </div>
             <span>This node is computed from props (PersonNode: "John Doe (john@example.com)")</span>
@@ -2194,7 +2215,7 @@
               </svg>
             </span>
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="task-ring"></div>
                 <div class="text-circle"></div>
               </div>
@@ -2205,7 +2226,7 @@
           <!-- Child Text Node -->
           <div class="hierarchy-node child-1">
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="text-circle"></div>
               </div>
             </div>
@@ -2220,7 +2241,7 @@
               </svg>
             </span>
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="task-ring"></div>
                 <div class="text-circle"></div>
               </div>
@@ -2231,7 +2252,7 @@
           <!-- Child Text Node -->
           <div class="hierarchy-node child-2">
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="text-circle"></div>
               </div>
             </div>
@@ -2277,7 +2298,7 @@
           <!-- Child Text Node (AI Response) -->
           <div class="hierarchy-node child-2">
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="text-circle"></div>
               </div>
             </div>
@@ -2292,7 +2313,7 @@
               </svg>
             </span>
             <div class="hierarchy-indicator">
-              <div class="task-icon">
+              <div class="node-icon">
                 <div class="task-ring"></div>
                 <div class="text-circle"></div>
               </div>
