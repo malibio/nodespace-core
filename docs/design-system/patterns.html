@@ -1474,8 +1474,45 @@
       </div>
       
       <h3>Browser-Like Tab System</h3>
-      <p>Each content pane supports multiple tabs with intelligent title management and browser-like behaviors.</p>
-      <p><strong>Alignment:</strong> Tab titles are vertically centered within tabs using <code>display: flex</code> and <code>align-items: center</code>.</p>
+      <p>Each content pane supports multiple tabs with intelligent title management, browser-like behaviors, and refined interaction states.</p>
+      <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin: 1rem 0;">
+        <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Key Features</p>
+        <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+          <li><strong>Subtle Hover States:</strong> Inactive tabs use <code>--border</code> color on hover for gentle visual feedback</li>
+          <li><strong>Instant State Changes:</strong> All transitions disabled globally for immediate response</li>
+          <li><strong>Precise Border Handling:</strong> Box-shadow borders prevent mitered corners and allow seamless active tab integration</li>
+          <li><strong>Primary Accent:</strong> 4px top border on active tab extends to browser edge for clear visual hierarchy</li>
+          <li><strong>Responsive Layout:</strong> Truncated titles (~25 characters) with full title on hover tooltip</li>
+        </ul>
+      </div>
+      
+      <h4>Interaction States</h4>
+      <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+        <thead>
+          <tr style="border-bottom: 1px solid hsl(var(--border));">
+            <th style="padding: 0.5rem; text-align: left;">Tab State</th>
+            <th style="padding: 0.5rem; text-align: left;">Background</th>
+            <th style="padding: 0.5rem; text-align: left;">Text Color</th>
+            <th style="padding: 0.5rem; text-align: left;">Hover Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom: 1px solid hsl(var(--border));">
+            <td style="padding: 0.5rem; font-weight: 500;">Inactive</td>
+            <td style="padding: 0.5rem;"><code>transparent</code></td>
+            <td style="padding: 0.5rem;"><code>--muted-foreground</code></td>
+            <td style="padding: 0.5rem;"><code>--border</code> bg + <code>--foreground</code> text</td>
+          </tr>
+          <tr>
+            <td style="padding: 0.5rem; font-weight: 500;">Active</td>
+            <td style="padding: 0.5rem;"><code>--background</code></td>
+            <td style="padding: 0.5rem;"><code>--foreground</code></td>
+            <td style="padding: 0.5rem;">No change (maintains state)</td>
+          </tr>
+        </tbody>
+      </table>
+      
+      <p><strong>Technical Implementation:</strong> Tab titles are vertically centered within 40px height tabs using <code>display: flex</code> and <code>align-items: center</code>. Border system uses <code>box-shadow: inset</code> to prevent mitered corners and allows precise control over active tab integration with content area.</p>
       
       <h4>Date Header Format</h4>
       <p>Date node viewers feature a prominent header with large typography and semantic calendar iconography:</p>
@@ -1531,25 +1568,29 @@
           <!-- Inactive tab: "Acme Corp Strategy" -->
           <div style="
             padding: 0 1rem;
-            background: hsl(var(--muted));
+            background: transparent;
             border-right: 1px solid hsl(var(--border));
             display: flex;
             align-items: center;
             font-size: 0.875rem;
             color: hsl(var(--muted-foreground));
             cursor: pointer;
-          ">Acme Corp Strategy</div>
+            transition: none;
+          " onmouseover="this.style.backgroundColor='hsl(var(--border))'; this.style.color='hsl(var(--foreground))'"
+             onmouseout="this.style.backgroundColor='transparent'; this.style.color='hsl(var(--muted-foreground))'">Acme Corp Strategy</div>
           <!-- Inactive tab: "Q2 Tasks" -->
           <div style="
             padding: 0 1rem;
-            background: hsl(var(--muted));
+            background: transparent;
             border-right: 1px solid hsl(var(--border));
             display: flex;
             align-items: center;
             font-size: 0.875rem;
             color: hsl(var(--muted-foreground));
             cursor: pointer;
-          ">Q2 Tasks (Truncated...)</div>
+            transition: none;
+          " onmouseover="this.style.backgroundColor='hsl(var(--border))'; this.style.color='hsl(var(--foreground))'"
+             onmouseout="this.style.backgroundColor='transparent'; this.style.color='hsl(var(--muted-foreground))'">Q2 Tasks (Truncated...)</div>
         </div>
         
         <!-- Main Content Area with Hierarchical Nodes -->
@@ -1702,10 +1743,11 @@
       <div style="margin-top: 1.5rem; padding: 1.5rem; background: hsl(var(--muted)); border-radius: var(--radius);">
         <h4 style="margin: 0 0 1rem 0; color: hsl(var(--foreground));">Tab Content Features</h4>
         <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); line-height: 1.6;">
-          <p><strong>Single Tab:</strong> No tab bar shown, just content</p>
+          <p><strong>Single Tab:</strong> No tab bar shown, content fills full area</p>
           <p><strong>Multiple Tabs:</strong> Tab bar appears with truncated titles (~25 characters)</p>
-          <p><strong>Active Tab:</strong> White background, full opacity text</p>
-          <p><strong>Inactive Tabs:</strong> Muted background, reduced opacity</p>
+          <p><strong>Active Tab:</strong> White background with primary accent border, no hover changes</p>
+          <p><strong>Inactive Tabs:</strong> Transparent background, subtle border color hover effect</p>
+          <p><strong>Instant Interactions:</strong> All state changes happen immediately without animation delays</p>
           <p><strong>New Tab Creation:</strong> Cmd+click opens links in new tab</p>
           <p><strong>Tab Titles:</strong></p>
           <ul style="margin: 0.5rem 0 0 1rem;">
@@ -1714,6 +1756,39 @@
             <li>EntityNodes: Entity name + type (e.g., "Acme Corp (Customer)")</li>
           </ul>
         </div>
+      </div>
+      
+      <h3>⚡ Global Transition Control</h3>
+      <p>System-wide animation and transition management for consistent user experience preferences.</p>
+      
+      <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin: 1rem 0;">
+        <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Design Philosophy</p>
+        <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+          <li><strong>Immediate Feedback:</strong> All interactive states change instantly without animation delays</li>
+          <li><strong>Reduced Distraction:</strong> No animated color transitions that can feel "tacky" or draw unnecessary attention</li>
+          <li><strong>Performance Focused:</strong> Eliminates animation overhead for faster, more responsive interactions</li>
+          <li><strong>Accessibility Friendly:</strong> Respects users who prefer reduced motion without additional configuration</li>
+        </ul>
+      </div>
+      
+      <h4>Implementation</h4>
+      <div class="example-code">
+        <pre><code>/* Global transition disabling in app.css */
+*,
+*::before,
+*::after {
+  transition: none !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}</code></pre>
+      </div>
+      
+      <div style="background: hsl(var(--card)); border: 1px solid hsl(var(--border)); padding: 1rem; border-radius: var(--radius); margin: 1rem 0;">
+        <p style="margin: 0 0 0.5rem 0; font-weight: 500; color: hsl(var(--warning));">⚠️ Implementation Note</p>
+        <p style="margin: 0; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+          This global approach overrides any component-level transitions. For specific cases where animation is needed, 
+          consider using CSS classes that explicitly re-enable transitions with higher specificity.
+        </p>
       </div>
       
       <h3>@Mention System Pattern</h3>
