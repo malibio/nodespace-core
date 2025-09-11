@@ -1477,6 +1477,24 @@
       <p>Each content pane supports multiple tabs with intelligent title management and browser-like behaviors.</p>
       <p><strong>Alignment:</strong> Tab titles are vertically centered within tabs using <code>display: flex</code> and <code>align-items: center</code>.</p>
       
+      <h4>Date Header Format</h4>
+      <p>Date node viewers feature a prominent header with large typography and semantic calendar iconography:</p>
+      <ul>
+        <li><strong>Typography:</strong> 2rem font size with 500 font weight for visual hierarchy</li>
+        <li><strong>Format:</strong> Clean date presentation (e.g., "September 7, 2025") without prefixes</li>
+        <li><strong>Semantic HTML:</strong> Uses <code>&lt;h1&gt;</code> element with zero margin for proper document structure</li>
+        <li><strong>Color:</strong> Uses <code>hsl(var(--muted-foreground))</code> for subtle but readable text</li>
+      </ul>
+      
+      <h4>Icon System Integration</h4>
+      <p>Icons are rendered using the NodeSpace Icon component system with consistent styling:</p>
+      <ul>
+        <li><strong>Calendar Icon:</strong> Uses semantic <code>calendar</code> icon with 18px size and 0.8 opacity</li>
+        <li><strong>CSS Classes:</strong> Applies <code>ns-icon ns-icon--calendar calendar-icon</code> for styling hooks</li>
+        <li><strong>Accessibility:</strong> Includes proper <code>role="img"</code> and <code>aria-label</code> attributes</li>
+        <li><strong>Rendering:</strong> Uses exact path data from icon registry for consistency across components</li>
+      </ul>
+      
       <div class="node-viewer" style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 500px; overflow: hidden; padding: 0; background: transparent;">
         <!-- Tab Bar Example -->
         <div style="
