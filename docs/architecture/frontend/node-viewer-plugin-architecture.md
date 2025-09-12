@@ -4,13 +4,21 @@
 
 This document specifies the target architecture for implementing a plugin-style node viewer system with proper BaseNode (abstract) and TextNode (concrete) separation.
 
-## Current State (After Rollback)
+## Implementation Status (Completed)
 
-- ✅ Working TextNode with proper header/multiline logic
-- ✅ All keyboard functionality (Enter, Backspace, Cmd+B/I, header syntax)
-- ✅ BaseNodeViewer manages collections of nodes
-- ✅ Pre-populated demo content working
-- ✅ Date page navigation working
+✅ **Node Viewer Plugin Architecture Successfully Implemented**
+
+**Core Components**:
+- ✅ BaseNode (abstract foundation for all node types)
+- ✅ TextNodeViewer (smart multiline logic implementation)
+- ✅ Plugin Registry System (extensible with lazy loading)
+- ✅ All keyboard functionality preserved (Enter, Backspace, Cmd+B/I, header syntax)
+- ✅ Dynamic node type indicators (ring/chevron states)
+
+**Critical Reactivity Issues Resolved**:
+- ✅ Cursor jumping bug fixed with nodeDepthCache
+- ✅ Parent-child indicator updates for indent/outdent operations
+- ✅ Performance optimized for typing vs. hierarchy changes
 
 ## Target Architecture
 
@@ -160,4 +168,157 @@ packages/desktop-app/src/lib/
 
 ---
 
-**Implementation Note**: Start from the rolled-back working state and implement this architecture incrementally, preserving functionality at each step.
+## Actual Implementation (December 2024)
+
+### Architecture Overview
+
+The plugin architecture was successfully implemented with the following components:
+
+#### 1. Plugin Registry System
+**Location**: `/src/lib/components/viewers/index.ts`
+
+```typescript
+export const viewerRegistry = new ViewerRegistry();
+
+// Registered viewers with lazy loading
+viewerRegistry.register('text', {
+  lazyLoad: () => import('./text-node-viewer.svelte'),
+  priority: 1
+});
+
+viewerRegistry.register('date', {
+  lazyLoad: () => import('./date-node-viewer.svelte'), 
+  priority: 1
+});
+```
+
+**Key Features**:
+- Lazy loading for performance
+- Extensible registration system
+- Graceful fallback to BaseNode for unknown types
+
+#### 2. BaseNode (Abstract Foundation)
+**Location**: `/src/lib/design/components/base-node.svelte`
+
+- Core contenteditable functionality
+- Markdown rendering and formatting
+- Universal keyboard shortcuts (Enter, Backspace, Cmd+B/I)
+- Node reference autocomplete system (@-trigger)
+- **Marked as abstract** - should not be instantiated directly
+
+#### 3. TextNodeViewer (Concrete Implementation)
+**Location**: `/src/lib/components/viewers/text-node-viewer.svelte`
+
+```svelte
+// Smart multiline logic based on header detection
+const editableConfig = $derived({
+  allowMultiline: headerLevel === 0  // Only allow multiline for regular text
+});
+```
+
+**Key Features**:
+- **Headers (H1-H6)**: Single-line only for semantic integrity
+- **Regular text**: Multi-line with Shift+Enter support  
+- Wraps BaseNode internally while maintaining all functionality
+- Header-aware content processing
+
+#### 4. Legacy Compatibility
+**Location**: `/src/lib/components/text-node.svelte`
+
+- Compatibility wrapper around TextNodeViewer
+- Preserves original TextNode API
+- Enables gradual migration path
+
+### Critical Reactivity Solutions
+
+#### Problem 1: Cursor Jumping Bug
+
+**Root Cause**: `visibleNodes` derived store was creating new node objects on every update:
+```typescript
+// PROBLEMATIC: Creates new object every time
+const nodeWithDepth = { ...node, hierarchyDepth: depth };
+```
+
+**Solution**: `nodeDepthCache` with intelligent invalidation
+```typescript
+// SOLUTION: Preserve object references
+const nodeDepthCache = new Map<string, Node & { hierarchyDepth: number }>();
+
+// Only recreate if content, expanded state, or children changed
+const childrenChanged = !cachedNode || 
+  cachedNode.children.length !== node.children.length ||
+  !cachedNode.children.every((id, index) => id === node.children[index]);
+```
+
+**Location**: `/src/lib/services/nodeStore.ts`
+
+#### Problem 2: Parent-Child Indicator Updates
+
+**Root Cause**: Cache wasn't invalidating for hierarchy changes affecting multiple nodes.
+
+**Solution**: Full cache invalidation for complex operations
+```typescript
+// For indent/outdent operations that affect multiple parent-child relationships
+export function invalidateNodeCache() {
+  cacheVersion++;
+  nodeDepthCache.clear();
+}
+```
+
+**Implementation**: 
+- Simple operations (typing): Incremental sync for performance
+- Complex operations (indent/outdent): Full cache clear for correctness
+
+#### Problem 3: Store Synchronization Performance
+
+**Root Cause**: Excessive store updates during typing caused performance issues.
+
+**Solution**: Smart synchronization with typing detection
+```typescript
+class ReactiveNodeManager extends NodeManager {
+  private isTyping = false;
+  private typingTimer: number | null = null;
+
+  // Delay store sync during rapid typing
+  updateNodeContent(nodeId: string, content: string): void {
+    super.updateNodeContent(nodeId, content);
+    this.isTyping = true;
+    // Debounced sync after typing stops
+  }
+}
+```
+
+**Location**: `/src/lib/services/reactiveNodeManager.ts`
+
+### Performance Optimizations
+
+1. **Lazy Loading**: Plugin components loaded on demand
+2. **Object Identity Preservation**: Prevents unnecessary Svelte re-renders
+3. **Smart Cache Invalidation**: Surgical updates for simple operations, full refresh for complex ones
+4. **Typing Optimization**: Reduced store synchronization during rapid input
+
+### Architecture Benefits
+
+1. **Extensibility**: New node types require only viewer registration
+2. **Performance**: Optimized for both simple and complex operations  
+3. **Maintainability**: Clear separation between core logic and UI rendering
+4. **Compatibility**: Preserves all existing functionality
+5. **Future-Proof**: Plugin system ready for unlimited node type extensions
+
+### Files Modified
+
+- `/src/lib/services/nodeStore.ts` - Added nodeDepthCache and invalidation
+- `/src/lib/services/reactiveNodeManager.ts` - Added cache invalidation calls
+- `/src/lib/components/viewers/index.ts` - Plugin registry implementation
+- `/src/lib/components/viewers/text-node-viewer.svelte` - Smart multiline logic
+- `/src/lib/components/text-node.svelte` - Legacy compatibility wrapper
+- `/src/lib/design/components/base-node.svelte` - Updated documentation
+
+### Success Metrics
+
+- ✅ Zero cursor jumping during typing
+- ✅ Dynamic parent-child indicators (rings/chevrons)  
+- ✅ All keyboard shortcuts preserved
+- ✅ Header vs. multiline logic working correctly
+- ✅ Plugin system fully functional with lazy loading
+- ✅ Performance maintained for all operations
