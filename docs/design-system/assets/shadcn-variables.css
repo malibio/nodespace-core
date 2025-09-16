@@ -80,10 +80,10 @@
     --background: 0 0% 12%; /* More comfortable dark background (VS Code standard) */
     --foreground: 0 0% 90%; /* Light neutral gray text - Scheme 3 active items dark */
 
-    --card: 25 15% 14%; /* Slightly elevated dark cards */
+    --card: 200 12% 14%; /* Slightly elevated dark cards - Scheme 3 blue-gray */
     --card-foreground: 0 0% 90%; /* Light neutral gray text */
 
-    --popover: 25 15% 14%; /* Same as cards */
+    --popover: 200 12% 14%; /* Same as cards - Scheme 3 blue-gray */
     --popover-foreground: 0 0% 90%;
 
     --muted: 200 12% 16%; /* Dark blue-gray muted areas - Scheme 3 */

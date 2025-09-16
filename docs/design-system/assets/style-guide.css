@@ -35,7 +35,7 @@ body {
 .style-guide-nav a {
   padding: 0.5rem 1rem;
   text-decoration: none;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   border-radius: 0 !important;
   transition: background-color 0.2s, color 0.2s;
   font-weight: 500;
@@ -80,9 +80,9 @@ body {
 
 .theme-toggle button {
   padding: 0.5rem;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
-  background: hsl(var(--background, 0 0% 100%));
-  color: hsl(var(--foreground, 220 13% 10%));
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   border-radius: 0.25rem;
   cursor: pointer;
   font-size: 1.2rem;
@@ -90,13 +90,13 @@ body {
 }
 
 .theme-toggle button:hover {
-  background-color: hsl(var(--muted, 210 40% 98%));
+  background-color: hsl(var(--muted));
 }
 
 .theme-toggle button.active {
-  background-color: hsl(var(--primary, 210 100% 40%));
-  color: hsl(var(--primary-foreground, 0 0% 100%));
-  border-color: hsl(var(--primary, 210 100% 40%));
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
 }
 
 /* Typography */
@@ -104,7 +104,7 @@ h1 {
   font-size: 2.5rem;
   font-weight: 700;
   margin-bottom: 1rem;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
 }
 
 h2 {
@@ -112,7 +112,7 @@ h2 {
   font-weight: 600;
   margin-top: 2rem;
   margin-bottom: 1rem;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
   border-bottom: 1px solid hsl(var(--border, 214 32% 91%));
   padding-bottom: 0.5rem;
 }
@@ -122,7 +122,7 @@ h3 {
   font-weight: 600;
   margin-top: 1.5rem;
   margin-bottom: 0.75rem;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
 }
 
 h4 {
@@ -130,31 +130,31 @@ h4 {
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
 }
 
 p {
   margin-bottom: 1rem;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
 }
 
 /* Code and documentation */
 code {
-  background-color: hsl(var(--muted, 210 40% 98%));
+  background-color: hsl(var(--muted));
   padding: 0.125rem 0.25rem;
   border-radius: var(--radius, 0.5rem);
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
   font-size: 0.875rem;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
 }
 
 pre {
-  background-color: hsl(var(--muted, 210 40% 98%));
+  background-color: hsl(var(--muted));
   padding: 1rem;
   border-radius: var(--radius, 0.5rem);
   overflow-x: auto;
   margin: 1rem 0;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
 }
 
 pre code {
@@ -166,7 +166,7 @@ pre code {
 .example-section {
   margin: 2rem 0;
   padding: 1.5rem;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius, 0.5rem);
   background-color: hsl(var(--card, 0 0% 100%));
 }
@@ -180,10 +180,10 @@ pre code {
 
 .example-demo {
   padding: 1.5rem;
-  background-color: hsl(var(--muted, 210 40% 98%));
+  background-color: hsl(var(--muted));
   border-radius: var(--radius, 0.5rem);
   margin-bottom: 1rem;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
 }
 
 .example-code {
@@ -195,8 +195,8 @@ pre code {
   top: 0.5rem;
   right: 0.5rem;
   padding: 0.25rem 0.5rem;
-  background: hsl(var(--background, 0 0% 100%));
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius, 0.5rem);
   cursor: pointer;
   font-size: 0.75rem;
@@ -217,7 +217,7 @@ pre code {
 }
 
 .color-swatch {
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius, 0.5rem);
   overflow: hidden;
   background: hsl(var(--card, 0 0% 100%));
@@ -233,7 +233,7 @@ pre code {
 
 .tier-card {
   background: hsl(var(--card, 0 0% 100%));
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius, 0.5rem);
   padding: 1.5rem;
 }
@@ -242,12 +242,12 @@ pre code {
   margin: 0 0 0.75rem 0;
   font-size: 1.125rem;
   font-weight: 600;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
 }
 
 .tier-card p {
   margin: 0 0 1rem 0;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   font-size: 0.875rem;
   line-height: 1.5;
 }
@@ -255,7 +255,7 @@ pre code {
 .tier-card ul {
   margin: 0;
   padding-left: 1.25rem;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   font-size: 0.875rem;
 }
 
@@ -287,13 +287,13 @@ pre code {
 .color-value {
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 0.875rem;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   margin-bottom: 0.25rem;
 }
 
 .color-usage {
   font-size: 0.75rem;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   line-height: 1.4;
 }
 
@@ -301,7 +301,7 @@ pre code {
 .typography-specimen {
   margin: 1.5rem 0;
   padding: 1rem;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius, 0.5rem);
 }
 
@@ -314,7 +314,7 @@ pre code {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   border-top: 1px solid hsl(var(--border, 214 32% 91%));
   padding-top: 0.5rem;
 }
@@ -329,13 +329,13 @@ pre code {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   margin-bottom: 0.125rem;
 }
 
 .detail-value {
   font-family: 'SF Mono', Monaco, monospace;
-  color: hsl(var(--foreground, 220 13% 10%));
+  color: hsl(var(--foreground));
 }
 
 /* Spacing examples */
@@ -369,7 +369,7 @@ pre code {
 }
 
 .spacing-value {
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 0.875rem;
 }
@@ -384,7 +384,7 @@ pre code {
 
 .component-example {
   padding: 1.5rem;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius, 0.5rem);
   background: hsl(var(--card, 0 0% 100%));
 }
@@ -405,7 +405,7 @@ pre code {
   background: hsl(var(--muted, 210 40% 98%));
   padding: 0.5rem;
   border-radius: var(--radius, 0.5rem);
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+  border: 1px solid hsl(var(--border));
 }
 
 /* Interaction states */
@@ -427,7 +427,7 @@ pre code {
 .state-label {
   font-size: 0.875rem;
   font-weight: 600;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
+  color: hsl(var(--muted-foreground));
 }
 
 /* Responsive behavior */
