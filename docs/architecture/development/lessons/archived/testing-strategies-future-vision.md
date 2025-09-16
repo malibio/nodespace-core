@@ -1,4 +1,8 @@
-# Testing Strategies for NodeSpace
+# Testing Strategies for NodeSpace - Future Vision (ARCHIVED)
+
+> **⚠️ ARCHIVED DOCUMENT**: This document represents a future vision for comprehensive testing with real services (LanceDB, Ollama, etc.). It does not reflect the current implementation, which uses pragmatic mocks for early-stage development. Archived on 2025-01-16 due to documentation-implementation misalignment.
+>
+> **Current Status**: See `/docs/architecture/development/testing-guide.md` for the actual testing approach being used.
 
 ## Overview
 
