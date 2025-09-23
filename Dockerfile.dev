@@ -1,0 +1,76 @@
+# Claude Code Development Container
+FROM ubuntu:22.04
+
+# Avoid prompts from apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    python3 \
+    python3-pip \
+    nodejs \
+    npm \
+    wget \
+    unzip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install Bun
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+# Install Claude Code manually
+RUN curl -L -o /tmp/claude.tar.gz "https://github.com/anthropics/claude-code/releases/latest/download/claude-code-linux-arm64.tar.gz" \
+    && tar -xzf /tmp/claude.tar.gz -C /tmp \
+    && mv /tmp/claude /usr/local/bin/ \
+    && chmod +x /usr/local/bin/claude \
+    && rm /tmp/claude.tar.gz
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create workspace directory
+WORKDIR /workspace
+
+# Set up git
+RUN git config --global init.defaultBranch main
+RUN git config --global user.name "Container Dev"
+RUN git config --global user.email "container@nodespace.dev"
+
+# Clone the nodespace-core repository
+RUN git clone https://github.com/malibio/nodespace-core.git
+WORKDIR /workspace/nodespace-core
+
+# Install common Rust tools
+RUN cargo install cargo-watch
+
+# Create an entrypoint script
+RUN echo '#!/bin/bash\n\
+echo "🚀 Claude Code Development Container Ready!"\n\
+echo "Repository: /workspace/nodespace-core (independent clone)"\n\
+echo "Available tools: git, rust, bun, claude, gh"\n\
+echo ""\n\
+echo "Quick start:"\n\
+echo "  git checkout -b feature/container-$(date +%s)"\n\
+echo "  claude"\n\
+echo ""\n\
+echo "Multiple containers can run simultaneously with unique branches!"\n\
+echo ""\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/bin/bash"]
