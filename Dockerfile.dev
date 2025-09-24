@@ -135,11 +135,8 @@ function resize_terminal() {\n\
     fi\n\
 }\n\
 \n\
-# Auto-start tmux if not already in tmux and if interactive\n\
-if command -v tmux &> /dev/null && [ -z "$TMUX" ] && [[ "$-" == *i* ]]; then\n\
-    # Pass terminal dimensions to tmux\n\
-    TMUX_TMPDIR=/tmp tmux new-session -A -s development\n\
-fi\n\
+# tmux available but not auto-started (Claude Code works better in plain bash)\n\
+# To start tmux manually: tmux new-session -A -s development\n\
 BASHRC_EOF\n\
 \n\
 # Create tmux config for better terminal handling\n\
@@ -169,13 +166,14 @@ echo "🚀 Claude Code Development Container Ready!"\n\
 echo "Repository: /workspace/nodespace-core"\n\
 echo "Available tools: git, rust, bun, claude (~/.local/bin/claude), gh, tmux"\n\
 echo "Terminal size: ${COLUMNS:-120}x${LINES:-40}"\n\
+echo "Terminal: optimized for Claude Code (plain bash, tmux available manually)"\n\
 echo ""\n\
 echo "Quick start:"\n\
 echo "  git checkout -b feature/container-$(date +%s)"\n\
 echo "  ~/.local/bin/claude"\n\
 echo ""\n\
 echo "If terminal sizing is wrong, use: resize_terminal [cols] [rows]"\n\
-echo "tmux will auto-start for interactive sessions!"\n\
+echo "To start tmux manually: tmux new-session -A -s development"\n\
 echo "Multiple containers can run simultaneously with unique branches!"\n\
 echo ""\n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
