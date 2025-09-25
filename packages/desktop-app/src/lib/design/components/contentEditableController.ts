@@ -89,6 +89,8 @@ export class ContentEditableController {
   private slashCommandDropdownActive: boolean = false;
   // Track if autocomplete dropdown is currently active
   private autocompleteDropdownActive: boolean = false;
+  // Prevent pattern detection loops after conversion
+  private skipPatternDetection: boolean = false;
 
   // Bound event handlers for proper cleanup
   private boundHandleFocus = this.handleFocus.bind(this);
@@ -186,6 +188,27 @@ export class ContentEditableController {
     } else {
       this.setFormattedContent(content);
     }
+  }
+
+  /**
+   * Force update content bypassing input guards for pattern conversions
+   */
+  public forceUpdateContent(content: string): void {
+    // Update stored original content
+    this.originalContent = content;
+
+    // Defer the DOM update to avoid conflicts with ongoing input processing
+    // This ensures the content update happens after the current input event completes
+    requestAnimationFrame(() => {
+      if (this.isEditing) {
+        this.setRawMarkdown(content);
+      } else {
+        this.setFormattedContent(content);
+      }
+
+      // Position cursor at the end of the cleaned content
+      this.positionCursorAtEnd();
+    });
   }
 
   /**
@@ -2179,7 +2202,8 @@ export class ContentEditableController {
       return;
     }
 
-    const taskPattern = /^\s*-?\s*\[(x|X|~|o|\s)\]\s*/;
+    // Only trigger task conversion when pattern is complete with space after bracket
+    const taskPattern = /^\s*-?\s*\[(x|X|~|o|\s)\]\s+/; // Requires space after bracket
     const hasTaskPattern = taskPattern.test(content);
 
     console.log('🔍 Task pattern check:', {
@@ -2190,27 +2214,42 @@ export class ContentEditableController {
     });
 
     if (this.nodeType === 'task' && !hasTaskPattern) {
-      // Task node that no longer has task pattern - convert to text
-      console.log('🔄 Converting task to text:', {
-        nodeId: this.nodeId,
-        cleanedContent: content.trim()
-      });
+      // Allow task-to-text conversion ONLY for header patterns
+      // Check if user is typing a header pattern
+      const headerPattern = /^(#{1,6})\s/;
+      const hasHeaderPattern = headerPattern.test(content);
 
-      this.events.nodeTypeConversionDetected({
-        nodeId: this.nodeId,
-        newNodeType: 'text',
-        cleanedContent: content.trim()
-      });
+      if (hasHeaderPattern) {
+        // Task node with header pattern - convert to text (KEEP header syntax)
+        console.log('🔄 Converting task to text (header pattern):', {
+          nodeId: this.nodeId,
+          cleanedContent: content // Keep the full content including "# "
+        });
+
+        this.events.nodeTypeConversionDetected({
+          nodeId: this.nodeId,
+          newNodeType: 'text',
+          cleanedContent: content // Keep the full content including "# "
+        });
+      }
+      // For non-header content, task nodes stay as tasks (sticky behavior)
     } else if (this.nodeType !== 'task' && hasTaskPattern) {
-      // Non-task node that now has task pattern - convert to task
+      // Non-task node that now has task pattern - convert to task using slash command flow
       const cleanedContent = content.replace(taskPattern, '').trim();
 
-      console.log('🔄 Converting to task:', {
+      console.log('🔄 Converting to task via slash command flow:', {
         from: this.nodeType,
         nodeId: this.nodeId,
         cleanedContent
       });
 
+      console.log('🔄 Converting to task (like header pattern):', {
+        from: this.nodeType,
+        to: 'task',
+        cleanedContent
+      });
+
+      // Use the exact same pattern as header detection - let event system handle everything
       this.events.nodeTypeConversionDetected({
         nodeId: this.nodeId,
         newNodeType: 'task',
@@ -2240,8 +2279,8 @@ export class ContentEditableController {
 
     // Only convert to text node with header if we're not already in that state
     if (hasHeaderPattern && (this.nodeType !== 'text' || this.currentHeaderLevel !== headerLevel)) {
-      // Clean content: remove header syntax
-      const cleanedContent = content.replace(headerPattern, '').trim();
+      // For headers, KEEP the syntax visible in the editor
+      const cleanedContent = content; // Keep "# " syntax for proper header formatting
 
       console.log('🔄 Converting to header text:', {
         from: this.nodeType,
@@ -2643,9 +2682,12 @@ export class ContentEditableController {
   public insertSlashCommand(content: string): void {
     const currentText = this.element.textContent || '';
 
+    console.log('🔧 insertSlashCommand:', { currentText, content });
+
     // Find the last slash command in the text (since cursor position is unreliable)
     const lastSlashIndex = currentText.lastIndexOf('/');
     if (lastSlashIndex === -1) {
+      console.log('❌ No slash found in text');
       return;
     }
 
@@ -2664,14 +2706,15 @@ export class ContentEditableController {
       commandEndIndex = lastSlashIndex + 1 + spaceIndex;
       query = afterSlash.substring(0, spaceIndex);
     } else {
-      // No space found - need to be more careful about what constitutes the command
-      // Look for word boundaries to avoid consuming existing content
-      const wordMatch = afterSlash.match(/^([a-zA-Z0-9-_]*)/);
-      if (wordMatch && wordMatch[1]) {
-        commandEndIndex = lastSlashIndex + 1 + wordMatch[1].length;
-        query = wordMatch[1];
+      // No space found - could be filtering like "/t" or just "/" at the beginning
+      // Look for command query (letters only) that might be used for filtering
+      const queryMatch = afterSlash.match(/^([a-zA-Z]*)/);
+      if (queryMatch && queryMatch[1]) {
+        // We have a query like "/t" - replace "/t" part only, preserve the rest
+        commandEndIndex = lastSlashIndex + 1 + queryMatch[1].length;
+        query = queryMatch[1];
       } else {
-        // Fallback: command is just the slash
+        // Just "/" at the beginning - replace only the slash
         commandEndIndex = lastSlashIndex + 1;
         query = '';
       }
@@ -2705,6 +2748,15 @@ export class ContentEditableController {
     }
 
     const newContent = finalBeforeContent + content + finalAfterContent;
+
+    console.log('🔧 Content replacement:', {
+      beforeSlash,
+      afterCommand,
+      finalBeforeContent,
+      finalAfterContent,
+      insertedContent: content,
+      newContent
+    });
 
     // Update content and position cursor after inserted content
     this.originalContent = newContent;

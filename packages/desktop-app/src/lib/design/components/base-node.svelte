@@ -40,7 +40,7 @@
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
   let {
     nodeId,
-    nodeType = 'text',
+    nodeType = $bindable('text'),
     autoFocus = false,
     content = $bindable(''),
     headerLevel = 0,
@@ -335,10 +335,20 @@
         cleanedContent: data.cleanedContent
       });
 
+      // Debug: Show what content we're dispatching
+      console.log('🔄 Dispatching contentChanged with:', {
+        content: data.cleanedContent,
+        length: data.cleanedContent.length,
+        currentContent: content
+      });
+
       // Update content to cleaned version
       dispatch('contentChanged', { content: data.cleanedContent });
-      // Notify parent to handle the node type change (parent will update nodeType prop)
-      dispatch('nodeTypeChanged', { nodeType: data.newNodeType });
+      // Notify parent to handle the node type change AND cleaned content together
+      dispatch('nodeTypeChanged', {
+        nodeType: data.newNodeType,
+        cleanedContent: data.cleanedContent
+      });
     }
   };
 
@@ -448,6 +458,7 @@
   const iconConfig = $derived(getIconConfig(nodeType as NodeType));
   const nodeState = $derived(resolveNodeState(nodeType as NodeType, undefined, metadata));
   const hasChildren = $derived(children.length > 0);
+
 
   // Note: Semantic classes handled internally by Icon component
 </script>
