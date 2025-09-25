@@ -2736,12 +2736,14 @@ export class ContentEditableController {
       const replaceEnd = session.startPosition + 1 + session.query.length; // "/" + query length
 
       let beforeSlash = currentText.substring(0, replaceStart);
-      const afterQuery = currentText.substring(replaceEnd);
+      let afterQuery = currentText.substring(replaceEnd);
 
       // Clean up header syntax if converting from text node to non-text node
       if (targetNodeType && this.nodeType === 'text' && targetNodeType !== 'text') {
         const headerPattern = /^(#{1,6})\s+/;
+        // Clean from both beforeSlash and afterQuery since we don't know where the header syntax is
         beforeSlash = beforeSlash.replace(headerPattern, '').trim();
+        afterQuery = afterQuery.replace(headerPattern, '').trim();
       }
 
       const newContent = beforeSlash + content + afterQuery;
