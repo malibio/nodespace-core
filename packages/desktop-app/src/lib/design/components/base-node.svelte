@@ -182,8 +182,8 @@
       // Execute the command and get the content to insert
       const result = slashCommandService.executeCommand(command);
 
-      // Insert the command content (e.g., "# " for header 1)
-      controller.insertSlashCommand(result.content);
+      // Insert the command content (skip cursor positioning since parent will handle it)
+      controller.insertSlashCommand(result.content, true);
 
       // Don't update nodeType locally - let parent handle it to avoid double re-renders
       // The parent (base-node-viewer) will update nodeType via nodeManager and trigger autoFocus
@@ -208,7 +208,8 @@
     // This will trigger the component switch, so we don't focus here - let autoFocus handle it
     dispatch('slashCommandSelected', {
       command: command.id,
-      nodeType: command.nodeType
+      nodeType: command.nodeType,
+      cursorPosition: 0  // Slash commands always position cursor at beginning
     });
   }
 
@@ -321,6 +322,18 @@
       if (data?.command?.content !== undefined) {
         // Interface validation passed
       }
+    },
+    directSlashCommand: (data: { command: string; nodeType: string; cursorPosition?: number }) => {
+      // Handle direct slash command typing by simulating dropdown selection
+      console.log('🎯 Received directSlashCommand:', data);
+      console.log('🎯 Forwarding to parent with cursor position:', data.cursorPosition);
+
+      // Emit the same event that dropdown selection emits, including cursor position
+      dispatch('slashCommandSelected', {
+        command: data.command,
+        nodeType: data.nodeType,
+        cursorPosition: data.cursorPosition
+      });
     },
     // Node Type Conversion Events
     nodeTypeConversionDetected: (data: {
