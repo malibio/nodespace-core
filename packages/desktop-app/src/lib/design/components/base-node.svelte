@@ -326,8 +326,6 @@
     },
     directSlashCommand: (data: { command: string; nodeType: string; cursorPosition?: number }) => {
       // Handle direct slash command typing by simulating dropdown selection
-      console.log('🎯 Received directSlashCommand:', data);
-      console.log('🎯 Forwarding to parent with cursor position:', data.cursorPosition);
 
       // Emit the same event that dropdown selection emits, including cursor position
       dispatch('slashCommandSelected', {
@@ -342,20 +340,6 @@
       newNodeType: string;
       cleanedContent: string;
     }) => {
-      console.log('🔄 Node type conversion detected:', {
-        nodeId: data.nodeId,
-        from: nodeType,
-        to: data.newNodeType,
-        cleanedContent: data.cleanedContent
-      });
-
-      // Debug: Show what content we're dispatching
-      console.log('🔄 Dispatching contentChanged with:', {
-        content: data.cleanedContent,
-        length: data.cleanedContent.length,
-        currentContent: content
-      });
-
       // Update content to cleaned version
       dispatch('contentChanged', { content: data.cleanedContent });
       // Notify parent to handle the node type change AND cleaned content together

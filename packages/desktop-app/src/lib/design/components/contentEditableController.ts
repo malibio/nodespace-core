@@ -2219,20 +2219,12 @@ export class ContentEditableController {
     // Don't process task patterns if there's a header pattern - header takes precedence
     const headerPattern = /^(#{1,6})\s/;
     if (headerPattern.test(content)) {
-      console.log('⚠️ Task pattern check skipped - header pattern takes precedence');
       return;
     }
 
     // Only trigger task conversion when pattern is complete with space after bracket
     const taskPattern = /^\s*-?\s*\[(x|X|~|o|\s)\]\s+/; // Requires space after bracket
     const hasTaskPattern = taskPattern.test(content);
-
-    console.log('🔍 Task pattern check:', {
-      content,
-      hasTaskPattern,
-      currentNodeType: this.nodeType,
-      taskPatternMatch: content.match(taskPattern)
-    });
 
     if (this.nodeType === 'task' && !hasTaskPattern) {
       // Allow task-to-text conversion ONLY for header patterns
@@ -2242,10 +2234,6 @@ export class ContentEditableController {
 
       if (hasHeaderPattern) {
         // Task node with header pattern - convert to text (KEEP header syntax)
-        console.log('🔄 Converting task to text (header pattern):', {
-          nodeId: this.nodeId,
-          cleanedContent: content // Keep the full content including "# "
-        });
 
         this.events.nodeTypeConversionDetected({
           nodeId: this.nodeId,
@@ -2257,18 +2245,6 @@ export class ContentEditableController {
     } else if (this.nodeType !== 'task' && hasTaskPattern) {
       // Non-task node that now has task pattern - convert to task using slash command flow
       const cleanedContent = content.replace(taskPattern, '').trim();
-
-      console.log('🔄 Converting to task via slash command flow:', {
-        from: this.nodeType,
-        nodeId: this.nodeId,
-        cleanedContent
-      });
-
-      console.log('🔄 Converting to task (like header pattern):', {
-        from: this.nodeType,
-        to: 'task',
-        cleanedContent
-      });
 
       // Use the exact same pattern as header detection - let event system handle everything
       this.events.nodeTypeConversionDetected({
@@ -2290,25 +2266,10 @@ export class ContentEditableController {
     const hasHeaderPattern = !!match;
     const headerLevel = match ? match[1].length : 0;
 
-    console.log('🔍 Header pattern check:', {
-      content,
-      hasHeaderPattern,
-      headerLevel,
-      currentNodeType: this.nodeType,
-      currentHeaderLevel: this.currentHeaderLevel
-    });
-
     // Only convert to text node with header if we're not already in that state
     if (hasHeaderPattern && (this.nodeType !== 'text' || this.currentHeaderLevel !== headerLevel)) {
       // For headers, KEEP the syntax visible in the editor
       const cleanedContent = content; // Keep "# " syntax for proper header formatting
-
-      console.log('🔄 Converting to header text:', {
-        from: this.nodeType,
-        to: 'text',
-        headerLevel,
-        cleanedContent
-      });
 
       // Convert to text node and update header level
       this.events.nodeTypeConversionDetected({
@@ -2679,11 +2640,6 @@ export class ContentEditableController {
         query: queryText,
         originalContent: content
       };
-      console.log('🔄 Started slash command session:', {
-        startPosition: lastSlashIndex,
-        query: queryText,
-        originalContentLength: content.length
-      });
     } else {
       // Update existing session query
       this.slashCommandSession.query = queryText;
@@ -2719,14 +2675,12 @@ export class ContentEditableController {
   /**
    * Insert slash command content at current cursor position
    */
-  public insertSlashCommand(content: string, skipCursorPositioning = false, targetNodeType?: string): void {
+  public insertSlashCommand(
+    content: string,
+    skipCursorPositioning = false,
+    targetNodeType?: string
+  ): void {
     const currentText = this.element.textContent || '';
-
-    console.log('🔧 insertSlashCommand:', {
-      currentText,
-      content,
-      session: this.slashCommandSession
-    });
 
     // Use session tracking if available, otherwise fallback to legacy logic
     if (this.slashCommandSession && this.slashCommandSession.active) {
@@ -2747,16 +2701,6 @@ export class ContentEditableController {
       }
 
       const newContent = beforeSlash + content + afterQuery;
-
-      console.log('🔧 Session-based replacement:', {
-        replaceStart,
-        replaceEnd,
-        query: session.query,
-        beforeSlash,
-        afterQuery,
-        insertedContent: content,
-        newContent
-      });
 
       // Clear session after successful replacement
       this.clearSlashCommandSession();
@@ -2787,10 +2731,8 @@ export class ContentEditableController {
       }
     } else {
       // Fallback to legacy logic for cases without session tracking
-      console.log('⚠️ No session tracking - using fallback logic');
       const lastSlashIndex = currentText.lastIndexOf('/');
       if (lastSlashIndex === -1) {
-        console.log('❌ No slash found in text');
         return;
       }
 
@@ -2817,7 +2759,6 @@ export class ContentEditableController {
    */
   private clearSlashCommandSession(): void {
     if (this.slashCommandSession) {
-      console.log('🧹 Clearing slash command session');
       this.slashCommandSession = null;
     }
   }
@@ -2826,7 +2767,7 @@ export class ContentEditableController {
    * Check if typing a space completes a direct slash command like "/task "
    * Returns true if a command was executed (so the space should be prevented)
    */
-  private checkForDirectSlashCommand(currentText: string, futureText: string): boolean {
+  private checkForDirectSlashCommand(_currentText: string, _futureText: string): boolean {
     // Only check if we have an active slash command session
     if (!this.slashCommandSession || !this.slashCommandSession.active) {
       return false;
@@ -2842,14 +2783,6 @@ export class ContentEditableController {
     if (!command) {
       return false; // Not a known command
     }
-
-    console.log('🚀 Direct slash command detected:', {
-      query,
-      command,
-      currentText,
-      futureText,
-      startPosition: session.startPosition
-    });
 
     // Use setTimeout to execute after the current event handling
     setTimeout(() => {
@@ -2870,12 +2803,6 @@ export class ContentEditableController {
       this.clearSlashCommandSession();
 
       // Emit the direct slash command event that will be handled by base-node to dispatch to parent
-      console.log('🚀 Emitting directSlashCommand event:', {
-        command: command.id,
-        nodeType: result.nodeType,
-        currentNodeType: this.nodeType,
-        cursorPosition: cursorPosition
-      });
       this.events.directSlashCommand({
         command: command.id,
         nodeType: result.nodeType,
