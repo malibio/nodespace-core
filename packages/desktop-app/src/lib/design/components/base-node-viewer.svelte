@@ -764,7 +764,7 @@
             {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
             <NodeComponent
               nodeId={node.id}
-              nodeType={node.nodeType}
+              bind:nodeType={node.nodeType}
               autoFocus={node.autoFocus || node.id === focusedNodeId}
               content={node.content}
               headerLevel={node.inheritHeaderLevel || 0}
@@ -811,7 +811,7 @@
             <!-- Final fallback to BaseNode -->
             <BaseNode
               nodeId={node.id}
-              nodeType={node.nodeType}
+              bind:nodeType={node.nodeType}
               autoFocus={node.autoFocus || node.id === focusedNodeId}
               content={node.content}
               headerLevel={node.inheritHeaderLevel || 0}
