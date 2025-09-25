@@ -48,12 +48,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const allNodes = Object.values(_nodes);
     // Touch each node's nodeType to track changes
     for (const node of allNodes) {
-      node.nodeType; // Access to trigger reactivity
+      void node.nodeType; // Access to trigger reactivity
     }
     // Touch the _updateTrigger to ensure reactivity when needed
-    _updateTrigger;
+    void _updateTrigger;
     // Touch _rootNodeIds to ensure reactivity on root changes
-    _rootNodeIds;
+    void _rootNodeIds;
     return getVisibleNodesRecursive(_rootNodeIds);
   });
 

@@ -44,17 +44,13 @@
   // Internal reactive state - sync with content prop changes like TextNodeViewer
   let internalContent = $state(content);
 
-  // Debug: Log initial content when TaskNode mounts
-  console.log(`🚀 [TaskNode] Mounting with content: "${content}"`);
-
   // Sync internalContent when content prop changes externally (e.g., from pattern conversions)
   $effect(() => {
     internalContent = content;
-    console.log(`🔄 [TaskNode] Content prop changed to: "${content}" (internal: "${internalContent}")`);
   });
 
   // Task-specific state management - prioritize metadata over content parsing
-  let taskState = $state<NodeState>((metadata.taskState as NodeState) || parseTaskState(internalContent));
+  let taskState = $state<NodeState>((metadata.taskState as NodeState) || parseTaskState(content));
 
   // Create reactive metadata object
   let taskMetadata = $derived({ taskState });

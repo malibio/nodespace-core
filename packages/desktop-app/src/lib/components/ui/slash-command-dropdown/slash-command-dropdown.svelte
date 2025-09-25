@@ -97,10 +97,8 @@
   }
 
   function selectCommand(command: SlashCommand) {
-    console.log('🎯 selectCommand called with:', { id: command.id, name: command.name });
     selectedIndex = commands.indexOf(command);
     dispatch('select', command);
-    console.log('🚀 dispatched select event');
   }
 
   // Reset selection when commands change
@@ -122,7 +120,9 @@
     bind:this={containerRef}
     style="
       position: fixed;
-      {smartPosition.showBelow ? `top: ${smartPosition.y}px;` : `bottom: ${window.innerHeight - smartPosition.y}px;`}
+      {smartPosition.showBelow
+      ? `top: ${smartPosition.y}px;`
+      : `bottom: ${window.innerHeight - smartPosition.y}px;`}
       left: {smartPosition.x}px;
       min-width: 300px;
       max-height: 300px;

@@ -726,72 +726,69 @@
         {#if node.nodeType === 'text'}
           {#key `${node.id}-${node.nodeType}`}
             <TextNodeViewer
-            nodeId={node.id}
-            nodeType={node.nodeType}
-            autoFocus={node.autoFocus || node.id === focusedNodeId}
-            content={node.content}
-            inheritHeaderLevel={node.inheritHeaderLevel || 0}
-            children={node.children}
-            on:createNewNode={handleCreateNewNode}
-            on:indentNode={handleIndentNode}
-            on:outdentNode={handleOutdentNode}
-            on:navigateArrow={handleArrowNavigation}
-            on:contentChanged={(e) => {
-              const content = e.detail.content;
+              nodeId={node.id}
+              nodeType={node.nodeType}
+              autoFocus={node.autoFocus || node.id === focusedNodeId}
+              content={node.content}
+              inheritHeaderLevel={node.inheritHeaderLevel || 0}
+              children={node.children}
+              on:createNewNode={handleCreateNewNode}
+              on:indentNode={handleIndentNode}
+              on:outdentNode={handleOutdentNode}
+              on:navigateArrow={handleArrowNavigation}
+              on:contentChanged={(e) => {
+                const content = e.detail.content;
 
-              // Update node content (placeholder flag is handled automatically)
-              nodeManager.updateNodeContent(node.id, content);
-            }}
-            on:slashCommandSelected={(e) => {
-              if (node.isPlaceholder) {
-                // For placeholder nodes, just update the nodeType locally
-                if ('updatePlaceholderNodeType' in nodeManager) {
-                  (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
-                }
-              } else {
-                // For real nodes, update node type with full persistence
-                nodeManager.updateNodeType(node.id, e.detail.nodeType);
-              }
-
-              // Set autoFocus to restore focus after nodeType change
-              focusedNodeId = node.id;
-            }}
-            on:nodeTypeChanged={(e: CustomEvent<{ nodeType: string; cleanedContent?: string }>) => {
-              console.log(`🔥 [TextNodeViewer] nodeTypeChanged received:`, e.detail);
-              const newNodeType = e.detail.nodeType;
-              const cleanedContent = e.detail.cleanedContent;
-              const targetNode = nodeManager.nodes.get(node.id);
-              if (targetNode) {
-                console.log(`💾 [TextNodeViewer] Updating node ${node.id} to type: ${newNodeType}`, {
-                  cleanedContent,
-                  hasCleanedContent: cleanedContent !== undefined
-                });
-                // Update both the node manager and local state
-                targetNode.nodeType = newNodeType;
-
-                // If cleanedContent is provided, update the node content too
-                if (cleanedContent !== undefined) {
-                  // Use requestAnimationFrame to ensure the update happens after component mounting
-                  requestAnimationFrame(() => {
-                    // Use proper node manager method to trigger reactivity
-                    nodeManager.updateNodeContent(node.id, cleanedContent);
-                    console.log(`💾 [TextNodeViewer] Also updated content to: "${cleanedContent}" (via nodeManager)`);
-                  });
-                }
-
-                // Clean up task-specific metadata when converting to text
-                if (newNodeType === 'text' && targetNode.metadata.taskState) {
-                  const { taskState, ...cleanMetadata } = targetNode.metadata;
-                  targetNode.metadata = { ...cleanMetadata, _forceUpdate: Date.now() };
+                // Update node content (placeholder flag is handled automatically)
+                nodeManager.updateNodeContent(node.id, content);
+              }}
+              on:slashCommandSelected={(e) => {
+                if (node.isPlaceholder) {
+                  // For placeholder nodes, just update the nodeType locally
+                  if ('updatePlaceholderNodeType' in nodeManager) {
+                    (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
+                  }
                 } else {
-                  targetNode.metadata = { ...targetNode.metadata, _forceUpdate: Date.now() };
+                  // For real nodes, update node type with full persistence
+                  nodeManager.updateNodeType(node.id, e.detail.nodeType);
                 }
-                nodeManager.updateNodeContent(targetNode.id, targetNode.content);
-              }
-              focusedNodeId = node.id;
-            }}
-            on:combineWithPrevious={handleCombineWithPrevious}
-            on:deleteNode={handleDeleteNode}
+
+                // Set autoFocus to restore focus after nodeType change
+                focusedNodeId = node.id;
+              }}
+              on:nodeTypeChanged={(
+                e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
+              ) => {
+                const newNodeType = e.detail.nodeType;
+                const cleanedContent = e.detail.cleanedContent;
+                const targetNode = nodeManager.nodes.get(node.id);
+                if (targetNode) {
+                  // Update both the node manager and local state
+                  targetNode.nodeType = newNodeType;
+
+                  // If cleanedContent is provided, update the node content too
+                  if (cleanedContent !== undefined) {
+                    // Use requestAnimationFrame to ensure the update happens after component mounting
+                    requestAnimationFrame(() => {
+                      // Use proper node manager method to trigger reactivity
+                      nodeManager.updateNodeContent(node.id, cleanedContent);
+                    });
+                  }
+
+                  // Clean up task-specific metadata when converting to text
+                  if (newNodeType === 'text' && targetNode.metadata.taskState) {
+                    const { taskState, ...cleanMetadata } = targetNode.metadata;
+                    void taskState; // Intentionally unused - extracted to remove from metadata
+                    targetNode.metadata = { ...cleanMetadata, _forceUpdate: Date.now() };
+                  } else {
+                    targetNode.metadata = { ...targetNode.metadata, _forceUpdate: Date.now() };
+                  }
+                  nodeManager.updateNodeContent(targetNode.id, targetNode.content);
+                }
+                focusedNodeId = node.id;
+              }}
+              on:combineWithPrevious={handleCombineWithPrevious}
+              on:deleteNode={handleDeleteNode}
             />
           {/key}
         {:else}
@@ -824,77 +821,75 @@
                   // Just restore focus after the change
                   focusedNodeId = node.id;
                 }}
-              on:nodeTypeChanged={(e: CustomEvent<{ nodeType: string; cleanedContent?: string }>) => {
-                const nodeType = e.detail.nodeType;
-                const cleanedContent = e.detail.cleanedContent;
-                const targetNode = nodeManager.nodes.get(node.id);
-                if (targetNode) {
-                  console.log(`💾 [TaskNode] Updating node ${node.id} to type: ${nodeType}`, {
-                    cleanedContent,
-                    hasCleanedContent: cleanedContent !== undefined
-                  });
-                  // Update the node type
-                  targetNode.nodeType = nodeType;
+                on:nodeTypeChanged={(
+                  e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
+                ) => {
+                  const nodeType = e.detail.nodeType;
+                  const cleanedContent = e.detail.cleanedContent;
+                  const targetNode = nodeManager.nodes.get(node.id);
+                  if (targetNode) {
+                    // Update the node type
+                    targetNode.nodeType = nodeType;
 
-                  // If cleanedContent is provided, update the node content too
-                  if (cleanedContent !== undefined) {
-                    // Use requestAnimationFrame to ensure the update happens after component mounting
-                    requestAnimationFrame(() => {
-                      // Use proper node manager method to trigger reactivity
-                      nodeManager.updateNodeContent(node.id, cleanedContent);
-                      console.log(`💾 [TaskNode] Also updated content to: "${cleanedContent}" (via nodeManager)`);
-                    });
+                    // If cleanedContent is provided, update the node content too
+                    if (cleanedContent !== undefined) {
+                      // Use requestAnimationFrame to ensure the update happens after component mounting
+                      requestAnimationFrame(() => {
+                        // Use proper node manager method to trigger reactivity
+                        nodeManager.updateNodeContent(node.id, cleanedContent);
+                      });
+                    }
+
+                    // CRITICAL: Clean up type-specific metadata when changing node types
+                    if (nodeType === 'text' && targetNode.metadata.taskState) {
+                      // When converting from task to text, remove task-specific metadata
+                      const { taskState, ...cleanMetadata } = targetNode.metadata;
+                      void taskState; // Intentionally unused - extracted to remove from metadata
+                      targetNode.metadata = { ...cleanMetadata, _forceUpdate: Date.now() };
+                    } else {
+                      // For other conversions, just force update
+                      targetNode.metadata = { ...targetNode.metadata, _forceUpdate: Date.now() };
+                    }
+
+                    // Use the working sync mechanism from taskStateChanged
+                    nodeManager.updateNodeContent(targetNode.id, targetNode.content);
+                  }
+                  // Set autoFocus to restore focus after nodeType change
+                  focusedNodeId = node.id;
+                }}
+                on:slashCommandSelected={(
+                  e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
+                ) => {
+                  // Store cursor position before node type change
+                  if (e.detail.cursorPosition !== null && e.detail.cursorPosition !== undefined) {
+                    pendingCursorPositions.set(node.id, e.detail.cursorPosition);
                   }
 
-                  // CRITICAL: Clean up type-specific metadata when changing node types
-                  if (nodeType === 'text' && targetNode.metadata.taskState) {
-                    // When converting from task to text, remove task-specific metadata
-                    const { taskState, ...cleanMetadata } = targetNode.metadata;
-                    targetNode.metadata = { ...cleanMetadata, _forceUpdate: Date.now() };
+                  if (node.isPlaceholder) {
+                    // For placeholder nodes, just update the nodeType locally
+                    if ('updatePlaceholderNodeType' in nodeManager) {
+                      (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
+                    }
                   } else {
-                    // For other conversions, just force update
-                    targetNode.metadata = { ...targetNode.metadata, _forceUpdate: Date.now() };
+                    // For real nodes, update node type with full persistence
+                    nodeManager.updateNodeType(node.id, e.detail.nodeType);
                   }
 
-                  // Use the working sync mechanism from taskStateChanged
-                  nodeManager.updateNodeContent(targetNode.id, targetNode.content);
-                }
-                // Set autoFocus to restore focus after nodeType change
-                focusedNodeId = node.id;
-              }}
-              on:slashCommandSelected={(
-                e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
-              ) => {
-                // Store cursor position before node type change
-                if (e.detail.cursorPosition !== null && e.detail.cursorPosition !== undefined) {
-                  pendingCursorPositions.set(node.id, e.detail.cursorPosition);
-                }
-
-                if (node.isPlaceholder) {
-                  // For placeholder nodes, just update the nodeType locally
-                  if ('updatePlaceholderNodeType' in nodeManager) {
-                    (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
+                  // Set autoFocus to restore focus after nodeType change
+                  focusedNodeId = node.id;
+                }}
+                on:iconClick={handleIconClick}
+                on:taskStateChanged={(e) => {
+                  const { nodeId, state } = e.detail;
+                  const node = nodeManager.nodes.get(nodeId);
+                  if (node) {
+                    node.metadata = { ...node.metadata, taskState: state };
+                    // Trigger sync to persist the change
+                    nodeManager.updateNodeContent(nodeId, node.content);
                   }
-                } else {
-                  // For real nodes, update node type with full persistence
-                  nodeManager.updateNodeType(node.id, e.detail.nodeType);
-                }
-
-                // Set autoFocus to restore focus after nodeType change
-                focusedNodeId = node.id;
-              }}
-              on:iconClick={handleIconClick}
-              on:taskStateChanged={(e) => {
-                const { nodeId, state } = e.detail;
-                const node = nodeManager.nodes.get(nodeId);
-                if (node) {
-                  node.metadata = { ...node.metadata, taskState: state };
-                  // Trigger sync to persist the change
-                  nodeManager.updateNodeContent(nodeId, node.content);
-                }
-              }}
-              on:combineWithPrevious={handleCombineWithPrevious}
-              on:deleteNode={handleDeleteNode}
+                }}
+                on:combineWithPrevious={handleCombineWithPrevious}
+                on:deleteNode={handleDeleteNode}
               />
             {/key}
           {:else}
@@ -942,16 +937,16 @@
                 }}
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
-                const { nodeId, state } = e.detail;
-                const node = nodeManager.nodes.get(nodeId);
-                if (node) {
-                  node.metadata = { ...node.metadata, taskState: state };
-                  // Trigger sync to persist the change
-                  nodeManager.updateNodeContent(nodeId, node.content);
-                }
-              }}
-              on:combineWithPrevious={handleCombineWithPrevious}
-              on:deleteNode={handleDeleteNode}
+                  const { nodeId, state } = e.detail;
+                  const node = nodeManager.nodes.get(nodeId);
+                  if (node) {
+                    node.metadata = { ...node.metadata, taskState: state };
+                    // Trigger sync to persist the change
+                    nodeManager.updateNodeContent(nodeId, node.content);
+                  }
+                }}
+                on:combineWithPrevious={handleCombineWithPrevious}
+                on:deleteNode={handleDeleteNode}
               />
             {/key}
           {/if}

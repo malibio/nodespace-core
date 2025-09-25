@@ -183,7 +183,8 @@
       const result = slashCommandService.executeCommand(command);
 
       // Insert the command content (skip cursor positioning since parent will handle it)
-      controller.insertSlashCommand(result.content, true);
+      // Pass the target node type so insertSlashCommand can clean header syntax appropriately
+      controller.insertSlashCommand(result.content, true, result.nodeType);
 
       // Don't update nodeType locally - let parent handle it to avoid double re-renders
       // The parent (base-node-viewer) will update nodeType via nodeManager and trigger autoFocus
@@ -209,7 +210,7 @@
     dispatch('slashCommandSelected', {
       command: command.id,
       nodeType: command.nodeType,
-      cursorPosition: 0  // Slash commands always position cursor at beginning
+      cursorPosition: 0 // Slash commands always position cursor at beginning
     });
   }
 
@@ -246,9 +247,9 @@
     combineWithPrevious: { nodeId: string; currentContent: string };
     deleteNode: { nodeId: string };
     nodeReferenceSelected: { nodeId: string; nodeTitle: string };
-    slashCommandSelected: { command: string; nodeType: string };
+    slashCommandSelected: { command: string; nodeType: string; cursorPosition?: number };
     iconClick: { nodeId: string; nodeType: string; currentState?: string };
-    nodeTypeChanged: { nodeType: string };
+    nodeTypeChanged: { nodeType: string; cleanedContent?: string };
   }>();
 
   // Controller event handlers
@@ -471,7 +472,6 @@
   const iconConfig = $derived(getIconConfig(nodeType as NodeType));
   const nodeState = $derived(resolveNodeState(nodeType as NodeType, undefined, metadata));
   const hasChildren = $derived(children.length > 0);
-
 
   // Note: Semantic classes handled internally by Icon component
 </script>

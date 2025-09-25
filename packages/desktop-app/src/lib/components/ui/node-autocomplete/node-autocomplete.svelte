@@ -153,7 +153,9 @@
     bind:this={containerRef}
     style="
       position: fixed;
-      {smartPosition.showBelow ? `top: ${smartPosition.y}px;` : `bottom: ${window.innerHeight - smartPosition.y}px;`}
+      {smartPosition.showBelow
+      ? `top: ${smartPosition.y}px;`
+      : `bottom: ${window.innerHeight - smartPosition.y}px;`}
       left: {smartPosition.x}px;
       min-width: 300px;
       max-height: 300px;

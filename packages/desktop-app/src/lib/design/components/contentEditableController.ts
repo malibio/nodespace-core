@@ -28,7 +28,11 @@ export interface ContentEditableEvents {
     focusOriginalNode?: boolean;
   }) => void;
   indentNode: (data: { nodeId: string }) => void;
-  directSlashCommand: (data: { command: string; nodeType: string; cursorPosition?: number }) => void;
+  directSlashCommand: (data: {
+    command: string;
+    nodeType: string;
+    cursorPosition?: number;
+  }) => void;
   outdentNode: (data: { nodeId: string }) => void;
   navigateArrow: (data: { nodeId: string; direction: 'up' | 'down'; columnHint: number }) => void;
   combineWithPrevious: (data: { nodeId: string; currentContent: string }) => void;
@@ -2715,10 +2719,14 @@ export class ContentEditableController {
   /**
    * Insert slash command content at current cursor position
    */
-  public insertSlashCommand(content: string, skipCursorPositioning = false): void {
+  public insertSlashCommand(content: string, skipCursorPositioning = false, targetNodeType?: string): void {
     const currentText = this.element.textContent || '';
 
-    console.log('🔧 insertSlashCommand:', { currentText, content, session: this.slashCommandSession });
+    console.log('🔧 insertSlashCommand:', {
+      currentText,
+      content,
+      session: this.slashCommandSession
+    });
 
     // Use session tracking if available, otherwise fallback to legacy logic
     if (this.slashCommandSession && this.slashCommandSession.active) {
@@ -2727,8 +2735,14 @@ export class ContentEditableController {
       const replaceStart = session.startPosition;
       const replaceEnd = session.startPosition + 1 + session.query.length; // "/" + query length
 
-      const beforeSlash = currentText.substring(0, replaceStart);
+      let beforeSlash = currentText.substring(0, replaceStart);
       const afterQuery = currentText.substring(replaceEnd);
+
+      // Clean up header syntax if converting from text node to non-text node
+      if (targetNodeType && this.nodeType === 'text' && targetNodeType !== 'text') {
+        const headerPattern = /^(#{1,6})\s+/;
+        beforeSlash = beforeSlash.replace(headerPattern, '').trim();
+      }
 
       const newContent = beforeSlash + content + afterQuery;
 
@@ -2769,7 +2783,6 @@ export class ContentEditableController {
           this.restoreCursorPosition(newCursorPos);
         }, 0);
       }
-
     } else {
       // Fallback to legacy logic for cases without session tracking
       console.log('⚠️ No session tracking - using fallback logic');
@@ -2828,7 +2841,13 @@ export class ContentEditableController {
       return false; // Not a known command
     }
 
-    console.log('🚀 Direct slash command detected:', { query, command, currentText, futureText, startPosition: session.startPosition });
+    console.log('🚀 Direct slash command detected:', {
+      query,
+      command,
+      currentText,
+      futureText,
+      startPosition: session.startPosition
+    });
 
     // Use setTimeout to execute after the current event handling
     setTimeout(() => {
@@ -2836,10 +2855,17 @@ export class ContentEditableController {
       const result = slashCommandService.executeCommand(command);
 
       // Execute the slash command replacement (skip cursor positioning since parent will handle it)
-      this.insertSlashCommand(result.content, true);
+      // Pass the target node type so insertSlashCommand can clean header syntax appropriately
+      this.insertSlashCommand(result.content, true, result.nodeType);
 
       // For slash commands, cursor always goes to beginning (position 0) since commands only work at start
       const cursorPosition = 0;
+
+      // Hide the slash command dropdown immediately since command is complete
+      this.events.slashCommandHidden();
+
+      // Clear the slash command session since it's complete
+      this.clearSlashCommandSession();
 
       // Emit the direct slash command event that will be handled by base-node to dispatch to parent
       console.log('🚀 Emitting directSlashCommand event:', {

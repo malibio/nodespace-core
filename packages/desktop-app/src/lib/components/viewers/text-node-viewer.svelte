@@ -70,6 +70,7 @@
       cursorPosition?: number;
     };
     deleteNode: { nodeId: string };
+    nodeTypeChanged: { nodeType: string; cleanedContent?: string };
     focus: void;
     blur: void;
   }>();
