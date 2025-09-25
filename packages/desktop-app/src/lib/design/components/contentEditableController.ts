@@ -87,6 +87,8 @@ export class ContentEditableController {
 
   // Track if slash command dropdown is currently active
   private slashCommandDropdownActive: boolean = false;
+  // Track if autocomplete dropdown is currently active
+  private autocompleteDropdownActive: boolean = false;
 
   // Bound event handlers for proper cleanup
   private boundHandleFocus = this.handleFocus.bind(this);
@@ -726,7 +728,8 @@ export class ContentEditableController {
         this.events.headerLevelChanged(newHeaderLevel);
       }
 
-      // Check for task shortcut pattern: "[ ]", "[x]", "[~]", "[o]"
+      // Check for patterns - header pattern takes precedence over task pattern
+      this.checkForHeaderPattern(textContent);
       this.checkForTaskShortcut(textContent);
 
       // Apply live formatting while preserving cursor, unless we just had a Shift+Enter or regular Enter
@@ -791,10 +794,18 @@ export class ContentEditableController {
     if (event.key === 'Enter') {
       // If slash command dropdown is active, let it handle the Enter key
       // Check both the state variable and if dropdown is actually visible in DOM
-      const dropdownExists = document.querySelector(
+      const slashDropdownExists = document.querySelector(
         '[role="listbox"][aria-label="Slash command palette"]'
       );
-      if (this.slashCommandDropdownActive || dropdownExists) {
+      const autocompleteDropdownExists = document.querySelector(
+        '[role="listbox"][aria-label="Node reference autocomplete"]'
+      );
+      if (
+        this.slashCommandDropdownActive ||
+        this.autocompleteDropdownActive ||
+        slashDropdownExists ||
+        autocompleteDropdownExists
+      ) {
         return; // Don't preventDefault, let the dropdown handle it
       }
 
@@ -876,6 +887,10 @@ export class ContentEditableController {
 
     // Arrow keys for navigation
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      // If any modal is active, let the modal handle the arrow keys
+      if (this.slashCommandDropdownActive || this.autocompleteDropdownActive) {
+        return;
+      }
       const direction = event.key === 'ArrowUp' ? 'up' : 'down';
 
       // For multiline nodes, only navigate between nodes if at first/last line
@@ -2157,25 +2172,98 @@ export class ContentEditableController {
    * Patterns: [ ], [x], [X], [~], [o]
    */
   private checkForTaskShortcut(content: string): void {
-    // Only check if node is not already a task
-    if (this.nodeType === 'task') {
+    // Don't process task patterns if there's a header pattern - header takes precedence
+    const headerPattern = /^(#{1,6})\s/;
+    if (headerPattern.test(content)) {
+      console.log('⚠️ Task pattern check skipped - header pattern takes precedence');
       return;
     }
 
-    // Check for task shortcut pattern: optional dash, followed by [x/~/o/ ]
     const taskPattern = /^\s*-?\s*\[(x|X|~|o|\s)\]\s*/;
-    const match = content.match(taskPattern);
+    const hasTaskPattern = taskPattern.test(content);
 
-    if (match) {
-      // Remove the task syntax from content to get clean content
+    console.log('🔍 Task pattern check:', {
+      content,
+      hasTaskPattern,
+      currentNodeType: this.nodeType,
+      taskPatternMatch: content.match(taskPattern)
+    });
+
+    if (this.nodeType === 'task' && !hasTaskPattern) {
+      // Task node that no longer has task pattern - convert to text
+      console.log('🔄 Converting task to text:', {
+        nodeId: this.nodeId,
+        cleanedContent: content.trim()
+      });
+
+      this.events.nodeTypeConversionDetected({
+        nodeId: this.nodeId,
+        newNodeType: 'text',
+        cleanedContent: content.trim()
+      });
+    } else if (this.nodeType !== 'task' && hasTaskPattern) {
+      // Non-task node that now has task pattern - convert to task
       const cleanedContent = content.replace(taskPattern, '').trim();
 
-      // Convert node to task type
+      console.log('🔄 Converting to task:', {
+        from: this.nodeType,
+        nodeId: this.nodeId,
+        cleanedContent
+      });
+
       this.events.nodeTypeConversionDetected({
         nodeId: this.nodeId,
         newNodeType: 'task',
         cleanedContent
       });
+    }
+  }
+
+  /**
+   * Check for header pattern and convert node type if detected
+   * Patterns: # , ## , ###
+   */
+  private checkForHeaderPattern(content: string): void {
+    // Check if content starts with header pattern (# followed by space)
+    const headerPattern = /^(#{1,6})\s/;
+    const match = content.match(headerPattern);
+    const hasHeaderPattern = !!match;
+    const headerLevel = match ? match[1].length : 0;
+
+    console.log('🔍 Header pattern check:', {
+      content,
+      hasHeaderPattern,
+      headerLevel,
+      currentNodeType: this.nodeType,
+      currentHeaderLevel: this.currentHeaderLevel
+    });
+
+    // Only convert to text node with header if we're not already in that state
+    if (hasHeaderPattern && (this.nodeType !== 'text' || this.currentHeaderLevel !== headerLevel)) {
+      // Clean content: remove header syntax
+      const cleanedContent = content.replace(headerPattern, '').trim();
+
+      console.log('🔄 Converting to header text:', {
+        from: this.nodeType,
+        to: 'text',
+        headerLevel,
+        cleanedContent
+      });
+
+      // Convert to text node and update header level
+      this.events.nodeTypeConversionDetected({
+        nodeId: this.nodeId,
+        newNodeType: 'text',
+        cleanedContent
+      });
+
+      // Also emit header level change
+      this.currentHeaderLevel = headerLevel;
+      this.events.headerLevelChanged(headerLevel);
+    } else if (!hasHeaderPattern && this.nodeType === 'text' && this.currentHeaderLevel > 0) {
+      // Text node that no longer has header pattern - reset to normal text
+      this.currentHeaderLevel = 0;
+      this.events.headerLevelChanged(0);
     }
   }
 
@@ -2542,6 +2630,14 @@ export class ContentEditableController {
   }
 
   /**
+   * Set whether the autocomplete dropdown is currently active
+   * This prevents arrow keys from moving the cursor when autocomplete should handle them
+   */
+  public setAutocompleteDropdownActive(active: boolean): void {
+    this.autocompleteDropdownActive = active;
+  }
+
+  /**
    * Insert slash command content at current cursor position
    */
   public insertSlashCommand(content: string): void {
@@ -2553,17 +2649,40 @@ export class ContentEditableController {
       return;
     }
 
-    // Find the end of the slash command (until space or end of text)
+    // Find the end of the slash command more carefully
+    // We need to only replace the /command part, not the rest of the content
     const afterSlash = currentText.substring(lastSlashIndex + 1);
     const spaceIndex = afterSlash.indexOf(' ');
-    const endOffset = spaceIndex === -1 ? afterSlash.length : spaceIndex + 1; // +1 to include the space
+
+    // If there's a space, we know where the command ends
+    // If there's no space, the command goes to the end, but we need to preserve existing content
+    let commandEndIndex;
+    let query;
+
+    if (spaceIndex !== -1) {
+      // Command ends at the space - don't include the space in replacement
+      commandEndIndex = lastSlashIndex + 1 + spaceIndex;
+      query = afterSlash.substring(0, spaceIndex);
+    } else {
+      // No space found - need to be more careful about what constitutes the command
+      // Look for word boundaries to avoid consuming existing content
+      const wordMatch = afterSlash.match(/^([a-zA-Z0-9-_]*)/);
+      if (wordMatch && wordMatch[1]) {
+        commandEndIndex = lastSlashIndex + 1 + wordMatch[1].length;
+        query = wordMatch[1];
+      } else {
+        // Fallback: command is just the slash
+        commandEndIndex = lastSlashIndex + 1;
+        query = '';
+      }
+    }
 
     // Create a synthetic slash context
     const slashContext = {
       startPosition: lastSlashIndex,
-      endPosition: lastSlashIndex + 1 + endOffset, // End after the slash command
+      endPosition: commandEndIndex,
       trigger: '/',
-      query: afterSlash.substring(0, spaceIndex === -1 ? afterSlash.length : spaceIndex),
+      query,
       element: this.element,
       isValid: true,
       metadata: {}

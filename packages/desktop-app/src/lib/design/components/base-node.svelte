@@ -328,9 +328,16 @@
       newNodeType: string;
       cleanedContent: string;
     }) => {
+      console.log('🔄 Node type conversion detected:', {
+        nodeId: data.nodeId,
+        from: nodeType,
+        to: data.newNodeType,
+        cleanedContent: data.cleanedContent
+      });
+
       // Update content to cleaned version
       dispatch('contentChanged', { content: data.cleanedContent });
-      // Notify parent to convert node type
+      // Notify parent to handle the node type change (parent will update nodeType prop)
       dispatch('nodeTypeChanged', { nodeType: data.newNodeType });
     }
   };
@@ -383,6 +390,13 @@
     }
   });
 
+  // Update controller when autocomplete dropdown state changes
+  $effect(() => {
+    if (controller) {
+      controller.setAutocompleteDropdownActive(showAutocomplete);
+    }
+  });
+
   onDestroy(() => {
     if (controller) {
       controller.destroy();
@@ -429,6 +443,12 @@
       .join(' ')
   );
 
+  // REACTIVITY FIX: Create reactive derived state for icon configuration
+  // This ensures template re-renders when nodeType changes
+  const iconConfig = $derived(getIconConfig(nodeType as NodeType));
+  const nodeState = $derived(resolveNodeState(nodeType as NodeType, undefined, metadata));
+  const hasChildren = $derived(children.length > 0);
+
   // Note: Semantic classes handled internally by Icon component
 </script>
 
@@ -442,10 +462,7 @@
     tabindex="0"
     aria-label="Toggle node state"
   >
-    {#if getIconConfig(nodeType as NodeType)}
-      {@const iconConfig = getIconConfig(nodeType as NodeType)}
-      {@const nodeState = resolveNodeState(nodeType as NodeType, undefined, metadata)}
-      {@const hasChildren = children.length > 0}
+    {#if iconConfig}
       <div class={iconConfig.semanticClass}>
         {#snippet iconComponent()}
           {@const IconComponent = iconConfig.component}
