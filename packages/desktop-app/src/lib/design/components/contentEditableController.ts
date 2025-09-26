@@ -700,12 +700,16 @@ export class ContentEditableController {
         const element = node as Element;
         if (element.tagName === 'DIV') {
           // Div element: represents a line
+          // Get the content of this div (could be empty for blank lines)
+          const divContent = this.getTextContentIgnoringSyntax(element);
+
           // First div doesn't need a newline prefix, subsequent divs do
           if (isFirstDiv) {
-            result += this.getTextContentIgnoringSyntax(element);
+            result += divContent;
             isFirstDiv = false;
           } else {
-            result += '\n' + this.getTextContentIgnoringSyntax(element);
+            // Add newline for each div, even if empty (preserves blank lines)
+            result += '\n' + divContent;
           }
         } else {
           // Other elements: just add their text content (excluding syntax markers)
