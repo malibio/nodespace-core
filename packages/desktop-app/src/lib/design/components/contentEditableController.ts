@@ -416,6 +416,33 @@ export class ContentEditableController {
    * Uses comprehensive parsing to handle all formatting patterns including mixed syntax
    */
   private markdownToLiveHtml(content: string): string {
+    // Check for block-level patterns first (code blocks, quote blocks)
+    // Code block pattern: ```\n...\n``` with flexible whitespace handling
+    const codeBlockPattern = /^```\n([\s\S]*?)\n```$/;
+    const codeBlockMatch = codeBlockPattern.exec(content);
+    if (codeBlockMatch) {
+      return this.renderCodeBlockLive(content, codeBlockMatch[1]);
+    }
+
+    // Flexible code block pattern for various newline combinations
+    const flexibleCodeBlockPattern = /^```(\n+)([\s\S]*?)(\n+)```$/;
+    const flexibleMatch = flexibleCodeBlockPattern.exec(content);
+    if (flexibleMatch) {
+      return this.renderCodeBlockLive(content, flexibleMatch[2] || '');
+    }
+
+    // Single newline code block pattern (like ```\n```)
+    const singleNewlinePattern = /^```\n```$/;
+    if (singleNewlinePattern.test(content)) {
+      return this.renderCodeBlockLive(content, '');
+    }
+
+    // Quote block pattern: > ...\n> ... (each line starts with > )
+    const quoteBlockPattern = /^(> .*(\n> .*)*(\n>)?)$/;
+    if (quoteBlockPattern.test(content)) {
+      return this.renderQuoteBlockLive(content);
+    }
+
     // Find all formatting patterns including mixed syntax
     const patterns = this.findAllFormattingPatterns(content);
 
@@ -750,7 +777,12 @@ export class ContentEditableController {
     // The content should be the inner code without markers
     const trimmedContent = content.trim();
 
-    // Default to no language specification
+    // Handle empty content case - use single newline to preserve original format
+    if (trimmedContent === '') {
+      return `\`\`\`\n\`\`\``;
+    }
+
+    // Default to no language specification for non-empty content
     return `\`\`\`\n${trimmedContent}\n\`\`\``;
   }
 
@@ -838,7 +870,9 @@ export class ContentEditableController {
     // Create HTML structure matching design patterns
     if (this.isEditing) {
       // When focused: show syntax markers with visual formatting
-      const syntaxMarkers = `<span class="code-marker">\`\`\`${language}</span>\n${this.escapeHtml(codeContent.trim())}\n<span class="code-marker">\`\`\`</span>`;
+      // Only show language if it's not the default 'text'
+      const languageLabel = language === 'text' ? '' : language;
+      const syntaxMarkers = `<span class="code-marker">\`\`\`${languageLabel}</span>\n${this.escapeHtml(codeContent.trim())}\n<span class="code-marker">\`\`\`</span>`;
       const codeHtml = `<div class="code-background"><pre><code>${syntaxMarkers}</code></pre></div>`;
       this.element.innerHTML = codeHtml;
     } else {
@@ -846,6 +880,64 @@ export class ContentEditableController {
       const codeHtml = `<div class="code-background"><pre><code>${this.escapeHtml(codeContent.trim())}</code></pre></div>`;
       this.element.innerHTML = codeHtml;
     }
+  }
+
+  /**
+   * Render code block for live formatting mode (returns HTML string instead of manipulating DOM)
+   * This is used during live editing to provide immediate visual feedback without DOM conflicts
+   */
+  private renderCodeBlockLive(content: string, codeContent: string): string {
+    // Only show language if it's not the default 'text'
+    const languageLabel = ''; // Don't show language in live mode for simplicity
+
+    // Handle empty content case properly - use <br> instead of \n to avoid div conversion
+    const escapedContent = this.escapeHtml(codeContent);
+    const contentPart = escapedContent ? `<br>${escapedContent}<br>` : '<br>';
+    const syntaxMarkers = `<span class="code-marker">\`\`\`${languageLabel}</span>${contentPart}<span class="code-marker">\`\`\`</span>`;
+
+    return `<div class="code-background"><pre><code>${syntaxMarkers}</code></pre></div>`;
+  }
+
+  /**
+   * Render quote block for live formatting mode (returns HTML string instead of manipulating DOM)
+   */
+  private renderQuoteBlockLive(content: string): string {
+    const lines = content.split('\n');
+    const quoteLinesWithMarkers = lines.map((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('>')) {
+        const content = trimmed.substring(1).trim();
+        return `<span class="quote-marker">&gt;</span> ${content}`;
+      }
+      return line;
+    });
+    const quoteContentWithMarkers = quoteLinesWithMarkers.join('<br>');
+    return `<div class="quote-accent-bar"></div><div class="quote-text">${quoteContentWithMarkers}</div>`;
+  }
+
+  /**
+   * Check if content matches code block pattern for live formatting
+   */
+  private isCodeBlockPattern(content: string): boolean {
+    // Try the standard pattern first
+    const codeBlockPattern = /^```\n([\s\S]*?)\n```$/;
+    if (codeBlockPattern.test(content)) return true;
+
+    // Try flexible pattern for various newline combinations
+    const flexibleCodeBlockPattern = /^```(\n+)([\s\S]*?)(\n+)```$/;
+    if (flexibleCodeBlockPattern.test(content)) return true;
+
+    // Try single newline pattern
+    const singleNewlinePattern = /^```\n```$/;
+    return singleNewlinePattern.test(content);
+  }
+
+  /**
+   * Check if content matches quote block pattern for live formatting
+   */
+  private isQuoteBlockPattern(content: string): boolean {
+    const quoteBlockPattern = /^(> .*(\n> .*)*(\n>)?)$/;
+    return quoteBlockPattern.test(content);
   }
 
   /**
@@ -1008,11 +1100,16 @@ export class ContentEditableController {
 
       // Apply live formatting while preserving cursor, unless we just had a Shift+Enter or regular Enter
       // Also skip formatting for multiline nodes with line breaks to preserve <div><br></div> structure
+      // EXCEPT for block-level patterns (code blocks, quote blocks) which need live formatting
       const hasLineBreaks =
         this.config.allowMultiline &&
         (this.element.innerHTML.includes('<div>') || this.element.innerHTML.includes('<br>'));
 
-      if (!this.recentShiftEnter && !this.recentEnter && !hasLineBreaks) {
+      // Check if this is a block-level pattern that should get live formatting even with line breaks
+      const isBlockPattern =
+        this.isCodeBlockPattern(textContent) || this.isQuoteBlockPattern(textContent);
+
+      if (!this.recentShiftEnter && !this.recentEnter && (!hasLineBreaks || isBlockPattern)) {
         this.setLiveFormattedContent(textContent);
         this.restoreCursorPosition(cursorOffset);
       }
@@ -2955,6 +3052,11 @@ export class ContentEditableController {
       if (contentHeaderMatch) {
         // Position cursor after the header syntax (e.g., after "# " in "# content")
         newCursorPos = beforeSlash.length + contentHeaderMatch[1].length;
+      }
+      // Special case: for code blocks, position cursor between the ``` markers (after first newline)
+      else if (content === '```\n\n```') {
+        // Position cursor after the first newline, ready for typing code content
+        newCursorPos = beforeSlash.length + '```\n'.length;
       }
       // Special case: for empty content (like task conversion), position cursor where "/" was
       else if (content === '') {

@@ -439,13 +439,36 @@
   // Utility Functions
   // ============================================================================
 
+  // Block detection functions
+  function isCodeBlock(content: string): boolean {
+    // Standard patterns
+    if (/^```\n[\s\S]*?\n```$/.test(content)) return true;
+    if (/^```(\n+)([\s\S]*?)(\n+)```$/.test(content)) return true;
+
+    // Single/double newline cases
+    return content === '```\n```' || content === '```\n\n```';
+  }
+
+  function isQuoteBlock(content: string): boolean {
+    return content
+      .split('\n')
+      .every((line) => line.startsWith('> ') || line.trim() === '' || line === '>');
+  }
+
+  function getBlockType(content: string): string | null {
+    if (isCodeBlock(content)) return 'code-block';
+    if (isQuoteBlock(content)) return 'quote-block';
+    return null;
+  }
+
   // Compute CSS classes
   const containerClasses = $derived(
     [
       'node',
       `node--${nodeType}`,
       headerLevel > 0 && `node--h${headerLevel}`,
-      children.length > 0 && 'node--has-children'
+      children.length > 0 && 'node--has-children',
+      getBlockType(content || '') && `node--${getBlockType(content || '')}`
     ]
       .filter(Boolean)
       .join(' ')

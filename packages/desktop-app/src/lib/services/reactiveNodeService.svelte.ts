@@ -1265,7 +1265,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       {
         id: 'code-block-1',
         content:
-          '```javascript\nconst message = "Hello, world!";\nconst x = 42;\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}',
+          '```\nconst message = "Hello, world!";\nconst x = 42;\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}\n```',
         nodeType: 'text',
         depth: 2,
         parentId: 'extended-markdown-section',
@@ -1291,7 +1291,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       {
         id: 'code-block-2',
         content:
-          '```css\n.example {\n  color: hsl(var(--foreground));\n  background: hsl(var(--background));\n  border-radius: 0.5rem;\n  padding: 1rem;\n}',
+          '```\n.example {\n  color: hsl(var(--foreground));\n  background: hsl(var(--background));\n  border-radius: 0.5rem;\n  padding: 1rem;\n}\n```',
         nodeType: 'text',
         depth: 2,
         parentId: 'extended-markdown-section',
@@ -1316,7 +1316,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       {
         id: 'python-block-1',
         content:
-          '```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)',
+          '```\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)```',
         nodeType: 'text',
         depth: 2,
         parentId: 'extended-markdown-section',

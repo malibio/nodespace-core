@@ -49,6 +49,22 @@ export const textNodePlugin: PluginDefinition = {
         description: 'Create a small header',
         shortcut: '###',
         contentTemplate: '### '
+      },
+      {
+        id: 'code-block',
+        name: 'Code Block',
+        description: 'Multi-line code with syntax highlighting',
+        shortcut: '```',
+        contentTemplate: '```\n\n```',
+        nodeType: 'text'
+      },
+      {
+        id: 'quote-block',
+        name: 'Quote Block',
+        description: 'Multi-line quotation block',
+        shortcut: '>',
+        contentTemplate: '> ',
+        nodeType: 'text'
       }
     ],
     canHaveChildren: true,
