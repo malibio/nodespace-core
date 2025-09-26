@@ -3,7 +3,7 @@
   
   IMPORTANT: This component should NOT be used directly in application code.
   It serves as the abstract foundation for all node viewers and should only 
-  be consumed by concrete node viewer implementations like TextNodeViewer.
+  be consumed by concrete node viewer implementations like TextNode.
   
   Core Features:
   - ContentEditableController integration for markdown syntax handling
@@ -14,7 +14,7 @@
   
   Architecture:
   - Abstract Base: Provides core functionality but should not be instantiated directly
-  - Concrete Viewers: TextNodeViewer, TaskNodeViewer, etc. wrap this component
+  - Concrete Viewers: TextNode, TaskNode, etc. wrap this component
   - Plugin System: Registered viewers extend this base with type-specific logic
 -->
 

@@ -4,7 +4,7 @@
  * Centralizes component imports for better organization.
  */
 
-export { default as TextNode } from './text-node.svelte';
+export { default as TextNode } from './viewers/text-node.svelte';
 export { default as NodeTree } from './node-tree.svelte';
 export { default as AutocompleteModal } from './autocomplete-modal.svelte';
 export { default as MarkdownRenderer } from './markdown-renderer.svelte';

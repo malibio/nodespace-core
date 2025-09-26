@@ -55,7 +55,7 @@ export const textNodePlugin: PluginDefinition = {
     canBeChild: true
   },
   viewer: {
-    lazyLoad: () => import('../components/viewers/text-node-viewer.svelte'),
+    lazyLoad: () => import('../components/viewers/text-node.svelte'),
     priority: 1
   },
   reference: {
@@ -137,7 +137,7 @@ export const dateNodePlugin: PluginDefinition = {
     canBeChild: true
   },
   viewer: {
-    lazyLoad: () => import('../components/viewers/date-node-viewer.svelte'),
+    lazyLoad: () => import('../components/viewers/date-node.svelte'),
     priority: 1
   },
   reference: {
