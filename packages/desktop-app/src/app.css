@@ -305,6 +305,148 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ctext x='10' y='12.5' fill='%23252523' text-anchor='middle' dominant-baseline='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-size='16' font-weight='400'%3EH3%3C/text%3E%3C/svg%3E");
 }
 
+/* Code Block and Quote Block Square Icons */
+.code-square-alt,
+.quote-square-alt {
+  width: 16px;
+  height: 16px;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  border-radius: 0.5px;
+  overflow: hidden;
+}
+
+.code-square-alt::before,
+.quote-square-alt::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: hsl(var(--primary));
+}
+
+.code-square-alt::after,
+.quote-square-alt::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Code block icon - braces {} */
+.code-square-alt::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23FAF9F5'%3E%3Cpath d='M5,2.5 C3.34,2.5 2,3.84 2,5.5 V6.5 C2,7.33 1.33,8 0.5,8 H0 V12 H0.5 C1.33,12 2,12.67 2,13.5 V14.5 C2,16.16 3.34,17.5 5,17.5 H7 V15.5 H5 C4.45,15.5 4,15.05 4,14.5 V13.5 C4,11.84 2.66,10.5 1,10.5 V9.5 C2.66,9.5 4,8.16 4,6.5 V5.5 C4,4.95 4.45,4.5 5,4.5 H7 V2.5 H5 Z M15,2.5 H13 V4.5 H15 C15.55,4.5 16,4.95 16,5.5 V6.5 C16,8.16 17.34,9.5 19,9.5 V10.5 C17.34,10.5 16,11.84 16,13.5 V14.5 C16,15.05 15.55,15.5 15,15.5 H13 V17.5 H15 C16.66,17.5 18,16.16 18,14.5 V13.5 C18,12.67 18.67,12 19.5,12 H20 V8 H19.5 C18.67,8 18,7.33 18,6.5 V5.5 C18,3.84 16.66,2.5 15,2.5 Z'/%3E%3C/svg%3E");
+}
+
+/* Quote block icon - quotation marks */
+.quote-square-alt::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23FAF9F5'%3E%3Cpath d='M18.62 18h-5.24l2-4H13V6h8v7.24L18.62 18zm-2-2h.76L19 12.76V8h-4v4h3.62l-2 4zm-8 2H3.38l2-4H3V6h8v7.24L8.62 18zm-2-2h.76L9 12.76V8H5v4h3.62l-2 4z'/%3E%3C/svg%3E");
+}
+
+.dark .code-square-alt::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23252523'%3E%3Cpath d='M5,2.5 C3.34,2.5 2,3.84 2,5.5 V6.5 C2,7.33 1.33,8 0.5,8 H0 V12 H0.5 C1.33,12 2,12.67 2,13.5 V14.5 C2,16.16 3.34,17.5 5,17.5 H7 V15.5 H5 C4.45,15.5 4,15.05 4,14.5 V13.5 C4,11.84 2.66,10.5 1,10.5 V9.5 C2.66,9.5 4,8.16 4,6.5 V5.5 C4,4.95 4.45,4.5 5,4.5 H7 V2.5 H5 Z M15,2.5 H13 V4.5 H15 C15.55,4.5 16,4.95 16,5.5 V6.5 C16,8.16 17.34,9.5 19,9.5 V10.5 C17.34,10.5 16,11.84 16,13.5 V14.5 C16,15.05 15.55,15.5 15,15.5 H13 V17.5 H15 C16.66,17.5 18,16.16 18,14.5 V13.5 C18,12.67 18.67,12 19.5,12 H20 V8 H19.5 C18.67,8 18,7.33 18,6.5 V5.5 C18,3.84 16.66,2.5 15,2.5 Z'/%3E%3C/svg%3E");
+}
+
+.dark .quote-square-alt::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23252523'%3E%3Cpath d='M18.62 18h-5.24l2-4H13V6h8v7.24L18.62 18zm-2-2h.76L19 12.76V8h-4v4h3.62l-2 4zm-8 2H3.38l2-4H3V6h8v7.24L8.62 18zm-2-2h.76L9 12.76V8H5v4h3.62l-2 4z'/%3E%3C/svg%3E");
+}
+
+/* Extended Markdown Block Styling */
+/* Code Block Styling - matches design patterns exactly */
+.node--code-block .node__content {
+  padding: 0;
+}
+
+.node--code-block .code-background {
+  background: hsl(var(--muted) / 0.3);
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.node--code-block pre {
+  margin: 0;
+  font-family:
+    ui-monospace, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New',
+    monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: hsl(var(--foreground));
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.node--code-block code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  font-family: inherit;
+}
+
+/* Quote Block Styling - matches design patterns exactly */
+.node--quote-block .node__content {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  position: relative;
+  padding: 0;
+}
+
+.node--quote-block .quote-accent-bar {
+  width: 3px;
+  background: hsl(var(--primary));
+  border-radius: 2px;
+  flex-shrink: 0;
+  align-self: stretch;
+  min-height: 100%;
+  margin-top: 0.125rem;
+  margin-bottom: 0.125rem;
+}
+
+.node--quote-block .quote-text {
+  flex: 1;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+  line-height: 1.6;
+  margin: 0;
+  padding: 0;
+  white-space: pre-line; /* Preserve line breaks from <br> tags and newlines */
+}
+
+/* Syntax marker visibility - for focused/blurred states */
+.node__content.focused .syntax-marker {
+  opacity: 0.7;
+  color: hsl(var(--muted-foreground));
+}
+
+.node__content:not(.focused) .syntax-marker {
+  display: none;
+}
+
+/* Additional syntax marker patterns for extended markdown */
+.node__content.focused .code-marker,
+.node__content.focused .quote-marker {
+  opacity: 0.7;
+  color: hsl(var(--muted-foreground));
+}
+
+.node__content:not(.focused) .code-marker,
+.node__content:not(.focused) .quote-marker {
+  display: none;
+}
+
 /* Text Node Circle */
 .text-circle {
   width: 14px;

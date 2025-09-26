@@ -596,22 +596,35 @@ export class ContentEditableController {
   private setFormattedContent(content: string): void {
     const headerLevel = ContentProcessor.getInstance().parseHeaderLevel(content);
 
+    // Clean up any existing block classes before applying new ones
+    const nodeElement = this.element.parentElement;
+    if (nodeElement) {
+      nodeElement.classList.remove('node--code-block', 'node--quote-block');
+    }
+
     if (headerLevel > 0) {
       // For headers: strip # symbols but preserve inline formatting
       const cleanText = ContentProcessor.getInstance().stripHeaderSyntax(content);
       const htmlContent = this.markdownToDisplayHtml(cleanText);
       this.element.innerHTML = htmlContent;
     } else {
-      // For non-headers: show formatted HTML with custom styling (bold, italic, code, strikethrough)
-      let htmlContent = this.markdownToDisplayHtml(content);
+      // Check for extended markdown blocks (code blocks and quote blocks)
+      if (this.isCodeBlock(content)) {
+        this.renderCodeBlock(content);
+      } else if (this.isQuoteBlock(content)) {
+        this.renderQuoteBlock(content);
+      } else {
+        // For normal text: show formatted HTML with custom styling (bold, italic, code, strikethrough)
+        let htmlContent = this.markdownToDisplayHtml(content);
 
-      // For multiline nodes: ensure newlines are preserved as <br> tags
-      if (this.config.allowMultiline) {
-        // Convert any remaining \n characters to <br> tags for display
-        htmlContent = htmlContent.replace(/\n/g, '<br>');
+        // For multiline nodes: ensure newlines are preserved as <br> tags
+        if (this.config.allowMultiline) {
+          // Convert any remaining \n characters to <br> tags for display
+          htmlContent = htmlContent.replace(/\n/g, '<br>');
+        }
+
+        this.element.innerHTML = htmlContent;
       }
-
-      this.element.innerHTML = htmlContent;
     }
   }
 
@@ -644,6 +657,10 @@ export class ContentEditableController {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
 
+    // Remove syntax marker elements before extracting text
+    const syntaxMarkers = tempDiv.querySelectorAll('.code-marker, .quote-marker, .syntax-marker');
+    syntaxMarkers.forEach((marker) => marker.remove());
+
     let result = '';
 
     // Walk through all child nodes
@@ -655,10 +672,10 @@ export class ContentEditableController {
         const element = node as Element;
         if (element.tagName === 'DIV') {
           // Div element: represents a new line, add newline + content
-          result += '\n' + (element.textContent || '');
+          result += '\n' + this.getTextContentIgnoringSyntax(element);
         } else {
-          // Other elements: just add their text content
-          result += element.textContent || '';
+          // Other elements: just add their text content (excluding syntax markers)
+          result += this.getTextContentIgnoringSyntax(element);
         }
       }
     }
@@ -666,11 +683,220 @@ export class ContentEditableController {
     return result;
   }
 
+  /**
+   * Get text content from an element, ignoring syntax marker elements but preserving line breaks
+   */
+  private getTextContentIgnoringSyntax(element: Element): string {
+    let result = '';
+
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        result += node.textContent || '';
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const childElement = node as Element;
+
+        // Handle <br> tags as newlines
+        if (childElement.tagName === 'BR') {
+          result += '\n';
+        }
+        // Skip syntax marker elements
+        else if (
+          !childElement.classList.contains('code-marker') &&
+          !childElement.classList.contains('quote-marker') &&
+          !childElement.classList.contains('syntax-marker')
+        ) {
+          result += this.getTextContentIgnoringSyntax(childElement);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Extract clean content, reconstructing proper markdown format for extended blocks
+   */
+  private extractCleanContent(text: string): string {
+    // Check if this looks like extracted content from a code block or quote block
+    // If the DOM contained code-background or quote-accent-bar, we need to reconstruct the markdown
+
+    // Check if the current element has code block or quote block classes
+    const nodeElement = this.element.parentElement;
+    if (nodeElement) {
+      if (nodeElement.classList.contains('node--code-block')) {
+        // This is a code block - reconstruct the markdown format
+        return this.reconstructCodeBlockMarkdown(text);
+      }
+      if (nodeElement.classList.contains('node--quote-block')) {
+        // This is a quote block - reconstruct the markdown format
+        return this.reconstructQuoteBlockMarkdown(text);
+      }
+    }
+
+    // For regular text: return as-is
+    return text;
+  }
+
+  /**
+   * Reconstruct code block markdown format from extracted content
+   */
+  private reconstructCodeBlockMarkdown(content: string): string {
+    // If content already has proper ``` format, return as-is
+    if (content.trim().startsWith('```') && content.trim().endsWith('```')) {
+      return content;
+    }
+
+    // Otherwise, we need to reconstruct it
+    // The content should be the inner code without markers
+    const trimmedContent = content.trim();
+
+    // Default to no language specification
+    return `\`\`\`\n${trimmedContent}\n\`\`\``;
+  }
+
+  /**
+   * Reconstruct quote block markdown format from extracted content
+   */
+  private reconstructQuoteBlockMarkdown(content: string): string {
+    // If content already has proper > format, return as-is
+    if (
+      content
+        .trim()
+        .split('\n')
+        .every((line) => line.trim().startsWith('>') || line.trim() === '')
+    ) {
+      return content;
+    }
+
+    // The content may have lost line breaks during extraction
+    // Try to detect if this was multi-line content that got collapsed
+    const trimmedContent = content.trim();
+
+    // If the content looks like it should be multi-line but isn't, we need to be careful
+    // For now, just wrap the content as a single quote line
+
+    if (trimmedContent.includes('\n')) {
+      // Multi-line content - add > to each line
+      const lines = trimmedContent.split('\n');
+      const quotedLines = lines.map((line) => (line.trim() ? `> ${line.trim()}` : '>'));
+      return quotedLines.join('\n');
+    } else {
+      // Single line or collapsed content - treat as single quote
+      return `> ${trimmedContent}`;
+    }
+  }
+
+  // ============================================================================
+  // Private Methods - Extended Markdown Block Support
+  // ============================================================================
+
+  /**
+   * Check if content represents a code block (starts with ```)
+   */
+  private isCodeBlock(content: string): boolean {
+    return content.trim().startsWith('```');
+  }
+
+  /**
+   * Check if content represents a quote block (starts with >)
+   */
+  private isQuoteBlock(content: string): boolean {
+    return content.trim().startsWith('>');
+  }
+
+  /**
+   * Render code block with proper HTML structure matching design patterns
+   */
+  private renderCodeBlock(content: string): void {
+    // Add code block CSS class to element's parent for styling
+    const nodeElement = this.element.parentElement;
+    if (nodeElement) {
+      nodeElement.classList.add('node--code-block');
+    }
+
+    // Parse code block - extract language and content
+    const lines = content.split('\n');
+    const firstLine = lines[0].trim();
+
+    let language = '';
+    let codeContent = '';
+
+    if (firstLine.startsWith('```')) {
+      // Extract language from first line
+      language = firstLine.substring(3).trim() || 'text';
+      // Get content (all lines except first and last if they're just ```)
+      const contentLines = lines.slice(1);
+      // Remove trailing ``` if present
+      if (contentLines.length > 0 && contentLines[contentLines.length - 1].trim() === '```') {
+        contentLines.pop();
+      }
+      codeContent = contentLines.join('\n');
+    } else {
+      codeContent = content;
+    }
+
+    // Create HTML structure matching design patterns
+    if (this.isEditing) {
+      // When focused: show syntax markers with visual formatting
+      const syntaxMarkers = `<span class="code-marker">\`\`\`${language}</span>\n${this.escapeHtml(codeContent.trim())}\n<span class="code-marker">\`\`\`</span>`;
+      const codeHtml = `<div class="code-background"><pre><code>${syntaxMarkers}</code></pre></div>`;
+      this.element.innerHTML = codeHtml;
+    } else {
+      // When blurred: hide syntax markers but keep visual formatting
+      const codeHtml = `<div class="code-background"><pre><code>${this.escapeHtml(codeContent.trim())}</code></pre></div>`;
+      this.element.innerHTML = codeHtml;
+    }
+  }
+
+  /**
+   * Render quote block with proper HTML structure matching design patterns
+   */
+  private renderQuoteBlock(content: string): void {
+    // Add quote block CSS class to element's parent for styling
+    const nodeElement = this.element.parentElement;
+    if (nodeElement) {
+      nodeElement.classList.add('node--quote-block');
+    }
+
+    // Parse quote content - remove > prefixes
+    const lines = content.split('\n');
+    const quoteLines = lines.map((line) => {
+      const trimmed = line.trim();
+      return trimmed.startsWith('>') ? trimmed.substring(1).trim() : trimmed;
+    });
+
+    const quoteContent = quoteLines.join('<br>');
+
+    // Create HTML structure matching design patterns
+    if (this.isEditing) {
+      // When focused: show > markers with visual formatting
+      const quoteLinesWithMarkers = lines.map((line) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('>')) {
+          const content = trimmed.substring(1).trim();
+          return `<span class="quote-marker">&gt;</span> ${content}`;
+        }
+        return line;
+      });
+      const quoteContentWithMarkers = quoteLinesWithMarkers.join('<br>');
+
+      const quoteHtml = `<div class="quote-accent-bar"></div><div class="quote-text">${quoteContentWithMarkers}</div>`;
+      this.element.innerHTML = quoteHtml;
+    } else {
+      // When blurred: hide > markers but keep visual formatting
+      const quoteHtml = `<div class="quote-accent-bar"></div><div class="quote-text">${quoteContent}</div>`;
+      this.element.innerHTML = quoteHtml;
+    }
+  }
+
   // ============================================================================
   // Private Methods - Event Handlers
   // ============================================================================
 
   private handleFocus(): void {
+    // Add focused class for CSS styling
+    this.element.classList.add('focused');
+
     // Get formatted content before showing raw markdown for position calculation
     const formattedContent = this.element.innerHTML;
     let calculatedMarkdownPosition: number | null = null;
@@ -685,8 +911,13 @@ export class ContentEditableController {
 
     this.isEditing = true;
 
-    // Show raw markdown for editing (this changes the DOM)
-    this.setRawMarkdown(this.originalContent);
+    // For extended markdown blocks, re-render with syntax markers instead of raw markdown
+    if (this.isCodeBlock(this.originalContent) || this.isQuoteBlock(this.originalContent)) {
+      this.setFormattedContent(this.originalContent);
+    } else {
+      // Show raw markdown for editing (this changes the DOM)
+      this.setRawMarkdown(this.originalContent);
+    }
 
     // Apply pre-calculated position
     if (calculatedMarkdownPosition !== null) {
@@ -702,6 +933,9 @@ export class ContentEditableController {
   }
 
   private handleBlur(): void {
+    // Remove focused class for CSS styling
+    this.element.classList.remove('focused');
+
     this.isEditing = false;
     this.wasEditing = false;
 
@@ -715,6 +949,9 @@ export class ContentEditableController {
       // For single-line nodes: use textContent as before
       currentText = this.element.textContent || '';
     }
+
+    // For extended markdown blocks, extract clean content without syntax markers
+    currentText = this.extractCleanContent(currentText);
 
     this.originalContent = currentText; // Store the edited content
     this.setFormattedContent(currentText);

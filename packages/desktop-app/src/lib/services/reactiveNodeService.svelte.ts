@@ -1076,9 +1076,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         content: '# Welcome to NodeSpace',
         nodeType: 'text',
         depth: 0,
-        children: ['features-section', 'formatting-section', 'tasks-section'],
+        children: [
+          'features-section',
+          'formatting-section',
+          'tasks-section',
+          'extended-markdown-section'
+        ],
         expanded: true,
-        autoFocus: false,
+        autoFocus: true,
         inheritHeaderLevel: 1,
         metadata: { type: 'welcome', version: '1.0' }
       },
@@ -1234,9 +1239,104 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         parentId: 'tasks-section',
         children: [],
         expanded: true,
-        autoFocus: true, // Focus on this task
+        autoFocus: false,
         inheritHeaderLevel: 0,
         metadata: { taskState: 'completed' }
+      },
+      {
+        id: 'extended-markdown-section',
+        content: '## Extended Markdown Blocks Demo (Issue #118)',
+        nodeType: 'text',
+        depth: 1,
+        parentId: 'welcome-root',
+        children: [
+          'code-block-1',
+          'quote-block-1',
+          'code-block-2',
+          'text-block-1',
+          'python-block-1',
+          'quote-block-2'
+        ],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 2,
+        metadata: {}
+      },
+      {
+        id: 'code-block-1',
+        content:
+          '```javascript\nconst message = "Hello, world!";\nconst x = 42;\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}',
+        nodeType: 'text',
+        depth: 2,
+        parentId: 'extended-markdown-section',
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        metadata: {}
+      },
+      {
+        id: 'quote-block-1',
+        content:
+          '> This is a quote block example\n> It can span multiple lines\n> And demonstrates the new formatting\n> \n> Perfect for highlighting important notes!',
+        nodeType: 'text',
+        depth: 2,
+        parentId: 'extended-markdown-section',
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        metadata: {}
+      },
+      {
+        id: 'code-block-2',
+        content:
+          '```css\n.example {\n  color: hsl(var(--foreground));\n  background: hsl(var(--background));\n  border-radius: 0.5rem;\n  padding: 1rem;\n}',
+        nodeType: 'text',
+        depth: 2,
+        parentId: 'extended-markdown-section',
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        metadata: {}
+      },
+      {
+        id: 'text-block-1',
+        content: 'Regular text content can be mixed with pure blocks below:',
+        nodeType: 'text',
+        depth: 2,
+        parentId: 'extended-markdown-section',
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        metadata: {}
+      },
+      {
+        id: 'python-block-1',
+        content:
+          '```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)',
+        nodeType: 'text',
+        depth: 2,
+        parentId: 'extended-markdown-section',
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        metadata: {}
+      },
+      {
+        id: 'quote-block-2',
+        content: '> And then a quote:\n> "The best way to predict the future is to create it."',
+        nodeType: 'text',
+        depth: 2,
+        parentId: 'extended-markdown-section',
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        metadata: {}
       }
     ];
 
