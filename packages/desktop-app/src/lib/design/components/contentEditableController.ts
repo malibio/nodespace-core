@@ -689,6 +689,7 @@ export class ContentEditableController {
     syntaxMarkers.forEach((marker) => marker.remove());
 
     let result = '';
+    let isFirstDiv = true;
 
     // Walk through all child nodes
     for (const node of tempDiv.childNodes) {
@@ -698,8 +699,14 @@ export class ContentEditableController {
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node as Element;
         if (element.tagName === 'DIV') {
-          // Div element: represents a new line, add newline + content
-          result += '\n' + this.getTextContentIgnoringSyntax(element);
+          // Div element: represents a line
+          // First div doesn't need a newline prefix, subsequent divs do
+          if (isFirstDiv) {
+            result += this.getTextContentIgnoringSyntax(element);
+            isFirstDiv = false;
+          } else {
+            result += '\n' + this.getTextContentIgnoringSyntax(element);
+          }
         } else {
           // Other elements: just add their text content (excluding syntax markers)
           result += this.getTextContentIgnoringSyntax(element);
