@@ -680,6 +680,8 @@ export class ContentEditableController {
    * Browser creates <div> elements for newlines in contenteditable
    */
   private convertHtmlToTextWithNewlines(html: string): string {
+    console.log('🔍 convertHtmlToTextWithNewlines INPUT:', html);
+
     // Create a temporary element to parse the HTML
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
@@ -691,17 +693,22 @@ export class ContentEditableController {
     let result = '';
     let isFirstDiv = true;
 
+    console.log('🔍 tempDiv children count:', tempDiv.childNodes.length);
+
     // Walk through all child nodes
     for (const node of tempDiv.childNodes) {
       if (node.nodeType === Node.TEXT_NODE) {
         // Text node: add the text content
-        result += node.textContent || '';
+        const textContent = node.textContent || '';
+        console.log('🔍 Text node:', JSON.stringify(textContent));
+        result += textContent;
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node as Element;
         if (element.tagName === 'DIV') {
           // Div element: represents a line
           // Get the content of this div (could be empty for blank lines)
           const divContent = this.getTextContentIgnoringSyntax(element);
+          console.log('🔍 DIV content:', JSON.stringify(divContent), 'innerHTML:', element.innerHTML);
 
           // First div doesn't need a newline prefix, subsequent divs do
           if (isFirstDiv) {
@@ -713,11 +720,14 @@ export class ContentEditableController {
           }
         } else {
           // Other elements: just add their text content (excluding syntax markers)
-          result += this.getTextContentIgnoringSyntax(element);
+          const elementContent = this.getTextContentIgnoringSyntax(element);
+          console.log('🔍 Other element:', element.tagName, 'content:', JSON.stringify(elementContent));
+          result += elementContent;
         }
       }
     }
 
+    console.log('🔍 convertHtmlToTextWithNewlines OUTPUT:', JSON.stringify(result));
     return result;
   }
 
