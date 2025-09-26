@@ -219,6 +219,14 @@
                   <div class="ai-icon">
                     <div class="h3-square-alt"></div>
                   </div>
+                {:else if command.id === 'code-block'}
+                  <div class="ai-icon">
+                    <div class="code-square-alt"></div>
+                  </div>
+                {:else if command.id === 'quote-block'}
+                  <div class="ai-icon">
+                    <div class="quote-square-alt"></div>
+                  </div>
                 {:else if command.id === 'task'}
                   <div class="task-icon">
                     <div class="task-circle task-circle-completed"></div>
