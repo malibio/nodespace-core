@@ -41,7 +41,7 @@
 
   const dispatch = createEventDispatcher();
 
-  // Internal reactive state - sync with content prop changes like TextNodeViewer
+  // Internal reactive state - sync with content prop changes like TextNode
   let internalContent = $state(content);
 
   // Sync internalContent when content prop changes externally (e.g., from pattern conversions)

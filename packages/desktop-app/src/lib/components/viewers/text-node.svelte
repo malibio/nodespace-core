@@ -1,12 +1,12 @@
 <!--
-  TextNodeViewer - Smart wrapper around BaseNode with header-aware multiline logic
-  
+  TextNode - Smart wrapper around BaseNode with header-aware multiline logic
+
   This component implements the core text editing functionality with intelligent
   multiline behavior based on header level:
   - Headers (h1-h6): Single-line only for semantic integrity
   - Regular text: Multi-line with Shift+Enter support
-  
-  This is now the canonical TextNode implementation, wrapping BaseNode internally
+
+  This is the canonical TextNode implementation, wrapping BaseNode internally
   while maintaining all existing functionality including keyboard shortcuts,
   markdown formatting, and navigation.
 -->
@@ -75,7 +75,7 @@
     blur: void;
   }>();
 
-  // Handle focus/blur for TextNodeViewer-specific behavior
+  // Handle focus/blur for TextNode-specific behavior
   function handleFocus() {
     dispatch('focus');
   }

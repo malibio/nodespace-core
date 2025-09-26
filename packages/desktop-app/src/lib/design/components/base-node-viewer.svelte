@@ -11,7 +11,7 @@
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { pluginRegistry } from '$lib/components/viewers/index';
   import BaseNode from '$lib/design/components/base-node.svelte';
-  import TextNodeViewer from '$lib/components/viewers/text-node-viewer.svelte';
+  import TextNode from '$lib/components/viewers/text-node.svelte';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
 
   // Get nodeManager from shared context
@@ -725,7 +725,7 @@
         <!-- Node viewer with stable component references -->
         {#if node.nodeType === 'text'}
           {#key `${node.id}-${node.nodeType}`}
-            <TextNodeViewer
+            <TextNode
               nodeId={node.id}
               nodeType={node.nodeType}
               autoFocus={node.autoFocus || node.id === focusedNodeId}
