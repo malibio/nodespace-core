@@ -1293,6 +1293,17 @@ export class ContentEditableController {
 
     // Backspace at start of node
     if (event.key === 'Backspace' && this.isAtStart()) {
+      // For multi-line nodes, check if we're at the start of the first line or just at the start of a line
+      if (this.config.allowMultiline) {
+        const isAtStartOfFirstLine = this.isAtStartOfFirstLine();
+        if (!isAtStartOfFirstLine) {
+          // We're at the start of a line other than the first line
+          // Allow default backspace behavior to delete the line break
+          return;
+        }
+        // We're at the start of the first line, so combine with previous node
+      }
+
       event.preventDefault();
       const currentContent = this.element.textContent || '';
 
@@ -1443,6 +1454,29 @@ export class ContentEditableController {
 
     // If no div structure found, assume single line (last line)
     return true;
+  }
+
+  private isAtStartOfFirstLine(): boolean {
+    if (!this.config.allowMultiline) return true;
+
+    // First check if we're at the first line
+    if (!this.isAtFirstLine()) {
+      return false;
+    }
+
+    // Then check if we're at the start of that first line
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed) return false;
+
+    // For the first line, we need to check if we're at position 0 of the entire element
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(this.element);
+    preCaretRange.setEnd(range.startContainer, range.startOffset);
+
+    return preCaretRange.toString().length === 0;
   }
 
   private restoreCursorPosition(textOffset: number): void {
