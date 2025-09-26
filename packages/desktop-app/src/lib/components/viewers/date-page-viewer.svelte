@@ -116,8 +116,10 @@
     /* Full height container for the entire date viewer */
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: 100vh;
+    max-height: 100vh;
     width: 100%;
+    overflow: hidden;
   }
 
   /* Date header styling - matches original +page.svelte design exactly */
@@ -168,11 +170,38 @@
   .node-content-area {
     /* Container for the BaseNodeViewer - takes remaining space */
     flex: 1;
-    overflow: auto;
+    min-height: 0; /* Allow flex item to shrink below its content size */
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     /* Add proper padding for node tree spacing - matches original editor-area */
     padding: 1.5rem;
+    /* Add extra bottom padding for better visibility of last node */
+    padding-bottom: 3rem;
+    /* Ensure smooth scrolling */
+    scroll-behavior: smooth;
+    /* Add subtle scrollbar styling */
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+
+  /* Webkit scrollbar styling for better appearance */
+  .node-content-area::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .node-content-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .node-content-area::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 4px;
+  }
+
+  .node-content-area::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
   }
 
   /* Calendar icon styling */

@@ -401,5 +401,342 @@ The transition involves:
 
 ---
 
+## ⚡ Extended Markdown Blocks (Code & Quote)
+
+### **Overview**
+
+NodeSpace supports extended markdown blocks for code blocks and quote blocks as specialized text node variants. These blocks maintain the text node architecture while providing enhanced multi-line editing capabilities and distinctive visual treatments.
+
+### **🎯 Key Design Principles**
+
+1. **Text Node Variants** - Code and quote blocks are **still text nodes**, not separate node types
+2. **Content-Driven Behavior** - Block behavior is determined by content pattern matching
+3. **Multi-line Native** - Both blocks support native multi-line editing with Shift+Enter
+4. **Syntax Transparency** - Syntax markers are visible when focused, hidden when blurred
+5. **Smart Node Creation** - Enter key creates intelligent new nodes based on context
+
+### **📋 Block Type Specifications**
+
+#### **Code Block (```)**
+
+##### **Activation Methods**
+- **Slash Command**: `/code` → Creates complete code block structure
+- **Direct Shortcut**: Type ``` followed by space, enter, or shift+enter
+
+##### **Initial Structure After Activation**
+```
+```
+| ← cursor positioned here
+```
+```
+
+##### **Visual Behavior**
+- **When Focused**: Shows opening and closing ``` with reduced opacity (0.7)
+- **When Blurred**: Hides syntax markers, shows only code content
+- **Styling**: Monospace font (SF Mono, Monaco, Cascadia Code), background color using `hsl(var(--muted))`
+
+##### **Line Break Behavior**
+- **Shift+Enter**: Adds new line within the same code block
+- **Enter at end (before closing ```)**: Creates new code block node below
+- **Enter in middle**: Splits content into two separate code block nodes
+
+##### **Node Splitting Example**
+```
+Original block with cursor position:
+```
+line 1
+line 2| ← cursor here
+line 3
+```
+
+After Enter key:
+Block 1:          Block 2:
+```              ```
+line 1           line 3
+line 2           ```
+```
+```
+
+#### **Quote Block (>)**
+
+##### **Activation Methods**
+- **Slash Command**: `/quote` → Creates quote block with `> ` prefix
+- **Direct Shortcut**: Type `>` followed by space
+
+##### **Initial Structure After Activation**
+```
+> | ← cursor positioned here
+```
+
+##### **Visual Behavior**
+- **When Focused**: Shows `> ` prefix on each line with reduced opacity (0.7)
+- **When Blurred**: Hides `> ` prefixes, shows styled quote with left border
+- **Styling**: Italic text, 3px left border in primary color, indented padding
+
+##### **Line Break Behavior**
+- **Shift+Enter**: Adds new line with automatic `> ` prefix
+- **Enter**: Splits content into two separate quote block nodes
+
+##### **Auto-prefixing Example**
+```
+User types: "First line" + Shift+Enter
+Result: > First line
+        > | ← cursor here, ready for next line
+```
+
+### **🔧 Implementation Architecture**
+
+#### **Content Pattern Detection**
+```typescript
+// Code block detection
+const isCodeBlock = content.startsWith('```') && content.endsWith('```') && content.includes('\n');
+
+// Quote block detection
+const isQuoteBlock = content.split('\n').every(line => line.startsWith('> ') || line.trim() === '');
+```
+
+#### **Multi-line Configuration**
+```typescript
+// Dynamic multiline enablement based on content
+$: multilineEnabled = isCodeBlock || isQuoteBlock || isRegularMultilineText;
+
+// Block-specific configurations
+const blockConfig = {
+  codeBlock: {
+    multiline: true,
+    preventSingleLineEnter: false, // Allow splits
+    showSyntaxOnFocus: true,
+    syntaxPattern: /^```[\s\S]*```$/
+  },
+  quoteBlock: {
+    multiline: true,
+    preventSingleLineEnter: false, // Allow splits
+    showSyntaxOnFocus: true,
+    syntaxPattern: /^(> .*\n?)+$/
+  }
+};
+```
+
+#### **Cursor Positioning System**
+```typescript
+// After slash command selection
+function positionCursorInCodeBlock() {
+  const firstLine = editor.querySelector('.line:first-child');
+  setCursorPosition(firstLine, 0); // Start of first content line
+}
+
+function positionCursorInQuoteBlock() {
+  const quoteLine = editor.querySelector('.quote-line');
+  setCursorPosition(quoteLine, 2); // After "> " prefix
+}
+```
+
+### **⌨️ Keyboard Interaction Matrix**
+
+| Key Combination | Code Block Behavior | Quote Block Behavior |
+|----------------|-------------------|-------------------|
+| **Enter** (at end) | Create new code block node | Create new quote block node |
+| **Enter** (in middle) | Split into two code blocks | Split into two quote blocks |
+| **Shift+Enter** | New line within block | New line with `> ` prefix |
+| **Backspace** (empty) | Convert to regular text node | Convert to regular text node |
+| **Tab** | Insert 2 spaces (code indentation) | No special behavior |
+
+### **🎨 Visual Treatment Specifications**
+
+#### **Code Block Styling**
+```css
+.code-block {
+  background: hsl(var(--muted));
+  padding: 0.5rem;
+  border-radius: var(--radius);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.code-block.focused .syntax-marker {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.7;
+}
+
+.code-block:not(.focused) .syntax-marker {
+  display: none;
+}
+```
+
+#### **Quote Block Styling**
+```css
+.quote-block {
+  border-left: 3px solid hsl(var(--primary));
+  padding-left: 1rem;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
+.quote-block.focused .quote-prefix {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.7;
+}
+
+.quote-block:not(.focused) .quote-prefix {
+  display: none;
+}
+```
+
+### **🔄 Node Type Conversion Rules**
+
+#### **Block → Text Node**
+- **Behavior**: Preserve multi-line structure, remove syntax markers
+- **Example**: Code block → multi-line text node (no ``` markers)
+
+#### **Block → Header/Task Node**
+- **Behavior**: Flatten to single line, remove all line breaks and syntax
+- **Example**: Multi-line code → `# line1 line2 line3` (single line header)
+
+#### **Text → Block**
+- **Behavior**: Preserve existing content, add appropriate syntax
+- **Example**: Multi-line text → wrap in ``` or add `> ` prefixes
+
+### **🚀 Slash Command Integration**
+
+#### **Slash Command Entries**
+```typescript
+const blockCommands = [
+  {
+    id: 'code-block',
+    name: 'Code Block',
+    shortcut: '```',
+    description: 'Multi-line code with syntax highlighting',
+    icon: 'code-square-alt',
+    action: () => createCodeBlock()
+  },
+  {
+    id: 'quote-block',
+    name: 'Quote Block',
+    shortcut: '>',
+    description: 'Multi-line quotation block',
+    icon: 'quote-square-alt',
+    action: () => createQuoteBlock()
+  }
+];
+```
+
+#### **Icon Specifications**
+- **Code Block Icon**: `code-square-alt` - 16x16px square with braces {} symbol
+- **Quote Block Icon**: `quote-square-alt` - 16x16px square with quotation marks
+- **Color Scheme**: Matches header icon system with light/dark theme support
+- **Node Indicators**: Use regular text node circles (not special icons)
+
+### **⚡ Smart Node Creation Logic**
+
+#### **Code Block Creation**
+```typescript
+function handleEnterInCodeBlock(cursorPosition: number, content: string) {
+  const lines = content.split('\n');
+  const isAtEnd = cursorPosition >= content.lastIndexOf('```');
+
+  if (isAtEnd) {
+    // Create new code block node
+    createNewNode({
+      type: 'text',
+      content: '```\n\n```',
+      cursorPosition: 4 // After opening ```
+    });
+  } else {
+    // Split current code block
+    splitCodeBlock(cursorPosition, content);
+  }
+}
+```
+
+#### **Quote Block Creation**
+```typescript
+function handleShiftEnterInQuoteBlock(cursorPosition: number) {
+  insertAtCursor('\n> ');
+  // Auto-prefix new line with "> "
+}
+
+function handleEnterInQuoteBlock(cursorPosition: number, content: string) {
+  const splitResult = splitQuoteBlock(cursorPosition, content);
+
+  createNewNode({
+    type: 'text',
+    content: splitResult.newContent,
+    cursorPosition: 2 // After "> " prefix
+  });
+}
+```
+
+### **🧪 Testing Requirements**
+
+#### **Manual Testing Workflows**
+1. **Activation Testing**:
+   - Slash commands: `/code` and `/quote` create proper structures
+   - Shortcuts: ```` space, ```` enter, `> ` space trigger correctly
+   - Cursor positioning: Proper placement after activation
+
+2. **Multi-line Editing**:
+   - Shift+Enter: Creates new lines within blocks
+   - Quote auto-prefixing: New lines get `> ` automatically
+   - Code indentation: Tab adds appropriate spacing
+
+3. **Node Splitting**:
+   - Enter in middle: Splits blocks correctly
+   - Enter at end: Creates new block nodes
+   - Content preservation: No data loss during splits
+
+4. **Visual Behavior**:
+   - Focus/blur: Syntax markers show/hide appropriately
+   - Styling: Monospace code, italic quotes, proper colors
+   - Responsive: Works at different screen sizes
+
+5. **Type Conversion**:
+   - Block → Text: Preserves multi-line, removes syntax
+   - Block → Header: Flattens to single line
+   - Conversion reversibility: Test conversion chains
+
+#### **Edge Cases to Test**
+- Empty blocks with just syntax markers
+- Very long code blocks with scrolling
+- Nested quotes (quote within quote)
+- Code blocks with special characters
+- Unicode content in blocks
+- Copy/paste behavior
+- Undo/redo functionality
+
+### **📊 Performance Considerations**
+
+#### **Optimizations Required**
+- **Pattern Matching**: Efficient regex for block detection
+- **DOM Updates**: Minimize re-renders during syntax toggling
+- **Memory Management**: Proper cleanup of multi-line content
+- **Event Handling**: Debounced content change detection
+
+#### **Memory Management**
+- **Large Code Blocks**: Virtualization for very long content
+- **Event Listeners**: Proper cleanup on component destruction
+- **Reactive Updates**: Minimal dependencies in reactive statements
+
+### **🔮 Future Enhancements**
+
+#### **Short Term**
+1. **Syntax Highlighting**: Code block language detection and highlighting
+2. **Quote Attribution**: Support for quote attribution (— Author)
+3. **Code Language Tags**: ````javascript``` with language specification
+
+#### **Medium Term**
+1. **Block Nesting**: Code blocks within quote blocks
+2. **Export Integration**: Special handling in export formats
+3. **Theme Integration**: Block styling that adapts to theme changes
+
+#### **Long Term**
+1. **Interactive Execution**: Run code blocks in supported languages
+2. **Collaborative Editing**: Real-time collaboration within blocks
+3. **Plugin System**: Custom block types via plugin architecture
+
+---
+
 **Status**: ✅ Implementation Complete - Ready for next markdown features and parent/child relationships
-**Next Priority**: Parent/child node hierarchical structure implementation
+**Next Priority**: Extended Markdown Blocks Implementation → Parent/child node hierarchical structure
