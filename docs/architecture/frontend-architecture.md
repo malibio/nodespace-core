@@ -15,15 +15,25 @@ NodeSpace frontend architecture built with Svelte 4.x, TypeScript, and Tauri 2.0
 ### Base Components
 
 **BaseNode** (`src/lib/design/components/base-node.svelte`)
-- Core node rendering component
+- Abstract core component (INTERNAL USE ONLY)
 - Handles content editing with ContentEditableController
 - Manages node positioning and hierarchy
 - Integrates with icon system for visual indicators
+- Should NOT be used directly - only by concrete node implementations
 
-**TextNode** (`src/lib/components/text-node.svelte`) 
-- Extends BaseNode for text content
-- Handles markdown processing via ContentProcessor
-- Supports autoFocus and content inheritance
+**BaseNodeViewer** (`src/lib/design/components/base-node-viewer.svelte`)
+- Container that manages collections of nodes
+- Handles node tree operations (create, delete, indent, navigation)
+- Uses plugin registry to dynamically load node components
+- Main entry point for page-level node management
+
+**Node Components** (wrap BaseNode):
+- **TextNode** (`src/lib/components/viewers/text-node.svelte`) - Text nodes with header-aware multiline logic
+- **TaskNode** (`src/lib/design/components/task-node.svelte`) - Task nodes with state management
+- **DateNode** (`src/lib/components/viewers/date-node.svelte`) - Date nodes with formatting
+
+**Viewer Components** (wrap BaseNodeViewer):
+- **DateNodeViewer** (`src/lib/components/viewers/date-node-viewer.svelte`) - Date pages with navigation UI
 
 ### Design System
 
