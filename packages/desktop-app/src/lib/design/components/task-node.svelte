@@ -26,7 +26,7 @@
     content = '',
     headerLevel = 0,
     children = [],
-    editableConfig = { allowMultiline: true },
+    editableConfig = { allowMultiline: false },
     metadata = {}
   }: {
     nodeId: string;
