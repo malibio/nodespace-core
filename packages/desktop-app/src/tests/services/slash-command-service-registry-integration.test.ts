@@ -24,7 +24,7 @@ describe('SlashCommandService Registry Integration', () => {
     it('should return registry commands when registry integration enabled', () => {
       const commands = service.getCommands();
 
-      expect(commands).toHaveLength(8); // 8 core plugin commands (text has 6: text, header1-3, code-block, quote-block, plus task, ai-chat)
+      expect(commands).toHaveLength(6); // 6 core plugin commands (text has 4: text, header1-3, plus task, ai-chat)
 
       // Commands are sorted by priority (higher first), then by name
       const commandIds = commands.map((cmd) => cmd.id);
@@ -32,8 +32,6 @@ describe('SlashCommandService Registry Integration', () => {
       expect(commandIds).toContain('header1');
       expect(commandIds).toContain('header2');
       expect(commandIds).toContain('header3');
-      expect(commandIds).toContain('code-block');
-      expect(commandIds).toContain('quote-block');
       expect(commandIds).toContain('task');
       expect(commandIds).toContain('ai-chat');
     });
@@ -165,7 +163,7 @@ describe('SlashCommandService Registry Integration', () => {
       const found = service.findCommand('task');
 
       // Registry-based behavior includes all core commands
-      expect(commands).toHaveLength(8); // All 8 core slash commands
+      expect(commands).toHaveLength(6); // All 6 core slash commands
       expect(filtered.length).toBe(1);
       expect(found?.id).toBe('task');
     });

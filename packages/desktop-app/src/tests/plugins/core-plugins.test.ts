@@ -41,7 +41,7 @@ describe('Core Plugins Integration', () => {
       expect(textNodePlugin.id).toBe('text');
       expect(textNodePlugin.name).toBe('Text Node');
       expect(textNodePlugin.version).toBe('1.0.0');
-      expect(textNodePlugin.config.slashCommands).toHaveLength(6); // text, h1, h2, h3, code-block, quote-block
+      expect(textNodePlugin.config.slashCommands).toHaveLength(4); // text, h1, h2, h3
       expect(textNodePlugin.viewer).toBeDefined();
       expect(textNodePlugin.reference).toBeDefined();
 
@@ -153,8 +153,8 @@ describe('Core Plugins Integration', () => {
 
       const stats = registry.getStats();
 
-      // text: 6 commands (text, h1, h2, h3, code-block, quote-block), task: 1, ai-chat: 1, date: 0, user: 0, document: 0 = 8 total
-      expect(stats.slashCommandsCount).toBe(8);
+      // text: 4 commands, task: 1, ai-chat: 1, date: 0, user: 0, document: 0 = 6 total
+      expect(stats.slashCommandsCount).toBe(6);
     });
 
     it('should provide all slash commands with proper inheritance', () => {
@@ -162,13 +162,13 @@ describe('Core Plugins Integration', () => {
 
       const commands = registry.getAllSlashCommands();
 
-      expect(commands).toHaveLength(8);
+      expect(commands).toHaveLength(6);
 
       // Verify text node commands from BasicNodeTypeRegistry work
       const textCommands = commands.filter((cmd) =>
-        ['text', 'header1', 'header2', 'header3', 'code-block', 'quote-block'].includes(cmd.id)
+        ['text', 'header1', 'header2', 'header3'].includes(cmd.id)
       );
-      expect(textCommands).toHaveLength(6);
+      expect(textCommands).toHaveLength(4);
 
       // Verify other core commands
       expect(commands.find((cmd) => cmd.id === 'task')).toBeDefined();
@@ -326,7 +326,7 @@ describe('Core Plugins Integration', () => {
       registerExternalPlugin(registry, externalPlugin);
 
       expect(registry.getAllPlugins()).toHaveLength(initialCount + 1);
-      expect(registry.getAllSlashCommands()).toHaveLength(9); // 8 core + 1 external
+      expect(registry.getAllSlashCommands()).toHaveLength(7); // 6 core + 1 external
     });
   });
 
