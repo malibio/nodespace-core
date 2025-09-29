@@ -194,20 +194,31 @@ pre code {
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
-  padding: 0.25rem 0.5rem;
   background: hsl(var(--background));
   border: 1px solid hsl(var(--border));
-  border-radius: var(--radius, 0.5rem);
-  cursor: pointer;
+  color: hsl(var(--foreground));
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
   font-size: 0.75rem;
+  cursor: pointer;
+  z-index: 10;
   opacity: 0;
-  transition: opacity 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .example-code:hover .copy-button {
   opacity: 1;
 }
 
+.example-code .copy-button:hover {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--primary));
+}
+
+.example-code .copy-button:active {
+  background: hsl(var(--muted));
+  transform: translateY(1px);
+}
 /* Color swatches */
 .color-grid {
   display: grid;
