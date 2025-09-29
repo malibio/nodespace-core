@@ -7,7 +7,8 @@
   <meta name="description" content="Comprehensive icon specifications for TextNode, TaskNode, and AI Chat Node components with perfect alignment systems.">
   <link rel="stylesheet" href="../../assets/shadcn-variables.css">
   <link rel="stylesheet" href="../../assets/style-guide.css">
-  <link rel="stylesheet" href="../assets/patterns-common.css">
+  <link rel="stylesheet" href="../../assets/design-system-icons.css">
+  
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
 
   <!-- Prevent flash of unstyled content by applying theme immediately -->
@@ -80,18 +81,13 @@
         <div class="task-icon-demo">
           <!-- Regular Text Node -->
           <div class="task-state-example">
-            <div class="node-icon">
-              <div class="text-circle"></div>
-            </div>
+            <div class="ns-icon ns-icon--text" role="img" aria-label="Text node icon"></div>
             <div class="task-state-label">Text Node</div>
           </div>
 
           <!-- Text Node with Children (Ring Effect) -->
           <div class="task-state-example">
-            <div class="node-icon">
-              <div class="task-ring"></div>
-              <div class="text-circle"></div>
-            </div>
+            <div class="ns-icon ns-icon--text-parent" role="img" aria-label="Text node with children icon"></div>
             <div class="task-state-label">Text Node (Parent)</div>
           </div>
         </div>
@@ -99,15 +95,13 @@
         <h3>Implementation Code</h3>
         <div class="example-code">
           <pre><code><!-- Regular Text Node -->
-&lt;div class="node-icon"&gt;
-  &lt;div class="text-circle"&gt;&lt;/div&gt;
-&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--text"&gt;&lt;/div&gt;
 
 <!-- Text Node with Children (Ring Effect) -->
-&lt;div class="node-icon"&gt;
-  &lt;div class="task-ring"&gt;&lt;/div&gt;
-  &lt;div class="text-circle"&gt;&lt;/div&gt;
-&lt;/div&gt;</code></pre>
+&lt;div class="ns-icon ns-icon--text-parent"&gt;&lt;/div&gt;
+
+<!-- Using Icon Component (Svelte) -->
+&lt;Icon name="circle" size={20} /&gt;</code></pre>
         </div>
       </section>
 
@@ -120,25 +114,19 @@
         <div class="task-icon-demo">
           <!-- Pending Task -->
           <div class="task-state-example">
-            <div class="task-icon">
-              <div class="task-circle task-circle-pending"></div>
-            </div>
+            <div class="ns-icon ns-icon--task-pending" role="img" aria-label="Pending task icon"></div>
             <div class="task-state-label">Pending</div>
           </div>
 
           <!-- In Progress Task -->
           <div class="task-state-example">
-            <div class="task-icon">
-              <div class="task-circle task-circle-in-progress"></div>
-            </div>
+            <div class="ns-icon ns-icon--task-progress" role="img" aria-label="In progress task icon"></div>
             <div class="task-state-label">In Progress</div>
           </div>
 
           <!-- Completed Task -->
           <div class="task-state-example">
-            <div class="task-icon">
-              <div class="task-circle task-circle-completed"></div>
-            </div>
+            <div class="ns-icon ns-icon--task-completed" role="img" aria-label="Completed task icon"></div>
             <div class="task-state-label">Completed</div>
           </div>
         </div>
@@ -147,7 +135,7 @@
         <div class="task-icon-demo">
           <!-- Pending Parent Task -->
           <div class="task-state-example">
-            <div class="task-icon">
+            <div class="ns-icon ns-icon--task-pending" role="img" aria-label="Pending parent task icon">
               <div class="task-ring"></div>
               <div class="task-circle task-circle-pending"></div>
             </div>
@@ -156,7 +144,7 @@
 
           <!-- In Progress Parent Task -->
           <div class="task-state-example">
-            <div class="task-icon">
+            <div class="ns-icon ns-icon--task-progress" role="img" aria-label="In progress parent task icon">
               <div class="task-ring"></div>
               <div class="task-circle task-circle-in-progress"></div>
             </div>
@@ -165,7 +153,7 @@
 
           <!-- Completed Parent Task -->
           <div class="task-state-example">
-            <div class="task-icon">
+            <div class="ns-icon ns-icon--task-completed" role="img" aria-label="Completed parent task icon">
               <div class="task-ring"></div>
               <div class="task-circle task-circle-completed"></div>
             </div>
@@ -173,28 +161,32 @@
           </div>
         </div>
 
-        <h3>Implementation Code (CSS-based for Cross-Browser Consistency)</h3>
+        <h3>Implementation Code</h3>
         <div class="example-code">
-          <pre><code><!-- Pending Task -->
-&lt;div class="task-icon"&gt;
+          <pre><code><!-- Basic Task States -->
+&lt;div class="ns-icon ns-icon--task-pending"&gt;&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--task-progress"&gt;&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--task-completed"&gt;&lt;/div&gt;
+
+<!-- Parent Task States (with Ring Effect) -->
+&lt;div class="ns-icon ns-icon--task-pending"&gt;
+  &lt;div class="task-ring"&gt;&lt;/div&gt;
   &lt;div class="task-circle task-circle-pending"&gt;&lt;/div&gt;
 &lt;/div&gt;
 
-<!-- In Progress Task -->
-&lt;div class="task-icon"&gt;
+&lt;div class="ns-icon ns-icon--task-progress"&gt;
+  &lt;div class="task-ring"&gt;&lt;/div&gt;
   &lt;div class="task-circle task-circle-in-progress"&gt;&lt;/div&gt;
 &lt;/div&gt;
 
-<!-- Completed Task -->
-&lt;div class="task-icon"&gt;
+&lt;div class="ns-icon ns-icon--task-completed"&gt;
+  &lt;div class="task-ring"&gt;&lt;/div&gt;
   &lt;div class="task-circle task-circle-completed"&gt;&lt;/div&gt;
 &lt;/div&gt;
 
-<!-- Task with Children (Ring Effect) -->
-&lt;div class="task-icon"&gt;
-  &lt;div class="task-ring"&gt;&lt;/div&gt;
-  &lt;div class="task-circle task-circle-pending"&gt;&lt;/div&gt;
-&lt;/div&gt;</code></pre>
+<!-- Using TaskIcon Component (Svelte) -->
+&lt;TaskIcon state="completed" hasChildren={false} /&gt;
+&lt;TaskIcon state="completed" hasChildren={true} /&gt;</code></pre>
         </div>
       </section>
 
@@ -207,34 +199,27 @@
         <div class="task-icon-demo">
           <!-- Regular AI Chat Node -->
           <div class="task-state-example">
-            <div class="ai-icon">
-              <div class="ai-square-alt"></div>
-            </div>
+            <div class="ns-icon ns-icon--ai" role="img" aria-label="AI chat node icon"></div>
             <div class="task-state-label">AI Chat Node</div>
           </div>
 
           <!-- AI Chat Node with Children (Ring Effect) -->
           <div class="task-state-example">
-            <div class="ai-icon">
-              <div class="ai-square-ring"></div>
-              <div class="ai-square-alt"></div>
-            </div>
+            <div class="ns-icon ns-icon--ai-parent" role="img" aria-label="AI chat node with children icon"></div>
             <div class="task-state-label">AI Chat Node (Parent)</div>
           </div>
         </div>
 
-        <h3>Implementation Code (CSS-based with Punch-hole Effect)</h3>
+        <h3>Implementation Code</h3>
         <div class="example-code">
           <pre><code><!-- Regular AI Chat Node -->
-&lt;div class="ai-icon"&gt;
-  &lt;div class="ai-square-alt"&gt;&lt;/div&gt;
-&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--ai"&gt;&lt;/div&gt;
 
 <!-- AI Chat Node with Children (Ring Effect) -->
-&lt;div class="ai-icon"&gt;
-  &lt;div class="ai-square-ring"&gt;&lt;/div&gt;
-  &lt;div class="ai-square-alt"&gt;&lt;/div&gt;
-&lt;/div&gt;</code></pre>
+&lt;div class="ns-icon ns-icon--ai-parent"&gt;&lt;/div&gt;
+
+<!-- Using Icon Component (Svelte) -->
+&lt;Icon name="aiSquare" size={20} /&gt;</code></pre>
         </div>
 
         <h3>Technical Implementation Details</h3>
