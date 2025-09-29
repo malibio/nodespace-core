@@ -31,13 +31,73 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='hsl(200 40% 45%)'%3E%3Cg opacity='0.5'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z' stroke='hsl(200 40% 45%)' stroke-width='2' fill='none'/%3E%3C/g%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z'/%3E%3C/svg%3E");
 }
 
-/* AI Chat Node Icons - Matching live Svelte implementation */
+/* AI Chat Node Icons - CSS-based with mask punch-hole effect */
 .ns-icon--ai {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='2' y='2' width='12' height='12' rx='2' ry='2' fill='hsl(200 40% 45%)' opacity='0.1' stroke='hsl(200 40% 45%)' stroke-width='1'/%3E%3Ctext x='8' y='10.5' font-family='system-ui, -apple-system, sans-serif' font-size='6' font-weight='600' text-anchor='middle' fill='hsl(200 40% 45%)'%3EAI%3C/text%3E%3C/svg%3E");
+  width: var(--circle-diameter, 20px);
+  height: var(--circle-diameter, 20px);
+  position: relative;
+  display: block;
+  background: none;
+}
+
+.ns-icon--ai::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: hsl(var(--primary));
+  border-radius: 1px;
+}
+
+.ns-icon--ai::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  background-color: hsl(var(--background));
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='black'/%3E%3C/svg%3E") no-repeat center;
+  mask-size: contain;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='black'/%3E%3C/svg%3E") no-repeat center;
+  -webkit-mask-size: contain;
 }
 
 .ns-icon--ai-parent {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='2' y='2' width='14' height='14' rx='2' ry='2' fill='hsl(200 40% 45%)' opacity='0.5' stroke='hsl(200 40% 45%)' stroke-width='1'/%3E%3Crect x='3' y='3' width='12' height='12' rx='2' ry='2' fill='hsl(200 40% 45%)' opacity='0.1' stroke='hsl(200 40% 45%)' stroke-width='1'/%3E%3Ctext x='9' y='11.5' font-family='system-ui, -apple-system, sans-serif' font-size='6' font-weight='600' text-anchor='middle' fill='hsl(200 40% 45%)'%3EAI%3C/text%3E%3C/svg%3E");
+  width: var(--circle-diameter, 20px);
+  height: var(--circle-diameter, 20px);
+  position: relative;
+  display: block;
+  background: none;
+}
+
+.ns-icon--ai-parent::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  background: hsl(var(--primary) / 0.5);
+  border-radius: 1px;
+}
+
+.ns-icon--ai-parent::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: hsl(var(--primary));
+  border-radius: 1px;
+  /* Punch hole effect for parent */
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Crect x='2' y='2' width='16' height='16' fill='black'/%3E%3Cpath d='M7 9L8.2 6h0.8l1.2 3h-0.6l-0.3-0.9H7.9L7.6 9H7zm1.1-1.4h0.8L8.5 6.5h0L8.1 7.6zm2.9 1.4v-3h0.5v3H11z' fill='white' transform='translate(0, 1)'/%3E%3C/svg%3E") no-repeat center;
+  mask-size: contain;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Crect x='2' y='2' width='16' height='16' fill='black'/%3E%3Cpath d='M7 9L8.2 6h0.8l1.2 3h-0.6l-0.3-0.9H7.9L7.6 9H7zm1.1-1.4h0.8L8.5 6.5h0L8.1 7.6zm2.9 1.4v-3h0.5v3H11z' fill='white' transform='translate(0, 1)'/%3E%3C/svg%3E") no-repeat center;
+  -webkit-mask-size: contain;
 }
 
 /* Task Node Icons - CSS-based following original design system */
