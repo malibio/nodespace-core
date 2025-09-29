@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Icon Systems - NodeSpace Design System</title>
-  <meta name="description" content="Comprehensive icon specifications for TextNode, TaskNode, and AI Chat Node components with perfect alignment systems.">
+  <meta name="description" content="Comprehensive icon specifications for TextNode, TaskNode, CodeNode, and AI Chat Node components with perfect alignment systems.">
   <link rel="stylesheet" href="../../assets/shadcn-variables.css">
   <link rel="stylesheet" href="../../assets/style-guide.css">
   <link rel="stylesheet" href="../../assets/design-system-icons.css">
@@ -25,13 +25,52 @@
       }
     })();
   </script>
+
+  <!-- FIXED CHECKMARK WITH PUNCH HOLE EFFECT -->
+  <style>
+    /* Completely disable the original ::after pseudo-element */
+    .task-circle-completed::after {
+      display: none !important;
+      content: none !important;
+      background: none !important;
+      background-image: none !important;
+      background-color: transparent !important;
+      width: 0 !important;
+      height: 0 !important;
+      opacity: 0 !important;
+      visibility: hidden !important;
+    }
+
+    /* Production checkmark implementation - matches task-icon.svelte exactly */
+    .task-circle-completed::before {
+      content: '' !important;
+      position: absolute !important;
+      left: 50% !important;
+      top: 50% !important;
+      width: 10px !important;
+      height: 8px !important;
+      transform: translate(-50%, -50%) !important;
+      background-repeat: no-repeat !important;
+      background-position: center !important;
+      background-size: contain !important;
+      z-index: 999 !important;
+
+      /* Light theme checkmark - matches production #FAF9F5 */
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23FAF9F5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
+    }
+
+    /* Dark theme checkmark - matches production #252523 */
+    .dark .task-circle-completed::before {
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23252523' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
+    }
+  </style>
 </head>
 <body class="no-transitions">
   <div class="style-guide">
     <!-- Header -->
     <header>
       <h1>Icon Systems</h1>
-      <p>Comprehensive icon specifications for TextNode, TaskNode, and AI Chat Node components with perfect alignment systems.</p>
+      <p>Comprehensive icon specifications for TextNode, TaskNode, CodeNode, and AI Chat Node components with perfect alignment systems.</p>
     </header>
 
     <!-- Navigation -->
@@ -70,6 +109,7 @@
           <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
             <li><strong>node-icon:</strong> Use for text nodes and other general node types (16x16px circle)</li>
             <li><strong>task-icon:</strong> Use specifically for task nodes with state indicators</li>
+            <li><strong>code-icon:</strong> Use specifically for code snippet nodes with syntax highlighting</li>
             <li><strong>ai-icon:</strong> Use specifically for AI chat nodes with square design</li>
           </ul>
           <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
@@ -114,19 +154,25 @@
         <div class="task-icon-demo">
           <!-- Pending Task -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--task-pending" role="img" aria-label="Pending task icon"></div>
+            <div class="ns-icon ns-icon--task-pending" role="img" aria-label="Pending task icon">
+              <div class="task-circle task-circle-pending"></div>
+            </div>
             <div class="task-state-label">Pending</div>
           </div>
 
           <!-- In Progress Task -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--task-progress" role="img" aria-label="In progress task icon"></div>
+            <div class="ns-icon ns-icon--task-progress" role="img" aria-label="In progress task icon">
+              <div class="task-circle task-circle-in-progress"></div>
+            </div>
             <div class="task-state-label">In Progress</div>
           </div>
 
           <!-- Completed Task -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--task-completed" role="img" aria-label="Completed task icon"></div>
+            <div class="ns-icon ns-icon--task-completed" role="img" aria-label="Completed task icon">
+              <div class="task-circle task-circle-completed"></div>
+            </div>
             <div class="task-state-label">Completed</div>
           </div>
         </div>
@@ -164,9 +210,15 @@
         <h3>Implementation Code</h3>
         <div class="example-code">
           <pre><code><!-- Basic Task States -->
-&lt;div class="ns-icon ns-icon--task-pending"&gt;&lt;/div&gt;
-&lt;div class="ns-icon ns-icon--task-progress"&gt;&lt;/div&gt;
-&lt;div class="ns-icon ns-icon--task-completed"&gt;&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--task-pending"&gt;
+  &lt;div class="task-circle task-circle-pending"&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--task-progress"&gt;
+  &lt;div class="task-circle task-circle-in-progress"&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="ns-icon ns-icon--task-completed"&gt;
+  &lt;div class="task-circle task-circle-completed"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- Parent Task States (with Ring Effect) -->
 &lt;div class="ns-icon ns-icon--task-pending"&gt;
@@ -189,6 +241,7 @@
 &lt;TaskIcon state="completed" hasChildren={true} /&gt;</code></pre>
         </div>
       </section>
+
 
       <!-- AI Chat Node Icon System -->
       <section class="example-section">
@@ -287,6 +340,70 @@
         </div>
       </section>
 
+      <!-- CodeNode Icon System -->
+      <section class="example-section">
+        <h2>CodeNode Icon System</h2>
+        <p>Circle-based icons for code snippet nodes with syntax highlighting and copy functionality.</p>
+
+        <h3>Code Node States</h3>
+        <div class="task-icon-demo">
+          <!-- Regular Code Node -->
+          <div class="task-state-example">
+            <div class="ns-icon ns-icon--code" role="img" aria-label="Code node icon"></div>
+            <div class="task-state-label">Code Node</div>
+          </div>
+
+          <!-- Code Node with Children (Ring Effect) -->
+          <div class="task-state-example">
+            <div class="ns-icon ns-icon--code-parent" role="img" aria-label="Code node with children icon"></div>
+            <div class="task-state-label">Code Node (Parent)</div>
+          </div>
+        </div>
+
+        <h3>Implementation Code</h3>
+        <div class="example-code">
+          <pre><code><!-- Regular Code Node -->
+&lt;div class="ns-icon ns-icon--code"&gt;&lt;/div&gt;
+
+<!-- Code Node with Children (Ring Effect) -->
+&lt;div class="ns-icon ns-icon--code-parent"&gt;&lt;/div&gt;
+
+<!-- Using Icon Component (Svelte) -->
+&lt;Icon name="code" size={20} /&gt;</code></pre>
+        </div>
+
+        <h3>Content Rendering</h3>
+        <div class="component-showcase">
+          <div class="component-example">
+            <div class="component-title">Code Block Display</div>
+            <div class="component-demo">
+              <pre style="position: relative;"><code>function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+// Usage example
+const result = fibonacci(10);
+console.log(result); // Output: 55</code><button class="copy-button">Copy</button></pre>
+            </div>
+          </div>
+
+          <div class="component-example">
+            <div class="component-title">Design Rationale</div>
+            <div class="component-demo">
+              <ul>
+                <li><strong>Circular Shape:</strong> Maintains consistency with TextNode design language</li>
+                <li><strong>Visual Hierarchy:</strong> Same base shape as text nodes but distinct context through usage</li>
+                <li><strong>Copy Functionality:</strong> Interactive copy button for code snippets</li>
+                <li><strong>Syntax Highlighting:</strong> Preserves readability and code structure</li>
+                <li><strong>Consistent Sizing:</strong> 16x16 active area within 20x20 container matches other icons</li>
+                <li><strong>Theme Adaptive:</strong> Works seamlessly in both light and dark modes</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Icon System Specifications -->
       <section class="example-section">
         <h2>Icon System Specifications</h2>
@@ -330,6 +447,16 @@
                     <td style="padding: 0.5rem;">TaskNode (with children)</td>
                     <td style="padding: 0.5rem;"><code>r="7.5" inner + r="8.5" ring</code></td>
                     <td style="padding: 0.5rem;">Stroked/filled inner with 50% opacity ring</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">CodeNode (regular)</td>
+                    <td style="padding: 0.5rem;"><code>r="7.5" (15x15px)</code></td>
+                    <td style="padding: 0.5rem;">Solid filled circle, centered in 20x20 container</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">CodeNode (with children)</td>
+                    <td style="padding: 0.5rem;"><code>r="7.5" inner + r="8.5" ring</code></td>
+                    <td style="padding: 0.5rem;">Solid inner with 50% opacity ring</td>
                   </tr>
                   <tr style="border-bottom: 1px solid hsl(var(--border));">
                     <td style="padding: 0.5rem;">AI Chat Node (regular)</td>
