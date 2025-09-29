@@ -606,3 +606,341 @@ pre code {
 .status-completed { color: hsl(var(--status-completed)); }
 .status-in-progress { color: hsl(var(--status-in-progress)); }
 .status-pending { color: hsl(var(--status-pending)); }
+
+/* Pattern Library specific styles */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.breadcrumb a {
+  color: hsl(var(--muted-foreground));
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.breadcrumb a:hover {
+  color: hsl(var(--foreground));
+}
+
+.breadcrumb-separator {
+  color: hsl(var(--border));
+}
+
+.pattern-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.pattern-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.pattern-card:hover {
+  border-color: hsl(var(--primary));
+  box-shadow: 0 4px 12px hsl(var(--primary) / 0.1);
+}
+
+.pattern-card h3 {
+  margin: 0 0 0.5rem 0;
+  color: hsl(var(--foreground));
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.pattern-card p {
+  margin: 0 0 1rem 0;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.5;
+}
+
+.pattern-count {
+  font-size: 0.875rem;
+  color: hsl(var(--primary));
+  font-weight: 500;
+}
+
+.search-bar {
+  margin: 2rem 0;
+  position: relative;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.search-input:focus {
+  border-color: hsl(var(--primary));
+}
+
+/* Icon System CSS - Essential for all NodeSpace design patterns */
+
+/* Perfect Node Alignment System - CSS Variables Architecture */
+.node-viewer {
+  --circle-offset: 22px;
+  --circle-diameter: 20px;
+  --circle-text-gap: 8px;
+  --node-indent: 2.5rem;
+  --baseline-correction: -0.06375em;
+}
+
+.hierarchy-example {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segue UI', Roboto, sans-serif;
+  line-height: 1.6;
+  margin: 1rem 0;
+  padding-left: 0;
+  position: relative;
+}
+
+.hierarchy-node {
+  position: relative;
+  cursor: pointer;
+  border-radius: 0.25rem;
+  transition: background-color 0.15s ease;
+  padding-left: calc(var(--circle-offset, 22px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  min-height: calc(var(--circle-diameter, 20px) + 0.5rem);
+  --line-height: 1.6;
+  --font-size: 1rem;
+  --line-height-px: calc(var(--font-size) * var(--line-height));
+}
+
+.hierarchy-node.child-1 {
+  margin-left: 2.5rem;
+}
+
+.hierarchy-node.child-2 {
+  margin-left: 5rem;
+}
+
+.hierarchy-indicator {
+  position: absolute;
+  left: var(--circle-offset, 22px);
+  top: calc(0.25rem + (var(--line-height-px) / 2));
+  transform: translateY(-50%);
+  width: var(--circle-diameter, 20px);
+  height: var(--circle-diameter, 20px);
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+/* TaskNode Circle Icon System */
+.task-icon-demo {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+
+.task-state-example {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.task-icon {
+  width: var(--circle-diameter, 20px);
+  height: var(--circle-diameter, 20px);
+  position: relative;
+  display: block;
+}
+
+.node-icon {
+  width: var(--circle-diameter, 20px);
+  height: var(--circle-diameter, 20px);
+  position: relative;
+  display: block;
+}
+
+.task-icon-with-ring {
+  width: calc(var(--circle-diameter, 20px) + 4px);
+  height: calc(var(--circle-diameter, 20px) + 4px);
+}
+
+.task-circle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+}
+
+.task-circle-pending {
+  background: transparent;
+  border: 1px solid hsl(var(--primary));
+  box-sizing: border-box;
+}
+
+.task-circle-in-progress {
+  background: linear-gradient(90deg, hsl(var(--primary)) 50%, transparent 50%);
+  border: 1px solid hsl(var(--primary));
+  box-sizing: border-box;
+}
+
+.task-circle-completed {
+  background: hsl(var(--primary));
+}
+
+.task-circle-completed::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23FAF9F5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+.dark .task-circle-completed::after {
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23252523' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+.task-ring {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid hsl(var(--primary) / 0.5);
+  box-sizing: border-box;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.chevron-icon {
+  position: absolute;
+  top: calc(0.25rem + (var(--line-height-px) / 2));
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease;
+  z-index: 3;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.hierarchy-node .chevron-icon {
+  left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2);
+}
+
+.chevron-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: hsl(var(--primary));
+}
+
+.chevron-icon.expanded {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.text-circle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  position: absolute;
+  top: 2px;
+  left: 2px;
+}
+
+.task-state-label {
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+
+/* AI Chat Node Icon System */
+.ai-icon {
+  width: var(--circle-diameter, 20px);
+  height: var(--circle-diameter, 20px);
+  position: relative;
+  display: block;
+}
+
+.ai-square-alt {
+  width: 16px;
+  height: 16px;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  border-radius: 0.5px;
+  overflow: hidden;
+}
+
+.ai-square-alt::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: hsl(var(--primary));
+}
+
+.ai-square-alt::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23FAF9F5'/%3E%3C/svg%3E");
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.dark .ai-square-alt::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M80-120v-80h800v80H80Zm680-160v-560h60v560h-60Zm-600 0 210-560h100l210 560h-96l-50-144H308l-52 144h-96Zm176-224h168l-82-232h-4l-82 232Z' fill='%23252523'/%3E%3C/svg%3E");
+}
+
+.ai-square-ring {
+  width: 20px;
+  height: 20px;
+  border-radius: 1px;
+  border: 2px solid hsl(var(--primary) / 0.5);
+  box-sizing: border-box;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
