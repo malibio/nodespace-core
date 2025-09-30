@@ -86,15 +86,17 @@
   box-sizing: border-box;
 }
 
-/* AI Chat Icons - Multi-element approach */
+/* AI Chat Icons - Chat bubble shape */
 .ai-square {
   width: 16px;
   height: 16px;
-  border-radius: 2px;
   position: absolute;
   top: 2px;
   left: 2px;
-  background: rgb(69, 130, 161); /* Matches other icons - consistent color */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M13.333 1.333H2.667c-.734 0-1.327.6-1.327 1.334L1.333 16l2.667-2.667h9.333c.734 0 1.334-.6 1.334-1.333V2.667c0-.734-.6-1.334-1.334-1.334z' fill='rgb(69, 130, 161)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
 }
 
 /* AI text overlay using pseudo-element */
@@ -102,11 +104,11 @@
   content: "";
   position: absolute;
   left: 50%;
-  top: 50%;
-  width: 12px;
-  height: 10px;
+  top: 45%;
+  width: 10px;
+  height: 8px;
   transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg width='12' height='10' viewBox='0 0 12 10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1-1.5v-1h10v1H1Zm8.5-2v-7h0.75v7h-0.75Zm-7.5 0 2.625-7h1.25l2.625 7h-1.2l-0.625-1.8H3.875l-0.65 1.8h-1.2Zm2.2-2.8h2.1l-1.025-2.9h-0.05l-1.025 2.9Z' fill='hsl(48 0% 99%)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.5 0v-0.8h8v0.8H0.5Zm6.8-1.6v-5.6h0.6v5.6h-0.6Zm-6 0 2.1-5.6h1l2.1 5.6h-1l-0.5-1.44H2.5l-0.52 1.44h-1Zm1.76-2.24h1.68l-0.82-2.32h-0.04l-0.82 2.32Z' fill='%23ffffff'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
@@ -116,12 +118,14 @@
 .ai-ring {
   width: 20px;
   height: 20px;
-  border-radius: 4px; /* Larger radius to account for 2px border - eliminates inner gap */
-  border: 2px solid rgba(69, 130, 161, 0.5); /* Matches other icons - consistent color */
   position: absolute;
   top: 0;
   left: 0;
   box-sizing: border-box;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M16.667 1.667H3.333c-.916 0-1.658.75-1.658 1.666L1.667 20l3.333-3.333h11.667c.916 0 1.666-.75 1.666-1.667V3.333c0-.916-.75-1.666-1.666-1.666z' fill='none' stroke='rgba(69, 130, 161, 0.5)' stroke-width='2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
 }
 
 /* Code Node Icons - Simplified curly braces */
