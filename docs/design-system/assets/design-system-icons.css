@@ -93,10 +93,10 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M13.333 1.333H2.667c-.734 0-1.327.6-1.327 1.334L1.333 16l2.667-2.667h9.333c.734 0 1.334-.6 1.334-1.333V2.667c0-.734-.6-1.334-1.334-1.334z' fill='rgb(69, 130, 161)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 0 C3.582 0 0 3.582 0 8 C0 12.418 3.582 16 8 16 L15.5 16 C15.776 16 16 15.776 16 15.5 L16 8 C16 3.582 12.418 0 8 0 Z' fill='hsl(204 47% 62%)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: contain;
+  background-size: 16px 16px;
 }
 
 /* AI sparkle overlay using pseudo-element */
@@ -104,14 +104,14 @@
   content: "";
   position: absolute;
   left: 50%;
-  top: 37%;
-  width: 10px;
-  height: 10px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
   transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='6 7 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 7l1.88 4.12L18 13l-4.12 1.88L12 19l-1.88-4.12L6 13l4.12-1.88z' fill='white'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6 0 L7.5 4.5 L12 6 L7.5 7.5 L6 12 L4.5 7.5 L0 6 L4.5 4.5 Z' fill='hsl(204 0%25 99%25)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: contain;
+  background-size: 12px 12px;
 }
 
 /* AI ring for parent AI nodes */
@@ -122,10 +122,10 @@
   top: 0;
   left: 0;
   box-sizing: border-box;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M16.667 1.667H3.333c-.916 0-1.658.75-1.658 1.666L1.667 20l3.333-3.333h11.667c.916 0 1.666-.75 1.666-1.667V3.333c0-.916-.75-1.666-1.666-1.666z' fill='none' stroke='rgba(69, 130, 161, 0.5)' stroke-width='2'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 0 C4.477 0 0 4.477 0 10 C0 15.523 4.477 20 10 20 L19.375 20 C19.72 20 20 19.72 20 19.375 L20 10 C20 4.477 15.523 0 10 0 Z' fill='hsla(204, 47%, 62%, 0.5)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: contain;
+  background-size: 20px 20px;
 }
 
 /* Code Node Icons - Simplified curly braces */
@@ -145,13 +145,13 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2,3.75v0.75C2,4.58,1.83,4.75,1.75,4.75H1v1.5h0.75C1.83,6.25,2,6.42,2,6.5v0.75C2,7.74,2.51,8.25,3,8.25h1V7.5H3 c-0.21,0-0.375-0.17-0.375-0.375v-0.75c0-0.58-0.44-1.055-1-1.12v0.015c0.56-0.06,1-0.54,1-1.12v-0.75 C2.625,3.17,2.79,3,3,3h1V2.25H3C2.51,2.25,2,2.76,2,3.25z M8.75,4.75C8.67,4.75,8.5,4.58,8.5,4.5v-0.75 C8.5,2.76,7.99,2.25,7.5,2.25h-1V3h1c0.21,0,0.375,0.17,0.375,0.375v0.75c0,0.58,0.44,1.055,1,1.12V5.23 c-0.56,0.06-1,0.54-1,1.12v0.75C7.875,7.33,7.71,7.5,7.5,7.5h-1v0.75h1c0.49,0,1-0.51,1-1.125V6.5c0-0.21,0.17-0.375,0.375-0.375 H9v-1.5H8.75z' fill='hsl(48 0% 99%)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z' fill='hsl(204 0%25 99%25)'/%3E%3Cpath d='M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z' fill='hsl(204 0%25 99%25)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: contain;
+  background-size: 16px 16px;
 }
 
 /* Navigation Icons - Simple SVG approach */
@@ -173,7 +173,11 @@
 }
 
 .dark .ai-square::after {
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='6 7 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 7l1.88 4.12L18 13l-4.12 1.88L12 19l-1.88-4.12L6 13l4.12-1.88z' fill='black'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6 0 L7.5 4.5 L12 6 L7.5 7.5 L6 12 L4.5 7.5 L0 6 L4.5 4.5 Z' fill='hsl(204 0%25 12%25)'/%3E%3C/svg%3E");
+}
+
+.dark .code-circle::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z' fill='hsl(204 0%25 12%25)'/%3E%3Cpath d='M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z' fill='hsl(204 0%25 12%25)'/%3E%3C/svg%3E");
 }
 
 /* Size variants */
