@@ -1,125 +1,40 @@
 /* NodeSpace Design System Icons */
-/* Lightweight icon system for design system documentation */
-/* SVG data URIs extracted from production Svelte components */
+/* Aligned with live Svelte implementation - multi-element approach */
 
+/* Base icon container */
 .ns-icon {
   display: inline-block;
   width: 20px;
   height: 20px;
+  position: relative;
   flex-shrink: 0;
   vertical-align: middle;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
 }
 
-/* Text Node Icons */
-.ns-icon--text {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 24 24' fill='hsl(200 40% 45%)' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='12' r='8' /%3E%3C/svg%3E");
-}
-
-.ns-icon--text-parent {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 24 24' fill='hsl(200 40% 45%)' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='12' r='10' opacity='0.5' /%3E%3Ccircle cx='12' cy='12' r='8' /%3E%3C/svg%3E");
-}
-
-/* Code Node Icons */
-.ns-icon--code {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='hsl(200 40% 45%)'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z'/%3E%3C/svg%3E");
-}
-
-.ns-icon--code-parent {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='hsl(200 40% 45%)'%3E%3Cg opacity='0.5'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z' stroke='hsl(200 40% 45%)' stroke-width='2' fill='none'/%3E%3C/g%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z'/%3E%3C/svg%3E");
-}
-
-/* AI Chat Node Icons - Using SVG in background-image for 18x18 square */
-.ns-icon--ai {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='1' y='1' width='18' height='18' rx='0.5' fill='hsl(200 40% 45%)'/%3E%3Cpath d='M8.5 12L10.2 7h1l1.8 5h-1.2l-0.4-1.2H9.1L8.7 12H8.5zm1-2h1.4l-0.7-2h0l-0.7 2zm3.5 2v-5h1v5h-1z' fill='hsl(250 15% 97%)'/%3E%3C/svg%3E");
-}
-
-.ns-icon--ai-parent {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='0' y='0' width='20' height='20' rx='0.5' fill='none' stroke='hsl(200 40% 45%)' stroke-width='2' opacity='0.5'/%3E%3Crect x='1' y='1' width='18' height='18' rx='0.5' fill='hsl(200 40% 45%)'/%3E%3Cpath d='M8.5 12L10.2 7h1l1.8 5h-1.2l-0.4-1.2H9.1L8.7 12H8.5zm1-2h1.4l-0.7-2h0l-0.7 2zm3.5 2v-5h1v5h-1z' fill='hsl(250 15% 97%)'/%3E%3C/svg%3E");
-}
-
-/* Task Node Icons - CSS-based following original design system */
-.ns-icon--task-pending {
-  width: var(--circle-diameter, 20px);
-  height: var(--circle-diameter, 20px);
-  position: relative;
-  display: block;
-  background: none;
-}
-
-.ns-icon--task-pending::after {
-  content: '';
+/* Basic Node Icons - Circle-based */
+.node-circle {
   width: 16px;
   height: 16px;
   border-radius: 50%;
   position: absolute;
   top: 2px;
   left: 2px;
-  background: transparent;
-  border: 1px solid hsl(var(--primary));
-  box-sizing: border-box;
+  background: rgb(69, 130, 161); /* Matches live Svelte implementation */
 }
 
-.ns-icon--task-progress {
-  width: var(--circle-diameter, 20px);
-  height: var(--circle-diameter, 20px);
-  position: relative;
-  display: block;
-  background: none;
-}
-
-.ns-icon--task-progress::after {
-  content: '';
-  width: 16px;
-  height: 16px;
+/* Parent ring effect for nodes with children */
+.node-ring {
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
+  border: 2px solid rgba(69, 130, 161, 0.5); /* Matches live Svelte implementation */
   position: absolute;
-  top: 2px;
-  left: 2px;
-  background: linear-gradient(90deg, hsl(var(--primary)) 50%, transparent 50%);
-  border: 1px solid hsl(var(--primary));
+  top: 0;
+  left: 0;
   box-sizing: border-box;
 }
 
-.ns-icon--task-completed {
-  width: var(--circle-diameter, 20px);
-  height: var(--circle-diameter, 20px);
-  position: relative;
-  display: block;
-  background: none;
-}
-
-.ns-icon--task-completed::after {
-  content: '';
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  background: hsl(var(--primary));
-  box-sizing: border-box;
-}
-
-.ns-icon--task-completed::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 10px;
-  height: 8px;
-  transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23FAF9F5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-  z-index: 1;
-}
-
-/* Task Node Parent Icons - HTML structure approach */
-/* Basic circle states - Perfect 16x16 rendering */
+/* Task Icons - Following live Svelte implementation exactly */
 .task-circle {
   width: 16px;
   height: 16px;
@@ -127,25 +42,24 @@
   position: absolute;
   top: 2px;
   left: 2px;
+  box-sizing: border-box;
 }
 
 .task-circle-pending {
   background: transparent;
-  border: 1px solid hsl(var(--primary));
-  box-sizing: border-box;
+  border: 1px solid rgb(69, 130, 161); /* Matches live Svelte implementation */
 }
 
 .task-circle-in-progress {
-  background: linear-gradient(90deg, hsl(var(--primary)) 50%, transparent 50%);
-  border: 1px solid hsl(var(--primary));
-  box-sizing: border-box;
+  background: linear-gradient(90deg, rgb(69, 130, 161) 50%, transparent 50%);
+  border: 1px solid rgb(69, 130, 161); /* Matches live Svelte implementation */
 }
 
 .task-circle-completed {
-  background: hsl(var(--primary));
+  background: rgb(69, 130, 161); /* Matches live Svelte implementation */
 }
 
-/* Checkmark for completed tasks - theme-aware stroke color */
+/* Checkmark for completed tasks */
 .task-circle-completed::after {
   content: "";
   position: absolute;
@@ -154,45 +68,94 @@
   width: 10px;
   height: 8px;
   transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23FAF9F5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23fcfcfc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
 }
 
-/* Parent task rings */
+/* Task ring for parent tasks */
 .task-ring {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 2px solid hsl(var(--primary) / 0.5);
-  box-sizing: border-box;
+  border: 2px solid rgba(69, 130, 161, 0.5); /* Matches live Svelte implementation */
   position: absolute;
   top: 0;
   left: 0;
+  box-sizing: border-box;
 }
 
-/* AI Chat Node Icons */
-.ns-icon--ai {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 16 16' fill='currentColor' stroke='currentColor' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='2' y='2' width='12' height='12' rx='2' ry='2' fill='currentColor' opacity='0.1' stroke='currentColor' stroke-width='1' /%3E%3Ctext x='8' y='10.5' font-family='system-ui, -apple-system, sans-serif' font-size='6' font-weight='600' text-anchor='middle' fill='currentColor'%3EAI%3C/text%3E%3C/svg%3E");
+/* AI Chat Icons - Multi-element approach */
+.ai-square {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: rgb(69, 130, 161); /* Matches other icons - consistent color */
 }
 
-.ns-icon--ai-parent {
-  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' fill='currentColor' stroke='currentColor' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='1' y='1' width='18' height='18' rx='3' ry='3' fill='none' stroke='currentColor' stroke-width='2' opacity='0.5' /%3E%3Crect x='4' y='4' width='12' height='12' rx='2' ry='2' fill='currentColor' opacity='0.1' stroke='currentColor' stroke-width='1' /%3E%3Ctext x='10' y='12.5' font-family='system-ui, -apple-system, sans-serif' font-size='6' font-weight='600' text-anchor='middle' fill='currentColor'%3EAI%3C/text%3E%3C/svg%3E");
+/* AI text overlay using pseudo-element */
+.ai-square::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='10' viewBox='0 0 12 10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1-1.5v-1h10v1H1Zm8.5-2v-7h0.75v7h-0.75Zm-7.5 0 2.625-7h1.25l2.625 7h-1.2l-0.625-1.8H3.875l-0.65 1.8h-1.2Zm2.2-2.8h2.1l-1.025-2.9h-0.05l-1.025 2.9Z' fill='hsl(48 0% 99%)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
 }
 
-/* Navigation Icons */
-.ns-icon--hamburger {
-  background-image: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' stroke='currentColor' xmlns='http://www.w3.org/2000/svg'%3E%3Cline x1='3' y1='6' x2='21' y2='6' stroke='currentColor' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='3' y1='12' x2='21' y2='12' stroke='currentColor' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='3' y1='18' x2='21' y2='18' stroke='currentColor' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+/* AI ring for parent AI nodes */
+.ai-ring {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px; /* Larger radius to account for 2px border - eliminates inner gap */
+  border: 2px solid rgba(69, 130, 161, 0.5); /* Matches other icons - consistent color */
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
 }
 
-.ns-icon--home {
-  background-image: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' stroke='currentColor' fill='currentColor' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' stroke='currentColor' stroke-width='2' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E");
+/* Code Node Icons - Simplified curly braces */
+.code-circle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: rgb(69, 130, 161); /* Matches live Svelte implementation */
 }
 
-/* Chevron Icon */
+/* Code braces overlay */
+.code-circle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2,3.75v0.75C2,4.58,1.83,4.75,1.75,4.75H1v1.5h0.75C1.83,6.25,2,6.42,2,6.5v0.75C2,7.74,2.51,8.25,3,8.25h1V7.5H3 c-0.21,0-0.375-0.17-0.375-0.375v-0.75c0-0.58-0.44-1.055-1-1.12v0.015c0.56-0.06,1-0.54,1-1.12v-0.75 C2.625,3.17,2.79,3,3,3h1V2.25H3C2.51,2.25,2,2.76,2,3.25z M8.75,4.75C8.67,4.75,8.5,4.58,8.5,4.5v-0.75 C8.5,2.76,7.99,2.25,7.5,2.25h-1V3h1c0.21,0,0.375,0.17,0.375,0.375v0.75c0,0.58,0.44,1.055,1,1.12V5.23 c-0.56,0.06-1,0.54-1,1.12v0.75C7.875,7.33,7.71,7.5,7.5,7.5h-1v0.75h1c0.49,0,1-0.51,1-1.125V6.5c0-0.21,0.17-0.375,0.375-0.375 H9v-1.5H8.75z' fill='hsl(48 0% 99%)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+/* Navigation Icons - Simple SVG approach */
 .ns-icon--chevron {
   background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 24 24' fill='currentColor' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M9 6l6 6-6 6-1.5-1.5L12 12 7.5 7.5 9 6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
   transition: transform 0.2s ease;
 }
 
@@ -200,46 +163,11 @@
   transform: rotate(90deg);
 }
 
-/* Dark theme variations - automatic with CSS custom properties */
+/* Dark theme - only checkmark colors need updating */
 @media (prefers-color-scheme: dark) {
-  .ns-icon--text {
-    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 24 24' fill='hsl(200 40% 65%)' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='12' r='8' /%3E%3C/svg%3E");
-  }
-
-  .ns-icon--text-parent {
-    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 24 24' fill='hsl(200 40% 65%)' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='12' r='10' opacity='0.5' /%3E%3Ccircle cx='12' cy='12' r='8' /%3E%3C/svg%3E");
-  }
-
-  .ns-icon--code {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='hsl(200 40% 65%)'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z'/%3E%3C/svg%3E");
-  }
-
-  .ns-icon--code-parent {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='hsl(200 40% 65%)'%3E%3Cg opacity='0.5'%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z' stroke='hsl(200 40% 65%)' stroke-width='2' fill='none'/%3E%3C/g%3E%3Cpath d='M4,6.25v1.5C4,8.16,3.66,8.5,3.25,8.5H2v3h1.25C3.66,11.5,4,11.84,4,12.25v1.5C4,14.99,5.01,16,6.25,16H8v-1.5H6.25 c-0.41,0-0.75-0.34-0.75-0.75v-1.5c0-1.16-0.88-2.11-2-2.24V9.99c1.12-0.12,2-1.08,2-2.24v-1.5c0-0.41,0.34-0.75,0.75-0.75H8V4 H6.25C5.01,4,4,5.01,4,6.25z M16.75,8.5C16.34,8.5,16,8.16,16,7.75v-1.5C16,5.01,14.99,4,13.75,4H12v1.5h1.75c0.41,0,0.75,0.34,0.75,0.75v1.5 c0,1.16,0.88,2.11,2,2.24v0.03c-1.12,0.12-2,1.08-2,2.24v1.5c0,0.41-0.34,0.75-0.75,0.75H12V16h1.75c1.24,0,2.25-1.01,2.25-2.25 v-1.5c0-0.41,0.34-0.75,0.75-0.75H18v-3H16.75z'/%3E%3C/svg%3E");
-  }
-
-  .ns-icon--ai {
-    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='1' y='1' width='18' height='18' rx='0.5' fill='hsl(200 40% 65%)'/%3E%3Cpath d='M8.5 12L10.2 7h1l1.8 5h-1.2l-0.4-1.2H9.1L8.7 12H8.5zm1-2h1.4l-0.7-2h0l-0.7 2zm3.5 2v-5h1v5h-1z' fill='hsl(240 12% 15%)'/%3E%3C/svg%3E");
-  }
-
-  .ns-icon--ai-parent {
-    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='0' y='0' width='20' height='20' rx='0.5' fill='none' stroke='hsl(200 40% 65%)' stroke-width='2' opacity='0.5'/%3E%3Crect x='1' y='1' width='18' height='18' rx='0.5' fill='hsl(200 40% 65%)'/%3E%3Cpath d='M8.5 12L10.2 7h1l1.8 5h-1.2l-0.4-1.2H9.1L8.7 12H8.5zm1-2h1.4l-0.7-2h0l-0.7 2zm3.5 2v-5h1v5h-1z' fill='hsl(240 12% 15%)'/%3E%3C/svg%3E");
-  }
-
-  /* Task icons use CSS with --primary variable, no dark theme overrides needed */
-
-  /* Dark theme checkmarks for completed task icons */
-  .ns-icon--task-completed::before {
-    background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23252523' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
-
   .task-circle-completed::after {
-    background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23252523' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%231f1f1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
-
-  /* AI icons use currentColor and don't need dark theme overrides */
-
-  /* Navigation icons use currentColor and don't need dark theme overrides */
 }
 
 /* Size variants */
