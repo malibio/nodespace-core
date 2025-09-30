@@ -26,44 +26,6 @@
     })();
   </script>
 
-  <!-- FIXED CHECKMARK WITH PUNCH HOLE EFFECT -->
-  <style>
-    /* Completely disable the original ::after pseudo-element */
-    .task-circle-completed::after {
-      display: none !important;
-      content: none !important;
-      background: none !important;
-      background-image: none !important;
-      background-color: transparent !important;
-      width: 0 !important;
-      height: 0 !important;
-      opacity: 0 !important;
-      visibility: hidden !important;
-    }
-
-    /* Production checkmark implementation - matches task-icon.svelte exactly */
-    .task-circle-completed::before {
-      content: '' !important;
-      position: absolute !important;
-      left: 50% !important;
-      top: 50% !important;
-      width: 10px !important;
-      height: 8px !important;
-      transform: translate(-50%, -50%) !important;
-      background-repeat: no-repeat !important;
-      background-position: center !important;
-      background-size: contain !important;
-      z-index: 999 !important;
-
-      /* Light theme checkmark - matches production #FAF9F5 */
-      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23FAF9F5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
-    }
-
-    /* Dark theme checkmark - matches production #252523 */
-    .dark .task-circle-completed::before {
-      background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%23252523' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
-    }
-  </style>
 </head>
 <body class="no-transitions">
   <div class="style-guide">
@@ -121,13 +83,18 @@
         <div class="task-icon-demo">
           <!-- Regular Text Node -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--text" role="img" aria-label="Text node icon"></div>
+            <div class="ns-icon" role="img" aria-label="Text node icon">
+              <div class="node-circle"></div>
+            </div>
             <div class="task-state-label">Text Node</div>
           </div>
 
           <!-- Text Node with Children (Ring Effect) -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--text-parent" role="img" aria-label="Text node with children icon"></div>
+            <div class="ns-icon" role="img" aria-label="Text node with children icon">
+              <div class="node-ring"></div>
+              <div class="node-circle"></div>
+            </div>
             <div class="task-state-label">Text Node (Parent)</div>
           </div>
         </div>
@@ -135,10 +102,15 @@
         <h3>Implementation Code</h3>
         <div class="example-code">
           <pre><code><!-- Regular Text Node -->
-&lt;div class="ns-icon ns-icon--text"&gt;&lt;/div&gt;
+&lt;div class="ns-icon"&gt;
+  &lt;div class="node-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- Text Node with Children (Ring Effect) -->
-&lt;div class="ns-icon ns-icon--text-parent"&gt;&lt;/div&gt;
+&lt;div class="ns-icon"&gt;
+  &lt;div class="node-ring"&gt;&lt;/div&gt;
+  &lt;div class="node-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- Using Icon Component (Svelte) -->
 &lt;Icon name="circle" size={20} /&gt;</code></pre>
@@ -252,13 +224,18 @@
         <div class="task-icon-demo">
           <!-- Regular AI Chat Node -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--ai" role="img" aria-label="AI chat node icon"></div>
+            <div class="ns-icon" role="img" aria-label="AI chat node icon">
+              <div class="ai-square"></div>
+            </div>
             <div class="task-state-label">AI Chat Node</div>
           </div>
 
           <!-- AI Chat Node with Children (Ring Effect) -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--ai-parent" role="img" aria-label="AI chat node with children icon"></div>
+            <div class="ns-icon" role="img" aria-label="AI chat node with children icon">
+              <div class="ai-ring"></div>
+              <div class="ai-square"></div>
+            </div>
             <div class="task-state-label">AI Chat Node (Parent)</div>
           </div>
         </div>
@@ -266,13 +243,18 @@
         <h3>Implementation Code</h3>
         <div class="example-code">
           <pre><code><!-- Regular AI Chat Node -->
-&lt;div class="ns-icon ns-icon--ai"&gt;&lt;/div&gt;
+&lt;div class="ns-icon"&gt;
+  &lt;div class="ai-square"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- AI Chat Node with Children (Ring Effect) -->
-&lt;div class="ns-icon ns-icon--ai-parent"&gt;&lt;/div&gt;
+&lt;div class="ns-icon"&gt;
+  &lt;div class="ai-ring"&gt;&lt;/div&gt;
+  &lt;div class="ai-square"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- Using Icon Component (Svelte) -->
-&lt;Icon name="aiSquare" size={20} /&gt;</code></pre>
+&lt;Icon name="ai-chat" size={20} /&gt;</code></pre>
         </div>
 
         <h3>Technical Implementation Details</h3>
@@ -349,13 +331,18 @@
         <div class="task-icon-demo">
           <!-- Regular Code Node -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--code" role="img" aria-label="Code node icon"></div>
+            <div class="ns-icon" role="img" aria-label="Code node icon">
+              <div class="code-circle"></div>
+            </div>
             <div class="task-state-label">Code Node</div>
           </div>
 
           <!-- Code Node with Children (Ring Effect) -->
           <div class="task-state-example">
-            <div class="ns-icon ns-icon--code-parent" role="img" aria-label="Code node with children icon"></div>
+            <div class="ns-icon" role="img" aria-label="Code node with children icon">
+              <div class="node-ring"></div>
+              <div class="code-circle"></div>
+            </div>
             <div class="task-state-label">Code Node (Parent)</div>
           </div>
         </div>
@@ -363,10 +350,15 @@
         <h3>Implementation Code</h3>
         <div class="example-code">
           <pre><code><!-- Regular Code Node -->
-&lt;div class="ns-icon ns-icon--code"&gt;&lt;/div&gt;
+&lt;div class="ns-icon"&gt;
+  &lt;div class="code-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- Code Node with Children (Ring Effect) -->
-&lt;div class="ns-icon ns-icon--code-parent"&gt;&lt;/div&gt;
+&lt;div class="ns-icon"&gt;
+  &lt;div class="node-ring"&gt;&lt;/div&gt;
+  &lt;div class="code-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
 
 <!-- Using Icon Component (Svelte) -->
 &lt;Icon name="code" size={20} /&gt;</code></pre>
