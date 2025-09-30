@@ -729,13 +729,14 @@ pre code {
   cursor: pointer;
   border-radius: 0.25rem;
   transition: background-color 0.15s ease;
-  padding-left: calc(var(--circle-offset, 22px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
+  padding-left: calc(16px + 20px + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px));
   padding-top: 0.25rem;
   padding-bottom: 0.25rem;
   min-height: calc(var(--circle-diameter, 20px) + 0.5rem);
   --line-height: 1.6;
   --font-size: 1rem;
   --line-height-px: calc(var(--font-size) * var(--line-height));
+  --node-indent: 2.5rem;
 }
 
 .hierarchy-node.child-1 {
@@ -748,9 +749,9 @@ pre code {
 
 .hierarchy-indicator {
   position: absolute;
-  left: var(--circle-offset, 22px);
+  left: calc(16px + 20px);
   top: calc(0.25rem + (var(--line-height-px) / 2));
-  transform: translateY(-50%);
+  transform: translate(-50%, -50%); /* Center icon on coordinates - matches live implementation */
   width: var(--circle-diameter, 20px);
   height: var(--circle-diameter, 20px);
   flex-shrink: 0;
@@ -870,13 +871,14 @@ pre code {
 }
 
 .hierarchy-node .chevron-icon {
-  left: calc(var(--circle-offset) + var(--circle-diameter) / 2 - var(--node-indent) / 2);
+  left: 16px;
 }
 
 .chevron-icon svg {
   width: 16px;
   height: 16px;
   fill: hsl(var(--primary));
+  opacity: 0.5;
 }
 
 .chevron-icon.expanded {

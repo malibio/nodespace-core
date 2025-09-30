@@ -318,10 +318,8 @@
                 </svg>
               </span>
               <div class="hierarchy-indicator">
-                <div class="ai-icon">
-                  <div class="ai-square-ring"></div>
-                  <div class="ai-square-alt"></div>
-                </div>
+                <div class="ai-ring"></div>
+                <div class="ai-square"></div>
               </div>
               What should I prioritize for the Acme Corp project?
             </div>
@@ -359,6 +357,38 @@
                 </div>
               </div>
               Acme Corp Sprint Items (Collapsed)
+            </div>
+
+            <!-- Code Block Example -->
+            <div class="hierarchy-node code-node-example" style="--code-font-size: 0.875rem; --code-line-height: 1.5;">
+              <div class="hierarchy-indicator">
+                <div class="code-circle"></div>
+              </div>
+              <div style="flex: 1; background: hsl(var(--muted)); padding: 0.25rem; border-radius: var(--radius); position: relative;" class="code-node-content">
+                <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 10rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}</code></pre>
+                <button class="code-language-button" onclick="event.stopPropagation(); this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'block' ? 'none' : 'block'" style="position: absolute; top: 0.5rem; right: 3.9375rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease; width: 8rem; box-sizing: border-box; text-align: left;">JavaScript</button>
+
+                <!-- Language Dropdown Menu -->
+                <div class="code-language-dropdown" onclick="event.stopPropagation()" style="display: none; position: absolute; top: 2rem; right: 3.9375rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.25rem; width: 8rem; max-height: 10.5rem; overflow-y: auto; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); z-index: 10; box-sizing: border-box;">
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'JavaScript'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">JavaScript</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'TypeScript'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">TypeScript</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Python'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Python</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Rust'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Rust</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Go'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Go</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Java'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Java</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'C++'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">C++</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Ruby'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Ruby</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'PHP'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">PHP</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Swift'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Swift</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Kotlin'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Kotlin</div>
+                  <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Shell'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Shell</div>
+                </div>
+
+                <button class="code-copy-button" style="position: absolute; top: 0.5rem; right: 0.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease;">Copy</button>
+              </div>
             </div>
               </div>
             </div>
@@ -523,107 +553,6 @@
           </div>
         </div>
 
-        <h3>Code Node Pattern</h3>
-        <p>Code snippets with syntax highlighting, subtle background differentiation, and copy functionality.</p>
-
-        <div class="pattern-demo">
-          <h4 style="margin: 0 0 1rem 0;">Code Node Display</h4>
-          <div style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 300px; overflow: hidden; background: hsl(var(--background));">
-            <div class="node-viewer" style="border: none; border-radius: 0; padding: 1.5rem; background: transparent; height: 100%;">
-              <div class="hierarchy-example">
-
-                <!-- Code Node with subtle background -->
-                <div class="hierarchy-node code-node-example">
-                  <div class="hierarchy-indicator">
-                    <div class="node-icon">
-                      <div class="code-circle"></div>
-                    </div>
-                  </div>
-                  <div style="flex: 1; background: hsl(var(--muted)); padding: 0.75rem; border-radius: var(--radius); position: relative;">
-                    <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 10rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
-  if (n <= 1) return n;
-  return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-// Usage example
-const result = fibonacci(10);
-console.log(result); // Output: 55</code></pre>
-                    <button class="code-language-button" onclick="event.stopPropagation(); this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'block' ? 'none' : 'block'" style="position: absolute; top: 0.5rem; right: 4.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease; width: 8rem; box-sizing: border-box; text-align: left;">JavaScript</button>
-
-                    <!-- Language Dropdown Menu -->
-                    <div class="code-language-dropdown" onclick="event.stopPropagation()" style="display: none; position: absolute; top: 2rem; right: 4.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.25rem; width: 8rem; max-height: 10.5rem; overflow-y: auto; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); z-index: 10; box-sizing: border-box;">
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'JavaScript'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">JavaScript</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'TypeScript'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">TypeScript</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Python'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Python</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Rust'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Rust</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Go'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Go</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Java'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Java</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'C++'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">C++</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Ruby'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Ruby</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'PHP'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">PHP</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Swift'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Swift</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Kotlin'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Kotlin</div>
-                      <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Shell'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Shell</div>
-                    </div>
-
-                    <script>
-                      // Close dropdown when clicking outside or pressing Escape
-                      (function() {
-                        const dropdown = document.querySelector('.code-language-dropdown');
-
-                        // Close on outside click
-                        document.addEventListener('click', function(e) {
-                          if (dropdown && dropdown.style.display === 'block') {
-                            dropdown.style.display = 'none';
-                          }
-                        });
-
-                        // Close on Escape key
-                        document.addEventListener('keydown', function(e) {
-                          if (e.key === 'Escape' && dropdown && dropdown.style.display === 'block') {
-                            dropdown.style.display = 'none';
-                          }
-                        });
-                      })();
-                    </script>
-
-                    <button class="code-copy-button" style="position: absolute; top: 0.5rem; right: 0.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease;">Copy</button>
-                  </div>
-                </div>
-
-                <style>
-                  .code-node-example:hover .code-copy-button,
-                  .code-node-example:hover .code-language-button,
-                  .code-copy-button:focus,
-                  .code-language-button:focus {
-                    opacity: 1 !important;
-                  }
-                  .code-copy-button:hover,
-                  .code-language-button:hover {
-                    background: hsl(var(--muted)) !important;
-                    border-color: hsl(var(--primary)) !important;
-                  }
-                </style>
-
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Features Description -->
-        <div style="margin-top: 1.5rem; padding: 1.5rem; background: hsl(var(--muted)); border-radius: var(--radius);">
-          <h4 style="margin: 0 0 1rem 0; color: hsl(var(--foreground));">Code Node Features</h4>
-          <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); line-height: 1.6;">
-            <p><strong>Subtle Background:</strong> Uses <code>hsl(var(--muted))</code> for visual differentiation from regular text nodes</p>
-            <p><strong>Syntax Highlighting:</strong> Monospace font with preserved formatting and proper spacing</p>
-            <p><strong>Language Selector:</strong> Dropdown button for selecting code language, positioned to left of copy button with min-width to accommodate longest language name</p>
-            <p><strong>Copy Button:</strong> Positioned top-right, appears on hover for one-click code copying</p>
-            <p><strong>Interactive Controls:</strong> Both buttons hidden by default, appear on hover or focus for clean interface</p>
-            <p><strong>Responsive Layout:</strong> Adapts to content width with proper overflow handling</p>
-            <p><strong>Theme Adaptive:</strong> Works seamlessly in both light and dark modes</p>
-          </div>
-        </div>
-
         <h3>Slash Commands Pattern</h3>
         <p>Quick commands for creating different node types and templates.</p>
 
@@ -722,10 +651,8 @@ console.log(result); // Output: 55</code></pre>
               <div style="padding: 0.75rem; cursor: pointer; border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">
                 <div style="display: flex; align-items: center; justify-content: space-between;">
                   <div style="display: flex; align-items: center; gap: 0.5rem;">
-                    <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
-                      <div class="ai-icon">
-                        <div class="ai-square-alt"></div>
-                      </div>
+                    <div style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; position: relative;">
+                      <div class="ai-square"></div>
                     </div>
                     <div style="font-weight: 500;">AI Chat</div>
                   </div>
@@ -770,7 +697,7 @@ console.log(result); // Output: 55</code></pre>
                   <li><strong>Text:</strong> Uses <code>node-icon</code> + <code>text-circle</code> (16x16px circle)</li>
                   <li><strong>Headers:</strong> Custom <code>h1/h2/h3-square-alt</code> (16x16px squares with punch-holed text)</li>
                   <li><strong>Task:</strong> Uses <code>task-icon</code> + <code>task-circle-completed</code> (checkmark)</li>
-                  <li><strong>AI Chat:</strong> Uses <code>ai-icon</code> + <code>ai-square-alt</code> ("AI" text)</li>
+                  <li><strong>AI Chat:</strong> Uses <code>ai-square</code> with sparkle overlay</li>
                   <li><strong>Positioning:</strong> <code>left: 54px</code> - precisely after "/" character</li>
                   <li><strong>Layout:</strong> Icons with labels and keyboard shortcuts</li>
                 </ul>
@@ -824,7 +751,48 @@ console.log(result); // Output: 55</code></pre>
     </footer>
   </div>
 
+  <!-- Code Block Button Styles -->
+  <style>
+    /* Prevent global .copy-button styles from interfering */
+    .code-node-content .copy-button {
+      display: none !important;
+    }
+
+    .code-node-example:hover .code-copy-button,
+    .code-node-example:hover .code-language-button,
+    .code-copy-button:focus,
+    .code-language-button:focus {
+      opacity: 1 !important;
+    }
+    .code-copy-button:hover,
+    .code-language-button:hover {
+      background: hsl(var(--muted)) !important;
+      border-color: hsl(var(--primary)) !important;
+    }
+  </style>
+
   <!-- JavaScript -->
   <script src="../../assets/style-guide.js"></script>
+
+  <script>
+    // Close dropdown when clicking outside or pressing Escape
+    (function() {
+      const dropdown = document.querySelector('.code-language-dropdown');
+
+      // Close on outside click
+      document.addEventListener('click', function(e) {
+        if (dropdown && dropdown.style.display === 'block') {
+          dropdown.style.display = 'none';
+        }
+      });
+
+      // Close on Escape key
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && dropdown && dropdown.style.display === 'block') {
+          dropdown.style.display = 'none';
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
