@@ -533,11 +533,13 @@
               <div class="hierarchy-example">
 
                 <!-- Code Node with subtle background -->
-                <div class="hierarchy-node code-node-example" style="background: hsl(var(--muted)); padding: 0.75rem; border-radius: var(--radius); position: relative; display: flex; align-items: flex-start; gap: 0.5rem;">
-                  <div style="width: 20px; height: 20px; position: relative; flex-shrink: 0;">
-                    <div class="code-circle"></div>
+                <div class="hierarchy-node code-node-example">
+                  <div class="hierarchy-indicator">
+                    <div class="node-icon">
+                      <div class="code-circle"></div>
+                    </div>
                   </div>
-                  <div style="flex: 1; position: relative; min-width: 0;">
+                  <div style="flex: 1; background: hsl(var(--muted)); padding: 0.75rem; border-radius: var(--radius); position: relative;">
                     <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 4rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
   if (n <= 1) return n;
   return fibonacci(n - 1) + fibonacci(n - 2);
@@ -546,13 +548,14 @@
 // Usage example
 const result = fibonacci(10);
 console.log(result); // Output: 55</code></pre>
-                    <button class="code-copy-button" style="position: absolute; top: 0; right: 0; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0.6; transition: opacity 0.2s ease;">Copy</button>
+                    <button class="code-copy-button" style="position: absolute; top: 0.5rem; right: 0.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease;">Copy</button>
                   </div>
                 </div>
 
                 <style>
-                  .code-node-example:hover .code-copy-button {
-                    opacity: 1;
+                  .code-node-example:hover .code-copy-button,
+                  .code-copy-button:focus {
+                    opacity: 1 !important;
                   }
                   .code-copy-button:hover {
                     background: hsl(var(--muted)) !important;
