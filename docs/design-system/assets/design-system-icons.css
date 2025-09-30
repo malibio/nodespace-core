@@ -99,16 +99,16 @@
   background-size: contain;
 }
 
-/* AI text overlay using pseudo-element */
+/* AI sparkle overlay using pseudo-element */
 .ai-square::after {
   content: "";
   position: absolute;
   left: 50%;
-  top: 45%;
+  top: 37%;
   width: 10px;
-  height: 8px;
+  height: 10px;
   transform: translate(-50%, -50%);
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.5 0v-0.8h8v0.8H0.5Zm6.8-1.6v-5.6h0.6v5.6h-0.6Zm-6 0 2.1-5.6h1l2.1 5.6h-1l-0.5-1.44H2.5l-0.52 1.44h-1Zm1.76-2.24h1.68l-0.82-2.32h-0.04l-0.82 2.32Z' fill='%23ffffff'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='6 7 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 7l1.88 4.12L18 13l-4.12 1.88L12 19l-1.88-4.12L6 13l4.12-1.88z' fill='white'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
@@ -167,11 +167,13 @@
   transform: rotate(90deg);
 }
 
-/* Dark theme - only checkmark colors need updating */
-@media (prefers-color-scheme: dark) {
-  .task-circle-completed::after {
-    background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%231f1f1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
+/* Dark theme - checkmark and sparkle colors */
+.dark .task-circle-completed::after {
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%231f1f1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.dark .ai-square::after {
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='6 7 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 7l1.88 4.12L18 13l-4.12 1.88L12 19l-1.88-4.12L6 13l4.12-1.88z' fill='black'/%3E%3C/svg%3E");
 }
 
 /* Size variants */
