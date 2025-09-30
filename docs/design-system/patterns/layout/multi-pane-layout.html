@@ -540,7 +540,7 @@
                     </div>
                   </div>
                   <div style="flex: 1; background: hsl(var(--muted)); padding: 0.75rem; border-radius: var(--radius); position: relative;">
-                    <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 4rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
+                    <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 10rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
   if (n <= 1) return n;
   return fibonacci(n - 1) + fibonacci(n - 2);
 }
@@ -548,16 +548,20 @@
 // Usage example
 const result = fibonacci(10);
 console.log(result); // Output: 55</code></pre>
+                    <button class="code-language-button" style="position: absolute; top: 0.5rem; right: 4.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease; min-width: 5rem; text-align: left;">JavaScript ▾</button>
                     <button class="code-copy-button" style="position: absolute; top: 0.5rem; right: 0.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease;">Copy</button>
                   </div>
                 </div>
 
                 <style>
                   .code-node-example:hover .code-copy-button,
-                  .code-copy-button:focus {
+                  .code-node-example:hover .code-language-button,
+                  .code-copy-button:focus,
+                  .code-language-button:focus {
                     opacity: 1 !important;
                   }
-                  .code-copy-button:hover {
+                  .code-copy-button:hover,
+                  .code-language-button:hover {
                     background: hsl(var(--muted)) !important;
                     border-color: hsl(var(--primary)) !important;
                   }
@@ -574,7 +578,9 @@ console.log(result); // Output: 55</code></pre>
           <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); line-height: 1.6;">
             <p><strong>Subtle Background:</strong> Uses <code>hsl(var(--muted))</code> for visual differentiation from regular text nodes</p>
             <p><strong>Syntax Highlighting:</strong> Monospace font with preserved formatting and proper spacing</p>
+            <p><strong>Language Selector:</strong> Dropdown button for selecting code language, positioned to left of copy button with min-width to accommodate longest language name</p>
             <p><strong>Copy Button:</strong> Positioned top-right, appears on hover for one-click code copying</p>
+            <p><strong>Interactive Controls:</strong> Both buttons hidden by default, appear on hover or focus for clean interface</p>
             <p><strong>Responsive Layout:</strong> Adapts to content width with proper overflow handling</p>
             <p><strong>Theme Adaptive:</strong> Works seamlessly in both light and dark modes</p>
           </div>
