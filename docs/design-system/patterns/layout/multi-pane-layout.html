@@ -522,6 +522,60 @@
           </div>
         </div>
 
+        <h3>Code Node Pattern</h3>
+        <p>Code snippets with syntax highlighting, subtle background differentiation, and copy functionality.</p>
+
+        <div class="pattern-demo">
+          <h4 style="margin: 0 0 1rem 0;">Code Node Display</h4>
+          <div style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); height: 300px; overflow: hidden; background: hsl(var(--background));">
+            <div class="node-viewer" style="border: none; border-radius: 0; padding: 1.5rem; background: transparent; height: 100%;">
+              <div class="hierarchy-example">
+
+                <!-- Code Node with subtle background -->
+                <div class="hierarchy-node code-node-example" style="background: hsl(var(--muted)); padding: 0.75rem; border-radius: var(--radius); position: relative; display: flex; align-items: flex-start; gap: 0.5rem;">
+                  <div style="width: 20px; height: 20px; position: relative; flex-shrink: 0;">
+                    <div class="code-circle"></div>
+                  </div>
+                  <div style="flex: 1; position: relative; min-width: 0;">
+                    <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 4rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+// Usage example
+const result = fibonacci(10);
+console.log(result); // Output: 55</code></pre>
+                    <button class="code-copy-button" style="position: absolute; top: 0; right: 0; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0.6; transition: opacity 0.2s ease;">Copy</button>
+                  </div>
+                </div>
+
+                <style>
+                  .code-node-example:hover .code-copy-button {
+                    opacity: 1;
+                  }
+                  .code-copy-button:hover {
+                    background: hsl(var(--muted)) !important;
+                    border-color: hsl(var(--primary)) !important;
+                  }
+                </style>
+
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Features Description -->
+        <div style="margin-top: 1.5rem; padding: 1.5rem; background: hsl(var(--muted)); border-radius: var(--radius);">
+          <h4 style="margin: 0 0 1rem 0; color: hsl(var(--foreground));">Code Node Features</h4>
+          <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); line-height: 1.6;">
+            <p><strong>Subtle Background:</strong> Uses <code>hsl(var(--muted))</code> for visual differentiation from regular text nodes</p>
+            <p><strong>Syntax Highlighting:</strong> Monospace font with preserved formatting and proper spacing</p>
+            <p><strong>Copy Button:</strong> Positioned top-right, appears on hover for one-click code copying</p>
+            <p><strong>Responsive Layout:</strong> Adapts to content width with proper overflow handling</p>
+            <p><strong>Theme Adaptive:</strong> Works seamlessly in both light and dark modes</p>
+          </div>
+        </div>
+
         <h3>Slash Commands Pattern</h3>
         <p>Quick commands for creating different node types and templates.</p>
 
