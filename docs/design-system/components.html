@@ -7,6 +7,7 @@
   <meta name="description" content="shadcn-svelte foundation components and custom NodeSpace domain components.">
   <link rel="stylesheet" href="assets/shadcn-variables.css">
   <link rel="stylesheet" href="assets/style-guide.css">
+  <link rel="stylesheet" href="assets/design-system-icons.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
   
   <!-- Prevent flash of unstyled content by applying theme immediately -->
@@ -298,139 +299,113 @@
 &lt;Textarea placeholder="Enter longer text..." /&gt;</code></pre>
         </div>
       </div>
-      
-      <h3>Cards</h3>
-      <div class="component-live-demo">
-        <div style="
-          background: hsl(var(--card));
-          color: hsl(var(--card-foreground));
-          border: 1px solid hsl(var(--border));
-          border-radius: var(--radius);
-          box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
-          max-width: 400px;
-        ">
-          <div style="padding: 1.5rem 1.5rem 0;">
-            <h3 style="margin: 0 0 0.5rem 0; font-size: 1.125rem; font-weight: 600;">Card Title</h3>
-            <p style="margin: 0; font-size: 0.875rem; color: hsl(var(--muted-foreground));">Card description or subtitle</p>
-          </div>
-          <div style="padding: 1.5rem;">
-            <p style="margin: 0 0 1rem 0;">Card content goes here. This is where you would place the main content of your card.</p>
-            <button style="
-              display: inline-flex;
-              align-items: center;
-              justify-content: center;
-              border-radius: calc(var(--radius) - 2px);
-              font-size: 0.875rem;
-              font-weight: 500;
-              height: 2.25rem;
-              padding: 0 1rem;
-              background: hsl(var(--primary));
-              color: hsl(var(--primary-foreground));
-              border: none;
-              cursor: pointer;
-            ">Action</button>
-          </div>
-        </div>
-        
-        <div class="example-code">
-          <pre><code>&lt;script&gt;
-  import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "$lib/components/ui/card";
-&lt;/script&gt;
-
-&lt;Card&gt;
-  &lt;CardHeader&gt;
-    &lt;CardTitle&gt;Card Title&lt;/CardTitle&gt;
-    &lt;CardDescription&gt;Card description&lt;/CardDescription&gt;
-  &lt;/CardHeader&gt;
-  &lt;CardContent&gt;
-    &lt;p&gt;Card content goes here.&lt;/p&gt;
-  &lt;/CardContent&gt;
-&lt;/Card&gt;</code></pre>
-        </div>
-      </div>
     </section>
 
     <!-- NodeSpace Domain Components -->
     <section class="example-section">
       <h2>NodeSpace Domain Components</h2>
-      <p>Custom components built on shadcn-svelte foundation for AI-native knowledge management. All 5 node types with consistent visual language.</p>
-      
-      <h3>Node Type Components</h3>
-      <div class="component-showcase">
-        <div class="component-example">
-          <div class="component-title">● Text Nodes</div>
-          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-text)); padding-left: 1rem;">
-            <div class="component-live-demo" style="margin-bottom: 1rem;">
-              <div style="display: flex; align-items: flex-start; margin-bottom: 0.75rem;">
-                <span style="color: hsl(var(--node-text)); margin-right: 0.75rem; font-size: 1.25rem;">●</span>
-                <div style="flex: 1;">
-                  <div style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem;">Campaign Strategy Overview</div>
-                  <div style="color: hsl(var(--muted-foreground));">Foundation content blocks with markdown support, hierarchical structure, and collapsible sections.</div>
-                </div>
-              </div>
-              
-              <div style="display: flex; align-items: flex-start; margin-left: 2rem; margin-bottom: 0.5rem;">
-                <span style="color: hsl(var(--node-text)); margin-right: 0.75rem; font-size: 1rem;">●</span>
-                <div>Our comprehensive approach focuses on digital transformation messaging...</div>
-              </div>
+      <p>Custom components built on shadcn-svelte foundation for AI-native knowledge management. All node types with consistent visual language and hierarchical icons.</p>
+
+      <h3>Text Nodes</h3>
+      <p>Foundation content blocks with markdown support, hierarchical structure, and collapsible sections. Uses circle icon for visual identification.</p>
+      <div style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.5rem; background: hsl(var(--background)); margin-bottom: 2rem;">
+        <!-- Parent text node with children -->
+        <div class="hierarchy-node has-children">
+          <span class="chevron-icon expanded">
+            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+              <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z"/>
+            </svg>
+          </span>
+          <div class="hierarchy-indicator">
+            <div class="node-ring"></div>
+            <div class="node-circle"></div>
+          </div>
+          Campaign Strategy Overview
+        </div>
+
+        <!-- Child text node -->
+        <div class="hierarchy-node child-1">
+          <div class="hierarchy-indicator">
+            <div class="node-circle"></div>
+          </div>
+          Our comprehensive approach focuses on digital transformation messaging...
+        </div>
+      </div>
+
+      <div style="margin-top: 1rem; padding: 1rem; background: hsl(var(--muted)); border-radius: var(--radius); font-size: 0.875rem;">
+        <strong>Features:</strong> Circle icon (16px), ring effect for parent nodes, collapsible hierarchy, markdown support
+      </div>
+
+      <h3>Task Nodes</h3>
+      <p>Action items with state tracking (pending, in-progress, completed). Circle icon with state-based fill and optional checkmark overlay.</p>
+      <div style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.5rem; background: hsl(var(--background)); margin-bottom: 2rem;">
+        <!-- Pending task -->
+        <div class="hierarchy-node">
+          <div class="hierarchy-indicator">
+            <div class="task-circle task-circle-pending"></div>
+          </div>
+          Review client feedback on logo concepts
+        </div>
+
+        <!-- In-progress task -->
+        <div class="hierarchy-node">
+          <div class="hierarchy-indicator">
+            <div class="task-circle task-circle-in-progress"></div>
+          </div>
+          Develop social media asset templates
+        </div>
+
+        <!-- Completed task -->
+        <div class="hierarchy-node">
+          <div class="hierarchy-indicator">
+            <div class="task-circle task-circle-completed"></div>
+          </div>
+          Complete brand guidelines document
+        </div>
+      </div>
+
+      <div style="margin-top: 1rem; padding: 1rem; background: hsl(var(--muted)); border-radius: var(--radius); font-size: 0.875rem;">
+        <strong>States:</strong> Pending (outlined circle), In-Progress (half-filled), Completed (filled with checkmark)
+      </div>
+
+      <h3>Code Block Nodes</h3>
+      <p>Code snippets with language selection, copy functionality, and curly brace icon. Subtle background differentiation with interactive controls.</p>
+      <div style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.5rem; background: hsl(var(--background)); margin-bottom: 2rem;">
+        <!-- Code Block Node -->
+        <div class="hierarchy-node code-node-example" style="--code-font-size: 0.875rem; --code-line-height: 1.5;">
+          <div class="hierarchy-indicator" style="top: 18px; transform: translate(-50%, -50%);">
+            <div class="code-circle"></div>
+          </div>
+          <div style="flex: 1; background: hsl(var(--muted)); padding: 0.25rem; border-radius: var(--radius); position: relative;" class="code-node-content">
+            <pre style="margin: 0; background: transparent; border: none; padding: 0; padding-right: 10rem;"><code style="font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.875rem; line-height: 1.5;">function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}</code></pre>
+            <button class="code-language-button" onclick="event.stopPropagation(); this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'block' ? 'none' : 'block'" style="position: absolute; top: 0.5rem; right: 3.9375rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease; width: 8rem; box-sizing: border-box; text-align: left;">JavaScript</button>
+
+            <!-- Language Dropdown Menu -->
+            <div class="code-language-dropdown" onclick="event.stopPropagation()" style="display: none; position: absolute; top: 2rem; right: 3.9375rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.25rem; width: 8rem; max-height: 10.5rem; overflow-y: auto; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); z-index: 10; box-sizing: border-box;">
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'JavaScript'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">JavaScript</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'TypeScript'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">TypeScript</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Python'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Python</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Rust'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Rust</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Go'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Go</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Java'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Java</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'C++'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">C++</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Ruby'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Ruby</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'PHP'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">PHP</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Swift'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Swift</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Kotlin'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground)); border-bottom: 1px solid hsl(var(--border));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Kotlin</div>
+              <div class="language-option" onclick="this.closest('.code-language-dropdown').previousElementSibling.childNodes[0].textContent = 'Shell'; this.closest('.code-language-dropdown').style.display = 'none'" style="padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.75rem; color: hsl(var(--foreground));" onmouseover="this.style.background='hsl(var(--muted))'" onmouseout="this.style.background='transparent'">Shell</div>
             </div>
-            <div class="example-code" style="font-size: 0.75rem;">
-              <pre><code>&lt;TextNode 
-  nodeId="strategy-overview"
-  title="Campaign Strategy Overview"
-  content="Our comprehensive approach..."
-  hasChildren={true}
-  collapsible={true}
-/&gt;</code></pre>
-            </div>
+
+            <button class="code-copy-button" style="position: absolute; top: 0.5rem; right: 0.5rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer; opacity: 0; transition: opacity 0.2s ease;">Copy</button>
           </div>
         </div>
-        
-        <div class="component-example">
-          <div class="component-title">☐ Task Nodes</div>
-          <div class="component-demo" style="border-left: 4px solid hsl(var(--node-task)); padding-left: 1rem;">
-            <div class="component-live-demo" style="margin-bottom: 1rem;">
-              <div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">
-                <span style="color: hsl(var(--status-pending)); font-size: 1rem;">☐</span>
-                <div style="flex: 1;">
-                  <div style="font-weight: 500;">Review client feedback on logo concepts</div>
-                  <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">
-                    Due: Jan 25, 2025 | Assigned: Sarah M.
-                  </div>
-                </div>
-              </div>
-              
-              <div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">
-                <span style="color: hsl(var(--status-in-progress)); font-size: 1rem;">◒</span>
-                <div style="flex: 1;">
-                  <div style="font-weight: 500;">Develop social media asset templates</div>
-                  <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">
-                    Progress: 60% complete
-                  </div>
-                </div>
-              </div>
-              
-              <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                <span style="color: hsl(var(--status-completed)); font-size: 1rem;">✓</span>
-                <div style="flex: 1; opacity: 0.7;">
-                  <div style="font-weight: 500; text-decoration: line-through;">Complete brand guidelines document</div>
-                  <div style="font-size: 0.875rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">
-                    Completed: Jan 18, 2025
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="example-code" style="font-size: 0.75rem;">
-              <pre><code>&lt;TaskNode 
-  nodeId="review-feedback"
-  title="Review client feedback on logo concepts"
-  status="pending"
-  dueDate="2025-01-25"
-  assignee="Sarah M."
-/&gt;</code></pre>
-            </div>
-          </div>
-        </div>
+      </div>
+
+      <div style="margin-top: 1rem; padding: 1rem; background: hsl(var(--muted)); border-radius: var(--radius); font-size: 0.875rem;">
+        <strong>Features:</strong> Curly brace icon (20px filled circle), language selector dropdown, copy button, buttons appear on hover, monospace font
       </div>
     </section>
 
@@ -503,7 +478,7 @@
         </div>
       </div>
     </section>
-    
+
     <!-- Footer -->
     <footer style="margin-top: 4rem; padding-top: 2rem; border-top: 1px solid hsl(var(--border)); text-align: center; color: hsl(var(--muted-foreground));">
       <p>NodeSpace Design System - Components</p>
@@ -511,5 +486,56 @@
   </div>
 
   <script src="assets/interactive.js"></script>
+
+  <style>
+    /* Chevron positioning - left of the icon */
+    .hierarchy-node .chevron-icon {
+      left: calc(22px + 10px - 20px) !important; /* circleOffset + circleDiameter/2 - nodeIndent/2 = 12px */
+    }
+
+    /* Chevron color with 50% opacity */
+    .chevron-icon svg {
+      fill: hsl(var(--primary));
+      opacity: 0.5;
+    }
+
+    /* Code block button styles */
+    .code-node-content .copy-button {
+      display: none !important;
+    }
+
+    .code-node-example:hover .code-copy-button,
+    .code-node-example:hover .code-language-button,
+    .code-copy-button:focus,
+    .code-language-button:focus {
+      opacity: 1 !important;
+    }
+    .code-copy-button:hover,
+    .code-language-button:hover {
+      background: hsl(var(--muted)) !important;
+      border-color: hsl(var(--primary)) !important;
+    }
+  </style>
+
+  <script>
+    // Close dropdown when clicking outside or pressing Escape
+    (function() {
+      const dropdown = document.querySelector('.code-language-dropdown');
+
+      // Close on outside click
+      document.addEventListener('click', function(e) {
+        if (dropdown && dropdown.style.display === 'block') {
+          dropdown.style.display = 'none';
+        }
+      });
+
+      // Close on Escape key
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && dropdown && dropdown.style.display === 'block') {
+          dropdown.style.display = 'none';
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

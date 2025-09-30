@@ -93,7 +93,7 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 0 C3.582 0 0 3.582 0 8 C0 12.418 3.582 16 8 16 L15.5 16 C15.776 16 16 15.776 16 15.5 L16 8 C16 3.582 12.418 0 8 0 Z' fill='hsl(204 47% 62%)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 0 C3.582 0 0 3.582 0 8 C0 12.418 3.582 16 8 16 L15.5 16 C15.776 16 16 15.776 16 15.5 L16 8 C16 3.582 12.418 0 8 0 Z' fill='rgb(69, 130, 161)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 16px 16px;
@@ -122,7 +122,7 @@
   top: 0;
   left: 0;
   box-sizing: border-box;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 0 C4.477 0 0 4.477 0 10 C0 15.523 4.477 20 10 20 L19.375 20 C19.72 20 20 19.72 20 19.375 L20 10 C20 4.477 15.523 0 10 0 Z' fill='hsla(204, 47%, 62%, 0.5)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 0 C4.477 0 0 4.477 0 10 C0 15.523 4.477 20 10 20 L19.375 20 C19.72 20 20 19.72 20 19.375 L20 10 C20 4.477 15.523 0 10 0 Z' fill='rgba(69, 130, 161, 0.5)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 20px 20px;
@@ -130,12 +130,12 @@
 
 /* Code Node Icons - Simplified curly braces */
 .code-circle {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: 0;
+  left: 0;
   background: rgb(69, 130, 161); /* Matches live Svelte implementation */
 }
 
