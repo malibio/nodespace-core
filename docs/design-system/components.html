@@ -407,6 +407,29 @@
       <div style="margin-top: 1rem; padding: 1rem; background: hsl(var(--muted)); border-radius: var(--radius); font-size: 0.875rem;">
         <strong>Features:</strong> Curly brace icon (20px filled circle), language selector dropdown, copy button, buttons appear on hover, monospace font
       </div>
+
+      <h3>Quote Block Nodes</h3>
+      <p>Block quotes with markdown styling conventions: left border accent, italic text, and optional attribution. Quotation mark icon for visual identification.</p>
+      <div style="border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.5rem; background: hsl(var(--background)); margin-bottom: 2rem;">
+        <!-- Quote Block Node -->
+        <div class="hierarchy-node quote-node-example">
+          <div class="hierarchy-indicator" style="top: 18px; transform: translate(-50%, -50%);">
+            <div class="quote-circle"></div>
+          </div>
+          <div class="quote-node-content" style="flex: 1; background: hsl(var(--muted)); padding: 0.25rem; padding-left: 1rem; border-radius: var(--radius); border-top-left-radius: 0; border-bottom-left-radius: 0; position: relative;">
+            <div style="font-style: italic; color: hsl(var(--foreground)); opacity: 0.9; line-height: 1.6;">
+              The best way to predict the future is to invent it.
+            </div>
+            <div style="margin-top: 0.5rem; font-size: 0.875rem; color: hsl(var(--muted-foreground)); font-style: normal;">
+              — Alan Kay
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 1rem; padding: 1rem; background: hsl(var(--muted)); border-radius: var(--radius); font-size: 0.875rem;">
+        <strong>Features:</strong> Quotation mark icon (20px filled circle), left border accent (4px primary color), italic text styling, subtle background, optional attribution line
+      </div>
     </section>
 
     <!-- Component Integration -->
@@ -514,6 +537,17 @@
     .code-language-button:hover {
       background: hsl(var(--muted)) !important;
       border-color: hsl(var(--primary)) !important;
+    }
+
+    /* Quote block vertical line - straight, no rounded corners */
+    .quote-node-content::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background: hsl(var(--primary));
     }
   </style>
 
