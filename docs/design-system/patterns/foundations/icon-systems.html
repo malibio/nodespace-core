@@ -32,7 +32,7 @@
     <!-- Header -->
     <header>
       <h1>Icon Systems</h1>
-      <p>Comprehensive icon specifications for TextNode, TaskNode, CodeNode, and AI Chat Node components with perfect alignment systems.</p>
+      <p>Comprehensive icon specifications for TextNode, TaskNode, QuoteNode, CodeNode, and AI Chat Node components with perfect alignment systems.</p>
     </header>
 
     <!-- Navigation -->
@@ -322,6 +322,157 @@
         </div>
       </section>
 
+      <!-- QuoteNode Icon System -->
+      <section class="example-section">
+        <h2>QuoteNode Icon System</h2>
+        <p>Circle-based icons with double quotation mark for quote block nodes and blockquotes. Identical pattern to CodeNode but with quotation mark instead of curly braces.</p>
+
+        <h3>Quote Node States</h3>
+        <div class="icon-demo">
+          <!-- Regular Quote Node -->
+          <div class="task-state-example">
+            <div class="ns-icon" role="img" aria-label="Quote node icon">
+              <div class="quote-circle"></div>
+            </div>
+            <div class="task-state-label">Quote Node</div>
+          </div>
+
+          <!-- Quote Node with Children (Ring Effect) -->
+          <div class="task-state-example">
+            <div class="ns-icon" role="img" aria-label="Quote node with children icon">
+              <div class="node-ring"></div>
+              <div class="quote-circle"></div>
+            </div>
+            <div class="task-state-label">Quote Node (Parent)</div>
+          </div>
+        </div>
+
+        <h3>Implementation Code</h3>
+        <div class="example-code">
+          <pre><code><!-- Regular Quote Node -->
+&lt;div class="ns-icon"&gt;
+  &lt;div class="quote-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- Quote Node with Children (Ring Effect) -->
+&lt;div class="ns-icon"&gt;
+  &lt;div class="node-ring"&gt;&lt;/div&gt;
+  &lt;div class="quote-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- Using Icon Component (Svelte) -->
+&lt;Icon name="quote" size={20} /&gt;</code></pre>
+        </div>
+
+        <h3>CSS Implementation</h3>
+        <div class="example-code">
+          <pre><code>/* Quote Node Icons - Double quotation mark with background-matching color */
+.quote-circle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: rgb(69, 130, 161); /* Blue-gray matching design system */
+}
+
+/* Quotation mark overlay - light theme
+   NOTE: SVG data URLs cannot use CSS variables, so must be hardcoded
+   Matches: hsl(var(--content-background)) = hsl(0 0% 99%) = #fcfcfc */
+.quote-circle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Ctext x='8' y='11' font-family='system-ui' font-size='11' font-weight='700' text-anchor='middle' fill='%23fcfcfc'%3E%22%3C/text%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 16px 16px;
+}
+
+/* Dark theme - quotation mark uses dark background color */
+.dark .quote-circle::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Ctext x='8' y='11' font-family='system-ui' font-size='11' font-weight='700' text-anchor='middle' fill='%23252523'%3E%22%3C/text%3E%3C/svg%3E");
+}</code></pre>
+        </div>
+
+        <h3>Technical Implementation Details</h3>
+        <div class="component-showcase">
+          <div class="component-example">
+            <div class="component-title">CSS-Based Rendering (Matches CodeNode Pattern)</div>
+            <div class="component-demo">
+              <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+                <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Quote Icon Specifications</p>
+                <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                  <li>16x16px filled circle (identical to CodeNode base)</li>
+                  <li>2px offset positioning in 20x20px container</li>
+                  <li>Background color: rgb(69, 130, 161) - blue-gray from design system</li>
+                  <li>Quotation mark: 11px font, 700 weight, centered</li>
+                  <li>Text color: Background color (#fcfcfc light / #252523 dark)</li>
+                  <li>Ring effect: 3px border ring for parent nodes (matches CodeNode)</li>
+                </ul>
+              </div>
+
+              <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+                <thead>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <th style="padding: 0.5rem; text-align: left;">Element</th>
+                    <th style="padding: 0.5rem; text-align: left;">Size</th>
+                    <th style="padding: 0.5rem; text-align: left;">Purpose</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Quote Icon Container</td>
+                    <td style="padding: 0.5rem;"><code>20x20px</code></td>
+                    <td style="padding: 0.5rem;">Standard icon container size</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Quote Circle (regular)</td>
+                    <td style="padding: 0.5rem;"><code>16x16px</code></td>
+                    <td style="padding: 0.5rem;">Solid filled circle, 2px offset in container</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Quote Circle (with children)</td>
+                    <td style="padding: 0.5rem;"><code>16x16px inner + 20x20px ring</code></td>
+                    <td style="padding: 0.5rem;">Solid inner with 3px border ring</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Quotation Mark Glyph</td>
+                    <td style="padding: 0.5rem;"><code>11px font, 700 weight</code></td>
+                    <td style="padding: 0.5rem;">Centered " character via SVG text</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.5rem;">Background Color</td>
+                    <td style="padding: 0.5rem;"><code>rgb(69, 130, 161)</code></td>
+                    <td style="padding: 0.5rem;">Blue-gray matching design system</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="component-example">
+            <div class="component-title">Design Rationale</div>
+            <div class="component-demo">
+              <ul>
+                <li><strong>Identical to CodeNode:</strong> Uses exact same base pattern (16x16 circle, 2px offset)</li>
+                <li><strong>Quotation Mark Glyph:</strong> Standard " character provides universal recognition</li>
+                <li><strong>CSS Pseudo-Element:</strong> SVG data URL in ::after ensures consistent rendering</li>
+                <li><strong>Ring Effect:</strong> Indicates nested quotes (parent nodes with children)</li>
+                <li><strong>Background Color Contrast:</strong> Light/dark theme-specific quotation mark colors</li>
+                <li><strong>Consistent Sizing:</strong> Same 20x20 container, 16x16 circle as CodeNode</li>
+                <li><strong>Theme Adaptive:</strong> Separate SVG data URLs for light and dark modes</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- CodeNode Icon System -->
       <section class="example-section">
         <h2>CodeNode Icon System</h2>
@@ -439,6 +590,16 @@ console.log(result); // Output: 55</code><button class="copy-button">Copy</butto
                     <td style="padding: 0.5rem;">TaskNode (with children)</td>
                     <td style="padding: 0.5rem;"><code>r="7.5" inner + r="8.5" ring</code></td>
                     <td style="padding: 0.5rem;">Stroked/filled inner with 50% opacity ring</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">QuoteNode (regular)</td>
+                    <td style="padding: 0.5rem;"><code>16x16px</code></td>
+                    <td style="padding: 0.5rem;">Solid filled circle with centered quotation mark, 2px offset in 20x20 container</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">QuoteNode (with children)</td>
+                    <td style="padding: 0.5rem;"><code>16x16px inner + 20x20px ring</code></td>
+                    <td style="padding: 0.5rem;">Solid inner with 3px border ring</td>
                   </tr>
                   <tr style="border-bottom: 1px solid hsl(var(--border));">
                     <td style="padding: 0.5rem;">CodeNode (regular)</td>
