@@ -351,7 +351,7 @@ input:focus-visible {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 3px solid hsl(var(--primary) / 0.5);
+  border: 2px solid hsl(var(--primary) / 0.5);
   box-sizing: border-box;
   position: absolute;
   top: 0;

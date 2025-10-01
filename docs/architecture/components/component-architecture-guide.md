@@ -64,10 +64,11 @@ NodeSpace follows a **consistent, hierarchical component architecture** with cle
   - Checkbox interaction
   - Task-specific metadata handling
 
-- **DateNode** (`src/lib/components/viewers/date-node.svelte`)
+- **DateNode** (`src/lib/design/components/date-node.svelte`)
   - Date formatting and validation
   - Calendar icon integration
   - Date parsing utilities
+  - Cannot be created via slash commands (exists implicitly for all dates)
 
 ### 3. Viewer Components Layer
 
