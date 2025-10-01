@@ -358,14 +358,14 @@ input:focus-visible {
   left: 0;
 }
 
-/* TaskNode Circle Icon System */
-.task-icon-demo {
+/* Icon Demo Container - Used for all icon types */
+.icon-demo {
   display: flex;
   align-items: center;
   gap: 2rem;
   margin: 1rem 0;
   padding: 1rem;
-  background: hsl(var(--background));
+  background: hsl(var(--content-background));
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
 }
