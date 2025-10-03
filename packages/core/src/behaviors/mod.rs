@@ -411,7 +411,17 @@ impl NodeBehavior for DateNodeBehavior {
 ///
 /// # Thread Safety
 ///
-/// All behaviors are stored in `Arc` for efficient cloning and thread-safe access.
+/// All behaviors are stored in `Arc` for efficient cloning and thread-safe access
+/// during read operations. The registry follows a "register at startup, read at runtime"
+/// pattern:
+///
+/// - **Concurrent reads**: Safe without external synchronization. Wrap in `Arc<NodeBehaviorRegistry>`
+///   to share across threads (see test_registry_thread_safety for example).
+/// - **Concurrent registration**: Requires external synchronization. Wrap in `Arc<Mutex<NodeBehaviorRegistry>>`
+///   if registering behaviors from multiple threads.
+///
+/// For most applications, behaviors are registered once during initialization and then
+/// accessed concurrently during runtime, making external synchronization unnecessary
 ///
 /// # Examples
 ///
