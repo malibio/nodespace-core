@@ -18,13 +18,13 @@
 //! - [`db`] - Database layer with libsql integration
 //! - [`mcp`] - MCP stdio server for AI agent integration
 
-pub mod models;
 pub mod behaviors;
-pub mod services;
 pub mod db;
 pub mod mcp;
+pub mod models;
+pub mod services;
 
-// Re-export commonly used types
-pub use models::*;
-pub use behaviors::*;
-pub use services::*;
+// Re-exports will be added as modules are implemented
+// pub use behaviors::*;
+// pub use models::*;
+// pub use services::*;
