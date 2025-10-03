@@ -22,6 +22,10 @@ thiserror = "1.0"
 async-trait = "0.1"
 libsql = "0.6"
 
+# Dev dependencies (shared via workspace inheritance)
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
