@@ -10,6 +10,9 @@
 //! - **WAL mode**: Write-Ahead Logging for better concurrency
 //! - **Foreign keys**: Enabled for referential integrity
 //! - **JSON operators**: Native SQLite JSON support
+//!
+//! For detailed schema specifications, see:
+//! `/docs/architecture/business-logic/database-schema.md`
 
 use crate::db::error::DatabaseError;
 use libsql::{Builder, Database};
@@ -103,6 +106,24 @@ impl DatabaseService {
         Ok(service)
     }
 
+    /// Execute a PRAGMA statement
+    ///
+    /// PRAGMA statements return rows, so we must use query() instead of execute().
+    /// This helper method encapsulates that pattern for cleaner code.
+    async fn execute_pragma(
+        &self,
+        conn: &libsql::Connection,
+        pragma: &str,
+    ) -> Result<(), DatabaseError> {
+        let mut stmt = conn.prepare(pragma).await.map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to execute '{}': {}", pragma, e))
+        })?;
+        let _ = stmt.query(()).await.map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to execute '{}': {}", pragma, e))
+        })?;
+        Ok(())
+    }
+
     /// Initialize database schema and configuration
     ///
     /// Creates tables and indexes using CREATE TABLE IF NOT EXISTS,
@@ -189,7 +210,9 @@ impl DatabaseService {
             (),
         )
         .await
-        .map_err(|e| DatabaseError::sql_execution(format!("Failed to create type index: {}", e)))?;
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to create index 'idx_nodes_type': {}", e))
+        })?;
 
         // Index on parent_id (hierarchy queries)
         conn.execute(
@@ -198,7 +221,10 @@ impl DatabaseService {
         )
         .await
         .map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to create parent index: {}", e))
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_nodes_parent': {}",
+                e
+            ))
         })?;
 
         // Index on root_id (bulk fetch by document)
@@ -207,7 +233,9 @@ impl DatabaseService {
             (),
         )
         .await
-        .map_err(|e| DatabaseError::sql_execution(format!("Failed to create root index: {}", e)))?;
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to create index 'idx_nodes_root': {}", e))
+        })?;
 
         // Index on modified_at (temporal queries)
         conn.execute(
@@ -216,7 +244,10 @@ impl DatabaseService {
         )
         .await
         .map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to create modified index: {}", e))
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_nodes_modified': {}",
+                e
+            ))
         })?;
 
         // Index on content (text search)
@@ -226,7 +257,10 @@ impl DatabaseService {
         )
         .await
         .map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to create content index: {}", e))
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_nodes_content': {}",
+                e
+            ))
         })?;
 
         // Indexes for node_mentions (bidirectional queries)
@@ -236,7 +270,10 @@ impl DatabaseService {
         )
         .await
         .map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to create mentions source index: {}", e))
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_mentions_source': {}",
+                e
+            ))
         })?;
 
         conn.execute(
@@ -245,7 +282,10 @@ impl DatabaseService {
         )
         .await
         .map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to create mentions target index: {}", e))
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_mentions_target': {}",
+                e
+            ))
         })?;
 
         Ok(())
