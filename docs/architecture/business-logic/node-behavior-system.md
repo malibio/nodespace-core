@@ -410,29 +410,26 @@ impl NodeBehavior for DateNodeBehavior {
     }
 
     fn validate(&self, node: &Node) -> Result<(), ValidationError> {
-        // Date nodes have special ID format: "date:YYYY-MM-DD"
-        if !node.id.starts_with("date:") {
-            return Err("Date nodes must have ID format 'date:YYYY-MM-DD'".to_string());
+        // Date nodes have special ID format: YYYY-MM-DD (no prefix)
+        // Use regex for robust validation
+        use regex::Regex;
+        use chrono::NaiveDate;
+
+        lazy_static::lazy_static! {
+            static ref DATE_PATTERN: Regex = Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
         }
 
-        let date_part = &node.id[5..]; // Skip "date:" prefix
-        if date_part.len() != 10 || date_part.chars().nth(4) != Some('-') || date_part.chars().nth(7) != Some('-') {
-            return Err("Date ID must be in format 'date:YYYY-MM-DD'".to_string());
+        if !DATE_PATTERN.is_match(&node.id) {
+            return Err("Date nodes must have ID format 'YYYY-MM-DD'".to_string());
         }
 
-        // Content should match the date
-        if node.content != date_part {
-            return Err("Date node content should match the date from ID".to_string());
-        }
+        // Validate that it's an actual valid date
+        NaiveDate::parse_from_str(&node.id, "%Y-%m-%d")
+            .map_err(|_| "Invalid date format".to_string())?;
 
-        // Validate recurring pattern if present
-        if let Some(recurring) = node.metadata.get("recurring") {
-            if let Some(recurring_str) = recurring.as_str() {
-                let valid_patterns = ["daily", "weekly", "monthly", "yearly"];
-                if !valid_patterns.contains(&recurring_str) {
-                    return Err(format!("Invalid recurring pattern: {}", recurring_str));
-                }
-            }
+        // Content should match the date ID
+        if node.content != node.id {
+            return Err("Date node content should match the date ID".to_string());
         }
 
         Ok(())
@@ -448,7 +445,6 @@ impl NodeBehavior for DateNodeBehavior {
 
     fn default_metadata(&self) -> Value {
         json!({
-            "recurring": null,
             "is_holiday": false,
             "timezone": "UTC"
         })
@@ -467,27 +463,27 @@ impl NodeBehavior for DateNodeBehavior {
 impl DateNodeBehavior {
     /// Create date node with deterministic ID
     pub fn create_date_node(date: &str) -> Result<Node, ProcessingError> {
-        // Validate date format
-        if date.len() != 10 {
-            return Err("Date must be in YYYY-MM-DD format".to_string());
-        }
+        use chrono::NaiveDate;
+
+        // Validate date format (YYYY-MM-DD)
+        NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| "Date must be in YYYY-MM-DD format".to_string())?;
 
         let now = chrono::Utc::now();
         Ok(Node {
-            id: format!("date:{}", date),
+            id: date.to_string(),              // Just the date, no prefix
             node_type: "date".to_string(),
-            content: date.to_string(),
+            content: date.to_string(),         // Content matches ID
             parent_id: None,
-            root_id: format!("date:{}", date), // Self-referencing root
+            root_id: date.to_string(),         // Self-referencing root
             before_sibling_id: None,
             created_at: now,
             modified_at: now,
             metadata: json!({
-                "recurring": null,
                 "is_holiday": false,
                 "timezone": "UTC"
             }),
-            embedding_vector: None,
+            embedding_vector: None,            // Dates don't need embeddings
         })
     }
 }

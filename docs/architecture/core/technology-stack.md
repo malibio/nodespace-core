@@ -23,55 +23,45 @@ NodeSpace's technology stack is carefully chosen to provide optimal performance,
 - **Native Notifications**: System-level notification integration
 - **Native Menus**: Context menus for multi-node selection operations
 
-### TypeScript Services (Frontend-Centric Architecture)
+### Rust Business Logic Layer
 
-**Why TypeScript Services:**
-- **Unified Architecture**: Single language for UI and business logic
-- **Desktop Optimization**: Direct integration with embedded database
-- **Developer Experience**: Excellent tooling and type safety
-- **Simplified Deployment**: No backend/frontend coordination complexity
-- **Performance**: Fast enough for desktop workloads with embedded storage
+**Why Rust for Business Logic:**
+- **MCP Server Integration**: Expose business logic to AI agents via Model Context Protocol
+- **AI Integration**: Direct llama.cpp-rs integration for local inference
+- **Type Safety**: Compile-time guarantees for critical business logic
+- **Performance**: Native performance for database operations and AI processing
+- **Future Vision**: Eventually move everything to Rust (including frontend via Dioxus/Leptos)
 
-**Migration from Rust Backend:**
-- **Core Logic Migration**: Hierarchy operations and node management moved to TypeScript
-- **Service Extension Pattern**: Extend existing NodeManager rather than replacement
-- **Simplified Caching**: In-memory computation caching appropriate for desktop context
+**Rust Business Logic Stack:**
+```toml
+[dependencies]
+# Database layer
+libsql = "0.4"                  # Turso embedded (NOT sqlx)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
-**TypeScript Service Stack:**
-```json
-{
-  "dependencies": {
-    // Core TypeScript services
-    "@types/node": "^20.14.0",
-    "typescript": "~5.6.2",
-    
-    // Database integration
-    "@turso/client": "latest",
-    "@turso/libsql": "latest",
-    
-    // AI Integration (via Rust bindings)
-    "@mistralrs/node": "latest",
-    
-    // Service architecture
-    "rxjs": "^7.8.1",           // Reactive programming for EventBus
-    "zod": "^3.23.8",           // Runtime type validation
-    
-    // Performance monitoring
-    "perf_hooks": "node",       // Built-in performance measuring
-    
-    // Configuration and logging
-    "winston": "^3.13.0",       // Logging framework
-    "dotenv": "^16.4.5"         // Configuration management
-  }
-}
+# AI Integration
+llama-cpp-rs = "0.5"            # Local LLM inference
+fastembed = "0.7"               # Embedding generation
+
+# MCP Server
+mcp-sdk = "0.1"                 # Model Context Protocol
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Type safety and validation
+validator = "0.18"
 ```
 
-**TypeScript Architecture Patterns:**
-- **Service Extension**: Extend existing services rather than replacement
-- **Event-Driven Coordination**: EventBus for UI reactivity (not cache invalidation)
-- **Type-Safe Database Operations**: Zod schemas for runtime validation
-- **Simplified Error Handling**: Result types and comprehensive error propagation
-- **Reactive State Management**: RxJS for complex service coordination
+**Rust Architecture Patterns:**
+- **Pure JSON Schema**: All entity data in JSON properties field (no ALTER TABLE migrations)
+- **Schema-as-Node**: Schemas stored as nodes with `node_type = "schema"`
+- **Rule-Based Indexing**: Dynamic JSON path indexes based on query frequency
+- **Auto-Reference Detection**: Primitive vs entity type detection at runtime
+- **MCP Exposure**: Business logic accessible to AI agents via stdio protocol
 
 ### Frontend: Svelte
 
@@ -209,49 +199,56 @@ pub enum AIBackend {
 
 ## Database Architecture
 
-### Embedded Turso Database
+### Embedded Turso Database (libSQL)
 
-**Why Embedded Turso:**
-- **Desktop Optimization**: SQLite-compatible embedded database with no network overhead
-- **LLM-Driven Schema Design**: AI analyzes natural language to optimize table structures
-- **Hybrid Hot/Cold Storage**: Frequently queried fields in normalized columns, flexible data in JSON
-- **Dynamic Index Management**: LLM creates indexes based on QueryNode usage patterns
-- **Performance**: Native column indexes (1-10ms) + JSON flexibility (20-100ms)
-- **TypeScript Integration**: Excellent JavaScript/Node.js client library
+**Why Embedded Turso with Pure JSON:**
+- **Desktop-First**: SQLite-compatible embedded database with no network overhead (0.1-5ms queries)
+- **Zero Migration Risk**: Pure JSON schema eliminates ALTER TABLE on user machines (critical for 10,000+ installations)
+- **Schema-as-Node**: Schemas stored as nodes, no dynamic table creation
+- **Rule-Based Indexing**: JSON path indexes created based on query frequency (not LLM-driven)
+- **Performance**: JSON path indexes (10-50ms) for frequently queried fields
+- **Rust Integration**: Direct libsql integration (NOT sqlx or TypeScript clients)
 - **Vector Search**: Built-in F32_BLOB vector support with similarity search
-- **Sync Ready**: Embedded replicas enable seamless cloud sync when needed
-- **SQLite Compatibility**: Standard SQL interface with JSON operations and vector extensions
+- **Sync Ready**: Embedded replicas enable seamless cloud sync (free → premium tier)
+- **SQLite Compatibility**: Standard SQL interface with JSON operations
 
-**Hybrid Database Schema:**
-```typescript
-// Universal nodes table (foundation)
-interface UniversalNode {
-    id: string;                             // Unique node identifier
-    type: string;                           // Node type identifier
-    content: string;                        // Primary content/text
-    parent_id: string | null;               // Hierarchy parent
-    root_id: string;                        // Root node reference
-    before_sibling_id: string | null;       // Single-pointer sibling ordering
-    created_at: string;                     // ISO 8601 timestamp
-    mentions: string[];                     // Referenced node IDs (backlink system)
-    embedding_vector: Float32Array | null;  // AI/ML embeddings
+**Pure JSON Database Schema:**
+```rust
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Node {
+    pub id: String,                             // UUID or deterministic (YYYY-MM-DD for dates)
+    pub node_type: String,                      // "task", "invoice", "schema", "date", etc.
+    pub content: String,                        // Primary content/text
+    pub parent_id: Option<String>,              // Where created (creation context)
+    pub root_id: Option<String>,                // Root document (NULL = is root)
+    pub before_sibling_id: Option<String>,      // Sibling ordering
+    pub created_at: String,                     // ISO 8601 timestamp
+    pub modified_at: String,                    // ISO 8601 timestamp
+    pub properties: serde_json::Value,          // ALL entity-specific fields (Pure JSON)
+    pub embedding_vector: Option<Vec<u8>>,      // F32_BLOB for AI embeddings
 }
 
-// Entity-specific tables (LLM-optimized hot fields)
-interface TaskProperties {
-    node_id: string;                        // Foreign key to UniversalNode
-    priority: 'low' | 'medium' | 'high' | 'urgent';  // Hot field (frequent queries)
-    due_date: Date;                         // Hot field (date range queries)
-    status: 'todo' | 'in_progress' | 'completed';    // Hot field (status filtering)
-    assignee_id: string;                    // Hot field (user-based filtering)
-    metadata: Record<string, unknown>;      // Cold fields (rare queries)
+// Schema definition (stored as node with node_type = "schema", id = type_name)
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SchemaDefinition {
+    pub is_core: bool,
+    pub description: String,
+    pub fields: Vec<FieldDefinition>,
 }
 
-// LLM-driven schema manager
-interface LLMSchemaManager {
-    async analyzeEntityRequest(userDescription: string): Promise<SchemaDesign>;
-    async optimizeFieldPlacement(usage: FieldUsageStats): Promise<SchemaChanges>;
-    async createDynamicIndexes(queryPattern: QueryDefinition): Promise<IndexStrategy>;
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FieldDefinition {
+    pub name: String,
+    pub field_type: String,         // "text", "number", "boolean", "date", "json", or schema name (auto-reference)
+    pub indexed: bool,              // Triggers JSON path index creation
+    pub required: bool,
+}
+
+// Rule-based index manager
+pub struct IndexManager {
+    db: Arc<Database>,
+    // Creates JSON path indexes when query frequency > threshold
+    // Example: CREATE INDEX idx_task_priority ON nodes((properties->>'$.priority')) WHERE node_type = 'task'
 }
 ```
 

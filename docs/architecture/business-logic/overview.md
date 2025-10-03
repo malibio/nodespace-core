@@ -81,7 +81,13 @@ pub struct Node {
 - **Single table storage**: All nodes use same database structure
 - **Type flexibility**: New node types via `node_type` field and metadata
 - **Hierarchy support**: Parent/child relationships with sibling ordering
-- **AI-ready**: Built-in embedding storage for semantic search
+- **AI-ready**: Built-in embedding storage for semantic search (optional, set to `None` initially)
+
+**Note on Embeddings:**
+- `embedding_vector` is `Option<Vec<u8>>` - nullable/optional
+- Initially set to `None` for all nodes (embeddings added in later phase)
+- NLP engine integration (Issues #107, #108) will populate embeddings
+- Date nodes typically never need embeddings (`None` permanently)
 
 ### 2. Node Behavior System
 
