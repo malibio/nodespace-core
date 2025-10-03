@@ -126,25 +126,12 @@ impl DatabaseService {
             .map_err(|e| DatabaseError::initialization_failed(e.to_string()))?;
 
         // Enable WAL mode for better concurrency
-        // Note: PRAGMA statements return rows, so we use query() not execute()
-        let mut stmt = conn
-            .prepare("PRAGMA journal_mode = WAL")
-            .await
-            .map_err(|e| DatabaseError::sql_execution(format!("Failed to enable WAL mode: {}", e)))?;
-        let _ = stmt.query(()).await.map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to enable WAL mode: {}", e))
-        })?;
+        self.execute_pragma(&conn, "PRAGMA journal_mode = WAL")
+            .await?;
 
         // Enable foreign key constraints
-        let mut stmt = conn
-            .prepare("PRAGMA foreign_keys = ON")
-            .await
-            .map_err(|e| {
-                DatabaseError::sql_execution(format!("Failed to enable foreign keys: {}", e))
-            })?;
-        let _ = stmt.query(()).await.map_err(|e| {
-            DatabaseError::sql_execution(format!("Failed to enable foreign keys: {}", e))
-        })?;
+        self.execute_pragma(&conn, "PRAGMA foreign_keys = ON")
+            .await?;
 
         // Create nodes table (Pure JSON schema)
         conn.execute(
@@ -195,30 +182,32 @@ impl DatabaseService {
     ///
     /// These indexes are essential for query performance and never change
     /// (no ALTER TABLE required on user machines).
-    async fn create_core_indexes(
-        &self,
-        conn: &libsql::Connection,
-    ) -> Result<(), DatabaseError> {
+    async fn create_core_indexes(&self, conn: &libsql::Connection) -> Result<(), DatabaseError> {
         // Index on node_type (most common filter)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(node_type)", ())
-            .await
-            .map_err(|e| {
-                DatabaseError::sql_execution(format!("Failed to create type index: {}", e))
-            })?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(node_type)",
+            (),
+        )
+        .await
+        .map_err(|e| DatabaseError::sql_execution(format!("Failed to create type index: {}", e)))?;
 
         // Index on parent_id (hierarchy queries)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id)", ())
-            .await
-            .map_err(|e| {
-                DatabaseError::sql_execution(format!("Failed to create parent index: {}", e))
-            })?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id)",
+            (),
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to create parent index: {}", e))
+        })?;
 
         // Index on root_id (bulk fetch by document)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_root ON nodes(root_id)", ())
-            .await
-            .map_err(|e| {
-                DatabaseError::sql_execution(format!("Failed to create root index: {}", e))
-            })?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_root ON nodes(root_id)",
+            (),
+        )
+        .await
+        .map_err(|e| DatabaseError::sql_execution(format!("Failed to create root index: {}", e)))?;
 
         // Index on modified_at (temporal queries)
         conn.execute(
@@ -231,11 +220,14 @@ impl DatabaseService {
         })?;
 
         // Index on content (text search)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_content ON nodes(content)", ())
-            .await
-            .map_err(|e| {
-                DatabaseError::sql_execution(format!("Failed to create content index: {}", e))
-            })?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_content ON nodes(content)",
+            (),
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to create content index: {}", e))
+        })?;
 
         // Indexes for node_mentions (bidirectional queries)
         conn.execute(
@@ -264,9 +256,7 @@ impl DatabaseService {
     /// Returns a new connection that can be used for queries.
     /// Multiple connections can be used concurrently thanks to WAL mode.
     pub fn connect(&self) -> Result<libsql::Connection, DatabaseError> {
-        self.db
-            .connect()
-            .map_err(|e| DatabaseError::LibsqlError(e))
+        self.db.connect().map_err(DatabaseError::LibsqlError)
     }
 }
 
