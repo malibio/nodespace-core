@@ -1,10 +1,8 @@
-/**
- * Simple Rust testing examples for NodeSpace
- * Demonstrates practical testing without over-complexity
- */
+//! Simple Rust testing examples for NodeSpace
+//! Demonstrates practical testing without over-complexity
 
 #[cfg(test)]
-mod tests {
+mod nodespace_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // Simple counter for unique IDs in tests
