@@ -210,17 +210,22 @@ impl NodeService {
             .prepare(
                 "SELECT id, node_type, content, parent_id, root_id, before_sibling_id,
                         created_at, modified_at, properties, embedding_vector
-                 FROM nodes WHERE id = ?"
+                 FROM nodes WHERE id = ?",
             )
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to prepare query: {}", e))
+            })?;
 
-        let mut rows = stmt
-            .query([id])
+        let mut rows = stmt.query([id]).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to execute query: {}", e))
+        })?;
+
+        if let Some(row) = rows
+            .next()
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to execute query: {}", e)))?;
-
-        if let Some(row) = rows.next().await.map_err(|e| NodeServiceError::query_failed(e.to_string()))? {
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+        {
             let node = self.row_to_node(row)?;
             Ok(Some(node))
         } else {
@@ -264,11 +269,15 @@ impl NodeService {
     /// ```
     pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<(), NodeServiceError> {
         if update.is_empty() {
-            return Err(NodeServiceError::invalid_update("Update contains no changes"));
+            return Err(NodeServiceError::invalid_update(
+                "Update contains no changes",
+            ));
         }
 
         // Get existing node to validate update
-        let existing = self.get_node(id).await?
+        let existing = self
+            .get_node(id)
+            .await?
             .ok_or_else(|| NodeServiceError::node_not_found(id))?;
 
         // For simplicity with libsql, we'll fetch the node, apply updates, and replace entirely
@@ -448,7 +457,9 @@ impl NodeService {
         new_parent: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         // Verify node exists
-        let _node = self.get_node(node_id).await?
+        let _node = self
+            .get_node(node_id)
+            .await?
             .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
 
         // Verify new parent exists if provided
@@ -460,9 +471,10 @@ impl NodeService {
 
             // Check for circular reference - parent_id cannot be a descendant of node_id
             if self.is_descendant(node_id, parent_id).await? {
-                return Err(NodeServiceError::circular_reference(
-                    format!("Cannot move node {} under its descendant {}", node_id, parent_id)
-                ));
+                return Err(NodeServiceError::circular_reference(format!(
+                    "Cannot move node {} under its descendant {}",
+                    node_id, parent_id
+                )));
             }
         }
 
@@ -470,7 +482,9 @@ impl NodeService {
         let new_root_id = match new_parent {
             Some(parent_id) => {
                 // Get parent's root_id, or use parent as root if it's a root node
-                let parent = self.get_node(parent_id).await?
+                let parent = self
+                    .get_node(parent_id)
+                    .await?
                     .ok_or_else(|| NodeServiceError::invalid_parent(parent_id))?;
                 parent.root_id.or(Some(parent_id.to_string()))
             }
@@ -519,16 +533,19 @@ impl NodeService {
         before_sibling_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         // Verify node exists
-        let _node = self.get_node(node_id).await?
+        let _node = self
+            .get_node(node_id)
+            .await?
             .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
 
         // Verify sibling exists if provided
         if let Some(sibling_id) = before_sibling_id {
             let sibling_exists = self.node_exists(sibling_id).await?;
             if !sibling_exists {
-                return Err(NodeServiceError::hierarchy_violation(
-                    format!("Sibling node {} does not exist", sibling_id)
-                ));
+                return Err(NodeServiceError::hierarchy_violation(format!(
+                    "Sibling node {} does not exist",
+                    sibling_id
+                )));
             }
         }
 
@@ -586,22 +603,30 @@ impl NodeService {
                 _ => "",
             };
 
-            let limit_clause = filter.limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
+            let limit_clause = filter
+                .limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
 
             let query = format!(
                 "SELECT id, node_type, content, parent_id, root_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes WHERE node_type = ?{}{}",
                 order_clause, limit_clause
             );
 
-            let mut stmt = conn.prepare(&query).await
-                .map_err(|e| NodeServiceError::query_failed(format!("Failed to prepare query: {}", e)))?;
+            let mut stmt = conn.prepare(&query).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to prepare query: {}", e))
+            })?;
 
-            let mut rows = stmt.query([node_type.as_str()]).await
-                .map_err(|e| NodeServiceError::query_failed(format!("Failed to execute query: {}", e)))?;
+            let mut rows = stmt.query([node_type.as_str()]).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to execute query: {}", e))
+            })?;
 
             let mut nodes = Vec::new();
-            while let Some(row) = rows.next().await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))? {
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+            {
                 nodes.push(self.row_to_node(row)?);
             }
 
@@ -616,22 +641,30 @@ impl NodeService {
                 _ => "",
             };
 
-            let limit_clause = filter.limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
+            let limit_clause = filter
+                .limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
 
             let query = format!(
                 "SELECT id, node_type, content, parent_id, root_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes WHERE parent_id = ?{}{}",
                 order_clause, limit_clause
             );
 
-            let mut stmt = conn.prepare(&query).await
-                .map_err(|e| NodeServiceError::query_failed(format!("Failed to prepare query: {}", e)))?;
+            let mut stmt = conn.prepare(&query).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to prepare query: {}", e))
+            })?;
 
-            let mut rows = stmt.query([parent_id.as_str()]).await
-                .map_err(|e| NodeServiceError::query_failed(format!("Failed to execute query: {}", e)))?;
+            let mut rows = stmt.query([parent_id.as_str()]).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to execute query: {}", e))
+            })?;
 
             let mut nodes = Vec::new();
-            while let Some(row) = rows.next().await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))? {
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+            {
                 nodes.push(self.row_to_node(row)?);
             }
 
@@ -647,22 +680,30 @@ impl NodeService {
             _ => "",
         };
 
-        let limit_clause = filter.limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
+        let limit_clause = filter
+            .limit
+            .map(|l| format!(" LIMIT {}", l))
+            .unwrap_or_default();
 
         let query = format!(
             "SELECT id, node_type, content, parent_id, root_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes{}{}",
             order_clause, limit_clause
         );
 
-        let mut stmt = conn.prepare(&query).await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to prepare query: {}", e)))?;
+        let mut stmt = conn.prepare(&query).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to prepare query: {}", e))
+        })?;
 
-        let mut rows = stmt.query(()).await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to execute query: {}", e)))?;
+        let mut rows = stmt.query(()).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to execute query: {}", e))
+        })?;
 
         let mut nodes = Vec::new();
-        while let Some(row) = rows.next().await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+        {
             nodes.push(self.row_to_node(row)?);
         }
 
@@ -678,15 +719,22 @@ impl NodeService {
         let mut stmt = conn
             .prepare("SELECT COUNT(*) FROM nodes WHERE id = ?")
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to prepare query: {}", e))
+            })?;
 
-        let mut rows = stmt
-            .query([id])
+        let mut rows = stmt.query([id]).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to execute query: {}", e))
+        })?;
+
+        if let Some(row) = rows
+            .next()
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to execute query: {}", e)))?;
-
-        if let Some(row) = rows.next().await.map_err(|e| NodeServiceError::query_failed(e.to_string()))? {
-            let count: i64 = row.get(0).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+        {
+            let count: i64 = row
+                .get(0)
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
             Ok(count > 0)
         } else {
             Ok(false)
@@ -695,20 +743,25 @@ impl NodeService {
 
     /// Check if potential_descendant is a descendant of node_id
     /// This prevents circular references when moving nodes
-    async fn is_descendant(&self, node_id: &str, potential_descendant: &str) -> Result<bool, NodeServiceError> {
+    async fn is_descendant(
+        &self,
+        node_id: &str,
+        potential_descendant: &str,
+    ) -> Result<bool, NodeServiceError> {
         // Walk up from potential_descendant to see if we reach node_id
         let mut current_id = potential_descendant.to_string();
 
-        for _ in 0..1000 {  // Prevent infinite loops
+        for _ in 0..1000 {
+            // Prevent infinite loops
             if current_id == node_id {
-                return Ok(true);  // Found node_id, so potential_descendant IS a descendant
+                return Ok(true); // Found node_id, so potential_descendant IS a descendant
             }
 
             if let Some(node) = self.get_node(&current_id).await? {
                 if let Some(parent_id) = node.parent_id {
                     current_id = parent_id;
                 } else {
-                    break;  // Reached root without finding node_id
+                    break; // Reached root without finding node_id
                 }
             } else {
                 break;
@@ -768,9 +821,9 @@ impl NodeService {
         let conn = self.db.connect()?;
 
         // Begin transaction
-        conn.execute("BEGIN TRANSACTION", ())
-            .await
-            .map_err(|e| NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e)))?;
+        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
+            NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e))
+        })?;
 
         let mut ids = Vec::new();
 
@@ -799,20 +852,21 @@ impl NodeService {
 
             if let Err(e) = result {
                 // Rollback on error
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(NodeServiceError::bulk_operation_failed(format!("Failed to insert node {}: {}", node.id, e)));
+                let _rollback = conn.execute("ROLLBACK", ()).await;
+                return Err(NodeServiceError::bulk_operation_failed(format!(
+                    "Failed to insert node {}: {}",
+                    node.id, e
+                )));
             }
 
             ids.push(node.id.clone());
         }
 
         // Commit transaction
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| {
-                let _ = conn.execute("ROLLBACK", ());
-                NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
-            })?;
+        conn.execute("COMMIT", ()).await.map_err(|e| {
+            std::mem::drop(conn.execute("ROLLBACK", ()));
+            NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
+        })?;
 
         Ok(ids)
     }
@@ -848,7 +902,10 @@ impl NodeService {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn bulk_update(&self, updates: Vec<(String, NodeUpdate)>) -> Result<(), NodeServiceError> {
+    pub async fn bulk_update(
+        &self,
+        updates: Vec<(String, NodeUpdate)>,
+    ) -> Result<(), NodeServiceError> {
         if updates.is_empty() {
             return Ok(());
         }
@@ -856,13 +913,15 @@ impl NodeService {
         let conn = self.db.connect()?;
 
         // Begin transaction
-        conn.execute("BEGIN TRANSACTION", ())
-            .await
-            .map_err(|e| NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e)))?;
+        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
+            NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e))
+        })?;
 
         for (id, update) in updates {
             // Apply update similar to update_node but in transaction
-            let existing = self.get_node(&id).await?
+            let existing = self
+                .get_node(&id)
+                .await?
                 .ok_or_else(|| NodeServiceError::node_not_found(&id))?;
 
             let mut updated = existing.clone();
@@ -899,16 +958,16 @@ impl NodeService {
 
             // Validate updated node
             if let Err(e) = self.behaviors.validate_node(&updated) {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(NodeServiceError::bulk_operation_failed(format!("Failed to validate node {}: {}", id, e)));
+                let _rollback = conn.execute("ROLLBACK", ()).await;
+                return Err(NodeServiceError::bulk_operation_failed(format!(
+                    "Failed to validate node {}: {}",
+                    id, e
+                )));
             }
 
             // Execute update in transaction
             let properties_json = serde_json::to_string(&updated.properties)
-                .map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", ());
-                    NodeServiceError::serialization_error(e.to_string())
-                })?;
+                .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
             let result = conn.execute(
                 "UPDATE nodes SET node_type = ?, content = ?, parent_id = ?, root_id = ?, before_sibling_id = ?, modified_at = ?, properties = ?, embedding_vector = ? WHERE id = ?",
@@ -927,18 +986,19 @@ impl NodeService {
             .await;
 
             if let Err(e) = result {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(NodeServiceError::bulk_operation_failed(format!("Failed to update node {}: {}", id, e)));
+                let _rollback = conn.execute("ROLLBACK", ()).await;
+                return Err(NodeServiceError::bulk_operation_failed(format!(
+                    "Failed to update node {}: {}",
+                    id, e
+                )));
             }
         }
 
         // Commit transaction
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| {
-                let _ = conn.execute("ROLLBACK", ());
-                NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
-            })?;
+        conn.execute("COMMIT", ()).await.map_err(|e| {
+            std::mem::drop(conn.execute("ROLLBACK", ()));
+            NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
+        })?;
 
         Ok(())
     }
@@ -979,27 +1039,30 @@ impl NodeService {
         let conn = self.db.connect()?;
 
         // Begin transaction
-        conn.execute("BEGIN TRANSACTION", ())
-            .await
-            .map_err(|e| NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e)))?;
+        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
+            NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e))
+        })?;
 
         for id in &ids {
-            let result = conn.execute("DELETE FROM nodes WHERE id = ?", [id.as_str()]).await;
+            let result = conn
+                .execute("DELETE FROM nodes WHERE id = ?", [id.as_str()])
+                .await;
 
             if let Err(e) = result {
                 // Rollback on error
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(NodeServiceError::bulk_operation_failed(format!("Failed to delete node {}: {}", id, e)));
+                let _rollback = conn.execute("ROLLBACK", ()).await;
+                return Err(NodeServiceError::bulk_operation_failed(format!(
+                    "Failed to delete node {}: {}",
+                    id, e
+                )));
             }
         }
 
         // Commit transaction
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| {
-                let _ = conn.execute("ROLLBACK", ());
-                NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
-            })?;
+        conn.execute("COMMIT", ()).await.map_err(|e| {
+            std::mem::drop(conn.execute("ROLLBACK", ()));
+            NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
+        })?;
 
         Ok(())
     }
@@ -1008,26 +1071,52 @@ impl NodeService {
 
     /// Convert a database row to a Node
     fn row_to_node(&self, row: libsql::Row) -> Result<Node, NodeServiceError> {
-        let id: String = row.get(0).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let node_type: String = row.get(1).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let content: String = row.get(2).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let parent_id: Option<String> = row.get(3).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let root_id: Option<String> = row.get(4).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let before_sibling_id: Option<String> = row.get(5).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let created_at: String = row.get(6).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let modified_at: String = row.get(7).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let properties_json: String = row.get(8).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let embedding_vector: Option<Vec<u8>> = row.get(9).map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let id: String = row
+            .get(0)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let node_type: String = row
+            .get(1)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let content: String = row
+            .get(2)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let parent_id: Option<String> = row
+            .get(3)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let root_id: Option<String> = row
+            .get(4)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let before_sibling_id: Option<String> = row
+            .get(5)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let created_at: String = row
+            .get(6)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let modified_at: String = row
+            .get(7)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let properties_json: String = row
+            .get(8)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let embedding_vector: Option<Vec<u8>> = row
+            .get(9)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        let properties: serde_json::Value = serde_json::from_str(&properties_json)
-            .map_err(|e| NodeServiceError::serialization_error(format!("Failed to parse properties: {}", e)))?;
+        let properties: serde_json::Value =
+            serde_json::from_str(&properties_json).map_err(|e| {
+                NodeServiceError::serialization_error(format!("Failed to parse properties: {}", e))
+            })?;
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
-            .map_err(|e| NodeServiceError::serialization_error(format!("Failed to parse created_at: {}", e)))?
+            .map_err(|e| {
+                NodeServiceError::serialization_error(format!("Failed to parse created_at: {}", e))
+            })?
             .with_timezone(&Utc);
 
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)
-            .map_err(|e| NodeServiceError::serialization_error(format!("Failed to parse modified_at: {}", e)))?
+            .map_err(|e| {
+                NodeServiceError::serialization_error(format!("Failed to parse modified_at: {}", e))
+            })?
             .with_timezone(&Utc);
 
         Ok(Node {
@@ -1121,17 +1210,11 @@ mod tests {
     async fn test_update_node() {
         let (service, _temp) = create_test_service().await;
 
-        let node = Node::new(
-            "text".to_string(),
-            "Original".to_string(),
-            None,
-            json!({}),
-        );
+        let node = Node::new("text".to_string(), "Original".to_string(), None, json!({}));
 
         let id = service.create_node(node).await.unwrap();
 
-        let update = NodeUpdate::new()
-            .with_content("Updated".to_string());
+        let update = NodeUpdate::new().with_content("Updated".to_string());
         service.update_node(&id, update).await.unwrap();
 
         let retrieved = service.get_node(&id).await.unwrap().unwrap();
@@ -1160,12 +1243,7 @@ mod tests {
     async fn test_get_children() {
         let (service, _temp) = create_test_service().await;
 
-        let parent = Node::new(
-            "text".to_string(),
-            "Parent".to_string(),
-            None,
-            json!({}),
-        );
+        let parent = Node::new("text".to_string(), "Parent".to_string(), None, json!({}));
         let parent_id = service.create_node(parent).await.unwrap();
 
         let child1 = Node::new(
@@ -1209,9 +1287,33 @@ mod tests {
     async fn test_query_nodes_by_type() {
         let (service, _temp) = create_test_service().await;
 
-        service.create_node(Node::new("text".to_string(), "Text 1".to_string(), None, json!({}))).await.unwrap();
-        service.create_node(Node::new("task".to_string(), "Task 1".to_string(), None, json!({"status": "pending"}))).await.unwrap();
-        service.create_node(Node::new("text".to_string(), "Text 2".to_string(), None, json!({}))).await.unwrap();
+        service
+            .create_node(Node::new(
+                "text".to_string(),
+                "Text 1".to_string(),
+                None,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_node(Node::new(
+                "task".to_string(),
+                "Task 1".to_string(),
+                None,
+                json!({"status": "pending"}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_node(Node::new(
+                "text".to_string(),
+                "Text 2".to_string(),
+                None,
+                json!({}),
+            ))
+            .await
+            .unwrap();
 
         let filter = NodeFilter::new().with_node_type("text".to_string());
         let results = service.query_nodes(filter).await.unwrap();
@@ -1227,7 +1329,12 @@ mod tests {
         let nodes = vec![
             Node::new("text".to_string(), "Bulk 1".to_string(), None, json!({})),
             Node::new("text".to_string(), "Bulk 2".to_string(), None, json!({})),
-            Node::new("task".to_string(), "Bulk Task".to_string(), None, json!({"status": "pending"})),
+            Node::new(
+                "task".to_string(),
+                "Bulk Task".to_string(),
+                None,
+                json!({"status": "pending"}),
+            ),
         ];
 
         let ids = service.bulk_create(nodes.clone()).await.unwrap();
@@ -1243,15 +1350,31 @@ mod tests {
     async fn test_bulk_update() {
         let (service, _temp) = create_test_service().await;
 
-        let node1 = Node::new("text".to_string(), "Original 1".to_string(), None, json!({}));
-        let node2 = Node::new("text".to_string(), "Original 2".to_string(), None, json!({}));
+        let node1 = Node::new(
+            "text".to_string(),
+            "Original 1".to_string(),
+            None,
+            json!({}),
+        );
+        let node2 = Node::new(
+            "text".to_string(),
+            "Original 2".to_string(),
+            None,
+            json!({}),
+        );
 
         let id1 = service.create_node(node1).await.unwrap();
         let id2 = service.create_node(node2).await.unwrap();
 
         let updates = vec![
-            (id1.clone(), NodeUpdate::new().with_content("Updated 1".to_string())),
-            (id2.clone(), NodeUpdate::new().with_content("Updated 2".to_string())),
+            (
+                id1.clone(),
+                NodeUpdate::new().with_content("Updated 1".to_string()),
+            ),
+            (
+                id2.clone(),
+                NodeUpdate::new().with_content("Updated 2".to_string()),
+            ),
         ];
 
         service.bulk_update(updates).await.unwrap();
@@ -1273,7 +1396,10 @@ mod tests {
         let id1 = service.create_node(node1).await.unwrap();
         let id2 = service.create_node(node2).await.unwrap();
 
-        service.bulk_delete(vec![id1.clone(), id2.clone()]).await.unwrap();
+        service
+            .bulk_delete(vec![id1.clone(), id2.clone()])
+            .await
+            .unwrap();
 
         assert!(service.get_node(&id1).await.unwrap().is_none());
         assert!(service.get_node(&id2).await.unwrap().is_none());
@@ -1286,13 +1412,21 @@ mod tests {
         let parent = Node::new("text".to_string(), "Parent".to_string(), None, json!({}));
         let parent_id = service.create_node(parent).await.unwrap();
 
-        let child = Node::new("text".to_string(), "Child".to_string(), Some(parent_id.clone()), json!({}));
+        let child = Node::new(
+            "text".to_string(),
+            "Child".to_string(),
+            Some(parent_id.clone()),
+            json!({}),
+        );
         let child_id = service.create_node(child).await.unwrap();
 
         // Attempt to move parent under child (circular reference)
         let result = service.move_node(&parent_id, Some(&child_id)).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), NodeServiceError::CircularReference { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            NodeServiceError::CircularReference { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1302,14 +1436,27 @@ mod tests {
         let parent = Node::new("text".to_string(), "Parent".to_string(), None, json!({}));
         let parent_id = service.create_node(parent).await.unwrap();
 
-        let child1 = Node::new("text".to_string(), "Child 1".to_string(), Some(parent_id.clone()), json!({}));
+        let child1 = Node::new(
+            "text".to_string(),
+            "Child 1".to_string(),
+            Some(parent_id.clone()),
+            json!({}),
+        );
         let child1_id = service.create_node(child1).await.unwrap();
 
-        let child2 = Node::new("text".to_string(), "Child 2".to_string(), Some(parent_id.clone()), json!({}));
+        let child2 = Node::new(
+            "text".to_string(),
+            "Child 2".to_string(),
+            Some(parent_id.clone()),
+            json!({}),
+        );
         let child2_id = service.create_node(child2).await.unwrap();
 
         // Reorder child2 to be before child1
-        service.reorder_siblings(&child2_id, Some(&child1_id)).await.unwrap();
+        service
+            .reorder_siblings(&child2_id, Some(&child1_id))
+            .await
+            .unwrap();
 
         let reordered = service.get_node(&child2_id).await.unwrap().unwrap();
         assert_eq!(reordered.before_sibling_id, Some(child1_id));
