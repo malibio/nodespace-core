@@ -604,24 +604,33 @@ pub enum FilterOperator {
 ///
 /// Enables filtering nodes based on values in their `properties` JSON field.
 ///
+/// # JSON Path Format
+///
+/// Paths must use JSONPath syntax starting with `$`:
+/// - `"$.status"` - Top-level property
+/// - `"$.metadata.priority"` - Nested property
+/// - `"$"` - Root (entire properties object)
+///
+/// Invalid paths will be rejected by the `new()` constructor.
+///
 /// # Examples
 ///
 /// ```rust
 /// # use nodespace_core::models::{PropertyFilter, FilterOperator};
 /// # use serde_json::json;
 /// // Filter for tasks with status = "done"
-/// let filter = PropertyFilter {
-///     path: "$.status".to_string(),
-///     operator: FilterOperator::Equals,
-///     value: json!("done"),
-/// };
+/// let filter = PropertyFilter::new(
+///     "$.status".to_string(),
+///     FilterOperator::Equals,
+///     json!("done"),
+/// ).unwrap();
 ///
 /// // Filter for tasks with priority >= "high"
-/// let filter = PropertyFilter {
-///     path: "$.priority".to_string(),
-///     operator: FilterOperator::GreaterThanOrEqual,
-///     value: json!("high"),
-/// };
+/// let filter = PropertyFilter::new(
+///     "$.priority".to_string(),
+///     FilterOperator::GreaterThanOrEqual,
+///     json!("high"),
+/// ).unwrap();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertyFilter {
@@ -633,6 +642,79 @@ pub struct PropertyFilter {
 
     /// Value to compare against
     pub value: serde_json::Value,
+}
+
+impl PropertyFilter {
+    /// Create a new PropertyFilter with path validation
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - JSONPath string (must start with `$`)
+    /// * `operator` - Comparison operator to use
+    /// * `value` - Value to compare against
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError::InvalidProperties` if:
+    /// - Path doesn't start with `$`
+    /// - Path contains invalid characters (e.g., `..`)
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use nodespace_core::models::{PropertyFilter, FilterOperator};
+    /// # use serde_json::json;
+    /// // Valid path
+    /// let filter = PropertyFilter::new(
+    ///     "$.status".to_string(),
+    ///     FilterOperator::Equals,
+    ///     json!("done"),
+    /// );
+    /// assert!(filter.is_ok());
+    ///
+    /// // Invalid path (missing $ prefix)
+    /// let filter = PropertyFilter::new(
+    ///     "status".to_string(),
+    ///     FilterOperator::Equals,
+    ///     json!("done"),
+    /// );
+    /// assert!(filter.is_err());
+    /// ```
+    pub fn new(
+        path: String,
+        operator: FilterOperator,
+        value: serde_json::Value,
+    ) -> Result<Self, ValidationError> {
+        // Validate path starts with "$"
+        if !path.starts_with('$') {
+            return Err(ValidationError::InvalidProperties(format!(
+                "JSON path must start with '$': {}",
+                path
+            )));
+        }
+
+        // Validate no consecutive dots (invalid JSONPath)
+        if path.contains("..") {
+            return Err(ValidationError::InvalidProperties(format!(
+                "JSON path contains invalid consecutive dots: {}",
+                path
+            )));
+        }
+
+        // Validate path doesn't end with a dot (incomplete path)
+        if path.len() > 1 && path.ends_with('.') {
+            return Err(ValidationError::InvalidProperties(format!(
+                "JSON path cannot end with '.': {}",
+                path
+            )));
+        }
+
+        Ok(Self {
+            path,
+            operator,
+            value,
+        })
+    }
 }
 
 /// Sort order specification for query results
@@ -1136,17 +1218,19 @@ mod tests {
 
     #[test]
     fn test_node_filter_property_filters() {
-        let filter1 = PropertyFilter {
-            path: "$.status".to_string(),
-            operator: FilterOperator::Equals,
-            value: json!("done"),
-        };
+        let filter1 = PropertyFilter::new(
+            "$.status".to_string(),
+            FilterOperator::Equals,
+            json!("done"),
+        )
+        .unwrap();
 
-        let filter2 = PropertyFilter {
-            path: "$.priority".to_string(),
-            operator: FilterOperator::GreaterThan,
-            value: json!("medium"),
-        };
+        let filter2 = PropertyFilter::new(
+            "$.priority".to_string(),
+            FilterOperator::GreaterThan,
+            json!("medium"),
+        )
+        .unwrap();
 
         let node_filter = NodeFilter::new()
             .with_property_filter(filter1.clone())
@@ -1175,11 +1259,12 @@ mod tests {
 
     #[test]
     fn test_property_filter_serialization() {
-        let filter = PropertyFilter {
-            path: "$.metadata.tags".to_string(),
-            operator: FilterOperator::Contains,
-            value: json!("important"),
-        };
+        let filter = PropertyFilter::new(
+            "$.metadata.tags".to_string(),
+            FilterOperator::Contains,
+            json!("important"),
+        )
+        .unwrap();
 
         let json = serde_json::to_string(&filter).unwrap();
         let deserialized: PropertyFilter = serde_json::from_str(&json).unwrap();
@@ -1187,6 +1272,73 @@ mod tests {
         assert_eq!(filter.path, deserialized.path);
         assert_eq!(filter.operator, deserialized.operator);
         assert_eq!(filter.value, deserialized.value);
+    }
+
+    #[test]
+    fn test_property_filter_valid_paths() {
+        // Valid root path
+        let filter = PropertyFilter::new("$".to_string(), FilterOperator::Equals, json!({}));
+        assert!(filter.is_ok());
+
+        // Valid simple path
+        let filter = PropertyFilter::new(
+            "$.status".to_string(),
+            FilterOperator::Equals,
+            json!("done"),
+        );
+        assert!(filter.is_ok());
+
+        // Valid nested path
+        let filter = PropertyFilter::new(
+            "$.metadata.priority".to_string(),
+            FilterOperator::Equals,
+            json!("high"),
+        );
+        assert!(filter.is_ok());
+
+        // Valid deeply nested path
+        let filter = PropertyFilter::new(
+            "$.a.b.c.d".to_string(),
+            FilterOperator::Equals,
+            json!("value"),
+        );
+        assert!(filter.is_ok());
+    }
+
+    #[test]
+    fn test_property_filter_invalid_paths() {
+        // Missing $ prefix
+        let filter = PropertyFilter::new(
+            "status".to_string(),
+            FilterOperator::Equals,
+            json!("done"),
+        );
+        assert!(filter.is_err());
+        assert!(matches!(filter, Err(ValidationError::InvalidProperties(_))));
+
+        // Consecutive dots
+        let filter = PropertyFilter::new(
+            "$.status..priority".to_string(),
+            FilterOperator::Equals,
+            json!("done"),
+        );
+        assert!(filter.is_err());
+
+        // Trailing dot
+        let filter = PropertyFilter::new(
+            "$.status.".to_string(),
+            FilterOperator::Equals,
+            json!("done"),
+        );
+        assert!(filter.is_err());
+
+        // Empty path after $
+        let filter = PropertyFilter::new(
+            "$.".to_string(),
+            FilterOperator::Equals,
+            json!("done"),
+        );
+        assert!(filter.is_err());
     }
 
     #[test]
