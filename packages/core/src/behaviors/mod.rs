@@ -11,8 +11,19 @@
 
 use crate::models::{Node, ValidationError as NodeValidationError};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
+
+/// Lazy-initialized regex for date validation (compiled once)
+static DATE_PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+
+/// Returns the compiled date validation regex, initializing it on first use
+fn get_date_pattern() -> &'static regex::Regex {
+    DATE_PATTERN.get_or_init(|| {
+        regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$")
+            .expect("Invalid date regex pattern (this is a bug)")
+    })
+}
 
 /// Errors that can occur during content processing
 #[derive(Error, Debug, Clone, PartialEq)]
@@ -354,9 +365,8 @@ impl NodeBehavior for DateNodeBehavior {
     }
 
     fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Validate date ID format (YYYY-MM-DD)
-        let date_pattern = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
-        if !date_pattern.is_match(&node.id) {
+        // Validate date ID format (YYYY-MM-DD) using lazy-compiled regex
+        if !get_date_pattern().is_match(&node.id) {
             return Err(NodeValidationError::InvalidId(
                 "Date nodes must have ID format 'YYYY-MM-DD'".to_string(),
             ));
