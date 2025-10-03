@@ -265,7 +265,7 @@
               <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
                 <p style="margin: 0 0 0.5rem 0; font-weight: 500;">CSS Mask Implementation</p>
                 <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
-                  <li>16x16px filled square with primary color (#A8C7FA)</li>
+                  <li>16x16px filled square with primary color (hsl(200 40% 45% / 200 40% 55%))</li>
                   <li>0.5px border-radius for subtle rounded corners</li>
                   <li>14x14px "AI" text with punch-hole effect (1px spacing on each side)</li>
                   <li>Background color shows through AI letters (like task checkmarks)</li>
@@ -374,7 +374,7 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  background: rgb(69, 130, 161); /* Blue-gray matching design system */
+  background: hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 /* Quotation mark overlay - light theme
@@ -410,7 +410,7 @@
                 <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
                   <li>16x16px filled circle (identical to CodeNode base)</li>
                   <li>2px offset positioning in 20x20px container</li>
-                  <li>Background color: rgb(69, 130, 161) - blue-gray from design system</li>
+                  <li>Background color: hsl(var(--node-text)) - blue-gray from design system (200 40% 45% / 200 40% 55%)</li>
                   <li>Quotation mark: 11px font, 700 weight, centered</li>
                   <li>Text color: Background color (#fcfcfc light / #252523 dark)</li>
                   <li>Ring effect: 3px border ring for parent nodes (matches CodeNode)</li>
@@ -448,8 +448,8 @@
                   </tr>
                   <tr>
                     <td style="padding: 0.5rem;">Background Color</td>
-                    <td style="padding: 0.5rem;"><code>rgb(69, 130, 161)</code></td>
-                    <td style="padding: 0.5rem;">Blue-gray matching design system</td>
+                    <td style="padding: 0.5rem;"><code>hsl(var(--node-text))</code></td>
+                    <td style="padding: 0.5rem;">Blue-gray matching design system (200 40% 45% / 200 40% 55%)</td>
                   </tr>
                 </tbody>
               </table>

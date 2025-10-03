@@ -19,7 +19,7 @@
   position: absolute;
   top: 3px;
   left: 3px;
-  background: rgb(69, 130, 161); /* Matches live Svelte implementation */
+  background: hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 /* Parent ring effect for nodes with children */
@@ -27,7 +27,7 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 3px solid rgba(69, 130, 161, 0.5); /* Matches live Svelte implementation */
+  border: 3px solid hsl(var(--node-text) / 0.5); /* Uses design system primary color */
   position: absolute;
   top: 0;
   left: 0;
@@ -47,16 +47,16 @@
 
 .task-circle-pending {
   background: transparent;
-  border: 1px solid rgb(69, 130, 161); /* Matches live Svelte implementation */
+  border: 1px solid hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 .task-circle-in-progress {
-  background: linear-gradient(90deg, rgb(69, 130, 161) 50%, transparent 50%);
-  border: 1px solid rgb(69, 130, 161); /* Matches live Svelte implementation */
+  background: linear-gradient(90deg, hsl(var(--node-text)) 50%, transparent 50%);
+  border: 1px solid hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 .task-circle-completed {
-  background: rgb(69, 130, 161); /* Matches live Svelte implementation */
+  background: hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 /* Checkmark for completed tasks */
@@ -79,21 +79,21 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 2px solid rgba(69, 130, 161, 0.5); /* Matches live Svelte implementation */
+  border: 2px solid hsl(var(--node-text) / 0.5); /* Uses design system primary color */
   position: absolute;
   top: 0;
   left: 0;
   box-sizing: border-box;
 }
 
-/* AI Chat Icons - Chat bubble shape */
+/* AI Chat Icons - Chat bubble shape using SVG in background-image (consistent with other icon overlays) */
 .ai-square {
   width: 16px;
   height: 16px;
   position: absolute;
   top: 2px;
   left: 2px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 0 C3.582 0 0 3.582 0 8 C0 12.418 3.582 16 8 16 L15.5 16 C15.776 16 16 15.776 16 15.5 L16 8 C16 3.582 12.418 0 8 0 Z' fill='rgb(69, 130, 161)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 0 C3.582 0 0 3.582 0 8 C0 12.418 3.582 16 8 16 L15.5 16 C15.776 16 16 15.776 16 15.5 L16 8 C16 3.582 12.418 0 8 0 Z' fill='hsl(200 40%25 45%25)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 16px 16px;
@@ -122,7 +122,7 @@
   top: 0;
   left: 0;
   box-sizing: border-box;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 0 C4.477 0 0 4.477 0 10 C0 15.523 4.477 20 10 20 L19.375 20 C19.72 20 20 19.72 20 19.375 L20 10 C20 4.477 15.523 0 10 0 Z' fill='rgba(69, 130, 161, 0.5)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 0 C4.477 0 0 4.477 0 10 C0 15.523 4.477 20 10 20 L19.375 20 C19.72 20 20 19.72 20 19.375 L20 10 C20 4.477 15.523 0 10 0 Z' fill='hsl(200 40%25 45%25 / 0.5)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 20px 20px;
@@ -136,7 +136,7 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  background: rgb(69, 130, 161); /* Matches live Svelte implementation */
+  background: hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 /* Code braces overlay - light theme
@@ -164,7 +164,7 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  background: rgb(69, 130, 161); /* Blue-gray matching design system */
+  background: hsl(var(--node-text)); /* Uses design system primary color */
 }
 
 /* Quotation mark overlay - light theme
@@ -202,6 +202,15 @@
   background-image: url("data:image/svg+xml,%3Csvg width='10' height='8' viewBox='0 0 10 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 4L3.5 6.5L9 1' stroke='%231f1f1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
+/* Dark theme - AI icon base shape */
+.dark .ai-square {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 0 C3.582 0 0 3.582 0 8 C0 12.418 3.582 16 8 16 L15.5 16 C15.776 16 16 15.776 16 15.5 L16 8 C16 3.582 12.418 0 8 0 Z' fill='hsl(200 40%25 55%25)'/%3E%3C/svg%3E");
+}
+
+.dark .ai-ring {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 0 C4.477 0 0 4.477 0 10 C0 15.523 4.477 20 10 20 L19.375 20 C19.72 20 20 19.72 20 19.375 L20 10 C20 4.477 15.523 0 10 0 Z' fill='hsl(200 40%25 55%25 / 0.5)'/%3E%3C/svg%3E");
+}
+
 .dark .ai-square::after {
   background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6 0 L7.5 4.5 L12 6 L7.5 7.5 L6 12 L4.5 7.5 L0 6 L4.5 4.5 Z' fill='hsl(204 0%25 12%25)'/%3E%3C/svg%3E");
 }
@@ -220,3 +229,32 @@
 .ns-icon--sm { width: 16px; height: 16px; }
 .ns-icon--lg { width: 24px; height: 24px; }
 .ns-icon--xl { width: 32px; height: 32px; }
+
+/* Scale AI icon to match container size */
+.ns-icon--lg .ai-square {
+  width: 24px;
+  height: 24px;
+  top: 0;
+  left: 0;
+  background-size: 24px 24px;
+}
+
+.ns-icon--lg .ai-square::after {
+  width: 18px;
+  height: 18px;
+  background-size: 18px 18px;
+}
+
+.ns-icon--xl .ai-square {
+  width: 28px;
+  height: 28px;
+  top: 2px;
+  left: 2px;
+  background-size: 28px 28px;
+}
+
+.ns-icon--xl .ai-square::after {
+  width: 20px;
+  height: 20px;
+  background-size: 20px 20px;
+}

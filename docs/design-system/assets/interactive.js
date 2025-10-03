@@ -12,6 +12,7 @@ let currentTheme = 'system';
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
   await loadDesignTokens();
+  initializeNavigation();
   initializeTheme();
   initializeInteractiveFeatures();
   initializeKeyboardShortcuts();
@@ -146,6 +147,41 @@ async function loadDesignTokens() {
       }
     }
   };
+}
+
+// Initialize navigation
+function initializeNavigation() {
+  const navContainer = document.querySelector('nav.style-guide-nav');
+  if (!navContainer) return;
+
+  // Get current page filename
+  const currentPage = window.location.pathname.split('/').pop() || 'index.html';
+
+  // Navigation links
+  const navLinks = [
+    { href: 'index.html', label: 'Overview' },
+    { href: 'foundations.html', label: 'Foundations' },
+    { href: 'components.html', label: 'Components' },
+    { href: 'patterns/index.html', label: 'Pattern Library' },
+    { href: 'nodeviewer.html', label: 'NodeViewer' },
+    { href: 'ai-chat-node-viewer.html', label: 'AI Chat Node Viewer' }
+  ];
+
+  // Build navigation HTML
+  const navHTML = navLinks.map(link => {
+    const isActive = currentPage === link.href ||
+                     (link.href === 'patterns/index.html' && currentPage.includes('patterns'));
+    const activeClass = isActive ? ' class="active"' : '';
+    return `<a href="${link.href}"${activeClass}>${link.label}</a>`;
+  }).join('\n      ');
+
+  // Insert navigation links before theme toggle
+  const themeToggle = navContainer.querySelector('.theme-toggle');
+  if (themeToggle) {
+    themeToggle.insertAdjacentHTML('beforebegin', navHTML + '\n      ');
+  } else {
+    navContainer.innerHTML = navHTML;
+  }
 }
 
 // Initialize theme system
