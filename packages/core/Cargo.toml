@@ -1,0 +1,26 @@
+[package]
+name = "nodespace-core"
+version = "0.1.0"
+description = "NodeSpace core business logic and database layer"
+authors = ["NodeSpace Team"]
+edition = "2021"
+
+[dependencies]
+# Database - Using libsql for Turso embedded database
+libsql = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
