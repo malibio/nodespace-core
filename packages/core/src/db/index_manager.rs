@@ -71,6 +71,48 @@ impl IndexManager {
         Self { db }
     }
 
+    /// Validate identifier for use in SQL statements
+    ///
+    /// Ensures identifiers contain only alphanumeric characters and underscores,
+    /// and start with a letter or underscore. This prevents SQL injection attacks.
+    ///
+    /// # Arguments
+    ///
+    /// * `identifier` - The identifier to validate
+    /// * `name` - Description of the identifier (for error messages)
+    ///
+    /// # Errors
+    ///
+    /// Returns `DatabaseError` if the identifier is invalid
+    fn validate_identifier(identifier: &str, name: &str) -> Result<(), DatabaseError> {
+        // Must not be empty
+        if identifier.is_empty() {
+            return Err(DatabaseError::sql_execution(format!(
+                "Invalid {}: identifier cannot be empty",
+                name
+            )));
+        }
+
+        // Must start with letter or underscore
+        let first_char = identifier.chars().next().unwrap();
+        if !first_char.is_alphabetic() && first_char != '_' {
+            return Err(DatabaseError::sql_execution(format!(
+                "Invalid {}: '{}' must start with a letter or underscore",
+                name, identifier
+            )));
+        }
+
+        // All characters must be alphanumeric or underscore
+        if !identifier.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(DatabaseError::sql_execution(format!(
+                "Invalid {}: '{}' contains invalid characters (only alphanumeric and underscore allowed)",
+                name, identifier
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Create a JSON path index on a specific property field
     ///
     /// Creates an index using SQLite's `json_extract()` function to index
@@ -116,6 +158,10 @@ impl IndexManager {
         node_type: &str,
         field_name: &str,
     ) -> Result<(), DatabaseError> {
+        // Validate inputs to prevent SQL injection
+        Self::validate_identifier(node_type, "node_type")?;
+        Self::validate_identifier(field_name, "field_name")?;
+
         let index_name = format!("idx_json_{}_{}", node_type, field_name);
         let json_path = format!("$.{}", field_name);
 
@@ -125,10 +171,7 @@ impl IndexManager {
             index_name, json_path, node_type
         );
 
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| DatabaseError::initialization_failed(e.to_string()))?;
+        let conn = self.db.connect().map_err(DatabaseError::LibsqlError)?;
 
         conn.execute(&sql, ()).await.map_err(|e| {
             DatabaseError::sql_execution(format!(
@@ -172,21 +215,19 @@ impl IndexManager {
         node_type: &str,
         field_name: &str,
     ) -> Result<bool, DatabaseError> {
+        // Validate inputs to prevent SQL injection
+        Self::validate_identifier(node_type, "node_type")?;
+        Self::validate_identifier(field_name, "field_name")?;
+
         let index_name = format!("idx_json_{}_{}", node_type, field_name);
 
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| DatabaseError::initialization_failed(e.to_string()))?;
+        let conn = self.db.connect().map_err(DatabaseError::LibsqlError)?;
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
             .await
             .map_err(|e| {
-                DatabaseError::sql_execution(format!(
-                    "Failed to check index existence for '{}': {}",
-                    index_name, e
-                ))
+                DatabaseError::sql_execution(format!("Index existence check failed: {}", e))
             })?;
 
         let mut rows = stmt.query([index_name]).await.map_err(|e| {
@@ -228,12 +269,12 @@ impl IndexManager {
     /// # }
     /// ```
     pub async fn list_indexes(&self, node_type: &str) -> Result<Vec<String>, DatabaseError> {
+        // Validate input to prevent SQL injection
+        Self::validate_identifier(node_type, "node_type")?;
+
         let pattern = format!("idx_json_{}_", node_type);
 
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| DatabaseError::initialization_failed(e.to_string()))?;
+        let conn = self.db.connect().map_err(DatabaseError::LibsqlError)?;
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE ?")
@@ -367,5 +408,92 @@ mod tests {
         assert_eq!(person_indexes.len(), 1);
         assert!(task_indexes.contains(&"status".to_string()));
         assert!(person_indexes.contains(&"email".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_sql_injection_prevention_create_index() {
+        let (_temp_dir, db) = setup_test_db().await;
+        let index_manager = IndexManager::new(db);
+
+        // Test SQL injection in node_type
+        assert!(index_manager
+            .create_json_path_index("task'; DROP TABLE nodes; --", "status")
+            .await
+            .is_err());
+
+        // Test SQL injection in field_name
+        assert!(index_manager
+            .create_json_path_index("task", "status'); DROP TABLE nodes; --")
+            .await
+            .is_err());
+
+        // Test WHERE clause injection
+        assert!(index_manager
+            .create_json_path_index("task' OR '1'='1", "status")
+            .await
+            .is_err());
+
+        // Test empty identifiers
+        assert!(index_manager
+            .create_json_path_index("", "status")
+            .await
+            .is_err());
+        assert!(index_manager
+            .create_json_path_index("task", "")
+            .await
+            .is_err());
+
+        // Test invalid characters
+        assert!(index_manager
+            .create_json_path_index("task-name", "status")
+            .await
+            .is_err());
+        assert!(index_manager
+            .create_json_path_index("task", "field.name")
+            .await
+            .is_err());
+
+        // Verify valid identifiers still work
+        assert!(index_manager
+            .create_json_path_index("task", "status")
+            .await
+            .is_ok());
+        assert!(index_manager
+            .create_json_path_index("task_type", "field_name")
+            .await
+            .is_ok());
+        assert!(index_manager
+            .create_json_path_index("_private", "_internal")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sql_injection_prevention_index_exists() {
+        let (_temp_dir, db) = setup_test_db().await;
+        let index_manager = IndexManager::new(db);
+
+        // Test SQL injection attempts
+        assert!(index_manager
+            .index_exists("task'; --", "status")
+            .await
+            .is_err());
+        assert!(index_manager
+            .index_exists("task", "status'; --")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sql_injection_prevention_list_indexes() {
+        let (_temp_dir, db) = setup_test_db().await;
+        let index_manager = IndexManager::new(db);
+
+        // Test SQL injection attempts
+        assert!(index_manager.list_indexes("task'; --").await.is_err());
+        assert!(index_manager.list_indexes("task' OR '1'='1").await.is_err());
+
+        // Verify valid identifier works
+        assert!(index_manager.list_indexes("task").await.is_ok());
     }
 }

@@ -16,6 +16,7 @@
 
 use crate::db::error::DatabaseError;
 use libsql::{Builder, Database};
+use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -291,6 +292,32 @@ impl DatabaseService {
             ))
         })?;
 
+        // Index on before_sibling_id (sibling ordering)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_before_sibling ON nodes(before_sibling_id)",
+            (),
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_nodes_before_sibling': {}",
+                e
+            ))
+        })?;
+
+        // Index on created_at (temporal queries)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at)",
+            (),
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!(
+                "Failed to create index 'idx_nodes_created': {}",
+                e
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -309,17 +336,20 @@ impl DatabaseService {
     /// This is idempotent - uses INSERT OR IGNORE to safely handle repeated initialization.
     async fn seed_core_schemas(&self, conn: &libsql::Connection) -> Result<(), DatabaseError> {
         // Task schema
+        let task_schema = json!({
+            "is_core": true,
+            "fields": [
+                {"name": "status", "type": "text", "indexed": true},
+                {"name": "assignee", "type": "person", "indexed": true},
+                {"name": "due_date", "type": "date", "indexed": true},
+                {"name": "description", "type": "text", "indexed": false}
+            ]
+        });
+
         conn.execute(
-            r#"INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
-               VALUES (
-                   'task',
-                   'schema',
-                   'Task',
-                   json('{"is_core": true, "fields": [{"name": "status", "type": "text", "indexed": true}, {"name": "assignee", "type": "person", "indexed": true}, {"name": "due_date", "type": "date", "indexed": true}, {"name": "description", "type": "text", "indexed": false}]}'),
-                   CURRENT_TIMESTAMP,
-                   CURRENT_TIMESTAMP
-               )"#,
-            (),
+            "INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
+             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("task", "schema", "Task", task_schema.to_string()),
         )
         .await
         .map_err(|e| {
@@ -327,17 +357,18 @@ impl DatabaseService {
         })?;
 
         // Person schema
+        let person_schema = json!({
+            "is_core": true,
+            "fields": [
+                {"name": "name", "type": "text", "indexed": true},
+                {"name": "email", "type": "text", "indexed": true}
+            ]
+        });
+
         conn.execute(
-            r#"INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
-               VALUES (
-                   'person',
-                   'schema',
-                   'Person',
-                   json('{"is_core": true, "fields": [{"name": "name", "type": "text", "indexed": true}, {"name": "email", "type": "text", "indexed": true}]}'),
-                   CURRENT_TIMESTAMP,
-                   CURRENT_TIMESTAMP
-               )"#,
-            (),
+            "INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
+             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("person", "schema", "Person", person_schema.to_string()),
         )
         .await
         .map_err(|e| {
@@ -345,17 +376,17 @@ impl DatabaseService {
         })?;
 
         // Date schema
+        let date_schema = json!({
+            "is_core": true,
+            "fields": [
+                {"name": "date", "type": "date", "indexed": true}
+            ]
+        });
+
         conn.execute(
-            r#"INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
-               VALUES (
-                   'date',
-                   'schema',
-                   'Date',
-                   json('{"is_core": true, "fields": [{"name": "date", "type": "date", "indexed": true}]}'),
-                   CURRENT_TIMESTAMP,
-                   CURRENT_TIMESTAMP
-               )"#,
-            (),
+            "INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
+             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("date", "schema", "Date", date_schema.to_string()),
         )
         .await
         .map_err(|e| {
@@ -363,17 +394,18 @@ impl DatabaseService {
         })?;
 
         // Project schema
+        let project_schema = json!({
+            "is_core": true,
+            "fields": [
+                {"name": "name", "type": "text", "indexed": true},
+                {"name": "status", "type": "text", "indexed": true}
+            ]
+        });
+
         conn.execute(
-            r#"INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
-               VALUES (
-                   'project',
-                   'schema',
-                   'Project',
-                   json('{"is_core": true, "fields": [{"name": "name", "type": "text", "indexed": true}, {"name": "status", "type": "text", "indexed": true}]}'),
-                   CURRENT_TIMESTAMP,
-                   CURRENT_TIMESTAMP
-               )"#,
-            (),
+            "INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
+             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("project", "schema", "Project", project_schema.to_string()),
         )
         .await
         .map_err(|e| {
@@ -381,17 +413,15 @@ impl DatabaseService {
         })?;
 
         // Text schema (minimal - just content)
+        let text_schema = json!({
+            "is_core": true,
+            "fields": []
+        });
+
         conn.execute(
-            r#"INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
-               VALUES (
-                   'text',
-                   'schema',
-                   'Text',
-                   json('{"is_core": true, "fields": []}'),
-                   CURRENT_TIMESTAMP,
-                   CURRENT_TIMESTAMP
-               )"#,
-            (),
+            "INSERT OR IGNORE INTO nodes (id, node_type, content, properties, created_at, modified_at)
+             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("text", "schema", "Text", text_schema.to_string()),
         )
         .await
         .map_err(|e| {
@@ -642,11 +672,24 @@ mod tests {
         let fields = json["fields"].as_array().unwrap();
         assert!(fields.len() > 0);
 
-        // Verify first field has required properties
-        let first_field = &fields[0];
-        assert!(first_field["name"].is_string());
-        assert!(first_field["type"].is_string());
-        assert!(first_field["indexed"].is_boolean());
+        // Verify ALL fields have required properties (not just the first)
+        for field in fields {
+            assert!(
+                field["name"].is_string(),
+                "Field missing 'name': {:?}",
+                field
+            );
+            assert!(
+                field["type"].is_string(),
+                "Field missing 'type': {:?}",
+                field
+            );
+            assert!(
+                field["indexed"].is_boolean(),
+                "Field missing 'indexed': {:?}",
+                field
+            );
+        }
     }
 
     #[tokio::test]
