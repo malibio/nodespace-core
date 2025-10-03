@@ -26,14 +26,61 @@ fn get_date_pattern() -> &'static regex::Regex {
 }
 
 /// Errors that can occur during content processing
+///
+/// These errors are returned by the `NodeBehavior::process_content()` method
+/// when content transformation or validation fails.
+///
+/// # Variant Usage Guidelines
+///
+/// - **`ProcessingFailed`**: Use for general processing failures that don't fit
+///   the other categories. Examples:
+///   - External service unavailable (e.g., markdown parser service down)
+///   - Resource exhaustion (e.g., content too large to process)
+///   - Unexpected processing state or configuration errors
+///
+/// - **`InvalidFormat`**: Use when the input content format is malformed or
+///   cannot be parsed. Examples:
+///   - Malformed markdown syntax that cannot be parsed
+///   - Invalid JSON in content that should be JSON
+///   - Unrecognized or unsupported content encoding
+///
+/// - **`TransformationError`**: Use when the transformation logic itself fails
+///   after successfully parsing the input. Examples:
+///   - Sanitization failed to remove unsafe content
+///   - Content normalization produced invalid output
+///   - Conversion between formats failed (e.g., markdown → HTML)
+///
+/// # Examples
+///
+/// ```rust
+/// use nodespace_core::behaviors::ProcessingError;
+///
+/// // Invalid format - malformed input
+/// let err = ProcessingError::InvalidFormat(
+///     "Markdown contains unclosed code fence".to_string()
+/// );
+///
+/// // Transformation error - logic failure
+/// let err = ProcessingError::TransformationError(
+///     "Failed to sanitize HTML: invalid entity".to_string()
+/// );
+///
+/// // General processing failure
+/// let err = ProcessingError::ProcessingFailed(
+///     "Content exceeds maximum size limit".to_string()
+/// );
+/// ```
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum ProcessingError {
+    /// General processing failure (service unavailable, resource exhaustion, etc.)
     #[error("Content processing failed: {0}")]
     ProcessingFailed(String),
 
+    /// Input content format is malformed or cannot be parsed
     #[error("Invalid content format: {0}")]
     InvalidFormat(String),
 
+    /// Content transformation logic failed after successful parsing
     #[error("Content transformation error: {0}")]
     TransformationError(String),
 }
