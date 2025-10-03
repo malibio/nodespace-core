@@ -2,45 +2,49 @@
 
 ## Overview
 
-NodeSpace uses a **hybrid database schema** approach with Turso (SQLite-compatible) that combines:
-- **Universal core table**: All nodes stored in single table for flexibility
-- **Complementary tables**: Indexed fields for performance-critical queries
-- **Dynamic tables**: Runtime-created tables for user-defined entities
+NodeSpace uses a **Pure JSON schema** approach with Turso (SQLite-compatible) that provides:
+- **Universal nodes table**: ALL entities stored in single table (no complementary tables)
+- **Schema-as-node pattern**: Schemas stored as nodes with `node_type = "schema"`
+- **JSON path indexes**: Dynamic index creation based on query frequency (rule-based)
+- **Zero migration risk**: No ALTER TABLE required on user machines (critical for desktop apps)
 
 ## Core Schema Architecture
 
-### Universal Node Table
+### Universal Node Table (Pure JSON Schema)
 
 ```sql
 CREATE TABLE nodes (
-    id TEXT PRIMARY KEY,                    -- UUID from frontend (or date:YYYY-MM-DD)
-    node_type TEXT NOT NULL,                -- "text", "task", "person", etc.
+    id TEXT PRIMARY KEY,                    -- UUID from frontend (or YYYY-MM-DD for date nodes)
+    node_type TEXT NOT NULL,                -- "task", "invoice", "schema", "date", etc.
     content TEXT NOT NULL,                  -- Primary content/text
-    parent_id TEXT,                         -- Hierarchy parent (nullable for roots)
-    root_id TEXT NOT NULL,                  -- Root node reference
+    parent_id TEXT,                         -- Where node was created (creation context)
+    root_id TEXT,                           -- Root document for bulk fetch (NULL = is root)
     before_sibling_id TEXT,                 -- Single-pointer sibling ordering
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    metadata JSON,                          -- Type-specific properties
-    embedding_vector BLOB,                  -- Vector embeddings (serialized)
+    properties JSON NOT NULL DEFAULT '{}',  -- ALL entity-specific fields (no complementary tables)
+    embedding_vector BLOB,                  -- F32_BLOB vector embeddings
 
-    FOREIGN KEY (parent_id) REFERENCES nodes(id),
+    FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
     FOREIGN KEY (root_id) REFERENCES nodes(id)
 );
 
--- Indexes for performance
+-- Core indexes (no ALTER TABLE ever required)
 CREATE INDEX idx_nodes_type ON nodes(node_type);
 CREATE INDEX idx_nodes_parent ON nodes(parent_id);
 CREATE INDEX idx_nodes_root ON nodes(root_id);
 CREATE INDEX idx_nodes_modified ON nodes(modified_at);
-CREATE INDEX idx_nodes_content_search ON nodes(content); -- For text search
+CREATE INDEX idx_nodes_content ON nodes(content); -- For text search
 ```
 
 **Design Rationale:**
-- **Single table**: All nodes share same structure, enabling polymorphic queries
-- **JSON metadata**: Flexible storage for type-specific properties
-- **BLOB embeddings**: Vector search capability with manual similarity computation
-- **Hierarchy support**: Parent-child relationships with root tracking
+- **Pure JSON approach**: ALL entity data in properties field (no complementary tables)
+- **Zero migration risk**: No ALTER TABLE on user machines (critical for desktop: 10,000+ installations)
+- **Schema-as-node**: Schemas stored as nodes (`node_type = "schema"`, `id = type_name`)
+- **Hierarchy semantics**:
+  - `parent_id`: "Where was this created?" (creation context, not ownership)
+  - `root_id`: "What document does this belong to?" (for bulk fetch, NULL = is root/page)
+- **Dynamic indexes**: JSON path indexes created based on query frequency (rule-based)
 
 ### Mentions Relation Table
 
@@ -72,262 +76,407 @@ JOIN node_mentions m ON n.id = m.mentions_node_id
 WHERE m.node_id = 'source-node-id';
 ```
 
-## Complementary Tables (Performance Layer)
+## Schema-as-Node Pattern
 
-### Tasks Table
+### Core Built-In Schemas
 
-```sql
-CREATE TABLE tasks (
-    node_id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,                   -- Extensible: "pending", "in-progress", "completed", etc.
-    due_date DATE,                          -- ISO date format
-    priority INTEGER,                       -- 1=low, 2=medium, 3=high, 4=urgent
+NodeSpace includes pre-seeded core schemas stored as nodes. **Convention**: Schema nodes have `id = type_name` and `node_type = "schema"`.
 
-    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
-);
-
--- Indexes for common queries
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_due_date ON tasks(due_date);
-CREATE INDEX idx_tasks_priority ON tasks(priority);
-CREATE INDEX idx_tasks_status_due ON tasks(status, due_date); -- Compound for overdue tasks
-```
-
-**Query Examples:**
-```sql
--- Find overdue incomplete tasks
-SELECT n.content, t.due_date, t.priority
-FROM nodes n
-JOIN tasks t ON n.id = t.node_id
-WHERE t.status != 'completed' AND t.due_date < DATE('now');
-
--- High priority tasks due this week
-SELECT n.content, t.due_date
-FROM nodes n
-JOIN tasks t ON n.id = t.node_id
-WHERE t.priority >= 3
-  AND t.due_date BETWEEN DATE('now') AND DATE('now', '+7 days');
-```
-
-### Persons Table
+#### Task Schema
 
 ```sql
-CREATE TABLE persons (
-    node_id TEXT PRIMARY KEY,
-    first_name TEXT,
-    last_name TEXT,
-    email TEXT UNIQUE,                      -- Unique constraint for lookups
-
-    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
-);
-
--- Indexes for lookups
-CREATE INDEX idx_persons_email ON persons(email);
-CREATE INDEX idx_persons_name ON persons(last_name, first_name);
-CREATE UNIQUE INDEX idx_persons_email_unique ON persons(email) WHERE email IS NOT NULL;
-```
-
-### Projects Table
-
-```sql
-CREATE TABLE projects (
-    node_id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,                   -- "planning", "active", "completed", "archived"
-    start_date DATE,
-    end_date DATE,
-
-    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
-);
-
--- Indexes for project queries
-CREATE INDEX idx_projects_status ON projects(status);
-CREATE INDEX idx_projects_dates ON projects(start_date, end_date);
-CREATE INDEX idx_projects_active ON projects(status, start_date) WHERE status = 'active';
-```
-
-### Dates Table
-
-```sql
-CREATE TABLE dates (
-    node_id TEXT PRIMARY KEY,               -- Format: "date:2024-01-15"
-    date DATE NOT NULL,                     -- YYYY-MM-DD
-    recurring TEXT,                         -- "daily", "weekly", "monthly", "yearly"
-
-    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
-);
-
--- Indexes for date operations
-CREATE INDEX idx_dates_date ON dates(date);
-CREATE INDEX idx_dates_recurring ON dates(recurring);
-CREATE INDEX idx_dates_date_range ON dates(date DESC); -- For date range queries
-```
-
-**Special Date Node Handling:**
-- **Deterministic IDs**: `date:2024-01-15` format
-- **Lazy creation**: Only created when referenced by other nodes
-- **Automatic reference**: Any date mention creates/links to date node
-
-## Dynamic Entity Tables (User-Defined)
-
-### Schema Management
-
-```sql
--- Store user-defined entity schemas
-CREATE TABLE entity_schemas (
-    entity_type TEXT PRIMARY KEY,           -- "invoice", "contract", etc.
-    schema_definition JSON NOT NULL,        -- Complete schema as JSON
-    version TEXT NOT NULL,                  -- Schema version for migrations
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    modified_at DATETIME DEFAULT CURRENT_TIMESTAMP
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    parent_id,
+    root_id,
+    properties
+) VALUES (
+    'task',                 -- Schema id = type name
+    'schema',              -- Identifies this as a schema definition
+    'Task',
+    NULL,
+    NULL,
+    '{
+        "is_core": true,
+        "description": "Task tracking with status, assignee, and due dates",
+        "fields": [
+            {"name": "status", "type": "text", "indexed": true, "required": true},
+            {"name": "assignee", "type": "person", "indexed": true},
+            {"name": "due_date", "type": "date", "indexed": true},
+            {"name": "priority", "type": "text", "indexed": true},
+            {"name": "description", "type": "text", "indexed": false}
+        ]
+    }'
 );
 ```
 
-### Runtime Table Creation
-
-When users define custom entities, tables are created dynamically:
-
-**Example: Invoice Entity Schema**
-```json
-{
-  "entity_type": "invoice",
-  "fields": [
-    {"name": "invoice_number", "type": "TEXT", "indexed": true, "required": true},
-    {"name": "amount", "type": REAL", "indexed": true, "required": true},
-    {"name": "customer_id", "type": "TEXT", "indexed": true},
-    {"name": "line_items", "type": "JSON", "indexed": false},
-    {"name": "notes", "type": "TEXT", "indexed": false}
-  ]
-}
-```
-
-**Generated Table:**
+**Task Instance Example:**
 ```sql
-CREATE TABLE invoice (
-    node_id TEXT PRIMARY KEY,
-    invoice_number TEXT NOT NULL,           -- Indexed field
-    amount REAL NOT NULL,                   -- Indexed field
-    customer_id TEXT,                       -- Indexed field
-    metadata JSON,                          -- Non-indexed fields stored here
-
-    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    parent_id,
+    root_id,
+    properties
+) VALUES (
+    'uuid-task-123',
+    'task',                 -- References schema by type
+    'Implement Pure JSON schema',
+    '2025-01-03',          -- Created in daily note
+    '2025-01-03',          -- Belongs to daily note document
+    '{
+        "status": "in_progress",
+        "assignee": "person-uuid-456",
+        "due_date": "2025-01-10",
+        "priority": "high",
+        "description": "Migrate from hybrid to Pure JSON architecture"
+    }'
 );
-
--- Generated indexes
-CREATE INDEX idx_invoice_number ON invoice(invoice_number);
-CREATE INDEX idx_invoice_amount ON invoice(amount);
-CREATE INDEX idx_invoice_customer ON invoice(customer_id);
 ```
 
-## SQLx Integration Patterns
+**Query with JSON Path Index:**
+```sql
+-- Find high priority tasks (uses JSON path index on properties->>'$.priority')
+SELECT * FROM nodes
+WHERE node_type = 'task'
+  AND properties->>'$.priority' = 'high'
+  AND properties->>'$.status' != 'completed';
+```
 
-### 1. Compile-Time Checked Queries (Core Tables)
+#### Person Schema
+
+```sql
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    properties
+) VALUES (
+    'person',              -- Schema id = type name
+    'schema',
+    'Person',
+    '{
+        "is_core": true,
+        "description": "Person/contact information",
+        "fields": [
+            {"name": "first_name", "type": "text", "indexed": true},
+            {"name": "last_name", "type": "text", "indexed": true},
+            {"name": "email", "type": "text", "indexed": true},
+            {"name": "phone", "type": "text", "indexed": false},
+            {"name": "notes", "type": "text", "indexed": false}
+        ]
+    }'
+);
+```
+
+#### Date Schema
+
+**Date nodes use deterministic IDs** (`YYYY-MM-DD`) and are created lazily when referenced.
+
+```sql
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    properties
+) VALUES (
+    'date',                -- Schema id = type name
+    'schema',
+    'Date',
+    '{
+        "is_core": true,
+        "description": "Date node for daily notes and temporal references",
+        "fields": [
+            {"name": "timezone", "type": "text", "indexed": false},
+            {"name": "is_holiday", "type": "boolean", "indexed": false}
+        ]
+    }'
+);
+```
+
+**Date Instance Example:**
+```sql
+INSERT INTO nodes (
+    id,                    -- "2025-01-03" (deterministic ID)
+    node_type,            -- "date"
+    content,              -- "2025-01-03"
+    parent_id,            -- NULL (dates are root nodes)
+    root_id,              -- NULL (self = root)
+    properties,           -- Optional metadata
+    embedding_vector      -- NULL (dates don't need embeddings)
+) VALUES (
+    '2025-01-03',
+    'date',
+    '2025-01-03',
+    NULL,
+    NULL,
+    '{"timezone": "UTC", "is_holiday": false}',
+    NULL
+);
+```
+
+#### Project Schema
+
+```sql
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    properties
+) VALUES (
+    'project',
+    'schema',
+    'Project',
+    '{
+        "is_core": true,
+        "description": "Project tracking with dates and status",
+        "fields": [
+            {"name": "status", "type": "text", "indexed": true},
+            {"name": "start_date", "type": "date", "indexed": true},
+            {"name": "end_date", "type": "date", "indexed": true},
+            {"name": "owner", "type": "person", "indexed": true}
+        ]
+    }'
+);
+```
+
+## User-Defined Schemas
+
+### Dynamic Schema Creation (Pure JSON)
+
+Users can create custom schemas without any table creation - schemas are just nodes:
+
+**Example: Invoice Schema Creation**
+```sql
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    properties
+) VALUES (
+    'invoice',             -- Schema id = type name
+    'schema',
+    'Invoice',
+    '{
+        "is_core": false,
+        "description": "Invoice tracking with amounts and customers",
+        "fields": [
+            {"name": "invoice_number", "type": "text", "indexed": true, "required": true},
+            {"name": "amount", "type": "number", "indexed": true, "required": true},
+            {"name": "customer", "type": "person", "indexed": true},
+            {"name": "line_items", "type": "json", "indexed": false},
+            {"name": "notes", "type": "text", "indexed": false}
+        ]
+    }'
+);
+```
+
+**Invoice Instance (No New Table Required):**
+```sql
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    parent_id,
+    root_id,
+    properties
+) VALUES (
+    'uuid-invoice-789',
+    'invoice',             -- References schema
+    'Invoice INV-2025-001',
+    'project-uuid-123',    -- Created in a project
+    'project-uuid-123',    -- Belongs to project document
+    '{
+        "invoice_number": "INV-2025-001",
+        "amount": 15000.00,
+        "customer": "person-uuid-456",
+        "line_items": [
+            {"description": "Consulting", "amount": 10000},
+            {"description": "Implementation", "amount": 5000}
+        ],
+        "notes": "Payment terms: Net 30"
+    }'
+);
+```
+
+**Auto-Reference Detection:**
+- Field `"customer": "person"` → Automatically detected as reference (person schema exists)
+- Field `"amount": "number"` → Primitive type
+- Field `"line_items": "json"` → Primitive JSON type
+
+## libsql Integration Patterns
+
+### 1. Pure JSON Queries (All Entities)
 
 ```rust
-use sqlx::{FromRow, SqlitePool};
+use libsql::{Database, de};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, FromRow)]
-struct TaskRow {
-    node_id: String,
-    status: String,
-    due_date: Option<NaiveDate>,
-    priority: Option<i32>,
+#[derive(Debug, Deserialize, Serialize)]
+struct Node {
+    id: String,
+    node_type: String,
+    content: String,
+    parent_id: Option<String>,
+    root_id: Option<String>,
+    properties: serde_json::Value,
+    embedding_vector: Option<Vec<u8>>,
 }
 
-// Compile-time verified SQL
-impl TaskService {
-    pub async fn get_overdue_tasks(&self) -> Result<Vec<TaskRow>, sqlx::Error> {
-        sqlx::query_as!(
-            TaskRow,
-            r#"
-            SELECT node_id, status, due_date, priority
-            FROM tasks
-            WHERE status != 'completed' AND due_date < DATE('now')
-            ORDER BY due_date ASC, priority DESC
-            "#
-        )
-        .fetch_all(&self.pool)
-        .await
+impl NodeService {
+    pub async fn get_tasks_by_priority(&self, priority: &str) -> Result<Vec<Node>> {
+        let mut stmt = self.db.prepare(
+            "SELECT * FROM nodes
+             WHERE node_type = 'task'
+               AND properties->>'$.priority' = ?1
+               AND properties->>'$.status' != 'completed'
+             ORDER BY properties->>'$.due_date' ASC"
+        ).await?;
+
+        let rows = stmt.query([priority]).await?;
+        let tasks: Vec<Node> = de::from_rows(&rows)?;
+        Ok(tasks)
     }
 }
 ```
 
-### 2. Dynamic Queries (User-Defined Tables)
+### 2. Schema Lookup and Validation
 
 ```rust
-impl DynamicEntityService {
-    pub async fn query_entity_with_filters(
-        &self,
-        entity_type: &str,
-        filters: &[(&str, &str, serde_json::Value)]
-    ) -> Result<Vec<serde_json::Value>, Error> {
-        // Build query dynamically
-        let mut sql = format!("SELECT * FROM {}", entity_type);
-        let mut conditions = Vec::new();
-        let mut bindings = Vec::new();
+const PRIMITIVE_TYPES: &[&str] = &["text", "number", "boolean", "date", "json"];
 
-        for (field, operator, value) in filters {
-            conditions.push(format!("{} {} ?", field, operator));
-            bindings.push(value.clone());
-        }
+impl SchemaService {
+    // Get schema definition
+    pub async fn get_schema(&self, schema_name: &str) -> Result<SchemaDefinition> {
+        let mut stmt = self.db.prepare(
+            "SELECT properties FROM nodes
+             WHERE id = ?1 AND node_type = 'schema'"
+        ).await?;
 
-        if !conditions.is_empty() {
-            sql.push_str(&format!(" WHERE {}", conditions.join(" AND ")));
-        }
-
-        // Execute dynamic query
-        let mut query = sqlx::query(&sql);
-        for binding in bindings {
-            query = match binding {
-                serde_json::Value::String(s) => query.bind(s),
-                serde_json::Value::Number(n) => query.bind(n.as_f64().unwrap()),
-                _ => query.bind(binding.to_string()),
-            };
-        }
-
-        let rows = query.fetch_all(&self.pool).await?;
-
-        // Convert rows to JSON
-        let results = rows.into_iter()
-            .map(|row| self.row_to_json(row, entity_type))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(results)
-    }
-}
-```
-
-### 3. Migration Management
-
-```rust
-// Database migrations using sqlx-migrate
-use sqlx::migrate::Migrator;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
-
-impl DatabaseService {
-    pub async fn run_migrations(&self) -> Result<(), Error> {
-        MIGRATOR.run(&self.pool).await.map_err(Into::into)
+        let row = stmt.query_row([schema_name]).await?;
+        let properties: SchemaDefinition = serde_json::from_str(&row.get::<String>(0)?)?;
+        Ok(properties)
     }
 
-    pub async fn create_custom_entity_table(
-        &self,
-        schema: &EntitySchema
-    ) -> Result<(), Error> {
-        let sql = self.generate_create_table_sql(schema);
-        sqlx::query(&sql).execute(&self.pool).await?;
-
-        // Create indexes for indexed fields
-        for field in &schema.fields {
-            if field.indexed {
-                let index_sql = format!(
-                    "CREATE INDEX idx_{}_{} ON {}({})",
-                    schema.entity_type, field.name,
-                    schema.entity_type, field.name
-                );
-                sqlx::query(&index_sql).execute(&self.pool).await?;
+    // Auto-detect field type
+    pub async fn detect_field_type(&self, field_type: &str) -> Result<FieldType> {
+        if PRIMITIVE_TYPES.contains(&field_type) {
+            Ok(FieldType::Primitive(field_type.to_string()))
+        } else {
+            // Check if schema exists
+            if self.schema_exists(field_type).await? {
+                Ok(FieldType::Reference { schema_name: field_type.to_string() })
+            } else {
+                Err(anyhow!("Unknown type: {}", field_type))
             }
         }
+    }
 
+    async fn schema_exists(&self, schema_name: &str) -> Result<bool> {
+        let mut stmt = self.db.prepare(
+            "SELECT COUNT(*) FROM nodes WHERE id = ?1 AND node_type = 'schema'"
+        ).await?;
+
+        let count: i64 = stmt.query_row([schema_name]).await?.get(0)?;
+        Ok(count > 0)
+    }
+}
+```
+
+### 3. Dynamic Index Management (Rule-Based)
+
+```rust
+pub struct IndexManager {
+    db: Arc<Database>,
+    index_registry: HashMap<String, IndexDefinition>,
+}
+
+impl IndexManager {
+    // Rule: Create JSON path index when query frequency exceeds threshold
+    pub async fn analyze_and_optimize(&self, query_stats: &QueryStatistics) -> Result<()> {
+        for (field_path, stats) in query_stats.json_field_access.iter() {
+            if stats.queries_per_day > 10 && !self.has_index(field_path) {
+                self.create_json_path_index(field_path).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn create_json_path_index(&self, json_path: &str) -> Result<()> {
+        // Example: "task.priority" -> CREATE INDEX idx_task_priority ON nodes((properties->>'$.priority')) WHERE node_type = 'task';
+        let parts: Vec<&str> = json_path.split('.').collect();
+        let node_type = parts[0];
+        let field_name = parts[1];
+
+        let index_name = format!("idx_{}_{}", node_type, field_name);
+        let sql = format!(
+            "CREATE INDEX IF NOT EXISTS {} ON nodes((properties->>'$.{}')) WHERE node_type = '{}'",
+            index_name, field_name, node_type
+        );
+
+        self.db.execute(&sql, ()).await?;
+        Ok(())
+    }
+
+    // Rule: Remove unused indexes after 30 days
+    pub async fn cleanup_unused_indexes(&self) -> Result<()> {
+        for (field_path, stats) in self.index_registry.iter() {
+            if stats.last_used_days_ago > 30 && stats.queries_per_month < 5 {
+                self.drop_index(field_path).await?;
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+### 4. Database Initialization (No ALTER TABLE)
+
+```rust
+// Pure JSON schema means NO migrations to user machines
+impl DatabaseService {
+    // Initial database setup (one-time)
+    pub async fn initialize_database(&self) -> Result<()> {
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS nodes (
+                id TEXT PRIMARY KEY,
+                node_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                parent_id TEXT,
+                root_id TEXT,
+                before_sibling_id TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                properties JSON NOT NULL DEFAULT '{}',
+                embedding_vector BLOB,
+                FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
+                FOREIGN KEY (root_id) REFERENCES nodes(id)
+            )",
+            ()
+        ).await?;
+
+        // Create core indexes (never changes)
+        self.create_core_indexes().await?;
+
+        // Seed core schemas
+        self.seed_core_schemas().await?;
+
+        Ok(())
+    }
+
+    // Seed core schemas (task, person, date, project, text)
+    async fn seed_core_schemas(&self) -> Result<()> {
+        // Insert core schema nodes
+        for schema in CORE_SCHEMAS {
+            self.db.execute(
+                "INSERT OR IGNORE INTO nodes (id, node_type, content, properties)
+                 VALUES (?1, 'schema', ?2, ?3)",
+                (schema.id, schema.content, schema.properties.to_string())
+            ).await?;
+        }
         Ok(())
     }
 }

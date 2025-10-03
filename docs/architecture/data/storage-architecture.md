@@ -4,7 +4,7 @@
 
 NodeSpace employs a **local-first data architecture** with embedded Turso (libSQL) for high-performance, offline-capable knowledge management. This design prioritizes user experience through instant local operations while supporting future collaborative features via database synchronization rather than cloud-first reactivity.
 
-## Current Architecture (Local-First + LLM Intelligence)
+## Current Architecture (Local-First + Pure JSON Schema)
 
 ### Core Storage: Turso Embedded (libSQL)
 
@@ -13,218 +13,225 @@ NodeSpace uses [Turso](https://turso.tech/) embedded mode as its primary databas
 #### Why Turso?
 - **SQLite Compatibility**: Battle-tested foundation with modern enhancements
 - **Embedded Mode**: Runs in-process with no network overhead (0.1-5ms queries)
-- **JSON Operations**: Native JSON field support with indexing capabilities
+- **JSON Operations**: Native JSON field support with JSON path indexing capabilities
 - **Vector Search**: F32_BLOB support for AI embeddings with similarity search
-- **Sync Ready**: Built-in replication for future cloud collaboration
-- **LLM-Optimized**: Perfect for AI-driven schema design and optimization
+- **Sync Ready**: Built-in embedded replicas for future cloud collaboration
+- **Desktop-Optimized**: No ALTER TABLE migrations required - critical for 10,000+ user machines
 - **Local-First**: Complete offline functionality with optional sync
 
-#### Hybrid Database Schema
+#### Pure JSON Schema Architecture
 
-NodeSpace uses a **hybrid architecture** combining universal nodes with LLM-optimized entity tables:
+NodeSpace uses a **Pure JSON schema** with a single universal nodes table - no complementary tables:
 
 ```sql
--- Universal nodes table (foundation for all entities)
+-- Universal nodes table (ALL entities stored here)
 CREATE TABLE nodes (
     id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,                     -- Entity type identifier
-    content TEXT NOT NULL,                  -- Primary content/text
-    parent_id TEXT REFERENCES nodes(id),    -- Hierarchy parent
-    root_id TEXT REFERENCES nodes(id),      -- Root node reference
-    before_sibling_id TEXT REFERENCES nodes(id), -- Single-pointer sibling ordering
-    created_at TEXT NOT NULL,               -- ISO 8601 timestamp
-    mentions TEXT,                          -- JSON array of referenced node IDs
-    embedding_vector BLOB                   -- F32_BLOB vector for AI similarity search
+    node_type TEXT NOT NULL,                    -- "task", "invoice", "schema", "date", etc.
+    content TEXT NOT NULL,                      -- Primary content/text
+    parent_id TEXT,                             -- Where node was created (creation context)
+    root_id TEXT,                               -- Root document for bulk fetch (NULL = is root)
+    before_sibling_id TEXT,                     -- Single-pointer sibling ordering
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    properties JSON NOT NULL DEFAULT '{}',      -- ALL entity-specific fields (includes auto-detected references)
+    embedding_vector BLOB,                      -- F32_BLOB vector for AI similarity search
+
+    FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY (root_id) REFERENCES nodes(id)
 );
 
--- LLM-generated entity tables (example: task management)
-CREATE TABLE task_properties (
-    node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
-    
-    -- Hot fields (LLM identified as frequently queried)
-    priority TEXT CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
-    due_date DATE,
-    status TEXT CHECK (status IN ('todo', 'in_progress', 'completed')),
-    assignee_id TEXT,
-    project_id TEXT,
-    
-    -- Cold fields (flexible JSON for rare queries)
-    metadata JSON,
-    
-    -- LLM-recommended indexes
-    INDEX(priority),
-    INDEX(due_date), 
-    INDEX(status),
-    INDEX(assignee_id)
+-- Separate mentions table for backlink queries
+CREATE TABLE node_mentions (
+    node_id TEXT NOT NULL,
+    mentions_node_id TEXT NOT NULL,
+    PRIMARY KEY (node_id, mentions_node_id),
+    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY (mentions_node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
--- LLM-generated entity tables (example: recipe collection)
-CREATE TABLE recipe_properties (
-    node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
-    
-    -- Hot fields (LLM identified from "cooking time, dietary restrictions")
-    cooking_time INTEGER,
-    difficulty TEXT CHECK (difficulty IN ('easy', 'medium', 'hard')),
-    cuisine TEXT,
-    dietary_tags TEXT, -- Comma-separated for indexing
-    
-    -- Cold fields (complex data structures)
-    metadata JSON, -- ingredients, instructions, nutrition_facts
-    
-    -- LLM-recommended indexes  
-    INDEX(cooking_time),
-    INDEX(cuisine),
-    INDEX(dietary_tags)
+-- Core indexes
+CREATE INDEX idx_nodes_type ON nodes(node_type);
+CREATE INDEX idx_nodes_parent ON nodes(parent_id);
+CREATE INDEX idx_nodes_root ON nodes(root_id);
+CREATE INDEX idx_nodes_modified ON nodes(modified_at);
+CREATE INDEX idx_mentions_source ON node_mentions(node_id);
+CREATE INDEX idx_mentions_target ON node_mentions(mentions_node_id);
+```
+
+#### Schema-as-Node Pattern
+
+Schemas are stored as nodes with `node_type = "schema"` and `id = type_name`:
+
+```sql
+-- Example: Task schema definition
+INSERT INTO nodes (
+    id,                     -- "task" (schema id = type name)
+    node_type,             -- "schema"
+    content,               -- "Task"
+    properties
+) VALUES (
+    'task',
+    'schema',
+    'Task',
+    '{
+        "is_core": true,
+        "fields": [
+            {"name": "status", "type": "text", "indexed": true},
+            {"name": "assignee", "type": "person", "indexed": true},
+            {"name": "due_date", "type": "date", "indexed": true},
+            {"name": "description", "type": "text", "indexed": false}
+        ]
+    }'
+);
+
+-- Example: Task instance
+INSERT INTO nodes (
+    id,                     -- UUID or custom identifier
+    node_type,             -- "task" (references schema)
+    content,               -- "Implement Pure JSON schema"
+    parent_id,             -- "2025-01-03" (created in daily note)
+    root_id,               -- "2025-01-03" (root document for bulk fetch)
+    properties
+) VALUES (
+    'uuid-123',
+    'task',
+    'Implement Pure JSON schema',
+    '2025-01-03',
+    '2025-01-03',
+    '{
+        "status": "in_progress",
+        "assignee": "person-uuid-456",
+        "due_date": "2025-01-10",
+        "description": "Migrate from hybrid to pure JSON architecture"
+    }'
 );
 ```
+
+**Schema Lookup Convention:**
+- Schema nodes: `WHERE id = <type_name> AND node_type = 'schema'`
+- Instance lookup: `WHERE node_type = <type_name>`
 
 #### Storage Benefits
 
-**Hybrid Architecture Advantages:**
-- **Performance Optimization**: Hot fields in normalized columns (1-10ms queries)
-- **Schema Flexibility**: Cold fields in JSON for unknown structures  
-- **LLM Intelligence**: AI-driven field classification and index recommendations
-- **Query Efficiency**: Entity-specific tables eliminate unnecessary data scanning
-- **Type Safety**: Database-level constraints and validation
-- **Storage Efficiency**: No repeated JSON field names, optimal column types
+**Pure JSON Architecture Advantages:**
+- **Zero Migration Risk**: No ALTER TABLE on user machines - catastrophic failure prevention
+- **Infinite Flexibility**: Add any field to any entity without schema changes
+- **Parent-Based Linking**: parent_id = creation context, root_id = bulk fetch optimization
+- **Auto-Reference Detection**: Non-primitive field types automatically treated as entity references
+- **Rule-Based Indexing**: Dynamic JSON path indexes based on query patterns (not LLM-driven)
+- **Desktop-First**: Optimized for 0-100K nodes locally, premium tier for 100K+ with cloud sync
 
 **Performance Characteristics:**
-- **Hot field queries**: 1-10ms (native column indexes)
-- **Cold field queries**: 20-100ms (JSON operations)
+- **Indexed JSON fields**: 10-50ms (JSON path indexes)
+- **Unindexed JSON fields**: 50-200ms (acceptable for rare queries)
 - **Vector similarity**: 10-50ms (F32_BLOB with indexes)
-- **Complex joins**: 5-30ms (foreign key optimization)
-- **Schema evolution**: Real-time field migration based on usage patterns
+- **Hierarchy queries**: 5-30ms (parent_id/root_id indexes)
+- **Schema evolution**: No migrations - just index creation/removal
 
-## LLM-Driven Database Intelligence
+**Hierarchy Semantics:**
+- **parent_id**: "Where was this node created?" (creation context, not ownership)
+- **root_id**: "What document does this belong to?" (for bulk fetch, NULL = is root node/page)
+- **node_mentions**: Separate table for bidirectional reference queries (backlinks)
 
-### Natural Language Schema Design
+## Rule-Based Index Management
 
-NodeSpace leverages Large Language Models to automatically optimize database schemas based on natural language descriptions:
+### Dynamic JSON Path Indexing
 
-```typescript
-// User describes entity in natural language
-const userRequest = "Create a task tracking system for my development team with priorities, deadlines, and assignees";
+NodeSpace uses rule-based index management to optimize query performance without ALTER TABLE migrations:
 
-// LLM analyzes and generates optimal schema
-interface LLMSchemaAnalysis {
-    entityType: "task";
-    hotFields: {
-        priority: {
-            type: "TEXT",
-            constraint: "CHECK (priority IN ('low', 'medium', 'high', 'urgent'))",
-            indexed: true,
-            reasoning: "Priority filtering is common in task management dashboards"
-        },
-        due_date: {
-            type: "DATE", 
-            indexed: true,
-            reasoning: "Date range queries frequent (overdue, due this week, etc.)"
-        },
-        assignee_id: {
-            type: "TEXT",
-            indexed: true,
-            reasoning: "Users will filter tasks by assignee for personal views"
-        }
-    },
-    coldFields: {
-        description: "Long text descriptions - keep in JSON metadata",
-        attachments: "File references - JSON array for flexibility"
-    },
-    predictedQueryPatterns: [
-        "Tasks due this week",
-        "High priority tasks by assignee", 
-        "Overdue tasks by project"
-    ]
+```rust
+pub struct IndexManager {
+    db: Arc<libsql::Database>,
+    index_registry: HashMap<String, IndexDefinition>,
 }
-```
 
-### Dynamic QueryNode Optimization
+impl IndexManager {
+    // Rule: Create JSON path index when query frequency exceeds threshold
+    pub async fn analyze_and_optimize(&self, query_stats: &QueryStatistics) -> Result<()> {
+        for (field_path, stats) in query_stats.json_field_access.iter() {
+            if stats.queries_per_day > 10 && !self.has_index(field_path) {
+                self.create_json_path_index(field_path).await?;
+            }
+        }
+        Ok(())
+    }
 
-When users create QueryNodes through natural language, the LLM optimizes database indexes:
-
-```typescript
-// User creates query: "Show me all high-priority tasks due in the next week"
-const queryOptimization = {
-    detectedFields: ["priority", "due_date"],
-    recommendedIndexes: [
-        "CREATE INDEX idx_task_priority ON task_properties(priority)",
-        "CREATE INDEX idx_task_due_date ON task_properties(due_date)",
-        // Composite index for common combined queries
-        "CREATE INDEX idx_task_priority_due ON task_properties(priority, due_date)"
-    ],
-    performanceImpact: {
-        before: "200-500ms (table scan)",
-        after: "5-15ms (indexed lookup)"
+    async fn create_json_path_index(&self, json_path: &str) -> Result<()> {
+        // Example: "task.priority" -> CREATE INDEX idx_task_priority ON nodes((properties->>'$.priority')) WHERE node_type = 'task';
+        let index_name = format!("idx_{}", json_path.replace(".", "_"));
+        let sql = format!(
+            "CREATE INDEX IF NOT EXISTS {} ON nodes((properties->>'$.{}')) WHERE node_type = '{}'",
+            index_name,
+            json_path.split('.').last().unwrap(),
+            json_path.split('.').next().unwrap()
+        );
+        self.db.execute(&sql, ()).await?;
+        Ok(())
     }
 }
 ```
 
-### Schema Evolution Intelligence
+**Index Creation Rules:**
+1. **Frequency-based**: Create index if field queried 10+ times/day
+2. **Type-specific**: JSON path indexes scoped to node_type (WHERE clause)
+3. **Composite indexes**: For common multi-field queries
+4. **Automatic removal**: Drop indexes unused for 30+ days
 
-The LLM continuously monitors usage patterns and evolves the schema:
+**Performance Impact:**
+- **Before index**: 200-1000ms (table scan with JSON extraction)
+- **After index**: 10-50ms (JSON path index lookup)
+- **Index creation**: <1 second (non-blocking background operation)
 
-```typescript
-interface SchemaEvolutionRecommendation {
-    analysis: {
-        fieldUsageStats: {
-            "task.project_id": { queries: 150, lastMonth: true },
-            "task.legacy_field": { queries: 0, lastMonth: false }
+### Auto-Reference Detection Pattern
+
+```rust
+const PRIMITIVE_TYPES: &[&str] = &["text", "number", "boolean", "date", "json"];
+
+impl SchemaService {
+    pub async fn detect_field_type(&self, field_type: &str) -> Result<FieldType> {
+        if PRIMITIVE_TYPES.contains(&field_type) {
+            Ok(FieldType::Primitive(field_type.to_string()))
+        } else {
+            // Check if schema exists
+            if self.schema_exists(field_type).await? {
+                Ok(FieldType::Reference {
+                    schema_name: field_type.to_string()
+                })
+            } else {
+                Err(anyhow!("Unknown type: {}", field_type))
+            }
         }
-    },
-    recommendations: [
-        {
-            action: "PROMOTE_TO_HOT",
-            field: "project_id", 
-            reasoning: "Now queried 150+ times/month, move from JSON to column",
-            migration: "ALTER TABLE task_properties ADD COLUMN project_id TEXT"
-        },
-        {
-            action: "DEMOTE_TO_COLD",
-            field: "legacy_field",
-            reasoning: "Zero usage in 3 months, move to JSON metadata" 
-        }
-    ]
+    }
 }
-```
 
-### Performance Intelligence
-
-The LLM provides real-time performance insights and optimizations:
-
-```typescript
-interface PerformanceOptimization {
-    queryAnalysis: {
-        query: "Find recipes under 30 minutes with high protein",
-        currentPerformance: "180ms (JSON extraction on 10K recipes)",
-        recommendation: {
-            createIndex: "CREATE INDEX idx_recipe_cooking_time ON recipe_properties(cooking_time)",
-            expectedImprovement: "15ms (12x faster)",
-            migrationCost: "2 seconds to create index"
-        }
-    },
-    autoOptimize: true // Automatically apply if benefit > cost
-}
+// Example usage:
+// {"name": "customer", "type": "person"} -> Auto-detected as reference to person schema
+// {"name": "priority", "type": "text"} -> Primitive text field
 ```
 
 ### Frontend Reactivity: Svelte Stores
 
-For UI reactivity, NodeSpace leverages Svelte's built-in reactive stores rather than complex database subscription systems:
+For UI reactivity, NodeSpace leverages Svelte's built-in reactive stores:
 
 ```typescript
 // Simple, effective UI reactivity
 class NodeManager {
     nodes = writable<Map<NodeId, Node>>(new Map());
-    
+
     async updateNode(node: Node) {
-        // 1. Update LanceDB (local, fast)
-        await this.lanceDB.upsert(node);
-        
+        // 1. Update Turso (local, fast)
+        await this.turso.execute(
+            "UPDATE nodes SET properties = ?, modified_at = ? WHERE id = ?",
+            [JSON.stringify(node.properties), new Date().toISOString(), node.id]
+        );
+
         // 2. Update Svelte store (automatic UI updates)
         this.nodes.update(n => {
             n.set(node.id, node);
             return n;
         });
-        
+
         // 3. Queue for future sync (background)
         if (this.syncEnabled) {
             this.syncQueue.push({ operation: 'upsert', node });
@@ -275,18 +282,24 @@ CREATE TABLE sync_log (
 ### Sync Protocol Architecture
 
 ```
-┌─────────────────┐    Sync Protocol    ┌─────────────────┐
-│   User A        │◄──────────────────►│   User B        │
-│   LanceDB       │                    │   LanceDB       │
-│   (Local)       │                    │   (Local)       │
-└─────────────────┘                    └─────────────────┘
-         ▲                                       ▲
-         │           ┌─────────────────┐         │
-         └──────────►│  Cloud Sync     │◄────────┘
-                     │  PostgreSQL     │
-                     │  (Coordination) │
-                     └─────────────────┘
+┌─────────────────┐    Embedded Replicas    ┌─────────────────┐
+│   User A        │◄──────────────────────►│   User B        │
+│   Turso Local   │                        │   Turso Local   │
+│   (Embedded)    │                        │   (Embedded)    │
+└─────────────────┘                        └─────────────────┘
+         ▲                                           ▲
+         │           ┌─────────────────────┐         │
+         └──────────►│  Turso Cloud        │◄────────┘
+                     │  (Sync Coordination)│
+                     │  Embedded Replicas  │
+                     └─────────────────────┘
 ```
+
+**Unified Stack Benefits:**
+- Same database (Turso) for free and premium tiers
+- Built-in embedded replicas for sync (no custom implementation)
+- Seamless transition from local to cloud sync
+- Consistent query interface across tiers
 
 ## Architectural Principles
 
@@ -298,15 +311,15 @@ CREATE TABLE sync_log (
 
 ### 2. Progressive Enhancement
 ```rust
-// Start simple
+// Start simple (free tier)
 struct NodeSpace {
-    storage: LanceDB,
+    storage: TursoEmbedded,
 }
 
-// Add sync capability without breaking existing code
+// Add sync capability without breaking existing code (premium tier)
 struct NodeSpace {
-    storage: LanceDB,
-    sync: Option<SyncAdapter>,  // Optional collaborative features
+    storage: TursoEmbedded,
+    sync: Option<TursoReplica>,  // Optional collaborative features via embedded replicas
 }
 ```
 
@@ -341,11 +354,11 @@ struct NodeSpace {
 
 ### NodeSpace (Local-First + Sync)
 ```
-User Operation → Local LanceDB → Instant Result
+User Operation → Local Turso Embedded → Instant Result
                       ↓
-                Background Sync → Cloud → Other Users
+                Background Sync → Turso Cloud → Other Users
 ```
-**Benefits**: Always fast, works offline, simple architecture
+**Benefits**: Always fast, works offline, unified database stack, embedded replicas
 
 ### Convex/Supabase (Cloud-First + Reactive)
 ```
@@ -397,26 +410,27 @@ pub trait NodeStorage {
     async fn query_hierarchy(&self, parent_id: &NodeId) -> Result<Vec<Node>>;
 }
 
-// Current implementation
-impl NodeStorage for LanceDataStore { /* ... */ }
+// Current implementation (free tier)
+impl NodeStorage for TursoEmbedded { /* ... */ }
 
-// Future: can add cloud adapter without changing interfaces
-impl NodeStorage for HybridStorage { /* local + sync */ }
+// Future: premium tier with sync
+impl NodeStorage for TursoWithReplica { /* embedded + cloud sync */ }
 ```
 
 ## Migration Considerations
 
 ### Phase 1: Current (Single User, Local)
-- LanceDB embedded storage
+- Turso embedded storage (Pure JSON schema)
 - Svelte stores for UI reactivity
-- Simple CRUD operations
-- No over-engineering
+- Simple CRUD operations with JSON path indexes
+- Rule-based index management
+- No ALTER TABLE migrations
 
-### Phase 2: Add Sync Infrastructure (Multi-User)
-- Add operation logging
-- Implement sync protocol
-- Cloud storage setup
-- Conflict resolution
+### Phase 2: Add Sync Infrastructure (Multi-User - Premium Tier)
+- Enable Turso embedded replicas
+- Configure cloud sync endpoint
+- Implement conflict resolution (Turso handles replication)
+- Premium tier upsell at 100K+ nodes
 
 ### Phase 3: Real-Time Collaboration
 - WebSocket connections for live editing
@@ -426,14 +440,13 @@ impl NodeStorage for HybridStorage { /* local + sync */ }
 
 ### Data Migration Strategy
 ```typescript
-// Existing data remains in LanceDB
-// Add sync metadata without changing core schema
-interface NodeWithSync extends Node {
-    _sync?: {
-        version: number;
-        lastSyncTime: Date;
-        syncStatus: 'pending' | 'synced' | 'conflict';
-    };
+// Pure JSON schema eliminates migration risk
+// Turso embedded replicas handle sync automatically
+// No schema changes needed - just enable replication
+interface TursoSyncConfig {
+    enabled: boolean;
+    cloudEndpoint: string;
+    conflictResolution: 'local-wins' | 'cloud-wins' | 'manual';
 }
 ```
 
@@ -466,12 +479,14 @@ interface NodeWithSync extends Node {
 
 ## Conclusion
 
-NodeSpace's local-first architecture with LanceDB provides the optimal foundation for AI-native knowledge management:
+NodeSpace's local-first architecture with Turso embedded and Pure JSON schema provides the optimal foundation for AI-native knowledge management:
 
-1. **Immediate Performance**: All operations are local-first and instant
-2. **AI-Optimized**: Native vector storage perfect for embeddings and semantic search  
-3. **Offline Capable**: Complete functionality without network dependency
-4. **Future-Ready**: Clean architecture for adding sync and collaboration
-5. **User-Centric**: Users own and control their data completely
+1. **Immediate Performance**: All operations are local-first and instant (0.1-5ms queries)
+2. **Zero Migration Risk**: Pure JSON schema eliminates ALTER TABLE on user machines
+3. **AI-Optimized**: F32_BLOB vector storage with JSON path indexes for semantic search
+4. **Offline Capable**: Complete functionality without network dependency
+5. **Future-Ready**: Turso embedded replicas enable seamless sync (free → premium tier)
+6. **Rule-Based Intelligence**: Dynamic index management based on query patterns (not LLM)
+7. **User-Centric**: Users own and control their data completely
 
-This approach avoids the complexity of cloud-first reactive systems while maintaining the flexibility to add collaborative features when needed. The result is a fast, reliable, and privacy-respecting knowledge management system that scales from individual use to team collaboration.
+This approach avoids the catastrophic risk of desktop migrations while providing a unified database stack from free tier (0-100K nodes) to premium tier (100K+ with cloud sync). The result is a fast, reliable, and privacy-respecting knowledge management system that scales from individual use to team collaboration.
