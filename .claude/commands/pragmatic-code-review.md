@@ -15,13 +15,13 @@ Analyze the following outputs to understand the scope and content of the changes
 !`git status`
 
 **FILES MODIFIED:**
-!`git diff --name-only origin/HEAD...`
+!`git diff --name-only origin/main...HEAD`
 
 **COMMITS:**
-!`git log --no-decorate origin/HEAD...`
+!`git log --no-decorate origin/main...HEAD`
 
 **DIFF CONTENT:**
-!`git diff --merge-base origin/HEAD`
+!`git diff origin/main...HEAD`
 
 Review the complete diff above. This contains all code changes in the PR.
 
