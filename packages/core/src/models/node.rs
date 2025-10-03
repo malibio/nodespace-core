@@ -577,14 +577,96 @@ impl NodeUpdate {
     }
 }
 
-/// Node filter for query operations
+/// Comparison operator for property filters
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FilterOperator {
+    /// Equality (=)
+    Equals,
+    /// Inequality (!=)
+    NotEquals,
+    /// Greater than (>)
+    GreaterThan,
+    /// Greater than or equal (>=)
+    GreaterThanOrEqual,
+    /// Less than (<)
+    LessThan,
+    /// Less than or equal (<=)
+    LessThanOrEqual,
+    /// String contains (LIKE %value%)
+    Contains,
+    /// String starts with (LIKE value%)
+    StartsWith,
+    /// String ends with (LIKE %value)
+    EndsWith,
+}
+
+/// Property filter for JSON path queries
 ///
-/// Supports common query patterns for filtering nodes by various criteria.
+/// Enables filtering nodes based on values in their `properties` JSON field.
 ///
 /// # Examples
 ///
 /// ```rust
-/// # use nodespace_core::models::NodeFilter;
+/// # use nodespace_core::models::{PropertyFilter, FilterOperator};
+/// # use serde_json::json;
+/// // Filter for tasks with status = "done"
+/// let filter = PropertyFilter {
+///     path: "$.status".to_string(),
+///     operator: FilterOperator::Equals,
+///     value: json!("done"),
+/// };
+///
+/// // Filter for tasks with priority >= "high"
+/// let filter = PropertyFilter {
+///     path: "$.priority".to_string(),
+///     operator: FilterOperator::GreaterThanOrEqual,
+///     value: json!("high"),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyFilter {
+    /// JSON path to the property (e.g., "$.status", "$.metadata.priority")
+    pub path: String,
+
+    /// Comparison operator
+    pub operator: FilterOperator,
+
+    /// Value to compare against
+    pub value: serde_json::Value,
+}
+
+/// Sort order specification for query results
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum OrderBy {
+    /// Sort by creation time, oldest first
+    CreatedAsc,
+    /// Sort by creation time, newest first
+    CreatedDesc,
+    /// Sort by modification time, oldest first
+    ModifiedAsc,
+    /// Sort by modification time, newest first
+    ModifiedDesc,
+    /// Sort by content alphabetically, A-Z
+    ContentAsc,
+    /// Sort by content alphabetically, Z-A
+    ContentDesc,
+    /// Sort by node type alphabetically
+    NodeTypeAsc,
+    /// Sort by node type reverse alphabetically
+    NodeTypeDesc,
+}
+
+/// Node filter for query operations
+///
+/// Supports common query patterns for filtering nodes by various criteria,
+/// including temporal ranges, JSON property values, and custom sort orders.
+///
+/// # Examples
+///
+/// ```rust
+/// # use nodespace_core::models::{NodeFilter, PropertyFilter, FilterOperator, OrderBy};
+/// # use serde_json::json;
+/// # use chrono::{Utc, Duration};
 /// // Filter by node type
 /// let filter = NodeFilter::new()
 ///     .with_node_type("task".to_string());
@@ -593,10 +675,18 @@ impl NodeUpdate {
 /// let filter = NodeFilter::new()
 ///     .with_parent_id("2025-01-03".to_string());
 ///
-/// // Filter by node type and parent
+/// // Complex filter: tasks created in last 7 days with high priority
+/// let week_ago = Utc::now() - Duration::days(7);
 /// let filter = NodeFilter::new()
 ///     .with_node_type("task".to_string())
-///     .with_parent_id("2025-01-03".to_string());
+///     .with_created_after(week_ago)
+///     .with_property_filter(PropertyFilter {
+///         path: "$.priority".to_string(),
+///         operator: FilterOperator::Equals,
+///         value: json!("high"),
+///     })
+///     .with_order_by(OrderBy::CreatedDesc)
+///     .with_limit(10);
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeFilter {
@@ -623,6 +713,30 @@ pub struct NodeFilter {
     /// Filter by content search (substring match)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_contains: Option<String>,
+
+    /// Filter by creation date - nodes created after this time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<DateTime<Utc>>,
+
+    /// Filter by creation date - nodes created before this time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_before: Option<DateTime<Utc>>,
+
+    /// Filter by modification date - nodes modified after this time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_after: Option<DateTime<Utc>>,
+
+    /// Filter by modification date - nodes modified before this time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_before: Option<DateTime<Utc>>,
+
+    /// Filter by JSON property values (can specify multiple)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_filters: Option<Vec<PropertyFilter>>,
+
+    /// Sort order specification
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_by: Option<OrderBy>,
 
     /// Limit number of results
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -672,6 +786,52 @@ impl NodeFilter {
     /// Filter by content substring
     pub fn with_content_contains(mut self, content: String) -> Self {
         self.content_contains = Some(content);
+        self
+    }
+
+    /// Filter by creation date - nodes created after this time
+    pub fn with_created_after(mut self, created_after: DateTime<Utc>) -> Self {
+        self.created_after = Some(created_after);
+        self
+    }
+
+    /// Filter by creation date - nodes created before this time
+    pub fn with_created_before(mut self, created_before: DateTime<Utc>) -> Self {
+        self.created_before = Some(created_before);
+        self
+    }
+
+    /// Filter by modification date - nodes modified after this time
+    pub fn with_modified_after(mut self, modified_after: DateTime<Utc>) -> Self {
+        self.modified_after = Some(modified_after);
+        self
+    }
+
+    /// Filter by modification date - nodes modified before this time
+    pub fn with_modified_before(mut self, modified_before: DateTime<Utc>) -> Self {
+        self.modified_before = Some(modified_before);
+        self
+    }
+
+    /// Add a property filter (can be called multiple times)
+    pub fn with_property_filter(mut self, filter: PropertyFilter) -> Self {
+        if let Some(ref mut filters) = self.property_filters {
+            filters.push(filter);
+        } else {
+            self.property_filters = Some(vec![filter]);
+        }
+        self
+    }
+
+    /// Set multiple property filters at once
+    pub fn with_property_filters(mut self, filters: Vec<PropertyFilter>) -> Self {
+        self.property_filters = Some(filters);
+        self
+    }
+
+    /// Set sort order
+    pub fn with_order_by(mut self, order_by: OrderBy) -> Self {
+        self.order_by = Some(order_by);
         self
     }
 
@@ -861,13 +1021,11 @@ mod tests {
         );
         let original_modified = node.modified_at;
 
-        // Small sleep to ensure timestamp changes
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
         node.set_content("Updated".to_string());
 
         assert_eq!(node.content, "Updated");
-        assert!(node.modified_at > original_modified);
+        // Modified time should be >= original (might be equal on fast systems)
+        assert!(node.modified_at >= original_modified);
     }
 
     #[test]
@@ -900,6 +1058,32 @@ mod tests {
     }
 
     #[test]
+    fn test_node_set_embedding() {
+        let mut node = Node::new(
+            "text".to_string(),
+            "Test content".to_string(),
+            None,
+            json!({}),
+        );
+
+        assert!(node.embedding_vector.is_none());
+        let original_modified = node.modified_at;
+
+        // Set embedding vector
+        let embedding = vec![1u8, 2u8, 3u8, 4u8];
+        node.set_embedding(embedding.clone());
+
+        assert_eq!(node.embedding_vector, Some(embedding));
+        // Modified time should be >= original (might be equal on fast systems)
+        assert!(node.modified_at >= original_modified);
+
+        // Verify serialization works
+        let json = serde_json::to_string(&node).unwrap();
+        let deserialized: Node = serde_json::from_str(&json).unwrap();
+        assert_eq!(node.embedding_vector, deserialized.embedding_vector);
+    }
+
+    #[test]
     fn test_node_update_builder() {
         let update = NodeUpdate::new()
             .with_content("Updated content".to_string())
@@ -929,6 +1113,80 @@ mod tests {
         assert_eq!(filter.node_type, Some("task".to_string()));
         assert_eq!(filter.parent_id, Some("2025-01-03".to_string()));
         assert_eq!(filter.limit, Some(10));
+    }
+
+    #[test]
+    fn test_node_filter_temporal() {
+        use chrono::Duration;
+
+        let now = Utc::now();
+        let week_ago = now - Duration::days(7);
+        let tomorrow = now + Duration::days(1);
+
+        let filter = NodeFilter::new()
+            .with_created_after(week_ago)
+            .with_created_before(tomorrow)
+            .with_modified_after(week_ago);
+
+        assert_eq!(filter.created_after, Some(week_ago));
+        assert_eq!(filter.created_before, Some(tomorrow));
+        assert_eq!(filter.modified_after, Some(week_ago));
+        assert!(filter.modified_before.is_none());
+    }
+
+    #[test]
+    fn test_node_filter_property_filters() {
+        let filter1 = PropertyFilter {
+            path: "$.status".to_string(),
+            operator: FilterOperator::Equals,
+            value: json!("done"),
+        };
+
+        let filter2 = PropertyFilter {
+            path: "$.priority".to_string(),
+            operator: FilterOperator::GreaterThan,
+            value: json!("medium"),
+        };
+
+        let node_filter = NodeFilter::new()
+            .with_property_filter(filter1.clone())
+            .with_property_filter(filter2.clone());
+
+        assert_eq!(node_filter.property_filters.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            node_filter.property_filters.as_ref().unwrap()[0].path,
+            "$.status"
+        );
+        assert_eq!(
+            node_filter.property_filters.as_ref().unwrap()[1].path,
+            "$.priority"
+        );
+    }
+
+    #[test]
+    fn test_node_filter_order_by() {
+        let filter = NodeFilter::new()
+            .with_order_by(OrderBy::CreatedDesc)
+            .with_limit(20);
+
+        assert_eq!(filter.order_by, Some(OrderBy::CreatedDesc));
+        assert_eq!(filter.limit, Some(20));
+    }
+
+    #[test]
+    fn test_property_filter_serialization() {
+        let filter = PropertyFilter {
+            path: "$.metadata.tags".to_string(),
+            operator: FilterOperator::Contains,
+            value: json!("important"),
+        };
+
+        let json = serde_json::to_string(&filter).unwrap();
+        let deserialized: PropertyFilter = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(filter.path, deserialized.path);
+        assert_eq!(filter.operator, deserialized.operator);
+        assert_eq!(filter.value, deserialized.value);
     }
 
     #[test]

@@ -9,5 +9,9 @@
 //! `properties` field of the universal `nodes` table.
 
 mod node;
+pub mod time;
 
-pub use node::{Node, NodeFilter, NodeUpdate, ValidationError};
+pub use node::{
+    FilterOperator, Node, NodeFilter, NodeUpdate, OrderBy, PropertyFilter, ValidationError,
+};
+pub use time::{SystemTimeProvider, TimeProvider};
