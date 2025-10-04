@@ -92,18 +92,15 @@
       // Initialize with loaded nodes directly (no conversion needed)
       nodeManager.initializeNodes(children, {
         expanded: true,
-        autoFocus: false,
+        autoFocus: children.length === 0,  // Auto-focus first node if empty
         inheritHeaderLevel: 0
       });
 
-      // Always add a placeholder node at the end
-      if (children.length > 0) {
-        const lastChildId = children[children.length - 1].id;
-        nodeManager.createPlaceholderNode(lastChildId, 'text', 0, false, '', true);
-      } else {
-        // If no children, create focused placeholder as first node
-        // We need a dummy "after" node, so we use the date node ID itself
-        nodeManager.createPlaceholderNode(dateId, 'text', 0, true, '', true);
+      // If no children, create an empty node as placeholder for immediate typing
+      // This creates a real node in memory but won't save to DB until user types content
+      if (children.length === 0) {
+        // Create node: afterNodeId, content, nodeType, headerLevel, insertAtBeginning, originalContent, focusNewNode
+        nodeManager.createNode(currentDateId, '', 'text', 0, true, '', true);
       }
     } catch (error) {
       console.error('[DateNodeViewer] Failed to load nodes for date:', dateId, error);
