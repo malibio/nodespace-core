@@ -726,13 +726,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
   }
 
-  function initializeWithRichDemoData(): void {
-    // Clear existing data
-    Object.keys(_nodes).forEach((key) => delete _nodes[key]);
-    Object.keys(_uiState).forEach((key) => delete _uiState[key]);
-    _rootNodeIds = [];
-  }
-
   return {
     // Reactive getters
     get nodes() {
@@ -767,9 +760,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     toggleExpanded,
 
     // Initialization
-    initializeNodes,
-    initializeWithSampleData: initializeWithRichDemoData,
-    initializeWithRichDemoData
+    initializeNodes
   };
 }
 
