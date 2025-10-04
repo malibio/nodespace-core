@@ -6,12 +6,6 @@
  */
 
 // ============================================================================
-// Core Database and Storage
-// ============================================================================
-// Temporarily commented out - mockDatabaseService deleted in Phase 1
-// export * from './mockDatabaseService';
-
-// ============================================================================
 // Node Management
 // ============================================================================
 export * from './reactiveNodeService.svelte.js';
@@ -44,9 +38,3 @@ export * from './wysiwygProcessor';
 // Performance and Monitoring
 // ============================================================================
 export * from './performanceMonitor';
-
-// ============================================================================
-// Legacy and Utilities
-// ============================================================================
-// Temporarily commented out - mockTextService deleted in Phase 1
-// export * from './mockTextService';

@@ -816,17 +816,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
   }
 
-  function initializeWithRichDemoData(): void {
-    // Clear existing data
-    Object.keys(_nodes).forEach((key) => delete _nodes[key]);
-    Object.keys(_uiState).forEach((key) => delete _uiState[key]);
-    _rootNodeIds = [];
-
-    // Demo data would go here, but we're phasing this out
-    // For now, just create an empty placeholder
-  }
-
-  // Helper methods for backward compatibility
+  // Helper methods
   function updateDescendantDepths(nodeId: string): void {
     const node = _nodes[nodeId];
     const uiState = _uiState[nodeId];
@@ -880,10 +870,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     outdentNode,
     deleteNode,
     toggleExpanded,
-
-    // Initialization
-    initializeWithSampleData: initializeWithRichDemoData,
-    initializeWithRichDemoData,
 
     // Content processing methods for integration tests
     parseNodeContent(nodeId: string) {
