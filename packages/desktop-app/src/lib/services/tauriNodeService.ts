@@ -1,0 +1,210 @@
+/**
+ * TauriNodeService - Real backend integration via Tauri commands
+ *
+ * Provides persistent storage with libsql through Tauri invoke() commands.
+ * Uses unified Node type that matches Rust backend exactly.
+ *
+ * Database Location (automatically handled by backend):
+ * - macOS/Linux: ~/.local/share/nodespace/nodespace.db
+ * - Windows: %APPDATA%/nodespace/nodespace.db
+ */
+
+import { invoke } from '@tauri-apps/api/core';
+import type { Node, NodeUpdate } from '$lib/types';
+import { toError, DatabaseInitializationError, NodeOperationError } from '$lib/types/errors';
+
+/**
+ * TauriNodeService - Clean implementation with unified types
+ */
+export class TauriNodeService {
+	private initialized = false;
+	private dbPath: string | null = null;
+
+	/**
+	 * Initialize database with default location
+	 *
+	 * Backend automatically chooses platform-appropriate location.
+	 * Call this once at app startup - BLOCKING operation.
+	 *
+	 * @returns Path to the initialized database file
+	 * @throws DatabaseInitializationError if initialization fails
+	 */
+	async initializeDatabase(): Promise<string> {
+		try {
+			this.dbPath = await invoke<string>('initialize_database');
+			this.initialized = true;
+			console.log('[TauriNodeService] Database initialized at:', this.dbPath);
+			return this.dbPath;
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to initialize database:', err);
+			throw new DatabaseInitializationError(err.message, err.stack);
+		}
+	}
+
+	/**
+	 * Select database location using native folder picker
+	 *
+	 * Presents a native dialog to the user for custom database locations.
+	 * Most apps should use initializeDatabase() instead.
+	 *
+	 * @returns Path to the selected database file
+	 * @throws DatabaseInitializationError if user cancels or initialization fails
+	 */
+	async selectDatabaseLocation(): Promise<string> {
+		try {
+			this.dbPath = await invoke<string>('select_db_location');
+			this.initialized = true;
+			console.log('[TauriNodeService] Database location selected:', this.dbPath);
+			return this.dbPath;
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to select database location:', err);
+			throw new DatabaseInitializationError(err.message, err.stack);
+		}
+	}
+
+	/**
+	 * Create a new node
+	 *
+	 * Note: Caller must provide node.id (UUID or deterministic like date)
+	 * Backend will set created_at and modified_at automatically.
+	 *
+	 * @param node - Complete node data (id required, timestamps optional)
+	 * @returns ID of the created node
+	 * @throws NodeOperationError if creation fails
+	 */
+	async createNode(node: Omit<Node, 'created_at' | 'modified_at'>): Promise<string> {
+		this.ensureInitialized();
+
+		try {
+			// Backend will add created_at and modified_at
+			const nodeId = await invoke<string>('create_node', { node });
+			console.log('[TauriNodeService] Created node:', nodeId);
+			return nodeId;
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to create node:', err);
+			throw new NodeOperationError(err.message, node.id, 'create');
+		}
+	}
+
+	/**
+	 * Get a node by ID
+	 *
+	 * @param id - Unique identifier of the node
+	 * @returns Node data if found, null otherwise
+	 * @throws NodeOperationError if operation fails
+	 */
+	async getNode(id: string): Promise<Node | null> {
+		this.ensureInitialized();
+
+		try {
+			const node = await invoke<Node | null>('get_node', { id });
+			return node;
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to get node:', id, err);
+			throw new NodeOperationError(err.message, id, 'get');
+		}
+	}
+
+	/**
+	 * Update an existing node
+	 *
+	 * Note: Backend automatically updates modified_at - do NOT include in update.
+	 *
+	 * @param id - ID of the node to update
+	 * @param update - Fields to update (partial)
+	 * @throws NodeOperationError if node doesn't exist or update fails
+	 */
+	async updateNode(id: string, update: NodeUpdate): Promise<void> {
+		this.ensureInitialized();
+
+		try {
+			// Backend will auto-update modified_at
+			await invoke<void>('update_node', { id, update });
+			console.log('[TauriNodeService] Updated node:', id);
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to update node:', id, err);
+			throw new NodeOperationError(err.message, id, 'update');
+		}
+	}
+
+	/**
+	 * Delete a node by ID
+	 *
+	 * Warning: This is destructive and cannot be undone.
+	 *
+	 * @param id - ID of the node to delete
+	 * @throws NodeOperationError if node doesn't exist or deletion fails
+	 */
+	async deleteNode(id: string): Promise<void> {
+		this.ensureInitialized();
+
+		try {
+			await invoke<void>('delete_node', { id });
+			console.log('[TauriNodeService] Deleted node:', id);
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to delete node:', id, err);
+			throw new NodeOperationError(err.message, id, 'delete');
+		}
+	}
+
+	/**
+	 * Get child nodes of a parent node
+	 *
+	 * Returns nodes sorted by sibling order (before_sibling_id linked list).
+	 *
+	 * @param parentId - ID of the parent node
+	 * @returns Array of child nodes (empty if no children)
+	 * @throws NodeOperationError if operation fails
+	 */
+	async getChildren(parentId: string): Promise<Node[]> {
+		this.ensureInitialized();
+
+		try {
+			const children = await invoke<Node[]>('get_children', { parent_id: parentId });
+			return children;
+		} catch (error) {
+			const err = toError(error);
+			console.error('[TauriNodeService] Failed to get children:', parentId, err);
+			throw new NodeOperationError(err.message, parentId, 'getChildren');
+		}
+	}
+
+	/**
+	 * Get database path (if initialized)
+	 */
+	getDatabasePath(): string | null {
+		return this.dbPath;
+	}
+
+	/**
+	 * Check if database is initialized
+	 */
+	isInitialized(): boolean {
+		return this.initialized;
+	}
+
+	/**
+	 * Ensure database is initialized before operations
+	 * @private
+	 */
+	private ensureInitialized(): void {
+		if (!this.initialized) {
+			throw new DatabaseInitializationError(
+				'Database not initialized. Call initializeDatabase() first.'
+			);
+		}
+	}
+}
+
+/**
+ * Singleton instance for easy access throughout the app
+ */
+export const tauriNodeService = new TauriNodeService();
+
+export default TauriNodeService;

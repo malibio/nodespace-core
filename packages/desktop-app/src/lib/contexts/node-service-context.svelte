@@ -17,7 +17,7 @@
   import type { HierarchyService as HierarchyServiceType } from '$lib/services/hierarchyService';
   import type { NodeOperationsService as NodeOperationsServiceType } from '$lib/services/nodeOperationsService';
   import type { ContentProcessor as ContentProcessorType } from '$lib/services/contentProcessor';
-  import type { MockDatabaseService as MockDatabaseServiceType } from '$lib/services/mockDatabaseService';
+  import type { TauriNodeService as TauriNodeServiceType } from '$lib/services/tauriNodeService';
   import type NodeReferenceServiceType from '$lib/services/nodeReferenceService';
 
   // Service interface definition with proper types
@@ -27,7 +27,7 @@
     hierarchyService: HierarchyServiceType;
     nodeOperationsService: NodeOperationsServiceType;
     contentProcessor: ContentProcessorType;
-    databaseService: MockDatabaseServiceType;
+    databaseService: TauriNodeServiceType;
   }
 
   // Context accessor functions
@@ -48,7 +48,7 @@
   import { createReactiveNodeService } from '$lib/services/reactiveNodeService.svelte';
   import { HierarchyService } from '$lib/services/hierarchyService';
   import { NodeOperationsService } from '$lib/services/nodeOperationsService';
-  import { MockDatabaseService } from '$lib/services/mockDatabaseService';
+  import { tauriNodeService } from '$lib/services/tauriNodeService';
   import { ContentProcessor } from '$lib/services/contentProcessor';
 
   // Props - external reference only for service configuration
@@ -62,8 +62,8 @@
   // Initialize services on mount
   onMount(async () => {
     try {
-      // Initialize services in dependency order
-      const databaseService = new MockDatabaseService();
+      // Initialize database with default location
+      await tauriNodeService.initializeDatabase();
 
       // Create node manager events
       const nodeManagerEvents = {
@@ -128,8 +128,7 @@
 
       const nodeManager = createReactiveNodeService(nodeManagerEvents);
 
-      // Initialize with demo data
-      nodeManager.initializeWithRichDemoData();
+      // No more demo data initialization - we'll load from real database
 
       const hierarchyService = new HierarchyService(nodeManager);
       const contentProcessor = ContentProcessor.getInstance();
@@ -143,7 +142,7 @@
         nodeManager,
         hierarchyService,
         nodeOperationsService,
-        databaseService,
+        tauriNodeService,
         contentProcessor
       );
 
@@ -154,7 +153,7 @@
         hierarchyService,
         nodeOperationsService,
         contentProcessor,
-        databaseService
+        databaseService: tauriNodeService
       };
 
       // Set context for child components
