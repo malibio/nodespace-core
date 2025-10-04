@@ -27,15 +27,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NodeReferenceService } from '../../lib/services/nodeReferenceService';
 import {
   createReactiveNodeService,
-  type ReactiveNodeService as NodeManager,
-  type Node
+  type ReactiveNodeService as NodeManager
 } from '../../lib/services/reactiveNodeService.svelte.js';
 import { HierarchyService } from '../../lib/services/hierarchyService';
 import { NodeOperationsService } from '../../lib/services/nodeOperationsService';
-import { MockDatabaseService } from '../../lib/services/mockDatabaseService';
 import { ContentProcessor } from '../../lib/services/contentProcessor';
 import { eventBus } from '../../lib/services/eventBus';
 import type { ReferencesUpdateNeededEvent, NodeDeletedEvent } from '../../lib/services/eventTypes';
+import type { Node } from '../../lib/types/node';
 
 // Mock document for test environment
 Object.defineProperty(global, 'document', {
@@ -50,15 +49,133 @@ Object.defineProperty(global, 'document', {
   writable: true
 });
 
+// In-memory node storage for tests
+const nodeStore = new Map<string, Node>();
+
+// Create a mock database service that implements the same interface as TauriNodeService
+class MockTauriNodeService {
+  private initialized = false;
+  private dbPath: string | null = null;
+
+  async initializeDatabase(): Promise<string> {
+    this.initialized = true;
+    this.dbPath = '/mock/db/path';
+    return this.dbPath;
+  }
+
+  async selectDatabaseLocation(): Promise<string> {
+    this.initialized = true;
+    this.dbPath = '/mock/db/path';
+    return this.dbPath;
+  }
+
+  async createNode(node: Omit<Node, 'created_at' | 'modified_at'>): Promise<string> {
+    const fullNode: Node = {
+      ...node,
+      created_at: new Date().toISOString(),
+      modified_at: new Date().toISOString()
+    };
+    nodeStore.set(fullNode.id, fullNode);
+    return fullNode.id;
+  }
+
+  async getNode(id: string): Promise<Node | null> {
+    return nodeStore.get(id) || null;
+  }
+
+  async updateNode(id: string, update: Partial<Node>): Promise<void> {
+    const existing = nodeStore.get(id);
+    if (existing) {
+      const updated = { ...existing, ...update, modified_at: new Date().toISOString() };
+      nodeStore.set(id, updated);
+    }
+  }
+
+  async deleteNode(id: string): Promise<void> {
+    nodeStore.delete(id);
+  }
+
+  async getChildren(parentId: string): Promise<Node[]> {
+    return Array.from(nodeStore.values()).filter((node) => node.parent_id === parentId);
+  }
+
+  async searchNodes(query: string, nodeType?: string): Promise<Node[]> {
+    const lowerQuery = query.toLowerCase();
+    return Array.from(nodeStore.values()).filter((node) => {
+      const matchesQuery = node.content.toLowerCase().includes(lowerQuery);
+      const matchesType = !nodeType || node.node_type === nodeType;
+      return matchesQuery && matchesType;
+    });
+  }
+
+  async getNodesByMentions(targetId: string): Promise<Node[]> {
+    return Array.from(nodeStore.values()).filter((node) => node.mentions?.includes(targetId));
+  }
+
+  async queryNodes(query: {
+    id?: string;
+    content_contains?: string;
+    type?: string;
+    mentioned_by?: string;
+    limit?: number;
+  }): Promise<Node[]> {
+    let results = Array.from(nodeStore.values());
+
+    // Filter by ID
+    if (query.id) {
+      const node = nodeStore.get(query.id);
+      return node ? [node] : [];
+    }
+
+    // Filter by content
+    if (query.content_contains) {
+      const lowerQuery = query.content_contains.toLowerCase();
+      results = results.filter((node) => node.content.toLowerCase().includes(lowerQuery));
+    }
+
+    // Filter by type
+    if (query.type) {
+      results = results.filter((node) => node.node_type === query.type);
+    }
+
+    // Filter by mentions (with type guard)
+    if (query.mentioned_by) {
+      const mentionedBy = query.mentioned_by; // Capture in const for type narrowing
+      results = results.filter((node) => node.mentions?.includes(mentionedBy));
+    }
+
+    // Apply limit
+    if (query.limit) {
+      results = results.slice(0, query.limit);
+    }
+
+    return results;
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  getDatabasePath(): string | null {
+    return this.dbPath;
+  }
+
+  private ensureInitialized(): void {
+    if (!this.initialized) {
+      throw new Error('Database not initialized');
+    }
+  }
+}
+
 describe('NodeReferenceService - Universal Node Reference System', () => {
   let nodeReferenceService: NodeReferenceService;
   let nodeManager: NodeManager;
   let hierarchyService: HierarchyService;
   let nodeOperationsService: NodeOperationsService;
-  let databaseService: MockDatabaseService;
+  let databaseService: MockTauriNodeService;
   let contentProcessor: ContentProcessor;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Clear EventBus state
     eventBus.reset();
 
@@ -87,7 +204,14 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
     hierarchyService = new HierarchyService(nodeManager);
     contentProcessor = ContentProcessor.getInstance();
-    databaseService = new MockDatabaseService();
+
+    // Clear node store before each test
+    nodeStore.clear();
+
+    // Mock TauriNodeService with in-memory storage
+    databaseService = new MockTauriNodeService();
+    await databaseService.initializeDatabase();
+
     nodeOperationsService = new NodeOperationsService(
       nodeManager,
       hierarchyService,
@@ -95,18 +219,19 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
     );
 
     // Initialize NodeReferenceService
+    // TypeScript note: MockTauriNodeService implements the public interface of TauriNodeService
+    // but may differ in private implementation details, so we use type assertion here
     nodeReferenceService = new NodeReferenceService(
       nodeManager,
       hierarchyService,
       nodeOperationsService,
-      databaseService,
+      databaseService as unknown as import('../../lib/services/tauriNodeService').TauriNodeService,
       contentProcessor
     );
   });
 
   afterEach(() => {
     eventBus.reset();
-    // MockDatabaseService doesn't have a reset method, we recreate it in beforeEach
   });
 
   describe('@ Trigger Detection', () => {
@@ -173,46 +298,40 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       const node2 = nodeManager.findNode(node2Id)!;
       const node3 = nodeManager.findNode(node3Id)!;
 
-      // Add to database for search
-      await databaseService.upsertNode({
+      // Add to database for search using new schema
+      await databaseService.createNode({
         id: node1.id,
-        type: 'project',
+        node_type: 'project',
         content: 'Test Project Node',
         parent_id: null,
         root_id: node1.id,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [],
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
 
-      await databaseService.upsertNode({
+      await databaseService.createNode({
         id: node2.id,
-        type: 'document',
+        node_type: 'document',
         content: 'Project Documentation',
         parent_id: null,
         root_id: node2.id,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [],
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
 
-      await databaseService.upsertNode({
+      await databaseService.createNode({
         id: node3.id,
-        type: 'text',
+        node_type: 'text',
         content: 'Another Test',
         parent_id: null,
         root_id: node3.id,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [],
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
     });
@@ -328,31 +447,29 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
       expect(resolved).toMatchObject({
         id: node.id,
-        type: 'text', // NodeSpaceNode uses 'type' not 'nodeType'
+        node_type: 'text', // UnifiedNode uses 'node_type'
         content: 'Test Node Content'
       });
     });
   });
 
   describe('Bidirectional Reference Tracking', () => {
-    let sourceNode: Node;
-    let targetNode: Node;
+    let sourceNodeId: string;
+    let targetNodeId: string;
 
     beforeEach(() => {
-      const sourceNodeId = nodeManager.createNode('root', 'Source Node', 'text');
-      const targetNodeId = nodeManager.createNode('root', 'Target Node', 'text');
-      sourceNode = nodeManager.findNode(sourceNodeId)!;
-      targetNode = nodeManager.findNode(targetNodeId)!;
+      sourceNodeId = nodeManager.createNode('root', 'Source Node', 'text');
+      targetNodeId = nodeManager.createNode('root', 'Target Node', 'text');
     });
 
     it('should add bidirectional reference', async () => {
-      await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
+      await nodeReferenceService.addReference(sourceNodeId, targetNodeId);
 
-      const outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
+      const outgoing = nodeReferenceService.getOutgoingReferences(sourceNodeId);
 
       expect(outgoing).toHaveLength(1);
       expect(outgoing[0]).toMatchObject({
-        nodeId: targetNode.id,
+        nodeId: targetNodeId,
         title: 'Target Node',
         nodeType: 'text',
         isValid: true
@@ -361,44 +478,42 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
     it('should remove bidirectional reference', async () => {
       // Add reference first
-      await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
+      await nodeReferenceService.addReference(sourceNodeId, targetNodeId);
 
       // Verify it exists
-      let outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
+      let outgoing = nodeReferenceService.getOutgoingReferences(sourceNodeId);
       expect(outgoing).toHaveLength(1);
 
       // Remove reference
-      await nodeReferenceService.removeReference(sourceNode.id, targetNode.id);
+      await nodeReferenceService.removeReference(sourceNodeId, targetNodeId);
 
       // Verify it's removed
-      outgoing = nodeReferenceService.getOutgoingReferences(sourceNode.id);
+      outgoing = nodeReferenceService.getOutgoingReferences(sourceNodeId);
       expect(outgoing).toHaveLength(0);
     });
 
     it('should get incoming references', async () => {
       // Add reference from source to target
-      await nodeReferenceService.addReference(sourceNode.id, targetNode.id);
+      await nodeReferenceService.addReference(sourceNodeId, targetNodeId);
 
-      // Add to database for incoming reference query
-      await databaseService.upsertNode({
-        id: sourceNode.id,
-        type: 'text',
+      // Add to database for incoming reference query using new schema
+      await databaseService.createNode({
+        id: sourceNodeId,
+        node_type: 'text',
         content: 'Source Node',
         parent_id: null,
-        root_id: sourceNode.id,
+        root_id: sourceNodeId,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
-        mentions: [targetNode.id],
-        metadata: {},
+        mentions: [targetNodeId],
+        properties: {},
         embedding_vector: null
       });
 
-      const incoming = await nodeReferenceService.getIncomingReferences(targetNode.id);
+      const incoming = await nodeReferenceService.getIncomingReferences(targetNodeId);
 
       expect(incoming).toHaveLength(1);
       expect(incoming[0]).toMatchObject({
-        nodeId: sourceNode.id,
+        nodeId: sourceNodeId,
         title: 'Source Node',
         isValid: true
       });
@@ -416,46 +531,40 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       const node2 = nodeManager.findNode(node2Id)!;
       const node3 = nodeManager.findNode(node3Id)!;
 
-      // Add to database
-      await databaseService.upsertNode({
+      // Add to database using new schema
+      await databaseService.createNode({
         id: node1.id,
-        type: 'document',
+        node_type: 'document',
         content: 'JavaScript Tutorial',
         parent_id: null,
         root_id: node1.id,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [],
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
 
-      await databaseService.upsertNode({
+      await databaseService.createNode({
         id: node2.id,
-        type: 'document',
+        node_type: 'document',
         content: 'Python Guide',
         parent_id: null,
         root_id: node2.id,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [],
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
 
-      await databaseService.upsertNode({
+      await databaseService.createNode({
         id: node3.id,
-        type: 'project',
+        node_type: 'project',
         content: 'Web Development',
         parent_id: null,
         root_id: node3.id,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [],
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
     });
@@ -465,7 +574,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
-        type: 'document',
+        node_type: 'document',
         content: 'JavaScript Tutorial'
       });
     });
@@ -475,7 +584,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
-        type: 'project',
+        node_type: 'project',
         content: 'Web Development'
       });
     });
@@ -484,7 +593,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       const newNode = await nodeReferenceService.createNode('note', 'New Note Content');
 
       expect(newNode).toMatchObject({
-        type: 'note',
+        node_type: 'note',
         content: 'New Note Content',
         mentions: []
       });
@@ -603,18 +712,16 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       let outgoing = nodeReferenceService.getOutgoingReferences(sourceNodeId);
       expect(outgoing).toHaveLength(1);
 
-      // Add the source node to database so cleanup can find it
-      await databaseService.upsertNode({
+      // Add the source node to database so cleanup can find it using new schema
+      await databaseService.createNode({
         id: sourceNodeId,
-        type: 'text',
+        node_type: 'text',
         content: 'Source',
         parent_id: null,
         root_id: sourceNodeId,
         before_sibling_id: null,
-        depth: 0,
-        created_at: new Date().toISOString(),
         mentions: [targetNodeId], // This is what cleanup will search for
-        metadata: {},
+        properties: {},
         embedding_vector: null
       });
 

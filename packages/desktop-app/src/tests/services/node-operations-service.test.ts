@@ -38,7 +38,7 @@ import { HierarchyService } from '../../lib/services/hierarchyService';
 import { NodeOperationsService } from '../../lib/services/nodeOperationsService';
 import { ContentProcessor } from '../../lib/services/contentProcessor';
 import { eventBus } from '../../lib/services/eventBus';
-import type { NodeSpaceNode } from '../../lib/services/mockDatabaseService';
+import type { Node } from '$lib/types';
 
 describe('NodeOperationsService', () => {
   let nodeManager: NodeManager;
@@ -121,22 +121,22 @@ describe('NodeOperationsService', () => {
       expect(result.fallbackUsed).toBe(false);
     });
 
-    test('extractContentString extracts from metadata as fallback', () => {
+    test('extractContentString extracts from properties as fallback', () => {
       const result = nodeOperationsService.extractContentString({
-        metadata: {
-          text: 'Content from metadata',
+        properties: {
+          text: 'Content from properties',
           someOtherField: 'ignored'
         }
       });
 
-      expect(result.content).toBe('Content from metadata');
+      expect(result.content).toBe('Content from properties');
       expect(result.confidence).toBeLessThan(1.0);
       expect(result.fallbackUsed).toBe(true);
     });
 
     test('extractContentString uses type defaults when no content', () => {
       const result = nodeOperationsService.extractContentString({
-        type: 'ai-chat'
+        node_type: 'ai-chat'
       });
 
       expect(result.content).toBe('');
@@ -404,12 +404,12 @@ const x = 42;
 
   describe('Upsert Operations', () => {
     test('upsertNode creates new node with all properties', async () => {
-      const nodeData: Partial<NodeSpaceNode> = {
-        type: 'ai-chat',
+      const nodeData: Partial<Node> = {
+        node_type: 'ai-chat',
         content: 'Test content',
         parent_id: 'root1',
         mentions: ['child1'],
-        metadata: {
+        properties: {
           chatRole: 'user',
           timestamp: Date.now()
         }
@@ -418,17 +418,17 @@ const x = 42;
       const result = await nodeOperationsService.upsertNode('new-node', nodeData);
 
       expect(result.id).toBe('new-node');
-      expect(result.type).toBe('ai-chat');
+      expect(result.node_type).toBe('ai-chat');
       expect(result.content).toBe('Test content');
       expect(result.parent_id).toBe('root1');
       expect(result.mentions).toEqual(['child1']);
-      expect(result.metadata).toMatchObject({
+      expect(result.properties).toMatchObject({
         chatRole: 'user'
       });
       expect(result.created_at).toBeDefined();
     });
 
-    test('upsertNode updates existing node preserving metadata', async () => {
+    test('upsertNode updates existing node preserving properties', async () => {
       // First create a node through NodeManager
       const nodeId = nodeManager.createNode('root1', 'Original content');
       const node = nodeManager.findNode(nodeId);
@@ -438,9 +438,9 @@ const x = 42;
       }
 
       // Update with upsert
-      const updates: Partial<NodeSpaceNode> = {
+      const updates: Partial<Node> = {
         content: 'Updated content',
-        metadata: { newProp: 'new', shared: 'updated' }
+        properties: { newProp: 'new', shared: 'updated' }
       };
 
       const result = await nodeOperationsService.upsertNode(nodeId, updates, {
@@ -448,7 +448,7 @@ const x = 42;
       });
 
       expect(result.content).toBe('Updated content');
-      expect(result.metadata).toMatchObject({
+      expect(result.properties).toMatchObject({
         originalProp: 'original', // Preserved
         newProp: 'new', // Added
         shared: 'updated' // Updated
@@ -456,18 +456,18 @@ const x = 42;
     });
 
     test('upsertNode handles content extraction fallbacks', async () => {
-      const nodeData: Partial<NodeSpaceNode> = {
-        type: 'task',
-        metadata: {
-          description: 'Task description from metadata',
+      const nodeData: Partial<Node> = {
+        node_type: 'task',
+        properties: {
+          description: 'Task description from properties',
           completed: false
         }
       };
 
       const result = await nodeOperationsService.upsertNode('task-node', nodeData);
 
-      expect(result.content).toBe('Task description from metadata');
-      expect(result.type).toBe('task');
+      expect(result.content).toBe('Task description from properties');
+      expect(result.node_type).toBe('task');
     });
 
     test('upsertNode preserves hierarchy when requested', async () => {
@@ -488,7 +488,7 @@ const x = 42;
       expect(result.parent_id).toBe('root1');
     });
 
-    test('upsertNode handles complex metadata merging', async () => {
+    test('upsertNode handles complex properties merging', async () => {
       const nodeId = nodeManager.createNode('root1', 'Test node');
       const node = nodeManager.findNode(nodeId);
       if (node) {
@@ -503,7 +503,7 @@ const x = 42;
       }
 
       const result = await nodeOperationsService.upsertNode(nodeId, {
-        metadata: {
+        properties: {
           tags: ['important', 'personal'], // Should override
           settings: {
             theme: 'light' // Should merge with existing
@@ -512,7 +512,7 @@ const x = 42;
         }
       });
 
-      expect(result.metadata).toMatchObject({
+      expect(result.properties).toMatchObject({
         type: 'document', // Preserved
         tags: ['important', 'personal'], // Updated
         settings: {
@@ -532,7 +532,7 @@ const x = 42;
     test('emits appropriate events during upsert', async () => {
       await nodeOperationsService.upsertNode('test-node', {
         content: 'Test content',
-        type: 'text'
+        node_type: 'text'
       });
 
       const events = eventBus.getRecentEvents();
@@ -612,9 +612,9 @@ const x = 42;
       if (note1Node) note1Node.mentions = [];
       if (note2Node) note2Node.mentions = [];
 
-      // Step 2: Use NodeOperationsService to update with enhanced metadata
+      // Step 2: Use NodeOperationsService to update with enhanced properties
       const docResult = await nodeOperationsService.upsertNode(docId, {
-        metadata: { tags: ['important'], workflow: 'test' }
+        properties: { tags: ['important'], workflow: 'test' }
       });
 
       expect(docResult.content).toContain('[[note1]]');
@@ -646,11 +646,11 @@ const x = 42;
 
       // Test upsert functionality
       const result = await nodeOperationsService.upsertNode(node1Id, {
-        metadata: { enhanced: true, processed: Date.now() }
+        properties: { enhanced: true, processed: Date.now() }
       });
 
       expect(result.content).toBe('First node'); // Content preserved
-      expect(result.metadata).toHaveProperty('enhanced');
+      expect(result.properties).toHaveProperty('enhanced');
 
       // Check that mentions were processed correctly
       expect(node1?.mentions || []).toEqual([node2Id]);
