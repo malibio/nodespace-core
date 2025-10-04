@@ -30,6 +30,12 @@ export class TauriNodeService {
    * @throws DatabaseInitializationError if initialization fails
    */
   async initializeDatabase(): Promise<string> {
+    // Guard against double initialization (can happen with HMR or React StrictMode)
+    if (this.initialized && this.dbPath) {
+      console.log('[TauriNodeService] Database already initialized, returning existing path');
+      return this.dbPath;
+    }
+
     try {
       this.dbPath = await invoke<string>('initialize_database');
       this.initialized = true;
@@ -166,7 +172,7 @@ export class TauriNodeService {
     this.ensureInitialized();
 
     try {
-      const children = await invoke<Node[]>('get_children', { parent_id: parentId });
+      const children = await invoke<Node[]>('get_children', { parentId });
       return children;
     } catch (error) {
       const err = toError(error);
