@@ -5,6 +5,9 @@
   - Date navigation header with professional styling
   - Previous/next day functionality
   - Keyboard support for arrow key navigation
+  - Database integration for persistent daily journal entries
+  - Lazy date node creation when first child is added
+  - Debounced saving (500ms) for user input
   - Seamless integration with existing BaseNodeViewer
   - Clean date formatting (e.g., "September 7, 2025")
 
@@ -15,10 +18,19 @@
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { updateTabTitle, getDateTabTitle } from '$lib/stores/navigation.js';
-  import NodeServiceContext from '$lib/contexts/node-service-context.svelte';
+  import NodeServiceContext, { getNodeServices } from '$lib/contexts/node-service-context.svelte';
+  import { v4 as uuidv4 } from 'uuid';
 
   // Props using Svelte 5 runes mode
   let { tabId = 'today' }: { tabId?: string } = $props();
+
+  // Get services from context
+  const services = getNodeServices();
+  if (!services) {
+    throw new Error('NodeServices not available in DateNodeViewer');
+  }
+
+  const { nodeManager, databaseService } = services;
 
   // Normalize date to midnight local time (ignore time components)
   function normalizeDate(d: Date): Date {
@@ -37,6 +49,12 @@
     })
   );
 
+  // Derive current date ID from currentDate
+  const currentDateId = $derived(currentDate.toISOString().split('T')[0]);
+
+  // Map to track debounce timeouts for each node
+  const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
   // Update tab title when date changes using Svelte 5 $effect
   $effect(() => {
     if (tabId) {
@@ -44,6 +62,144 @@
       updateTabTitle(tabId, newTitle);
     }
   });
+
+  // Load nodes from database when date changes
+  $effect(() => {
+    loadNodesForDate(currentDateId);
+  });
+
+  // Watch nodeManager for content changes and persist to database with debounce
+  $effect(() => {
+    // Access visibleNodes to trigger reactivity
+    const nodes = nodeManager.visibleNodes;
+
+    // Schedule persistence for each non-placeholder node
+    for (const node of nodes) {
+      if (node.content.trim() && !node.isPlaceholder) {
+        scheduleNodePersistence(node.id, node.content);
+      }
+    }
+  });
+
+  /**
+   * Load nodes for the current date from database
+   */
+  async function loadNodesForDate(dateId: string) {
+    try {
+      // Load children from database
+      const children = await databaseService.getChildren(dateId);
+
+      // Build legacy node data for initialization
+      const legacyNodes = children.map((child) => ({
+        id: child.id,
+        nodeType: child.node_type,
+        content: child.content,
+        inheritHeaderLevel: 0,
+        children: [],
+        expanded: true,
+        autoFocus: false,
+        metadata: child.properties,
+        parentId: child.parent_id || undefined
+      }));
+
+      // Clear existing nodes and initialize with loaded data
+      if ('initializeFromLegacyData' in nodeManager) {
+        const initFn = nodeManager.initializeFromLegacyData;
+        if (typeof initFn === 'function') {
+          initFn.call(nodeManager, legacyNodes);
+        }
+      }
+
+      // Always add a placeholder node at the end
+      const placeholderId = uuidv4();
+
+      // Add placeholder to nodeManager
+      if (children.length > 0) {
+        const lastChildId = children[children.length - 1].id;
+        nodeManager.createPlaceholderNode(lastChildId, 'text', 0, false, '', true);
+      } else {
+        // If no children, initialize with just the placeholder
+        if ('initializeFromLegacyData' in nodeManager) {
+          const initFn = nodeManager.initializeFromLegacyData;
+          if (typeof initFn === 'function') {
+            initFn.call(nodeManager, [
+              {
+                id: placeholderId,
+                nodeType: 'text',
+                content: '',
+                inheritHeaderLevel: 0,
+                children: [],
+                expanded: true,
+                autoFocus: true,
+                metadata: {},
+                parentId: dateId
+              }
+            ]);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[DateNodeViewer] Failed to load nodes for date:', dateId, error);
+    }
+  }
+
+  /**
+   * Schedule node persistence with debouncing (500ms)
+   */
+  function scheduleNodePersistence(nodeId: string, content: string) {
+    // Clear existing timeout for this node
+    const existingTimeout = saveTimeouts.get(nodeId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    // Set new debounced save
+    const saveTimeout = setTimeout(async () => {
+      if (content.trim()) {
+        try {
+          // Ensure date node exists before saving child
+          const dateNode = await databaseService.getNode(currentDateId);
+          if (!dateNode) {
+            // Create date node lazily
+            await databaseService.createNode({
+              id: currentDateId,
+              node_type: 'date',
+              content: currentDateId,
+              parent_id: null,
+              root_id: null,
+              before_sibling_id: null,
+              properties: {}
+            });
+          }
+
+          // Save or update the child node
+          const existingNode = await databaseService.getNode(nodeId);
+          if (existingNode) {
+            await databaseService.updateNode(nodeId, { content });
+          } else {
+            await databaseService.createNode({
+              id: nodeId,
+              node_type: 'text',
+              content,
+              parent_id: currentDateId,
+              root_id: currentDateId,
+              before_sibling_id: null,
+              properties: {}
+            });
+          }
+
+          console.log('[DateNodeViewer] Persisted node:', nodeId, 'to date:', currentDateId);
+        } catch (error) {
+          console.error('[DateNodeViewer] Failed to save node:', nodeId, error);
+        }
+      }
+
+      // Clean up timeout reference
+      saveTimeouts.delete(nodeId);
+    }, 500); // 500ms debounce
+
+    saveTimeouts.set(nodeId, saveTimeout);
+  }
 
   /**
    * Navigate to previous or next day
