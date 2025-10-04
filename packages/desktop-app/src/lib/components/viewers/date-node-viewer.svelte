@@ -101,9 +101,9 @@
         const lastChildId = children[children.length - 1].id;
         nodeManager.createPlaceholderNode(lastChildId, 'text', 0, false, '', true);
       } else {
-        // If no children, create placeholder directly
-        const placeholderId = uuidv4();
-        nodeManager.createPlaceholderNode(placeholderId, 'text', 0, true, dateId, false);
+        // If no children, create focused placeholder as first node
+        // We need a dummy "after" node, so we use the date node ID itself
+        nodeManager.createPlaceholderNode(dateId, 'text', 0, true, '', true);
       }
     } catch (error) {
       console.error('[DateNodeViewer] Failed to load nodes for date:', dateId, error);
