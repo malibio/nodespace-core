@@ -18,8 +18,9 @@
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { updateTabTitle, getDateTabTitle } from '$lib/stores/navigation.js';
-  import NodeServiceContext, { getNodeServices } from '$lib/contexts/node-service-context.svelte';
+  import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { v4 as uuidv4 } from 'uuid';
+  import type { Node } from '$lib/types/node';
 
   // Props using Svelte 5 runes mode
   let { tabId = 'today' }: { tabId?: string } = $props();
@@ -85,26 +86,38 @@
    * Load nodes for the current date from database
    */
   async function loadNodesForDate(dateId: string) {
+    let children: Node[] = [];
+
     try {
       // Load children from database (already in unified Node format)
-      const children = await databaseService.getChildren(dateId);
-
-      // Initialize with loaded nodes directly (no conversion needed)
-      nodeManager.initializeNodes(children, {
-        expanded: true,
-        autoFocus: children.length === 0,  // Auto-focus first node if empty
-        inheritHeaderLevel: 0
-      });
-
-      // If no children, create an empty node as placeholder for immediate typing
-      // This creates a real node in memory but won't save to DB until user types content
-      if (children.length === 0) {
-        // Create node: afterNodeId, content, nodeType, headerLevel, insertAtBeginning, originalContent, focusNewNode
-        nodeManager.createNode(currentDateId, '', 'text', 0, true, '', true);
-      }
+      children = await databaseService.getChildren(dateId);
     } catch (error) {
-      console.error('[DateNodeViewer] Failed to load nodes for date:', dateId, error);
+      console.warn('[DateNodeViewer] Failed to load nodes from database:', dateId, error);
+      // Continue with empty array - will create placeholder below
     }
+
+    // If no children, create an empty placeholder node
+    if (children.length === 0) {
+      const placeholderId = uuidv4();
+      children = [{
+        id: placeholderId,
+        node_type: 'text',
+        content: '',
+        parent_id: null,  // Root-level node (parent doesn't exist in nodeManager)
+        root_id: placeholderId,  // It's its own root
+        before_sibling_id: null,
+        created_at: new Date().toISOString(),
+        modified_at: new Date().toISOString(),
+        properties: {}
+      }];
+    }
+
+    // Initialize with loaded nodes (or placeholder if empty)
+    nodeManager.initializeNodes(children, {
+      expanded: true,
+      autoFocus: children.length === 1 && children[0].content === '',  // Auto-focus if it's the placeholder
+      inheritHeaderLevel: 0
+    });
   }
 
   /**
@@ -141,15 +154,27 @@
           if (existingNode) {
             await databaseService.updateNode(nodeId, { content });
           } else {
+            // Create as child of date node
             await databaseService.createNode({
               id: nodeId,
               node_type: 'text',
               content,
-              parent_id: currentDateId,
+              parent_id: currentDateId,  // Child of the date node
               root_id: currentDateId,
               before_sibling_id: null,
               properties: {}
             });
+
+            // Update in-memory node to reflect correct parent relationship
+            const node = nodeManager.findNode(nodeId);
+            if (node && node.parent_id === null) {
+              // This was a placeholder - update to have correct parent
+              nodeManager.nodes.set(nodeId, {
+                ...node,
+                parent_id: currentDateId,
+                root_id: currentDateId
+              });
+            }
           }
 
           console.log('[DateNodeViewer] Persisted node:', nodeId, 'to date:', currentDateId);
@@ -201,37 +226,35 @@
 <!-- Keyboard event listener -->
 <svelte:window on:keydown={handleKeydown} />
 
-<NodeServiceContext>
-  <BaseNodeViewer>
-    {#snippet header()}
-      <!-- Date Navigation Header - inherits base styling from BaseNodeViewer -->
-      <div class="date-nav-container">
-        <div class="date-display">
-          <Icon
-            name="calendar"
-            size={24}
-            color="hsl(var(--muted-foreground))"
-            className="calendar-icon"
-          />
-          <h1>{formattedDate}</h1>
-        </div>
-
-        <div class="date-nav-buttons">
-          <button
-            class="date-nav-btn"
-            onclick={() => navigateDate('prev')}
-            aria-label="Previous day"
-          >
-            <Icon name="chevronRight" size={16} color="currentColor" className="rotate-left" />
-          </button>
-          <button class="date-nav-btn" onclick={() => navigateDate('next')} aria-label="Next day">
-            <Icon name="chevronRight" size={16} color="currentColor" />
-          </button>
-        </div>
+<BaseNodeViewer>
+  {#snippet header()}
+    <!-- Date Navigation Header - inherits base styling from BaseNodeViewer -->
+    <div class="date-nav-container">
+      <div class="date-display">
+        <Icon
+          name="calendar"
+          size={24}
+          color="hsl(var(--muted-foreground))"
+          className="calendar-icon"
+        />
+        <h1>{formattedDate}</h1>
       </div>
-    {/snippet}
-  </BaseNodeViewer>
-</NodeServiceContext>
+
+      <div class="date-nav-buttons">
+        <button
+          class="date-nav-btn"
+          onclick={() => navigateDate('prev')}
+          aria-label="Previous day"
+        >
+          <Icon name="chevronRight" size={16} color="currentColor" className="rotate-left" />
+        </button>
+        <button class="date-nav-btn" onclick={() => navigateDate('next')} aria-label="Next day">
+          <Icon name="chevronRight" size={16} color="currentColor" />
+        </button>
+      </div>
+    </div>
+  {/snippet}
+</BaseNodeViewer>
 
 <style>
   /* Date-specific navigation styles - base header styling comes from BaseNodeViewer */

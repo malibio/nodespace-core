@@ -14,7 +14,31 @@ import type { Node, NodeUpdate } from '$lib/types';
 import { toError, DatabaseInitializationError, NodeOperationError } from '$lib/types/errors';
 
 /**
+ * Detect if running in Tauri environment
+ */
+function isTauriEnvironment(): boolean {
+  return typeof window !== 'undefined' &&
+    (window as any).__TAURI_INTERNALS__ !== undefined;
+}
+
+/**
+ * Invoke Tauri command - only works in Tauri environment
+ * In web mode, throws an error that should be handled by caller
+ */
+async function universalInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauriEnvironment()) {
+    throw new DatabaseInitializationError(
+      'Tauri API not available - running in web browser mode. Database operations require Tauri desktop app.',
+      undefined
+    );
+  }
+
+  return invoke<T>(command, args);
+}
+
+/**
  * TauriNodeService - Clean implementation with unified types
+ * Works in both Tauri desktop and web browser environments
  */
 export class TauriNodeService {
   private initialized = false;
@@ -37,7 +61,7 @@ export class TauriNodeService {
     }
 
     try {
-      this.dbPath = await invoke<string>('initialize_database');
+      this.dbPath = await universalInvoke<string>('initialize_database');
       this.initialized = true;
       console.log('[TauriNodeService] Database initialized at:', this.dbPath);
       return this.dbPath;
@@ -59,7 +83,7 @@ export class TauriNodeService {
    */
   async selectDatabaseLocation(): Promise<string> {
     try {
-      this.dbPath = await invoke<string>('select_db_location');
+      this.dbPath = await universalInvoke<string>('select_db_location');
       this.initialized = true;
       console.log('[TauriNodeService] Database location selected:', this.dbPath);
       return this.dbPath;
@@ -85,7 +109,7 @@ export class TauriNodeService {
 
     try {
       // Backend will add created_at and modified_at
-      const nodeId = await invoke<string>('create_node', { node });
+      const nodeId = await universalInvoke<string>('create_node', { node });
       console.log('[TauriNodeService] Created node:', nodeId);
       return nodeId;
     } catch (error) {
@@ -106,7 +130,7 @@ export class TauriNodeService {
     this.ensureInitialized();
 
     try {
-      const node = await invoke<Node | null>('get_node', { id });
+      const node = await universalInvoke<Node | null>('get_node', { id });
       return node;
     } catch (error) {
       const err = toError(error);
@@ -129,7 +153,7 @@ export class TauriNodeService {
 
     try {
       // Backend will auto-update modified_at
-      await invoke<void>('update_node', { id, update });
+      await universalInvoke<void>('update_node', { id, update });
       console.log('[TauriNodeService] Updated node:', id);
     } catch (error) {
       const err = toError(error);
@@ -150,7 +174,7 @@ export class TauriNodeService {
     this.ensureInitialized();
 
     try {
-      await invoke<void>('delete_node', { id });
+      await universalInvoke<void>('delete_node', { id });
       console.log('[TauriNodeService] Deleted node:', id);
     } catch (error) {
       const err = toError(error);
@@ -172,7 +196,7 @@ export class TauriNodeService {
     this.ensureInitialized();
 
     try {
-      const children = await invoke<Node[]>('get_children', { parentId });
+      const children = await universalInvoke<Node[]>('get_children', { parentId });
       return children;
     } catch (error) {
       const err = toError(error);

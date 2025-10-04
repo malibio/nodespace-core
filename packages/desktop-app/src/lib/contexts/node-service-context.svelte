@@ -66,8 +66,13 @@
   // Initialize services on mount
   onMount(async () => {
     try {
-      // Initialize database with default location
-      await tauriNodeService.initializeDatabase();
+      // Try to initialize database (may fail in web mode)
+      try {
+        await tauriNodeService.initializeDatabase();
+      } catch (dbError) {
+        console.warn('[NodeServiceContext] Database unavailable, continuing without persistence:', dbError);
+        // Continue - services will work in memory-only mode
+      }
 
       // Create node manager events
       const nodeManagerEvents = {
