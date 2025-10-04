@@ -92,15 +92,18 @@ describe('NodeOperationsService', () => {
     );
 
     // Set up basic test data
-    nodeManager.initializeNodes([
-      createNode('root1', 'Root node 1'),
-      createNode('child1', 'Child node 1', 'text', 'root1'),
-      createNode('root2', 'Root node 2')
-    ], {
-      autoFocus: false,
-      inheritHeaderLevel: 0,
-      expanded: true
-    });
+    nodeManager.initializeNodes(
+      [
+        createNode('root1', 'Root node 1'),
+        createNode('child1', 'Child node 1', 'text', 'root1'),
+        createNode('root2', 'Root node 2')
+      ],
+      {
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        expanded: true
+      }
+    );
   });
 
   // ========================================================================

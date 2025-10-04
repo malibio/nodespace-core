@@ -96,9 +96,7 @@ describe('EventBus-NodeManager Integration', () => {
   describe('Basic Integration', () => {
     it('should emit events when nodes are created', () => {
       // Create initial node data
-      nodeManager.initializeNodes([
-        createNode('root1', 'Root node')
-      ], {
+      nodeManager.initializeNodes([createNode('root1', 'Root node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -124,9 +122,7 @@ describe('EventBus-NodeManager Integration', () => {
 
     it('should emit events when node content is updated', () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('node1', 'Original content')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Original content')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -155,14 +151,17 @@ describe('EventBus-NodeManager Integration', () => {
 
     it('should emit events when nodes are deleted', () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('parent1', 'Parent node'),
-        createNode('child1', 'Child node', 'text', 'parent1')
-      ], {
-        inheritHeaderLevel: 0,
-        expanded: true,
-        autoFocus: false
-      });
+      nodeManager.initializeNodes(
+        [
+          createNode('parent1', 'Parent node'),
+          createNode('child1', 'Child node', 'text', 'parent1')
+        ],
+        {
+          inheritHeaderLevel: 0,
+          expanded: true,
+          autoFocus: false
+        }
+      );
 
       eventLog.length = 0;
 
@@ -193,9 +192,7 @@ describe('EventBus-NodeManager Integration', () => {
   describe('Status Change Coordination', () => {
     it('should handle expanded/collapsed status changes', () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('node1', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Test node')], {
         expanded: true,
         inheritHeaderLevel: 0,
         autoFocus: false
@@ -224,9 +221,7 @@ describe('EventBus-NodeManager Integration', () => {
   describe('Cache Invalidation Coordination', () => {
     it('should emit cache invalidation events on node operations', () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('node1', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Test node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -246,9 +241,7 @@ describe('EventBus-NodeManager Integration', () => {
 
     it('should handle global cache invalidation on deletions', () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('node1', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Test node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -273,10 +266,7 @@ describe('EventBus-NodeManager Integration', () => {
   describe('Hierarchy Change Coordination', () => {
     it('should coordinate indent operations', () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('node1', 'Node 1'),
-        createNode('node2', 'Node 2')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Node 1'), createNode('node2', 'Node 2')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -301,14 +291,14 @@ describe('EventBus-NodeManager Integration', () => {
 
     it('should coordinate outdent operations', () => {
       // Initialize with nested data
-      nodeManager.initializeNodes([
-        createNode('parent', 'Parent'),
-        createNode('child', 'Child', 'text', 'parent')
-      ], {
-        inheritHeaderLevel: 0,
-        expanded: true,
-        autoFocus: false
-      });
+      nodeManager.initializeNodes(
+        [createNode('parent', 'Parent'), createNode('child', 'Child', 'text', 'parent')],
+        {
+          inheritHeaderLevel: 0,
+          expanded: true,
+          autoFocus: false
+        }
+      );
 
       eventLog.length = 0;
 
@@ -334,9 +324,7 @@ describe('EventBus-NodeManager Integration', () => {
   describe('Performance Integration', () => {
     it('should handle high-frequency node updates efficiently', () => {
       // Initialize with multiple nodes
-      const testNodes = Array.from({ length: 10 }, (_, i) =>
-        createNode(`node${i}`, `Node ${i}`)
-      );
+      const testNodes = Array.from({ length: 10 }, (_, i) => createNode(`node${i}`, `Node ${i}`));
 
       nodeManager.initializeNodes(testNodes, {
         inheritHeaderLevel: 0,
@@ -377,9 +365,7 @@ describe('EventBus-NodeManager Integration', () => {
       });
 
       // Initialize nodes
-      const testNodes = Array.from({ length: 5 }, (_, i) =>
-        createNode(`node${i}`, `Node ${i}`)
-      );
+      const testNodes = Array.from({ length: 5 }, (_, i) => createNode(`node${i}`, `Node ${i}`));
 
       nodeManager.initializeNodes(testNodes, {
         inheritHeaderLevel: 0,
@@ -420,9 +406,7 @@ describe('EventBus-NodeManager Integration', () => {
       eventBus.subscribe('node:updated', normalHandler);
 
       // Initialize node
-      nodeManager.initializeNodes([
-        createNode('node1', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Test node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -445,9 +429,7 @@ describe('EventBus-NodeManager Integration', () => {
 
     it('should maintain consistency after network-like failures', () => {
       // Simulate intermittent failures by temporarily disabling EventBus
-      nodeManager.initializeNodes([
-        createNode('node1', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'Test node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false

@@ -64,7 +64,14 @@ class DatabaseServiceAdapter {
 
     // Check if tauri service has queryNodes method (for MockTauriNodeService in tests)
     if ('queryNodes' in this.tauri && typeof this.tauri.queryNodes === 'function') {
-      return await (this.tauri as unknown as { queryNodes: (query: typeof query) => Promise<Node[]> }).queryNodes(query);
+      type QueryNodesMethod = (q: {
+        id?: string;
+        mentioned_by?: string;
+        content_contains?: string;
+        type?: string;
+        limit?: number;
+      }) => Promise<Node[]>;
+      return await (this.tauri as unknown as { queryNodes: QueryNodesMethod }).queryNodes(query);
     }
 
     // For other queries, we need to implement via getChildren or return empty

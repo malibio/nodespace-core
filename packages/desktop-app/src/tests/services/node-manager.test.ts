@@ -89,7 +89,6 @@ describe('NodeManager', () => {
     nodeManager = createReactiveNodeService(events);
   });
 
-
   describe('Node Combination on Backspace', () => {
     beforeEach(() => {
       // Setup test nodes for combination tests
@@ -99,7 +98,11 @@ describe('NodeManager', () => {
         createNode('node3', 'Third content'),
         createNode('child1', 'Child content', 'text', 'node3')
       ];
-      nodeManager.initializeNodes(testNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
       // Reset call counts after initialization
       focusRequestedCalls.length = 0;
       hierarchyChangedCalls = 0;
@@ -213,7 +216,11 @@ describe('NodeManager', () => {
         createNode('child2', 'Child 2', 'text', 'formatting')
       ];
 
-      nodeManager.initializeNodes(depthTestNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      nodeManager.initializeNodes(depthTestNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
 
       // Perform the merge: shallow node onto deeper node
       nodeManager.combineNodes('formatting', 'realtime');
@@ -245,10 +252,12 @@ describe('NodeManager', () => {
 
   describe('Core Operations', () => {
     beforeEach(() => {
-      const testNodes = [
-        createNode('node1', 'Test content')
-      ];
-      nodeManager.initializeNodes(testNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      const testNodes = [createNode('node1', 'Test content')];
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
       // Reset event counts
       nodeCreatedCalls.length = 0;
       nodeDeletedCalls.length = 0;
@@ -304,7 +313,11 @@ describe('NodeManager', () => {
         createNode('child1', 'Child 1'),
         createNode('child2', 'Child 2')
       ];
-      nodeManager.initializeNodes(testNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
       hierarchyChangedCalls = 0;
     });
 
@@ -397,7 +410,11 @@ describe('NodeManager', () => {
         createNode('node1', 'Node 1'),
         createNode('child1', 'Child 1', 'text', 'node1')
       ];
-      nodeManager.initializeNodes(testNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
 
       // Initially both should be visible
       expect(nodeManager.visibleNodes.map((n) => n.id)).toEqual(['node1', 'child1']);
@@ -412,10 +429,12 @@ describe('NodeManager', () => {
     });
 
     test('node map updates preserve reactivity', () => {
-      const testNodes = [
-        createNode('test', 'Test')
-      ];
-      nodeManager.initializeNodes(testNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      const testNodes = [createNode('test', 'Test')];
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
 
       expect(nodeManager.nodes.size).toBe(1);
 
@@ -458,12 +477,12 @@ describe('NodeManager', () => {
     });
 
     test('maintains consistency after multiple operations', () => {
-      const testNodes = [
-        createNode('a', 'A'),
-        createNode('b', 'B'),
-        createNode('c', 'C')
-      ];
-      nodeManager.initializeNodes(testNodes, { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+      const testNodes = [createNode('a', 'A'), createNode('b', 'B'), createNode('c', 'C')];
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
 
       // Perform multiple operations
       nodeManager.indentNode('b');

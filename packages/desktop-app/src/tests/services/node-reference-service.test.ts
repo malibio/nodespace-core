@@ -211,9 +211,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
     nodeManager = createReactiveNodeService(mockEvents);
 
     // Initialize with a root node so other nodes can be created after it
-    nodeManager.initializeNodes([
-      createNode('root', 'Root node')
-    ], {
+    nodeManager.initializeNodes([createNode('root', 'Root node')], {
       autoFocus: false,
       inheritHeaderLevel: 0,
       expanded: true

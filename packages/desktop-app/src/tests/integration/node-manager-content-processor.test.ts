@@ -49,13 +49,14 @@ describe('NodeManager + ContentProcessor Integration', () => {
   describe('Dual-Representation Methods', () => {
     test('parseNodeContent should parse markdown content to AST', () => {
       // Initialize with test data including our target node
-      nodeManager.initializeNodes([
-        createNode('test-node', '# Test Header\n\nSome **bold** text')
-      ], {
-        expanded: true,
-        autoFocus: false,
-        inheritHeaderLevel: 0
-      });
+      nodeManager.initializeNodes(
+        [createNode('test-node', '# Test Header\n\nSome **bold** text')],
+        {
+          expanded: true,
+          autoFocus: false,
+          inheritHeaderLevel: 0
+        }
+      );
 
       // Parse the content
       const ast = nodeManager.parseNodeContent('test-node');
@@ -67,9 +68,7 @@ describe('NodeManager + ContentProcessor Integration', () => {
 
     test('renderNodeAsHTML should convert markdown to HTML', async () => {
       // Initialize with test data
-      nodeManager.initializeNodes([
-        createNode('html-test-node', '**Bold text** with *italics*')
-      ], {
+      nodeManager.initializeNodes([createNode('html-test-node', '**Bold text** with *italics*')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -83,15 +82,18 @@ describe('NodeManager + ContentProcessor Integration', () => {
     });
 
     test('getNodeHeaderLevel should detect header levels', () => {
-      nodeManager.initializeNodes([
-        createNode('h1-node', '# Header 1'),
-        createNode('h2-node', '## Header 2'),
-        createNode('text-node', 'Regular text')
-      ], {
-        expanded: true,
-        autoFocus: false,
-        inheritHeaderLevel: 0
-      });
+      nodeManager.initializeNodes(
+        [
+          createNode('h1-node', '# Header 1'),
+          createNode('h2-node', '## Header 2'),
+          createNode('text-node', 'Regular text')
+        ],
+        {
+          expanded: true,
+          autoFocus: false,
+          inheritHeaderLevel: 0
+        }
+      );
 
       expect(nodeManager.getNodeHeaderLevel('h1-node')).toBe(1);
       expect(nodeManager.getNodeHeaderLevel('h2-node')).toBe(2);
@@ -99,9 +101,7 @@ describe('NodeManager + ContentProcessor Integration', () => {
     });
 
     test('getNodeDisplayText should strip markdown syntax', () => {
-      nodeManager.initializeNodes([
-        createNode('header-node', '## This is a header')
-      ], {
+      nodeManager.initializeNodes([createNode('header-node', '## This is a header')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -113,9 +113,7 @@ describe('NodeManager + ContentProcessor Integration', () => {
     });
 
     test('updateNodeContentWithProcessing should update content and header level', () => {
-      nodeManager.initializeNodes([
-        createNode('update-test-node', 'Regular text')
-      ], {
+      nodeManager.initializeNodes([createNode('update-test-node', 'Regular text')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -146,9 +144,7 @@ This is a paragraph with **bold** and *italic* text.
 
 \`code block\``;
 
-      nodeManager.initializeNodes([
-        createNode('complex-node', complexContent)
-      ], {
+      nodeManager.initializeNodes([createNode('complex-node', complexContent)], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0

@@ -86,9 +86,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
   describe('createNode Reactive State Synchronization', () => {
     test('createNode updates reactive state properly - single root node', () => {
       // Initialize with one root node (matches BaseNodeViewer)
-      nodeManager.initializeNodes([
-        createNode('root1', 'Initial node')
-      ], {
+      nodeManager.initializeNodes([createNode('root1', 'Initial node')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -117,14 +115,17 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
 
     test('createNode updates reactive state properly - with parent-child hierarchy', () => {
       // Initialize with parent-child structure
-      nodeManager.initializeNodes([
-        createNode('parent1', 'Parent node'),
-        createNode('child1', 'Child node', 'text', 'parent1')
-      ], {
-        expanded: true,
-        autoFocus: false,
-        inheritHeaderLevel: 0
-      });
+      nodeManager.initializeNodes(
+        [
+          createNode('parent1', 'Parent node'),
+          createNode('child1', 'Child node', 'text', 'parent1')
+        ],
+        {
+          expanded: true,
+          autoFocus: false,
+          inheritHeaderLevel: 0
+        }
+      );
 
       expect(nodeManager.visibleNodes).toHaveLength(2); // parent + child
 
@@ -150,9 +151,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
     });
 
     test('createNode maintains autoFocus state correctly', () => {
-      nodeManager.initializeNodes([
-        createNode('node1', 'First node')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'First node')], {
         expanded: true,
         autoFocus: true, // Initially has focus
         inheritHeaderLevel: 0
@@ -178,9 +177,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
     });
 
     test('reactive state matches base class state after createNode', () => {
-      nodeManager.initializeNodes([
-        createNode('test1', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('test1', 'Test node')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -209,15 +206,18 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
   describe('Bug 4 fix - Collapsed node child transfer', () => {
     test('should not transfer children from collapsed nodes when creating new nodes', () => {
       // Set up parent with children in collapsed state
-      nodeManager.initializeNodes([
-        createNode('parent1', 'Parent node'),
-        createNode('child1', 'Child 1', 'text', 'parent1'),
-        createNode('child2', 'Child 2', 'text', 'parent1')
-      ], {
-        expanded: false, // Collapsed - children should not transfer
-        autoFocus: false,
-        inheritHeaderLevel: 0
-      });
+      nodeManager.initializeNodes(
+        [
+          createNode('parent1', 'Parent node'),
+          createNode('child1', 'Child 1', 'text', 'parent1'),
+          createNode('child2', 'Child 2', 'text', 'parent1')
+        ],
+        {
+          expanded: false, // Collapsed - children should not transfer
+          autoFocus: false,
+          inheritHeaderLevel: 0
+        }
+      );
 
       // Create new node after collapsed parent
       const newNodeId = nodeManager.createNode('parent1', 'New node content', 'text');
@@ -240,15 +240,18 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
 
     test('should transfer children from expanded nodes when creating new nodes', () => {
       // Set up parent with children in expanded state
-      nodeManager.initializeNodes([
-        createNode('parent1', 'Parent node'),
-        createNode('child1', 'Child 1', 'text', 'parent1'),
-        createNode('child2', 'Child 2', 'text', 'parent1')
-      ], {
-        expanded: true, // Expanded - children should transfer
-        autoFocus: false,
-        inheritHeaderLevel: 0
-      });
+      nodeManager.initializeNodes(
+        [
+          createNode('parent1', 'Parent node'),
+          createNode('child1', 'Child 1', 'text', 'parent1'),
+          createNode('child2', 'Child 2', 'text', 'parent1')
+        ],
+        {
+          expanded: true, // Expanded - children should transfer
+          autoFocus: false,
+          inheritHeaderLevel: 0
+        }
+      );
 
       // Create new node after expanded parent
       const newNodeId = nodeManager.createNode('parent1', 'New node content', 'text');
@@ -272,10 +275,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
 
   describe('Other Operations - Regression Tests', () => {
     test('deleteNode still works correctly', () => {
-      nodeManager.initializeNodes([
-        createNode('node1', 'First'),
-        createNode('node2', 'Second')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'First'), createNode('node2', 'Second')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -288,10 +288,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
     });
 
     test('indentNode still works correctly', () => {
-      nodeManager.initializeNodes([
-        createNode('node1', 'First'),
-        createNode('node2', 'Second')
-      ], {
+      nodeManager.initializeNodes([createNode('node1', 'First'), createNode('node2', 'Second')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0

@@ -60,13 +60,9 @@ describe('NodeManager Performance Tests', () => {
       const parentIndex = Math.floor(i / 10) * 10;
       const parentId = i > 0 && i !== parentIndex ? `node-${parentIndex}` : null;
 
-      nodes.push(createNode(
-        nodeId,
-        `Content for node ${i}`,
-        'text',
-        parentId,
-        { created: Date.now() }
-      ));
+      nodes.push(
+        createNode(nodeId, `Content for node ${i}`, 'text', parentId, { created: Date.now() })
+      );
     }
 
     return nodes;

@@ -46,9 +46,11 @@ describe('Header Syntax Inheritance Fix', () => {
     nodeService = createReactiveNodeService(mockEvents);
 
     // Initialize with basic structure to have nodes to work with
-    nodeService.initializeNodes([
-      createNode('root-node', 'Root node')
-    ], { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
+    nodeService.initializeNodes([createNode('root-node', 'Root node')], {
+      expanded: true,
+      autoFocus: false,
+      inheritHeaderLevel: 0
+    });
   });
 
   describe('Header Syntax Inheritance on Node Creation', () => {

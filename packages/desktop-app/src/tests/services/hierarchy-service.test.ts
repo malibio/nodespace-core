@@ -424,10 +424,7 @@ describe('HierarchyService', () => {
     });
 
     test('handles root-level siblings correctly', () => {
-      nodeManager.initializeNodes([
-        createNode('root1', 'Root 1'),
-        createNode('root2', 'Root 2')
-      ], {
+      nodeManager.initializeNodes([createNode('root1', 'Root 1'), createNode('root2', 'Root 2')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -523,9 +520,7 @@ describe('HierarchyService', () => {
     });
 
     test('getNodePath handles root nodes correctly', () => {
-      nodeManager.initializeNodes([
-        createNode('root-only', 'Root only')
-      ], {
+      nodeManager.initializeNodes([createNode('root-only', 'Root only')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0
@@ -665,9 +660,7 @@ describe('HierarchyService', () => {
 
   describe('EventBus Integration', () => {
     test('responds to node:updated events', async () => {
-      nodeManager.initializeNodes([
-        createNode('test-node', 'Test node')
-      ], {
+      nodeManager.initializeNodes([createNode('test-node', 'Test node')], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0

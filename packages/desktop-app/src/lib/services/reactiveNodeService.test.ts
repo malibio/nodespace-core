@@ -88,14 +88,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return result;
   }
 
-  function findNode(nodeId: string): (Node & {
-    depth: number;
-    children: string[];
-    expanded: boolean;
-    autoFocus: boolean;
-    inheritHeaderLevel: number;
-    isPlaceholder: boolean;
-  }) | null {
+  function findNode(nodeId: string):
+    | (Node & {
+        depth: number;
+        children: string[];
+        expanded: boolean;
+        autoFocus: boolean;
+        inheritHeaderLevel: number;
+        isPlaceholder: boolean;
+      })
+    | null {
     const node = _nodes[nodeId];
     if (!node) return null;
 
@@ -354,7 +356,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     });
   }
 
-  function processFastContentOperations(nodeId: string, content: string): void {
+  function processFastContentOperations(nodeId: string, _content: string): void {
     const node = _nodes[nodeId];
     if (!node) return;
 
@@ -365,7 +367,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // }
 
     // Update any immediate reference links in other nodes
-    emitReferenceUpdateNeeded(nodeId, content);
+    emitReferenceUpdateNeeded(nodeId);
 
     // Clear fast timer
     const operations = debouncedOperations.get(nodeId);
