@@ -23,5 +23,5 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tauri-plugin-decorum = "1.1.1"
-nodespace-core = { path = "../../core" }
+nodespace-core = { workspace = true }
 
