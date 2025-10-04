@@ -26,11 +26,130 @@
 
 import { eventBus } from './eventBus';
 import { ContentProcessor } from './contentProcessor';
-import type { ReactiveNodeService as NodeManager, Node } from './reactiveNodeService.svelte.ts';
+import type {
+  ReactiveNodeService as NodeManager,
+  LegacyNodeShape
+} from './reactiveNodeService.svelte.ts';
 import type { HierarchyService } from './hierarchyService';
 import type { NodeOperationsService } from './nodeOperationsService';
 import type { Node as UnifiedNode } from '$lib/types';
 import type { TauriNodeService } from './tauriNodeService';
+
+// ============================================================================
+// Type-Safe Conversion Helpers
+// ============================================================================
+
+/**
+ * Convert LegacyNodeShape to UnifiedNode format
+ */
+function toUnifiedFormat(
+  legacy: LegacyNodeShape,
+  rootId?: string,
+  createdAt?: string
+): UnifiedNode {
+  return {
+    id: legacy.id,
+    node_type: legacy.nodeType,
+    content: legacy.content,
+    parent_id: legacy.parentId || null,
+    root_id: rootId || null,
+    before_sibling_id: legacy.before_sibling_id || null,
+    created_at: createdAt || new Date().toISOString(),
+    modified_at: new Date().toISOString(),
+    properties: legacy.metadata,
+    mentions: legacy.mentions,
+    embedding_vector: null
+  };
+}
+
+/**
+ * Get created_at timestamp from legacy node
+ */
+function getCreatedAt(node: LegacyNodeShape): string {
+  return (node.metadata?.created_at as string) || new Date().toISOString();
+}
+
+// ============================================================================
+// Database Service Adapter
+// ============================================================================
+
+/**
+ * DatabaseServiceAdapter - Wraps TauriNodeService with missing methods
+ *
+ * TauriNodeService doesn't yet have queryNodes and upsertNode methods.
+ * This adapter provides those capabilities using the existing methods.
+ */
+class DatabaseServiceAdapter {
+  constructor(private tauri: TauriNodeService) {}
+
+  /**
+   * Query nodes with various filters
+   * Currently implements basic functionality - will be expanded when Tauri backend supports it
+   */
+  async queryNodes(query: {
+    id?: string;
+    mentioned_by?: string;
+    content_contains?: string;
+    type?: string;
+    limit?: number;
+  }): Promise<UnifiedNode[]> {
+    // For id-based queries, use getNode
+    if (query.id) {
+      const node = await this.tauri.getNode(query.id);
+      return node ? [node] : [];
+    }
+
+    // For other queries, we need to implement via getChildren or return empty
+    // This is a temporary solution - proper implementation would query via backend
+    console.warn('queryNodes: Advanced queries not yet implemented on TauriNodeService', query);
+    return [];
+  }
+
+  /**
+   * Upsert node (create or update)
+   * Uses getNode to check existence, then creates or updates accordingly
+   */
+  async upsertNode(node: UnifiedNode): Promise<UnifiedNode> {
+    try {
+      const existing = await this.tauri.getNode(node.id);
+
+      if (existing) {
+        // Update existing node
+        // Note: NodeUpdate doesn't include mentions - those are managed separately
+        await this.tauri.updateNode(node.id, {
+          content: node.content,
+          parent_id: node.parent_id,
+          before_sibling_id: node.before_sibling_id,
+          properties: node.properties
+        });
+        return { ...node, modified_at: new Date().toISOString() };
+      } else {
+        // Create new node
+        await this.tauri.createNode({
+          id: node.id,
+          node_type: node.node_type,
+          content: node.content,
+          parent_id: node.parent_id,
+          root_id: node.root_id,
+          before_sibling_id: node.before_sibling_id,
+          mentions: node.mentions,
+          properties: node.properties
+        });
+        return node;
+      }
+    } catch (error) {
+      console.error('DatabaseServiceAdapter: upsertNode failed', { error, nodeId: node.id });
+      throw error;
+    }
+  }
+
+  /**
+   * Proxy getNode from TauriNodeService
+   */
+  async getNode(id: string): Promise<UnifiedNode | null> {
+    return this.tauri.getNode(id);
+  }
+}
 
 // ============================================================================
 // Core Types and Interfaces
@@ -112,7 +231,7 @@ export class NodeReferenceService {
   private nodeManager: NodeManager;
   private hierarchyService: HierarchyService;
   private nodeOperationsService: NodeOperationsService;
-  private databaseService: TauriNodeService;
+  private databaseService: DatabaseServiceAdapter;
   private contentProcessor: ContentProcessor;
   private readonly serviceName = 'NodeReferenceService';
 
@@ -155,7 +274,7 @@ export class NodeReferenceService {
     this.nodeManager = nodeManager;
     this.hierarchyService = hierarchyService;
     this.nodeOperationsService = nodeOperationsService;
-    this.databaseService = databaseService;
+    this.databaseService = new DatabaseServiceAdapter(databaseService);
     this.contentProcessor = contentProcessor || ContentProcessor.getInstance();
 
     this.setupEventBusIntegration();
@@ -483,20 +602,12 @@ export class NodeReferenceService {
       // Try to find node in NodeManager first
       const managerNode = this.nodeManager.findNode(reference.nodeId);
       if (managerNode) {
-        // Found in NodeManager, convert to UnifiedNode format
-        const nodeSpaceNode: UnifiedNode = {
-          id: managerNode.id,
-          type: managerNode.nodeType,
-          content: managerNode.content,
-          parent_id: managerNode.parentId || null,
-          root_id: this.findRootId(managerNode.id),
-          before_sibling_id: null,
-          depth: (managerNode as any).depth,
-          created_at: new Date().toISOString(),
-          mentions: [],
-          metadata: (managerNode as any).metadata,
-          embedding_vector: null
-        } as any;
+        // Found in NodeManager, convert to UnifiedNode format using type-safe helper
+        const nodeSpaceNode = toUnifiedFormat(
+          managerNode,
+          this.findRootId(managerNode.id),
+          getCreatedAt(managerNode)
+        );
 
         this.performanceMetrics.avgURIResolutionTime =
           (this.performanceMetrics.avgURIResolutionTime + (performance.now() - startTime)) / 2;
@@ -505,7 +616,7 @@ export class NodeReferenceService {
 
       // If not found in NodeManager, try database (for test scenarios)
       try {
-        const dbNodes = await (this.databaseService as any).queryNodes({ id: reference.nodeId });
+        const dbNodes = await this.databaseService.queryNodes({ id: reference.nodeId });
         if (dbNodes && dbNodes.length > 0) {
           const dbNode = dbNodes[0];
           this.performanceMetrics.avgURIResolutionTime =
@@ -653,7 +764,7 @@ export class NodeReferenceService {
   public async getIncomingReferences(nodeId: string): Promise<NodeReference[]> {
     try {
       // Use database service to find nodes that mention this node
-      const referencingNodes = await (this.databaseService as any).queryNodes({
+      const referencingNodes = await this.databaseService.queryNodes({
         mentioned_by: nodeId
       });
 
@@ -661,7 +772,7 @@ export class NodeReferenceService {
         nodeId: node.id,
         uri: this.createNodespaceURI(node.id),
         title: this.extractNodeTitleFromSpaceNode(node),
-        nodeType: (node as any).type,
+        nodeType: node.node_type,
         isValid: true,
         lastResolved: Date.now(),
         metadata: { type: 'incoming' }
@@ -697,7 +808,7 @@ export class NodeReferenceService {
 
     try {
       // Use database service for efficient querying
-      const results = await (this.databaseService as any).queryNodes({
+      const results = await this.databaseService.queryNodes({
         content_contains: query,
         type: nodeType,
         limit: this.autocompleteConfig.maxSuggestions * 3 // Get more for better filtering
@@ -720,33 +831,25 @@ export class NodeReferenceService {
     try {
       const nodeId = this.generateNodeId();
 
-      // For testing scenarios, bypass NodeManager and create node directly
-      // This ensures consistent ID generation for tests
-      const managerNodeId = nodeId; // Use our generated ID directly
-
-      // Use NodeOperationsService for consistent node creation with database
-      const nodeData: any = {
-        id: managerNodeId, // Use the ID that was actually created
-        type: nodeType,
+      // Create UnifiedNode with proper type structure
+      const finalNodeData: UnifiedNode = {
+        id: nodeId,
+        node_type: nodeType,
         content: content,
         parent_id: null, // Root node
-        root_id: managerNodeId,
+        root_id: nodeId,
         before_sibling_id: null,
+        created_at: new Date().toISOString(),
+        modified_at: new Date().toISOString(),
         mentions: [],
-        metadata: {
+        properties: {
           createdBy: 'NodeReferenceService',
           createdAt: Date.now()
-        },
-        embedding_vector: null
+        }
       };
 
-      // Store directly in database service since NodeOperationsService doesn't persist to database
-      const finalNodeData: UnifiedNode = {
-        ...nodeData,
-        created_at: new Date().toISOString()
-      } as UnifiedNode;
-
-      const createdNode = await (this.databaseService as any).upsertNode(finalNodeData);
+      // Store directly in database service via adapter
+      const createdNode = await this.databaseService.upsertNode(finalNodeData);
 
       // In a full implementation, the node would be automatically
       // synchronized with the NodeManager via database change events.
@@ -758,7 +861,7 @@ export class NodeReferenceService {
         namespace: 'lifecycle',
         source: this.serviceName,
         timestamp: Date.now(),
-        nodeId: managerNodeId,
+        nodeId: nodeId,
         nodeType,
         metadata: { createdViaReference: true }
       };
@@ -947,7 +1050,7 @@ export class NodeReferenceService {
       nodeId: node.id,
       title,
       content: node.content.substring(0, 200), // Truncate for performance
-      nodeType: (node as any).type,
+      nodeType: node.node_type,
       relevanceScore,
       matchType: title.toLowerCase().includes(query.toLowerCase()) ? 'title' : 'content',
       matchPositions,
@@ -983,7 +1086,7 @@ export class NodeReferenceService {
     }
 
     // Boost score for exact node type matches
-    if ((node as any).type && (node as any).type.toLowerCase().includes(queryLower)) {
+    if (node.node_type && node.node_type.toLowerCase().includes(queryLower)) {
       score += 0.2;
     }
 
@@ -1016,7 +1119,7 @@ export class NodeReferenceService {
     }
   }
 
-  private extractNodeTitle(node: Node | UnifiedNode): string {
+  private extractNodeTitle(node: LegacyNodeShape | UnifiedNode): string {
     if (!node.content) return 'Untitled';
 
     // Try to extract title from content
@@ -1101,7 +1204,7 @@ export class NodeReferenceService {
   private async cleanupDeletedNodeReferences(deletedNodeId: string): Promise<void> {
     try {
       // Find all nodes that reference the deleted node
-      const referencingNodes = await (this.databaseService as any).queryNodes({
+      const referencingNodes = await this.databaseService.queryNodes({
         mentioned_by: deletedNodeId
       });
 

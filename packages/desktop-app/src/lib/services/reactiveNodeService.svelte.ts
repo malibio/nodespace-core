@@ -57,8 +57,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   function toLegacyShape(node: Node): LegacyNodeShape {
     const uiState = _uiState[node.id] || createDefaultUIState(node.id);
     const children = Object.values(_nodes)
-      .filter(n => n.parent_id === node.id)
-      .map(n => n.id);
+      .filter((n) => n.parent_id === node.id)
+      .map((n) => n.id);
 
     return {
       id: node.id,
@@ -101,8 +101,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         result.push(toLegacyShape(node));
 
         const children = Object.values(_nodes)
-          .filter(n => n.parent_id === nodeId)
-          .map(n => n.id);
+          .filter((n) => n.parent_id === nodeId)
+          .map((n) => n.id);
 
         if (uiState?.expanded && children.length > 0) {
           result.push(...getVisibleNodesRecursive(children));
@@ -207,7 +207,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         //   .filter(n => n.parent_id === afterNode.parentId)
         //   .map(n => n.id);
         // const afterNodeIndex = siblings.indexOf(afterNodeId);
-
         // Update sibling pointers (simplified for now)
       } else {
         const afterNodeIndex = _rootNodeIds.indexOf(afterNodeId);
@@ -234,14 +233,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.nodeCreated(nodeId);
     events.hierarchyChanged();
 
-    eventBus.emit({
-      type: 'node:created' as const,
-      namespace: 'lifecycle' as const,
+    eventBus.emit<import('./eventTypes').NodeCreatedEvent>({
+      type: 'node:created',
+      namespace: 'lifecycle',
       source: serviceName,
       nodeId,
       nodeType,
       metadata: {}
-    } as any);
+    });
 
     if (!shouldFocusNewNode && afterNode) {
       _uiState[afterNodeId] = { ..._uiState[afterNodeId], autoFocus: true };
@@ -374,47 +373,47 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitReferenceUpdateNeeded(nodeId: string): void {
-    eventBus.emit({
-      type: 'references:update-needed' as const,
-      namespace: 'coordination' as const,
+    eventBus.emit<import('./eventTypes').ReferencesUpdateNeededEvent>({
+      type: 'references:update-needed',
+      namespace: 'coordination',
       source: serviceName,
       nodeId,
       updateType: 'content',
       metadata: {}
-    } as any);
+    });
   }
 
   function emitExpensivePersistenceNeeded(nodeId: string, content: string): void {
-    eventBus.emit({
-      type: 'node:persistence-needed' as const,
-      namespace: 'backend' as const,
+    eventBus.emit<import('./eventTypes').NodePersistenceEvent>({
+      type: 'node:persistence-needed',
+      namespace: 'backend',
       source: serviceName,
       nodeId,
       content,
       metadata: {}
-    } as any);
+    });
   }
 
   function emitVectorEmbeddingNeeded(nodeId: string, content: string): void {
-    eventBus.emit({
-      type: 'node:embedding-needed' as const,
-      namespace: 'ai' as const,
+    eventBus.emit<import('./eventTypes').NodeEmbeddingEvent>({
+      type: 'node:embedding-needed',
+      namespace: 'ai',
       source: serviceName,
       nodeId,
       content,
       metadata: {}
-    } as any);
+    });
   }
 
   function emitReferencePropagatationNeeded(nodeId: string, content: string): void {
-    eventBus.emit({
-      type: 'node:reference-propagation-needed' as const,
-      namespace: 'coordination' as const,
+    eventBus.emit<import('./eventTypes').NodeReferencePropagationEvent>({
+      type: 'node:reference-propagation-needed',
+      namespace: 'references',
       source: serviceName,
       nodeId,
       content,
       metadata: {}
-    } as any);
+    });
   }
 
   function combineNodes(currentNodeId: string, previousNodeId: string): void {
@@ -437,8 +436,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Handle child promotion if needed
     const currentChildren = Object.values(_nodes)
-      .filter(n => n.parent_id === currentNodeId)
-      .map(n => n.id);
+      .filter((n) => n.parent_id === currentNodeId)
+      .map((n) => n.id);
 
     for (const childId of currentChildren) {
       const child = _nodes[childId];
@@ -480,8 +479,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     if (node.parent_id) {
       siblings = Object.values(_nodes)
-        .filter(n => n.parent_id === node.parent_id)
-        .map(n => n.id);
+        .filter((n) => n.parent_id === node.parent_id)
+        .map((n) => n.id);
       nodeIndex = siblings.indexOf(nodeId);
     } else {
       siblings = _rootNodeIds;
@@ -513,13 +512,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    eventBus.emit({
-      type: 'hierarchy:changed' as const,
-      namespace: 'lifecycle' as const,
+    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+      type: 'hierarchy:changed',
+      namespace: 'lifecycle',
       source: serviceName,
       changeType: 'indent',
       affectedNodes: [nodeId]
-    } as any);
+    });
 
     return true;
   }
@@ -550,13 +549,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    eventBus.emit({
-      type: 'hierarchy:changed' as const,
-      namespace: 'lifecycle' as const,
+    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+      type: 'hierarchy:changed',
+      namespace: 'lifecycle',
       source: serviceName,
       changeType: 'outdent',
       affectedNodes: [nodeId]
-    } as any);
+    });
 
     return true;
   }
@@ -569,8 +568,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Promote children
     const children = Object.values(_nodes)
-      .filter(n => n.parent_id === nodeId)
-      .map(n => n.id);
+      .filter((n) => n.parent_id === nodeId)
+      .map((n) => n.id);
 
     for (const childId of children) {
       const child = _nodes[childId];
@@ -594,13 +593,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.nodeDeleted(nodeId);
     _updateTrigger++;
 
-    eventBus.emit({
-      type: 'node:deleted' as const,
-      namespace: 'lifecycle' as const,
+    eventBus.emit<import('./eventTypes').NodeDeletedEvent>({
+      type: 'node:deleted',
+      namespace: 'lifecycle',
       source: serviceName,
       nodeId,
       parentId: node.parent_id || undefined
-    } as any);
+    });
   }
 
   function toggleExpanded(nodeId: string): boolean {
@@ -614,24 +613,25 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       events.hierarchyChanged();
       _updateTrigger++;
 
-      const status = newExpandedState ? 'expanded' : 'collapsed';
-      const changeType = newExpandedState ? 'expand' : 'collapse';
+      const status: import('./eventTypes').NodeStatus = newExpandedState ? 'expanded' : 'collapsed';
+      const changeType: import('./eventTypes').HierarchyChangedEvent['changeType'] =
+        newExpandedState ? 'expand' : 'collapse';
 
-      eventBus.emit({
-        type: 'node:status-changed' as const,
-        namespace: 'coordination' as const,
+      eventBus.emit<import('./eventTypes').NodeStatusChangedEvent>({
+        type: 'node:status-changed',
+        namespace: 'coordination',
         source: serviceName,
         nodeId,
         status
-      } as any);
+      });
 
-      eventBus.emit({
-        type: 'hierarchy:changed' as const,
-        namespace: 'lifecycle' as const,
+      eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+        type: 'hierarchy:changed',
+        namespace: 'lifecycle',
         source: serviceName,
         changeType,
         affectedNodes: [nodeId]
-      } as any);
+      });
 
       return true;
     } catch (error) {
@@ -650,35 +650,35 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitNodeUpdated(nodeId: string, updateType: string, newValue: unknown): void {
-    eventBus.emit({
-      type: 'node:updated' as const,
-      namespace: 'lifecycle' as const,
+    eventBus.emit<import('./eventTypes').NodeUpdatedEvent>({
+      type: 'node:updated',
+      namespace: 'lifecycle',
       source: serviceName,
       nodeId,
-      updateType,
+      updateType: updateType as import('./eventTypes').NodeUpdatedEvent['updateType'],
       newValue
-    } as any);
+    });
 
     if (updateType === 'content') {
-      eventBus.emit({
-        type: 'decoration:update-needed' as const,
-        namespace: 'interaction' as const,
+      eventBus.emit<import('./eventTypes').DecorationUpdateNeededEvent>({
+        type: 'decoration:update-needed',
+        namespace: 'interaction',
         source: serviceName,
         nodeId,
         decorationType: 'content',
         reason: 'content-changed',
         metadata: {}
-      } as any);
+      });
 
-      eventBus.emit({
-        type: 'cache:invalidate' as const,
-        namespace: 'coordination' as const,
+      eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+        type: 'cache:invalidate',
+        namespace: 'coordination',
         source: serviceName,
         cacheKey: `node:${nodeId}`,
         scope: 'node',
         nodeId,
         reason: 'content-updated'
-      } as any);
+      });
     }
   }
 
@@ -811,7 +811,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       );
 
       for (const legacyNode of validLegacyData) {
-        const node: UnifiedNode = {
+        const node: Node = {
           id: legacyNode.id,
           node_type: legacyNode.type || legacyNode.nodeType || 'text',
           content: legacyNode.content || '',
@@ -843,10 +843,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds = validLegacyData.filter((n) => !allChildIds.has(n.id)).map((n) => n.id);
 
       // Update parent references and depths
-      for (const [nodeId, node] of Object.entries(_nodes)) {
+      for (const nodeId of Object.keys(_nodes)) {
         const children = Object.values(_nodes)
-          .filter(n => n.parent_id === nodeId)
-          .map(n => n.id);
+          .filter((n) => n.parent_id === nodeId)
+          .map((n) => n.id);
 
         for (const childId of children) {
           const child = _nodes[childId];

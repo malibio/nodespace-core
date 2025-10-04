@@ -15,9 +15,119 @@
 
 import { eventBus } from './eventBus';
 import { ContentProcessor } from './contentProcessor';
-import type { ReactiveNodeService as NodeManager, Node } from './reactiveNodeService.svelte.ts';
+import type {
+  ReactiveNodeService as NodeManager,
+  LegacyNodeShape
+} from './reactiveNodeService.svelte.ts';
 import type { HierarchyService } from './hierarchyService';
 import type { Node as UnifiedNode } from '$lib/types';
+
+// ============================================================================
+// Type-Safe Conversion Helpers
+// ============================================================================
+
+/**
+ * Helper type for data that might be in either format
+ */
+interface NodeLikeData {
+  // UnifiedNode fields
+  node_type?: string;
+  properties?: Record<string, unknown>;
+  parent_id?: string | null;
+  // LegacyNodeShape fields
+  type?: string;
+  nodeType?: string;
+  metadata?: Record<string, unknown>;
+  parentId?: string;
+  // Shared fields
+  depth?: number;
+  embedding_vector?: number[] | null;
+  mentions?: string[];
+}
+
+/**
+ * Get node type from either format
+ */
+function getNodeType(data: NodeLikeData, fallback = 'text'): string {
+  return data.node_type || data.type || data.nodeType || fallback;
+}
+
+/**
+ * Get properties/metadata from either format
+ */
+function getProperties(data: NodeLikeData): Record<string, unknown> {
+  return data.properties || data.metadata || {};
+}
+
+/**
+ * Get depth from node data (UI state field)
+ */
+function getDepth(data: NodeLikeData): number {
+  return data.depth ?? 0;
+}
+
+/**
+ * Get embedding vector from either format
+ */
+function getEmbeddingVector(data: NodeLikeData): number[] | null {
+  return data.embedding_vector ?? null;
+}
+
+/**
+ * Get mentions from either format
+ */
+function getMentions(data: NodeLikeData): string[] {
+  return data.mentions || [];
+}
+
+/**
+ * Convert UnifiedNode to LegacyNodeShape format
+ */
+function toLegacyFormat(unified: UnifiedNode): LegacyNodeShape {
+  return {
+    id: unified.id,
+    content: unified.content,
+    nodeType: unified.node_type,
+    depth: getDepth(unified as unknown as NodeLikeData),
+    parentId: unified.parent_id || undefined,
+    children: [], // Will be populated by NodeManager
+    expanded: true,
+    autoFocus: false,
+    inheritHeaderLevel: 0, // Will be calculated by ContentProcessor
+    metadata: unified.properties,
+    mentions: unified.mentions,
+    before_sibling_id: unified.before_sibling_id || undefined
+  };
+}
+
+/**
+ * Convert LegacyNodeShape to UnifiedNode format
+ */
+function toUnifiedFormat(
+  legacy: LegacyNodeShape,
+  rootId?: string,
+  createdAt?: string
+): UnifiedNode {
+  return {
+    id: legacy.id,
+    node_type: legacy.nodeType,
+    content: legacy.content,
+    parent_id: legacy.parentId || null,
+    root_id: rootId || null,
+    before_sibling_id: legacy.before_sibling_id || null,
+    created_at: createdAt || new Date().toISOString(),
+    modified_at: new Date().toISOString(),
+    properties: legacy.metadata,
+    mentions: legacy.mentions
+  };
+}
+
+/**
+ * Get created_at timestamp from legacy node
+ */
+function getCreatedAt(node: LegacyNodeShape): string {
+  return (node.metadata?.created_at as string) || new Date().toISOString();
+}
 
 // ============================================================================
 // Core Types
@@ -130,22 +240,22 @@ export class NodeOperationsService {
     // Prepare base node data with proper type conversion
     const baseNodeData: UnifiedNode = {
       id: nodeId,
-      type: (data as any).type || (existingNode ? existingNode.nodeType : 'text'),
+      node_type: getNodeType(data as NodeLikeData, existingNode ? existingNode.nodeType : 'text'),
       content: contentResult.content,
       parent_id: hierarchyResolution.parentId,
       root_id: hierarchyResolution.rootId,
       before_sibling_id: siblingPosition.beforeSiblingId,
-      depth: existingNode?.depth || 0, // Include depth field
-      created_at: existingNode ? this.getCreatedAtFromNode(existingNode) : new Date().toISOString(),
-      mentions: (data as any).mentions || existingNode?.mentions || [],
-      metadata: this.mergeMetadata(
+      created_at: existingNode ? getCreatedAt(existingNode) : new Date().toISOString(),
+      modified_at: new Date().toISOString(),
+      mentions: getMentions(data as NodeLikeData) || existingNode?.mentions || [],
+      properties: this.mergeMetadata(
         existingNode,
-        (data as any).metadata,
+        getProperties(data as NodeLikeData),
         contentResult.metadata,
         opts.preserveMetadata
       ),
-      embedding_vector: (data as any).embedding_vector || null
-    } as any;
+      embedding_vector: getEmbeddingVector(data as NodeLikeData)
+    };
 
     // Convert to NodeManager format and store
     const nodeManagerNode = this.convertToNodeManagerFormat(baseNodeData);
@@ -241,38 +351,46 @@ export class NodeOperationsService {
     let fallbackUsed = false;
     let metadata: Record<string, unknown> = {};
 
+    const dataAsNodeLike = data as unknown as NodeLikeData;
+
     // Strategy 1: Direct content field
     if (data.content && typeof data.content === 'string') {
       content = data.content;
       extractedType = this.inferContentType(content);
       confidence = 1.0;
     }
-    // Strategy 2: Extract from metadata
-    else if ((data as any).metadata && typeof (data as any).metadata === 'object') {
-      const result = this.extractContentFromMetadata((data as any).metadata);
-      if (result.content) {
-        content = result.content;
-        extractedType = result.type;
-        confidence = 0.8;
-        fallbackUsed = true;
-        metadata = result.preservedMetadata;
+    // Strategy 2: Extract from properties/metadata
+    else {
+      const properties = getProperties(dataAsNodeLike);
+      if (properties && Object.keys(properties).length > 0) {
+        const result = this.extractContentFromMetadata(properties);
+        if (result.content) {
+          content = result.content;
+          extractedType = result.type;
+          confidence = 0.8;
+          fallbackUsed = true;
+          metadata = result.preservedMetadata;
+        }
       }
     }
+
     // Strategy 3: Type-specific defaults
-    else if ((data as any).type) {
-      const defaults = this.getTypeDefaults((data as any).type);
-      content = defaults.content;
-      extractedType = (data as any).type;
-      confidence = 0.5;
-      fallbackUsed = true;
-      metadata = defaults.metadata;
-    }
-    // Strategy 4: Last resort - empty text node
-    else {
-      content = '';
-      extractedType = 'text';
-      confidence = 0.1;
-      fallbackUsed = true;
+    if (!content) {
+      const nodeType = getNodeType(dataAsNodeLike, '');
+      if (nodeType) {
+        const defaults = this.getTypeDefaults(nodeType);
+        content = defaults.content;
+        extractedType = nodeType;
+        confidence = 0.5;
+        fallbackUsed = true;
+        metadata = defaults.metadata;
+      } else {
+        // Strategy 4: Last resort - empty text node
+        content = '';
+        extractedType = 'text';
+        confidence = 0.1;
+        fallbackUsed = true;
+      }
     }
 
     return {
@@ -452,7 +570,7 @@ export class NodeOperationsService {
    * Merge metadata with type-specific handling
    */
   private mergeMetadata(
-    existingNode: Node | null,
+    existingNode: LegacyNodeShape | null,
     newMetadata?: Record<string, unknown>,
     extractedMetadata?: Record<string, unknown>,
     preserve = true
@@ -480,39 +598,15 @@ export class NodeOperationsService {
   /**
    * Convert UnifiedNode format to NodeManager format
    */
-  private convertToNodeManagerFormat(node: UnifiedNode): Node {
-    return {
-      id: node.id,
-      content: node.content,
-      nodeType: (node as any).type,
-      depth: (node as any).depth, // Use depth from NodeSpaceNode
-      parentId: node.parent_id || undefined,
-      children: [], // Will be populated by NodeManager
-      expanded: true,
-      autoFocus: false,
-      inheritHeaderLevel: this.contentProcessor.parseHeaderLevel(node.content),
-      metadata: (node as any).metadata,
-      mentions: node.mentions
-    } as any;
+  private convertToNodeManagerFormat(node: UnifiedNode): LegacyNodeShape {
+    return toLegacyFormat(node);
   }
 
   /**
    * Convert NodeManager format to UnifiedNode format
    */
-  private convertFromNodeManagerFormat(node: Node): UnifiedNode {
-    return {
-      id: node.id,
-      type: node.nodeType, // Convert nodeType to type
-      content: node.content,
-      parent_id: node.parentId || null,
-      root_id: 'default-root', // This should be properly calculated in real implementation
-      before_sibling_id: null, // This should be calculated based on sibling order
-      depth: (node as any).depth,
-      created_at: new Date().toISOString(), // Default for new conversions
-      mentions: node.mentions || [],
-      metadata: (node as any).metadata,
-      embedding_vector: null
-    } as any;
+  private convertFromNodeManagerFormat(node: LegacyNodeShape): UnifiedNode {
+    return toUnifiedFormat(node);
   }
 
   /**
@@ -662,7 +756,7 @@ export class NodeOperationsService {
   /**
    * Find root ID for a node by walking up hierarchy
    */
-  private findNodeRootId(node: Node): string {
+  private findNodeRootId(node: LegacyNodeShape): string {
     let current = node;
     while (current.parentId) {
       const parent = this.nodeManager.findNode(current.parentId);
@@ -670,15 +764,6 @@ export class NodeOperationsService {
       current = parent;
     }
     return current.id;
-  }
-
-  /**
-   * Get created_at timestamp from existing node
-   */
-  private getCreatedAtFromNode(node: Node): string {
-    // NodeManager nodes don't have created_at, so we'll use current time
-    // In full implementation, this would be stored in metadata or database
-    return (node.metadata?.created_at as string) || new Date().toISOString();
   }
 
   /**

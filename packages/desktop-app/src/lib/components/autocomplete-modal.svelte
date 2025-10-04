@@ -185,7 +185,7 @@
           nodeId: node.id,
           title: extractNodeTitle(node.content),
           content: node.content.substring(0, 200),
-          nodeType: (node as any).type || 'text',
+          nodeType: node.node_type || 'text',
           relevanceScore: 0.5,
           matchType: 'title',
           matchPositions: [],
