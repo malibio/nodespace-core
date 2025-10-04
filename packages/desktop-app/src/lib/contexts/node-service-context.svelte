@@ -32,11 +32,12 @@
 
   // Context accessor functions
   export function getNodeServices(): NodeServices | null {
-    return getContext(NODE_SERVICE_CONTEXT_KEY) || null;
+    const ctx = getContext<{ services: NodeServices | null }>(NODE_SERVICE_CONTEXT_KEY);
+    return ctx?.services || null;
   }
 
-  export function setNodeServices(services: NodeServices): void {
-    setContext(NODE_SERVICE_CONTEXT_KEY, services);
+  function setNodeServicesContext(servicesRef: { services: NodeServices | null }): void {
+    setContext(NODE_SERVICE_CONTEXT_KEY, servicesRef);
   }
 </script>
 
@@ -54,10 +55,13 @@
   // Props - external reference only for service configuration
   export const initializationMode: 'full' | 'mock' = 'mock';
 
-  // Services state
-  let services: NodeServices | null = null;
-  let servicesInitialized = false;
-  let initializationError: string | null = null;
+  // Services state - wrapped in object so context can hold reference
+  const servicesContainer = $state<{ services: NodeServices | null }>({ services: null });
+  let servicesInitialized = $state(false);
+  let initializationError = $state<string | null>(null);
+
+  // Set context immediately with container reference (required by Svelte)
+  setNodeServicesContext(servicesContainer);
 
   // Initialize services on mount
   onMount(async () => {
@@ -146,8 +150,9 @@
         contentProcessor
       );
 
-      // Create service bundle
-      services = {
+      // Create service bundle and update reactive state
+      // (context was already set at component init with the container reference)
+      servicesContainer.services = {
         nodeReferenceService,
         nodeManager,
         hierarchyService,
@@ -155,9 +160,6 @@
         contentProcessor,
         databaseService: tauriNodeService
       };
-
-      // Set context for child components
-      setNodeServices(services);
 
       servicesInitialized = true;
     } catch (error) {
