@@ -86,57 +86,24 @@
    */
   async function loadNodesForDate(dateId: string) {
     try {
-      // Load children from database
+      // Load children from database (already in unified Node format)
       const children = await databaseService.getChildren(dateId);
 
-      // Build legacy node data for initialization
-      const legacyNodes = children.map((child) => ({
-        id: child.id,
-        nodeType: child.node_type,
-        content: child.content,
-        inheritHeaderLevel: 0,
-        children: [],
+      // Initialize with loaded nodes directly (no conversion needed)
+      nodeManager.initializeNodes(children, {
         expanded: true,
         autoFocus: false,
-        metadata: child.properties,
-        parentId: child.parent_id || undefined
-      }));
-
-      // Clear existing nodes and initialize with loaded data
-      if ('initializeFromLegacyData' in nodeManager) {
-        const initFn = nodeManager.initializeFromLegacyData;
-        if (typeof initFn === 'function') {
-          initFn.call(nodeManager, legacyNodes);
-        }
-      }
+        inheritHeaderLevel: 0
+      });
 
       // Always add a placeholder node at the end
-      const placeholderId = uuidv4();
-
-      // Add placeholder to nodeManager
       if (children.length > 0) {
         const lastChildId = children[children.length - 1].id;
         nodeManager.createPlaceholderNode(lastChildId, 'text', 0, false, '', true);
       } else {
-        // If no children, initialize with just the placeholder
-        if ('initializeFromLegacyData' in nodeManager) {
-          const initFn = nodeManager.initializeFromLegacyData;
-          if (typeof initFn === 'function') {
-            initFn.call(nodeManager, [
-              {
-                id: placeholderId,
-                nodeType: 'text',
-                content: '',
-                inheritHeaderLevel: 0,
-                children: [],
-                expanded: true,
-                autoFocus: true,
-                metadata: {},
-                parentId: dateId
-              }
-            ]);
-          }
-        }
+        // If no children, create placeholder directly
+        const placeholderId = uuidv4();
+        nodeManager.createPlaceholderNode(placeholderId, 'text', 0, true, dateId, false);
       }
     } catch (error) {
       console.error('[DateNodeViewer] Failed to load nodes for date:', dateId, error);

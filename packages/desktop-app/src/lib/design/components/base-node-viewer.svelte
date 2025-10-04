@@ -737,11 +737,11 @@
           {/if}
 
           <!-- Node viewer with stable component references -->
-          {#if node.nodeType === 'text'}
-            {#key `${node.id}-${node.nodeType}`}
+          {#if node.node_type === 'text'}
+            {#key `${node.id}-${node.node_type}`}
               <TextNodeViewer
                 nodeId={node.id}
-                nodeType={node.nodeType}
+                nodeType={node.node_type}
                 autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
                   !pendingCursorPositions.has(node.id)}
                 content={node.content}
@@ -786,7 +786,7 @@
                   const targetNode = nodeManager.nodes.get(node.id);
                   if (targetNode) {
                     // Update both the node manager and local state
-                    targetNode.nodeType = newNodeType;
+                    targetNode.node_type = newNodeType;
 
                     // If cleanedContent is provided, update the node content too
                     if (cleanedContent !== undefined) {
@@ -797,13 +797,16 @@
                       });
                     }
 
-                    // Clean up task-specific metadata when converting to text
-                    if (newNodeType === 'text' && targetNode.metadata.taskState) {
-                      const { taskState, ...cleanMetadata } = targetNode.metadata;
-                      void taskState; // Intentionally unused - extracted to remove from metadata
-                      targetNode.metadata = { ...cleanMetadata, _forceUpdate: Date.now() };
+                    // Clean up task-specific properties when converting to text
+                    if (newNodeType === 'text' && targetNode.properties.taskState) {
+                      const { taskState, ...cleanProperties } = targetNode.properties;
+                      void taskState; // Intentionally unused - extracted to remove from properties
+                      targetNode.properties = { ...cleanProperties, _forceUpdate: Date.now() };
                     } else {
-                      targetNode.metadata = { ...targetNode.metadata, _forceUpdate: Date.now() };
+                      targetNode.properties = {
+                        ...targetNode.properties,
+                        _forceUpdate: Date.now()
+                      };
                     }
                     nodeManager.updateNodeContent(targetNode.id, targetNode.content);
                   }
@@ -815,18 +818,18 @@
             {/key}
           {:else}
             <!-- Use plugin registry for non-text node types with key for re-rendering -->
-            {#if node.nodeType in loadedNodes}
-              {#key `${node.id}-${node.nodeType}`}
-                {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
+            {#if node.node_type in loadedNodes}
+              {#key `${node.id}-${node.node_type}`}
+                {@const NodeComponent = loadedNodes[node.node_type] as typeof BaseNode}
                 <NodeComponent
                   nodeId={node.id}
-                  nodeType={node.nodeType}
+                  nodeType={node.node_type}
                   autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
                     !pendingCursorPositions.has(node.id)}
                   content={node.content}
                   headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
-                  metadata={node.metadata || {}}
+                  metadata={node.properties || {}}
                   editableConfig={{ allowMultiline: true }}
                   on:createNewNode={handleCreateNewNode}
                   on:indentNode={handleIndentNode}
@@ -852,7 +855,7 @@
                     const targetNode = nodeManager.nodes.get(node.id);
                     if (targetNode) {
                       // Update the node type
-                      targetNode.nodeType = nodeType;
+                      targetNode.node_type = nodeType;
 
                       // If cleanedContent is provided, update the node content too
                       if (cleanedContent !== undefined) {
@@ -863,15 +866,18 @@
                         });
                       }
 
-                      // CRITICAL: Clean up type-specific metadata when changing node types
-                      if (nodeType === 'text' && targetNode.metadata.taskState) {
-                        // When converting from task to text, remove task-specific metadata
-                        const { taskState, ...cleanMetadata } = targetNode.metadata;
-                        void taskState; // Intentionally unused - extracted to remove from metadata
-                        targetNode.metadata = { ...cleanMetadata, _forceUpdate: Date.now() };
+                      // CRITICAL: Clean up type-specific properties when changing node types
+                      if (nodeType === 'text' && targetNode.properties.taskState) {
+                        // When converting from task to text, remove task-specific properties
+                        const { taskState, ...cleanProperties } = targetNode.properties;
+                        void taskState; // Intentionally unused - extracted to remove from properties
+                        targetNode.properties = { ...cleanProperties, _forceUpdate: Date.now() };
                       } else {
                         // For other conversions, just force update
-                        targetNode.metadata = { ...targetNode.metadata, _forceUpdate: Date.now() };
+                        targetNode.properties = {
+                          ...targetNode.properties,
+                          _forceUpdate: Date.now()
+                        };
                       }
 
                       // Use the working sync mechanism from taskStateChanged
@@ -906,7 +912,7 @@
                     const { nodeId, state } = e.detail;
                     const node = nodeManager.nodes.get(nodeId);
                     if (node) {
-                      node.metadata = { ...node.metadata, taskState: state };
+                      node.properties = { ...node.properties, taskState: state };
                       // Trigger sync to persist the change
                       nodeManager.updateNodeContent(nodeId, node.content);
                     }
@@ -917,16 +923,16 @@
               {/key}
             {:else}
               <!-- Final fallback to BaseNode with key for re-rendering -->
-              {#key `${node.id}-${node.nodeType}`}
+              {#key `${node.id}-${node.node_type}`}
                 <BaseNode
                   nodeId={node.id}
-                  nodeType={node.nodeType}
+                  nodeType={node.node_type}
                   autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
                     !pendingCursorPositions.has(node.id)}
                   content={node.content}
                   headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
-                  metadata={node.metadata || {}}
+                  metadata={node.properties || {}}
                   editableConfig={{ allowMultiline: true }}
                   on:createNewNode={handleCreateNewNode}
                   on:indentNode={handleIndentNode}
@@ -964,7 +970,7 @@
                     const { nodeId, state } = e.detail;
                     const node = nodeManager.nodes.get(nodeId);
                     if (node) {
-                      node.metadata = { ...node.metadata, taskState: state };
+                      node.properties = { ...node.properties, taskState: state };
                       // Trigger sync to persist the change
                       nodeManager.updateNodeContent(nodeId, node.content);
                     }

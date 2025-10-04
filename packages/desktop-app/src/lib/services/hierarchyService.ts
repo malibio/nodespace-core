@@ -19,8 +19,8 @@
  */
 
 import { eventBus } from './eventBus';
-import type { ReactiveNodeService as NodeManager, Node } from './reactiveNodeService.svelte.ts';
-// import type { NodeSpaceNode } from './mockDatabaseService';
+import type { ReactiveNodeService as NodeManager } from './reactiveNodeService.svelte.ts';
+import type { Node } from '$lib/types';
 
 // ============================================================================
 // Core Types
@@ -106,9 +106,9 @@ export class HierarchyService {
 
     // Walk up parent chain, caching depths along the way
     const pathNodes: string[] = [nodeId];
-    while (currentNode && currentNode.parentId) {
+    while (currentNode && currentNode.parent_id) {
       depth++;
-      const parentId = currentNode.parentId;
+      const parentId = currentNode.parent_id;
       pathNodes.push(parentId);
 
       // Check if parent depth is cached
@@ -153,8 +153,9 @@ export class HierarchyService {
       return [];
     }
 
-    // Get children from NodeManager
-    const children = [...node.children];
+    // Get children from all nodes with this parent_id
+    const allNodes = Array.from(this.nodeManager.nodes.values());
+    const children = allNodes.filter((n) => n.parent_id === nodeId).map((n) => n.id);
 
     // Cache the result
     this.cache.childrenCache.set(nodeId, children);
@@ -205,7 +206,7 @@ export class HierarchyService {
       nodeIds.unshift(currentId);
       depths.unshift(this.getNodeDepth(currentId));
 
-      currentId = currentNode.parentId;
+      currentId = currentNode.parent_id || undefined;
     }
 
     return {
@@ -228,7 +229,7 @@ export class HierarchyService {
       return [];
     }
 
-    const parentId = node.parentId;
+    const parentId = node.parent_id;
     const cacheKey = parentId || '__root__';
 
     // Check cache first - now with timestamp validation
@@ -395,7 +396,7 @@ export class HierarchyService {
       return {
         id: nodeId,
         node: node,
-        parent_id: node.parentId || null,
+        parent_id: node.parent_id || null,
         before_sibling_id: node.before_sibling_id || null, // For client-side ordering
         depth: this.getNodeDepth(nodeId),
         children_count: children.length
@@ -429,7 +430,7 @@ export class HierarchyService {
     // Invalidate sibling caches that might include this node
     const node = this.nodeManager.findNode(nodeId);
     if (node) {
-      const parentKey = node.parentId || '__root__';
+      const parentKey = node.parent_id || '__root__';
       this.cache.siblingOrderCache.delete(parentKey);
     }
 
@@ -489,8 +490,8 @@ export class HierarchyService {
 
         // Also invalidate parent and children caches
         const node = this.nodeManager.findNode(nodeEvent.nodeId);
-        if (node?.parentId) {
-          this.invalidateNodeCache(node.parentId);
+        if (node?.parent_id) {
+          this.invalidateNodeCache(node.parent_id);
         }
       }
     });
@@ -546,19 +547,29 @@ export class HierarchyService {
     const descendants: string[] = [];
     const node = this.nodeManager.findNode(nodeId);
 
-    if (!node || !node.children.length) {
+    if (!node) {
       return descendants;
     }
 
-    const toProcess = [...node.children];
+    // Get children manually from all nodes
+    const allNodes = Array.from(this.nodeManager.nodes.values());
+    const children = allNodes.filter((n) => n.parent_id === nodeId).map((n) => n.id);
+
+    if (children.length === 0) {
+      return descendants;
+    }
+
+    const toProcess = [...children];
 
     while (toProcess.length > 0) {
       const currentId = toProcess.shift()!;
       descendants.push(currentId);
 
-      const currentNode = this.nodeManager.findNode(currentId);
-      if (currentNode?.children.length) {
-        toProcess.push(...currentNode.children);
+      // Get children of current node
+      const currentChildren = allNodes.filter((n) => n.parent_id === currentId).map((n) => n.id);
+
+      if (currentChildren.length > 0) {
+        toProcess.push(...currentChildren);
       }
     }
 

@@ -11,6 +11,27 @@ import {
   type NodeManagerEvents
 } from '$lib/services/reactiveNodeService.test';
 
+// Helper to create unified Node format
+function createNode(
+  id: string,
+  content: string,
+  nodeType: string = 'text',
+  parentId: string | null = null
+) {
+  return {
+    id,
+    node_type: nodeType,
+    content,
+    parent_id: parentId,
+    root_id: null,
+    before_sibling_id: null,
+    created_at: new Date().toISOString(),
+    modified_at: new Date().toISOString(),
+    mentions: [] as string[],
+    properties: {}
+  };
+}
+
 describe('Header Syntax Inheritance Fix', () => {
   let nodeService: ReturnType<typeof createReactiveNodeService>;
   let mockEvents: NodeManagerEvents;
@@ -25,19 +46,9 @@ describe('Header Syntax Inheritance Fix', () => {
     nodeService = createReactiveNodeService(mockEvents);
 
     // Initialize with basic structure to have nodes to work with
-    nodeService.initializeFromLegacyData([
-      {
-        id: 'root-node',
-        content: 'Root node',
-        nodeType: 'text',
-        depth: 0,
-        children: [],
-        expanded: true,
-        autoFocus: false,
-        inheritHeaderLevel: 0,
-        metadata: {}
-      }
-    ]);
+    nodeService.initializeNodes([
+      createNode('root-node', 'Root node')
+    ], { expanded: true, autoFocus: false, inheritHeaderLevel: 0 });
   });
 
   describe('Header Syntax Inheritance on Node Creation', () => {

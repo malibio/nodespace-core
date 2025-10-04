@@ -40,6 +40,28 @@ import { ContentProcessor } from '../../lib/services/contentProcessor';
 import { eventBus } from '../../lib/services/eventBus';
 import type { Node } from '$lib/types';
 
+// Helper to create unified Node objects for tests
+function createNode(
+  id: string,
+  content: string,
+  nodeType: string = 'text',
+  parentId: string | null = null,
+  properties: Record<string, unknown> = {}
+) {
+  return {
+    id,
+    node_type: nodeType,
+    content,
+    parent_id: parentId,
+    root_id: null,
+    before_sibling_id: null,
+    created_at: new Date().toISOString(),
+    modified_at: new Date().toISOString(),
+    mentions: [] as string[],
+    properties
+  };
+}
+
 describe('NodeOperationsService', () => {
   let nodeManager: NodeManager;
   let hierarchyService: HierarchyService;
@@ -70,39 +92,15 @@ describe('NodeOperationsService', () => {
     );
 
     // Set up basic test data
-    nodeManager.initializeFromLegacyData([
-      {
-        id: 'root1',
-        nodeType: 'text',
-        content: 'Root node 1',
-        autoFocus: false,
-        inheritHeaderLevel: 0,
-        expanded: true,
-        metadata: {},
-        children: ['child1']
-      },
-      {
-        id: 'child1',
-        nodeType: 'text',
-        content: 'Child node 1',
-        autoFocus: false,
-        inheritHeaderLevel: 0,
-        expanded: true,
-        metadata: {},
-        parentId: 'root1',
-        children: []
-      },
-      {
-        id: 'root2',
-        nodeType: 'text',
-        content: 'Root node 2',
-        autoFocus: false,
-        inheritHeaderLevel: 0,
-        expanded: true,
-        metadata: {},
-        children: []
-      }
-    ]);
+    nodeManager.initializeNodes([
+      createNode('root1', 'Root node 1'),
+      createNode('child1', 'Child node 1', 'text', 'root1'),
+      createNode('root2', 'Root node 2')
+    ], {
+      autoFocus: false,
+      inheritHeaderLevel: 0,
+      expanded: true
+    });
   });
 
   // ========================================================================
@@ -330,15 +328,9 @@ const x = 42;
   describe('Mentions and Bidirectionality', () => {
     beforeEach(() => {
       // Add mentions property to test nodes
-      const child1 = nodeManager.findNode('child1');
-      if (child1) {
-        child1.mentions = [];
-      }
-
-      const root2 = nodeManager.findNode('root2');
-      if (root2) {
-        root2.mentions = [];
-      }
+      // Clear mentions using proper method
+      nodeManager.updateNodeMentions('child1', []);
+      nodeManager.updateNodeMentions('root2', []);
     });
 
     test('updateNodeMentions updates mentions array', async () => {
@@ -431,11 +423,8 @@ const x = 42;
     test('upsertNode updates existing node preserving properties', async () => {
       // First create a node through NodeManager
       const nodeId = nodeManager.createNode('root1', 'Original content');
-      const node = nodeManager.findNode(nodeId);
-      if (node) {
-        node.metadata = { originalProp: 'original', shared: 'old' };
-        node.mentions = ['root2'];
-      }
+      nodeManager.updateNodeProperties(nodeId, { originalProp: 'original', shared: 'old' });
+      nodeManager.updateNodeMentions(nodeId, ['root2']);
 
       // Update with upsert
       const updates: Partial<Node> = {
@@ -490,17 +479,14 @@ const x = 42;
 
     test('upsertNode handles complex properties merging', async () => {
       const nodeId = nodeManager.createNode('root1', 'Test node');
-      const node = nodeManager.findNode(nodeId);
-      if (node) {
-        node.metadata = {
-          type: 'document',
-          tags: ['important', 'work'],
-          settings: {
-            autoSave: true,
-            theme: 'dark'
-          }
-        };
-      }
+      nodeManager.updateNodeProperties(nodeId, {
+        type: 'document',
+        tags: ['important', 'work'],
+        settings: {
+          autoSave: true,
+          theme: 'dark'
+        }
+      });
 
       const result = await nodeOperationsService.upsertNode(nodeId, {
         properties: {
@@ -604,13 +590,10 @@ const x = 42;
       const note1Id = nodeManager.createNode('root1', 'First note content');
       const note2Id = nodeManager.createNode('root1', 'Second note content');
 
-      // Add mentions properties
-      const docNode = nodeManager.findNode(docId);
-      const note1Node = nodeManager.findNode(note1Id);
-      const note2Node = nodeManager.findNode(note2Id);
-      if (docNode) docNode.mentions = ['note1', 'note2'];
-      if (note1Node) note1Node.mentions = [];
-      if (note2Node) note2Node.mentions = [];
+      // Add mentions properties using proper method
+      nodeManager.updateNodeMentions(docId, ['note1', 'note2']);
+      nodeManager.updateNodeMentions(note1Id, []);
+      nodeManager.updateNodeMentions(note2Id, []);
 
       // Step 2: Use NodeOperationsService to update with enhanced properties
       const docResult = await nodeOperationsService.upsertNode(docId, {
@@ -633,12 +616,9 @@ const x = 42;
       const node1Id = nodeManager.createNode('root1', 'First node');
       const node2Id = nodeManager.createNode('root1', 'Second node');
 
-      // Add mentions properties
-      const node1 = nodeManager.findNode(node1Id);
-      const node2 = nodeManager.findNode(node2Id);
-
-      if (node1) node1.mentions = [];
-      if (node2) node2.mentions = [];
+      // Initialize mentions using proper method
+      nodeManager.updateNodeMentions(node1Id, []);
+      nodeManager.updateNodeMentions(node2Id, []);
 
       // Test NodeOperationsService functionality
       await nodeOperationsService.updateNodeMentions(node1Id, [node2Id]);
@@ -652,9 +632,11 @@ const x = 42;
       expect(result.content).toBe('First node'); // Content preserved
       expect(result.properties).toHaveProperty('enhanced');
 
-      // Check that mentions were processed correctly
-      expect(node1?.mentions || []).toEqual([node2Id]);
-      expect(node2?.mentions || []).toEqual([node1Id]);
+      // Check that mentions were processed correctly - fetch fresh copies
+      const updatedNode1 = nodeManager.findNode(node1Id);
+      const updatedNode2 = nodeManager.findNode(node2Id);
+      expect(updatedNode1?.mentions || []).toEqual([node2Id]);
+      expect(updatedNode2?.mentions || []).toEqual([node1Id]);
     });
   });
 });

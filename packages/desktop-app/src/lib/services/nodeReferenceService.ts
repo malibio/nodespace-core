@@ -26,48 +26,11 @@
 
 import { eventBus } from './eventBus';
 import { ContentProcessor } from './contentProcessor';
-import type {
-  ReactiveNodeService as NodeManager,
-  LegacyNodeShape
-} from './reactiveNodeService.svelte.ts';
+import type { ReactiveNodeService as NodeManager } from './reactiveNodeService.svelte.ts';
 import type { HierarchyService } from './hierarchyService';
 import type { NodeOperationsService } from './nodeOperationsService';
-import type { Node as UnifiedNode } from '$lib/types';
+import type { Node } from '$lib/types';
 import type { TauriNodeService } from './tauriNodeService';
-
-// ============================================================================
-// Type-Safe Conversion Helpers
-// ============================================================================
-
-/**
- * Convert LegacyNodeShape to UnifiedNode format
- */
-function toUnifiedFormat(
-  legacy: LegacyNodeShape,
-  rootId?: string,
-  createdAt?: string
-): UnifiedNode {
-  return {
-    id: legacy.id,
-    node_type: legacy.nodeType,
-    content: legacy.content,
-    parent_id: legacy.parentId || null,
-    root_id: rootId || null,
-    before_sibling_id: legacy.before_sibling_id || null,
-    created_at: createdAt || new Date().toISOString(),
-    modified_at: new Date().toISOString(),
-    properties: legacy.metadata,
-    mentions: legacy.mentions,
-    embedding_vector: null
-  };
-}
-
-/**
- * Get created_at timestamp from legacy node
- */
-function getCreatedAt(node: LegacyNodeShape): string {
-  return (node.metadata?.created_at as string) || new Date().toISOString();
-}
 
 // ============================================================================
 // Database Service Adapter
@@ -92,11 +55,16 @@ class DatabaseServiceAdapter {
     content_contains?: string;
     type?: string;
     limit?: number;
-  }): Promise<UnifiedNode[]> {
+  }): Promise<Node[]> {
     // For id-based queries, use getNode
     if (query.id) {
       const node = await this.tauri.getNode(query.id);
       return node ? [node] : [];
+    }
+
+    // Check if tauri service has queryNodes method (for MockTauriNodeService in tests)
+    if ('queryNodes' in this.tauri && typeof this.tauri.queryNodes === 'function') {
+      return await (this.tauri as unknown as { queryNodes: (query: typeof query) => Promise<Node[]> }).queryNodes(query);
     }
 
     // For other queries, we need to implement via getChildren or return empty
@@ -109,7 +77,7 @@ class DatabaseServiceAdapter {
    * Upsert node (create or update)
    * Uses getNode to check existence, then creates or updates accordingly
    */
-  async upsertNode(node: UnifiedNode): Promise<UnifiedNode> {
+  async upsertNode(node: Node): Promise<Node> {
     try {
       const existing = await this.tauri.getNode(node.id);
 
@@ -146,7 +114,7 @@ class DatabaseServiceAdapter {
   /**
    * Proxy getNode from TauriNodeService
    */
-  async getNode(id: string): Promise<UnifiedNode | null> {
+  async getNode(id: string): Promise<Node | null> {
     return this.tauri.getNode(id);
   }
 }
@@ -238,7 +206,7 @@ export class NodeReferenceService {
   // Caching for performance (following Phase 1 patterns)
   private suggestionCache = new Map<string, { result: AutocompleteResult; timestamp: number }>();
   private uriCache = new Map<string, NodeReference>();
-  private searchCache = new Map<string, UnifiedNode[]>();
+  private searchCache = new Map<string, Node[]>();
   private mentionsCache = new Map<string, string[]>(); // nodeId -> array of mentioned nodeIds
   private readonly cacheTimeout = 30000; // 30 seconds
 
@@ -499,7 +467,7 @@ export class NodeReferenceService {
         nodeId,
         uri,
         title: node ? this.extractNodeTitle(node) : nodeId,
-        nodeType: node?.nodeType || 'unknown',
+        nodeType: node?.node_type || 'unknown',
         isValid,
         lastResolved: Date.now(),
         metadata: {
@@ -589,7 +557,7 @@ export class NodeReferenceService {
   /**
    * Resolve nodespace:// URI to actual node
    */
-  public async resolveNodespaceURI(uri: string): Promise<UnifiedNode | null> {
+  public async resolveNodespaceURI(uri: string): Promise<Node | null> {
     const startTime = performance.now();
     this.performanceMetrics.totalURIResolutions++;
 
@@ -602,16 +570,10 @@ export class NodeReferenceService {
       // Try to find node in NodeManager first
       const managerNode = this.nodeManager.findNode(reference.nodeId);
       if (managerNode) {
-        // Found in NodeManager, convert to UnifiedNode format using type-safe helper
-        const nodeSpaceNode = toUnifiedFormat(
-          managerNode,
-          this.findRootId(managerNode.id),
-          getCreatedAt(managerNode)
-        );
-
+        // Found in NodeManager - it's already a Node
         this.performanceMetrics.avgURIResolutionTime =
           (this.performanceMetrics.avgURIResolutionTime + (performance.now() - startTime)) / 2;
-        return nodeSpaceNode;
+        return managerNode;
       }
 
       // If not found in NodeManager, try database (for test scenarios)
@@ -749,7 +711,7 @@ export class NodeReferenceService {
         nodeId: mentionedId,
         uri: this.createNodespaceURI(mentionedId),
         title: targetNode ? this.extractNodeTitle(targetNode) : mentionedId,
-        nodeType: targetNode?.nodeType || 'unknown',
+        nodeType: targetNode?.node_type || 'unknown',
         isValid: !!targetNode,
         lastResolved: Date.now(),
         metadata: { type: 'outgoing' }
@@ -768,10 +730,10 @@ export class NodeReferenceService {
         mentioned_by: nodeId
       });
 
-      return referencingNodes.map((node: UnifiedNode) => ({
+      return referencingNodes.map((node: Node) => ({
         nodeId: node.id,
         uri: this.createNodespaceURI(node.id),
-        title: this.extractNodeTitleFromSpaceNode(node),
+        title: this.extractNodeTitleFromNode(node),
         nodeType: node.node_type,
         isValid: true,
         lastResolved: Date.now(),
@@ -793,7 +755,7 @@ export class NodeReferenceService {
   /**
    * Search nodes with fuzzy matching and filtering
    */
-  public async searchNodes(query: string, nodeType?: string): Promise<UnifiedNode[]> {
+  public async searchNodes(query: string, nodeType?: string): Promise<Node[]> {
     if (!query || query.length < this.autocompleteConfig.minQueryLength) {
       return [];
     }
@@ -827,12 +789,12 @@ export class NodeReferenceService {
   /**
    * Create new node with specified type and content
    */
-  public async createNode(nodeType: string, content: string): Promise<UnifiedNode> {
+  public async createNode(nodeType: string, content: string): Promise<Node> {
     try {
       const nodeId = this.generateNodeId();
 
-      // Create UnifiedNode with proper type structure
-      const finalNodeData: UnifiedNode = {
+      // Create Node with proper type structure
+      const finalNodeData: Node = {
         id: nodeId,
         node_type: nodeType,
         content: content,
@@ -1040,8 +1002,8 @@ export class NodeReferenceService {
     return textContent.length;
   }
 
-  private async createNodeSuggestion(node: UnifiedNode, query: string): Promise<NodeSuggestion> {
-    const title = this.extractNodeTitleFromSpaceNode(node);
+  private async createNodeSuggestion(node: Node, query: string): Promise<NodeSuggestion> {
+    const title = this.extractNodeTitleFromNode(node);
     const relevanceScore = this.calculateRelevanceScore(node, query);
     const matchPositions = this.findMatchPositions(title, query);
     const hierarchy = await this.getNodeHierarchy(node.id);
@@ -1062,8 +1024,8 @@ export class NodeReferenceService {
     };
   }
 
-  private calculateRelevanceScore(node: UnifiedNode, query: string): number {
-    const title = this.extractNodeTitleFromSpaceNode(node);
+  private calculateRelevanceScore(node: Node, query: string): number {
+    const title = this.extractNodeTitleFromNode(node);
     const content = node.content;
     const queryLower = query.toLowerCase();
     const titleLower = title.toLowerCase();
@@ -1119,7 +1081,7 @@ export class NodeReferenceService {
     }
   }
 
-  private extractNodeTitle(node: LegacyNodeShape | UnifiedNode): string {
+  private extractNodeTitle(node: Node): string {
     if (!node.content) return 'Untitled';
 
     // Try to extract title from content
@@ -1136,7 +1098,7 @@ export class NodeReferenceService {
     return firstLine.substring(0, 100) || 'Untitled';
   }
 
-  private extractNodeTitleFromSpaceNode(node: UnifiedNode): string {
+  private extractNodeTitleFromNode(node: Node): string {
     if (!node.content) return 'Untitled';
 
     const lines = node.content.split('\n');
@@ -1154,8 +1116,8 @@ export class NodeReferenceService {
     let currentId = nodeId;
     let node = this.nodeManager.findNode(currentId);
 
-    while (node && node.parentId) {
-      currentId = node.parentId;
+    while (node && node.parent_id) {
+      currentId = node.parent_id;
       node = this.nodeManager.findNode(currentId);
     }
 

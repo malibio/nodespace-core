@@ -1,15 +1,13 @@
 /**
- * ReactiveNodeService - Pure Svelte 5 Runes Reactive Architecture (Refactored)
+ * ReactiveNodeService - Pure Svelte 5 Runes Reactive Architecture
  *
- * Now uses unified Node type from $lib/types with separated UI state.
- * This is a TEMPORARY BRIDGE implementation that maintains backward compatibility
- * with existing components while transitioning to the real backend.
+ * Uses unified Node type from $lib/types with separated UI state.
  *
- * Key changes:
+ * Key features:
  * - Uses Node from $lib/types (with node_type, properties, etc.)
  * - Separates data (Node) from UI state (NodeUIState)
  * - Computes children on-demand instead of storing arrays
- * - Maintains compatibility with existing component interfaces
+ * - Direct access to Node objects for mutations
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -17,24 +15,6 @@ import { ContentProcessor } from './contentProcessor';
 import { eventBus } from './eventBus';
 import type { Node, NodeUIState } from '$lib/types';
 import { createDefaultUIState } from '$lib/types';
-
-// IMPORTANT: This is a LEGACY interface for backward compatibility
-// Components still expect this shape, but internally we use the unified Node
-export interface LegacyNodeShape {
-  id: string;
-  content: string;
-  nodeType: string; // Maps to node_type
-  depth: number; // From UI state
-  parentId?: string; // Maps to parent_id
-  children: string[]; // Computed on-demand
-  expanded: boolean; // From UI state
-  autoFocus: boolean; // From UI state
-  inheritHeaderLevel: number; // From UI state
-  metadata: Record<string, unknown>; // Maps to properties
-  mentions?: string[];
-  before_sibling_id?: string;
-  isPlaceholder?: boolean; // From UI state
-}
 
 export interface NodeManagerEvents {
   focusRequested: (nodeId: string, position?: number) => void;
@@ -53,26 +33,21 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   // Manual reactivity trigger for debugging
   let _updateTrigger = $state(0);
 
-  // Helper function to convert Node to legacy shape for backward compatibility
-  function toLegacyShape(node: Node): LegacyNodeShape {
+  // Helper function to get computed node data with UI state (currently unused but may be needed for future features)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  function getNodeWithUIState(node: Node) {
     const uiState = _uiState[node.id] || createDefaultUIState(node.id);
     const children = Object.values(_nodes)
       .filter((n) => n.parent_id === node.id)
       .map((n) => n.id);
 
     return {
-      id: node.id,
-      content: node.content,
-      nodeType: node.node_type,
+      ...node,
       depth: uiState.depth,
-      parentId: node.parent_id || undefined,
       children,
       expanded: uiState.expanded,
       autoFocus: uiState.autoFocus,
       inheritHeaderLevel: uiState.inheritHeaderLevel,
-      metadata: node.properties,
-      mentions: node.mentions,
-      before_sibling_id: node.before_sibling_id || undefined,
       isPlaceholder: uiState.isPlaceholder
     };
   }
@@ -91,18 +66,41 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   const serviceName = 'ReactiveNodeService';
   const contentProcessor = ContentProcessor.getInstance();
 
-  function getVisibleNodesRecursive(nodeIds: string[]): LegacyNodeShape[] {
-    const result: LegacyNodeShape[] = [];
+  function getVisibleNodesRecursive(nodeIds: string[]): (Node & {
+    depth: number;
+    children: string[];
+    expanded: boolean;
+    autoFocus: boolean;
+    inheritHeaderLevel: number;
+    isPlaceholder: boolean;
+  })[] {
+    const result: (Node & {
+      depth: number;
+      children: string[];
+      expanded: boolean;
+      autoFocus: boolean;
+      inheritHeaderLevel: number;
+      isPlaceholder: boolean;
+    })[] = [];
 
     for (const nodeId of nodeIds) {
       const node = _nodes[nodeId];
       const uiState = _uiState[nodeId];
       if (node) {
-        result.push(toLegacyShape(node));
-
         const children = Object.values(_nodes)
           .filter((n) => n.parent_id === nodeId)
           .map((n) => n.id);
+
+        // Merge Node with UI state for components
+        result.push({
+          ...node,
+          depth: uiState?.depth || 0,
+          children,
+          expanded: uiState?.expanded || false,
+          autoFocus: uiState?.autoFocus || false,
+          inheritHeaderLevel: uiState?.inheritHeaderLevel || 0,
+          isPlaceholder: uiState?.isPlaceholder || false
+        });
 
         if (uiState?.expanded && children.length > 0) {
           result.push(...getVisibleNodesRecursive(children));
@@ -113,9 +111,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return result;
   }
 
-  function findNode(nodeId: string): LegacyNodeShape | null {
-    const node = _nodes[nodeId];
-    return node ? toLegacyShape(node) : null;
+  function findNode(nodeId: string): Node | null {
+    return _nodes[nodeId] || null;
   }
 
   function clearAllAutoFocus(): void {
@@ -143,15 +140,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     clearAllAutoFocus();
 
     const nodeId = uuidv4();
+    const afterUIState = _uiState[afterNodeId] || createDefaultUIState(afterNodeId);
     let newDepth: number;
     let newParentId: string | null;
 
     if (insertAtBeginning) {
-      newDepth = afterNode.depth;
-      newParentId = afterNode.parentId || null;
+      newDepth = afterUIState.depth;
+      newParentId = afterNode.parent_id;
     } else {
-      newDepth = afterNode.depth;
-      newParentId = afterNode.parentId || null;
+      newDepth = afterUIState.depth;
+      newParentId = afterNode.parent_id;
     }
 
     let initialContent = content;
@@ -193,18 +191,40 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       depth: newDepth,
       expanded: true,
       autoFocus: shouldFocusNewNode,
-      inheritHeaderLevel: headerLevel !== undefined ? headerLevel : afterNode.inheritHeaderLevel,
+      inheritHeaderLevel: headerLevel !== undefined ? headerLevel : afterUIState.inheritHeaderLevel,
       isPlaceholder
     });
 
     _nodes[nodeId] = newNode;
     _uiState[nodeId] = newUIState;
 
+    // Bug 4 fix: Transfer children from expanded nodes
+    // If afterNode is expanded and has children, transfer them to the new node
+    if (!insertAtBeginning && afterUIState.expanded) {
+      const children = Object.values(_nodes)
+        .filter((n) => n.parent_id === afterNodeId)
+        .map((n) => n.id);
+
+      if (children.length > 0) {
+        // Transfer children to new node
+        for (const childId of children) {
+          const child = _nodes[childId];
+          if (child) {
+            _nodes[childId] = {
+              ...child,
+              parent_id: nodeId,
+              modified_at: new Date().toISOString()
+            };
+          }
+        }
+      }
+    }
+
     // Handle hierarchy positioning
     if (insertAtBeginning) {
-      if (afterNode.parentId) {
+      if (afterNode.parent_id) {
         // const siblings = Object.values(_nodes)
-        //   .filter(n => n.parent_id === afterNode.parentId)
+        //   .filter(n => n.parent_id === afterNode.parent_id)
         //   .map(n => n.id);
         // const afterNodeIndex = siblings.indexOf(afterNodeId);
         // Update sibling pointers (simplified for now)
@@ -217,7 +237,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         ];
       }
     } else {
-      if (afterNode.parentId) {
+      if (afterNode.parent_id) {
         // Insert after sibling
       } else {
         const afterNodeIndex = _rootNodeIds.indexOf(afterNodeId);
@@ -241,6 +261,26 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       nodeType,
       metadata: {}
     });
+
+    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+      type: 'hierarchy:changed',
+      namespace: 'lifecycle',
+      source: serviceName,
+      changeType: 'create',
+      affectedNodes: [nodeId]
+    });
+
+    eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+      type: 'cache:invalidate',
+      namespace: 'coordination',
+      source: serviceName,
+      cacheKey: `node:${nodeId}`,
+      scope: 'node',
+      nodeId,
+      reason: 'node-created'
+    });
+
+    emitReferenceUpdateNeeded(nodeId);
 
     if (!shouldFocusNewNode && afterNode) {
       _uiState[afterNodeId] = { ..._uiState[afterNodeId], autoFocus: true };
@@ -324,6 +364,38 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }, 250);
 
     scheduleContentProcessing(nodeId, node.content);
+  }
+
+  function updateNodeMentions(nodeId: string, mentions: string[]): void {
+    const node = _nodes[nodeId];
+    if (!node) return;
+
+    _nodes[nodeId] = {
+      ...node,
+      mentions: [...mentions],
+      modified_at: new Date().toISOString()
+    };
+
+    _updateTrigger++;
+    emitNodeUpdated(nodeId, 'mentions', mentions);
+  }
+
+  function updateNodeProperties(
+    nodeId: string,
+    properties: Record<string, unknown>,
+    merge: boolean = true
+  ): void {
+    const node = _nodes[nodeId];
+    if (!node) return;
+
+    _nodes[nodeId] = {
+      ...node,
+      properties: merge ? { ...node.properties, ...properties } : { ...properties },
+      modified_at: new Date().toISOString()
+    };
+
+    _updateTrigger++;
+    emitNodeUpdated(nodeId, 'properties', properties);
   }
 
   function scheduleContentProcessing(nodeId: string, content: string): void {
@@ -439,14 +511,34 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       .filter((n) => n.parent_id === currentNodeId)
       .map((n) => n.id);
 
+    // Determine where children should go:
+    // - If nodes are at same depth/level, transfer to target (previousNode)
+    // - If there's a depth mismatch, promote to source's parent
+    const currentUIState = _uiState[currentNodeId];
+    const previousUIState = _uiState[previousNodeId];
+    const sameDepthLevel = currentUIState?.depth === previousUIState?.depth;
+
+    const newParentForChildren = sameDepthLevel ? previousNodeId : currentNode.parent_id;
+
     for (const childId of currentChildren) {
       const child = _nodes[childId];
       if (child) {
         _nodes[childId] = {
           ...child,
-          parent_id: previousNodeId,
+          parent_id: newParentForChildren,
           modified_at: new Date().toISOString()
         };
+
+        // Update depth based on new parent
+        const newParentUIState = newParentForChildren ? _uiState[newParentForChildren] : null;
+        const newDepth = newParentUIState ? newParentUIState.depth + 1 : 0;
+        _uiState[childId] = {
+          ..._uiState[childId],
+          depth: newDepth
+        };
+
+        // Recursively update descendant depths
+        updateDescendantDepths(childId);
       }
     }
 
@@ -503,6 +595,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     };
     _uiState[nodeId] = { ...uiState, depth: (prevSiblingUIState?.depth || 0) + 1 };
 
+    // Recalculate depths for all descendants
+    updateDescendantDepths(nodeId);
+
     if (node.parent_id) {
       // Remove from old parent's children list
     } else {
@@ -518,6 +613,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       source: serviceName,
       changeType: 'indent',
       affectedNodes: [nodeId]
+    });
+
+    eventBus.emit<import('./eventTypes').ReferencesUpdateNeededEvent>({
+      type: 'references:update-needed',
+      namespace: 'coordination',
+      source: serviceName,
+      nodeId,
+      updateType: 'hierarchy',
+      affectedReferences: []
     });
 
     return true;
@@ -540,6 +644,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       modified_at: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: newDepth };
+
+    // Recalculate depths for all descendants
+    updateDescendantDepths(nodeId);
 
     if (!newParentId) {
       const parentIndex = _rootNodeIds.indexOf(parent.id);
@@ -591,6 +698,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     events.nodeDeleted(nodeId);
+    events.hierarchyChanged();
     _updateTrigger++;
 
     eventBus.emit<import('./eventTypes').NodeDeletedEvent>({
@@ -599,6 +707,32 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       source: serviceName,
       nodeId,
       parentId: node.parent_id || undefined
+    });
+
+    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+      type: 'hierarchy:changed',
+      namespace: 'lifecycle',
+      source: serviceName,
+      changeType: 'delete',
+      affectedNodes: [nodeId, ...children]
+    });
+
+    eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+      type: 'cache:invalidate',
+      namespace: 'coordination',
+      source: serviceName,
+      cacheKey: 'all',
+      scope: 'global',
+      reason: 'node-deleted'
+    });
+
+    eventBus.emit<import('./eventTypes').ReferencesUpdateNeededEvent>({
+      type: 'references:update-needed',
+      namespace: 'coordination',
+      source: serviceName,
+      nodeId,
+      updateType: 'deletion',
+      metadata: {}
     });
   }
 
@@ -693,28 +827,28 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   // Helper methods for backward compatibility
-  // function updateDescendantDepths(nodeId: string): void {
-  //   const node = _nodes[nodeId];
-  //   const uiState = _uiState[nodeId];
-  //   if (!node || !uiState) return;
+  function updateDescendantDepths(nodeId: string): void {
+    const node = _nodes[nodeId];
+    const uiState = _uiState[nodeId];
+    if (!node || !uiState) return;
 
-  //   const children = Object.values(_nodes)
-  //     .filter(n => n.parent_id === nodeId)
-  //     .map(n => n.id);
+    const children = Object.values(_nodes)
+      .filter((n) => n.parent_id === nodeId)
+      .map((n) => n.id);
 
-  //   for (const childId of children) {
-  //     _uiState[childId] = {
-  //       ..._uiState[childId],
-  //       depth: uiState.depth + 1
-  //     };
-  //     updateDescendantDepths(childId);
-  //   }
-  // }
+    for (const childId of children) {
+      _uiState[childId] = {
+        ..._uiState[childId],
+        depth: uiState.depth + 1
+      };
+      updateDescendantDepths(childId);
+    }
+  }
 
   return {
     // Reactive getters
     get nodes() {
-      return new Map(Object.entries(_nodes).map(([id, node]) => [id, toLegacyShape(node)]));
+      return new Map(Object.entries(_nodes));
     },
     get rootNodeIds() {
       return _rootNodeIds;
@@ -728,6 +862,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     get _updateTrigger() {
       return _updateTrigger;
     },
+    // Direct access to UI state for computed properties
+    getUIState(nodeId: string) {
+      return _uiState[nodeId];
+    },
 
     // Node operations
     findNode,
@@ -735,6 +873,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     createPlaceholderNode,
     updateNodeContent,
     updateNodeType,
+    updateNodeMentions,
+    updateNodeProperties,
     combineNodes,
     indentNode,
     outdentNode,
@@ -782,82 +922,55 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       return true;
     },
 
-    // Legacy data initialization for tests
-    initializeFromLegacyData(
-      legacyData: Array<{
-        id: string;
-        type?: string;
-        nodeType?: string;
-        content: string;
-        inheritHeaderLevel: number;
-        children: string[];
-        expanded: boolean;
-        autoFocus: boolean;
-        metadata?: Record<string, unknown>;
-        parentId?: string;
-      }>
+    // Initialize service with nodes (used for loading from database)
+    initializeNodes(
+      nodes: Array<Node>,
+      options?: {
+        expanded?: boolean;
+        autoFocus?: boolean;
+        inheritHeaderLevel?: number;
+      }
     ): void {
+      // Clear existing state
       Object.keys(_nodes).forEach((id) => delete _nodes[id]);
       Object.keys(_uiState).forEach((id) => delete _uiState[id]);
       _rootNodeIds = [];
 
-      const validLegacyData = legacyData.filter(
-        (legacyNode): legacyNode is NonNullable<typeof legacyNode> =>
-          legacyNode !== null &&
-          legacyNode !== undefined &&
-          typeof legacyNode === 'object' &&
-          'id' in legacyNode &&
-          Boolean(legacyNode.id)
-      );
+      const defaults = {
+        expanded: options?.expanded ?? true,
+        autoFocus: options?.autoFocus ?? false,
+        inheritHeaderLevel: options?.inheritHeaderLevel ?? 0
+      };
 
-      for (const legacyNode of validLegacyData) {
-        const node: Node = {
-          id: legacyNode.id,
-          node_type: legacyNode.type || legacyNode.nodeType || 'text',
-          content: legacyNode.content || '',
-          parent_id: legacyNode.parentId || null,
-          root_id: legacyNode.parentId || legacyNode.id,
-          before_sibling_id: null,
-          created_at: new Date().toISOString(),
-          modified_at: new Date().toISOString(),
-          properties: legacyNode.metadata || {},
-          mentions: []
-        };
+      // Compute depth for a node based on parent chain
+      const computeDepth = (nodeId: string, visited = new Set<string>()): number => {
+        if (visited.has(nodeId)) return 0; // Prevent infinite recursion
+        visited.add(nodeId);
 
-        const uiState = createDefaultUIState(legacyNode.id, {
-          depth: 0,
-          expanded: legacyNode.expanded ?? true,
-          autoFocus: legacyNode.autoFocus ?? false,
-          inheritHeaderLevel: legacyNode.inheritHeaderLevel ?? 0,
+        const node = _nodes[nodeId];
+        if (!node || !node.parent_id) return 0;
+        return 1 + computeDepth(node.parent_id, visited);
+      };
+
+      // First pass: Add all nodes
+      for (const node of nodes) {
+        _nodes[node.id] = node;
+        _uiState[node.id] = createDefaultUIState(node.id, {
+          depth: 0, // Will be computed in second pass
+          expanded: defaults.expanded,
+          autoFocus: defaults.autoFocus,
+          inheritHeaderLevel: defaults.inheritHeaderLevel,
           isPlaceholder: false
         });
-
-        _nodes[legacyNode.id] = node;
-        _uiState[legacyNode.id] = uiState;
       }
 
-      // Set root nodes
-      const allChildIds = new Set(
-        validLegacyData.flatMap((n) => (Array.isArray(n.children) ? n.children : []))
-      );
-      _rootNodeIds = validLegacyData.filter((n) => !allChildIds.has(n.id)).map((n) => n.id);
+      // Second pass: Compute depths and identify roots
+      const childIds = new Set(nodes.filter((n) => n.parent_id).map((n) => n.id));
+      _rootNodeIds = nodes.filter((n) => !n.parent_id || !childIds.has(n.id)).map((n) => n.id);
 
-      // Update parent references and depths
       for (const nodeId of Object.keys(_nodes)) {
-        const children = Object.values(_nodes)
-          .filter((n) => n.parent_id === nodeId)
-          .map((n) => n.id);
-
-        for (const childId of children) {
-          const child = _nodes[childId];
-          const childUIState = _uiState[childId];
-          if (child && childUIState) {
-            _uiState[childId] = {
-              ...childUIState,
-              depth: (_uiState[nodeId]?.depth || 0) + 1
-            };
-          }
-        }
+        const depth = computeDepth(nodeId);
+        _uiState[nodeId] = { ..._uiState[nodeId], depth };
       }
 
       _updateTrigger++;
@@ -870,6 +983,3 @@ export type ReactiveNodeService = ReturnType<typeof createReactiveNodeService>;
 
 // For backward compatibility with existing imports
 export { createReactiveNodeService as ReactiveNodeService };
-
-// Re-export LegacyNodeShape as Node for backward compatibility
-export type { LegacyNodeShape as Node };

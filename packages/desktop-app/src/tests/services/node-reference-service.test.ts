@@ -36,6 +36,28 @@ import { eventBus } from '../../lib/services/eventBus';
 import type { ReferencesUpdateNeededEvent, NodeDeletedEvent } from '../../lib/services/eventTypes';
 import type { Node } from '../../lib/types/node';
 
+// Helper to create unified Node objects for tests
+function createNode(
+  id: string,
+  content: string,
+  nodeType: string = 'text',
+  parentId: string | null = null,
+  properties: Record<string, unknown> = {}
+) {
+  return {
+    id,
+    node_type: nodeType,
+    content,
+    parent_id: parentId,
+    root_id: null,
+    before_sibling_id: null,
+    created_at: new Date().toISOString(),
+    modified_at: new Date().toISOString(),
+    mentions: [] as string[],
+    properties
+  };
+}
+
 // Mock document for test environment
 Object.defineProperty(global, 'document', {
   value: {
@@ -189,18 +211,13 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
     nodeManager = createReactiveNodeService(mockEvents);
 
     // Initialize with a root node so other nodes can be created after it
-    nodeManager.initializeFromLegacyData([
-      {
-        id: 'root',
-        nodeType: 'text',
-        content: 'Root node',
-        autoFocus: false,
-        inheritHeaderLevel: 0,
-        children: [],
-        expanded: true,
-        metadata: {}
-      }
-    ]);
+    nodeManager.initializeNodes([
+      createNode('root', 'Root node')
+    ], {
+      autoFocus: false,
+      inheritHeaderLevel: 0,
+      expanded: true
+    });
 
     hierarchyService = new HierarchyService(nodeManager);
     contentProcessor = ContentProcessor.getInstance();
