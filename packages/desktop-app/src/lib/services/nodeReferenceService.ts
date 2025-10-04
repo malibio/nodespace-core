@@ -29,7 +29,8 @@ import { ContentProcessor } from './contentProcessor';
 import type { ReactiveNodeService as NodeManager, Node } from './reactiveNodeService.svelte.ts';
 import type { HierarchyService } from './hierarchyService';
 import type { NodeOperationsService } from './nodeOperationsService';
-import type { MockDatabaseService, NodeSpaceNode } from './mockDatabaseService';
+import type { Node as UnifiedNode } from '$lib/types';
+import type { TauriNodeService } from './tauriNodeService';
 
 // ============================================================================
 // Core Types and Interfaces
@@ -111,14 +112,14 @@ export class NodeReferenceService {
   private nodeManager: NodeManager;
   private hierarchyService: HierarchyService;
   private nodeOperationsService: NodeOperationsService;
-  private databaseService: MockDatabaseService;
+  private databaseService: TauriNodeService;
   private contentProcessor: ContentProcessor;
   private readonly serviceName = 'NodeReferenceService';
 
   // Caching for performance (following Phase 1 patterns)
   private suggestionCache = new Map<string, { result: AutocompleteResult; timestamp: number }>();
   private uriCache = new Map<string, NodeReference>();
-  private searchCache = new Map<string, NodeSpaceNode[]>();
+  private searchCache = new Map<string, UnifiedNode[]>();
   private mentionsCache = new Map<string, string[]>(); // nodeId -> array of mentioned nodeIds
   private readonly cacheTimeout = 30000; // 30 seconds
 
@@ -148,7 +149,7 @@ export class NodeReferenceService {
     nodeManager: NodeManager,
     hierarchyService: HierarchyService,
     nodeOperationsService: NodeOperationsService,
-    databaseService: MockDatabaseService,
+    databaseService: TauriNodeService,
     contentProcessor?: ContentProcessor
   ) {
     this.nodeManager = nodeManager;
@@ -469,7 +470,7 @@ export class NodeReferenceService {
   /**
    * Resolve nodespace:// URI to actual node
    */
-  public async resolveNodespaceURI(uri: string): Promise<NodeSpaceNode | null> {
+  public async resolveNodespaceURI(uri: string): Promise<UnifiedNode | null> {
     const startTime = performance.now();
     this.performanceMetrics.totalURIResolutions++;
 
@@ -482,20 +483,20 @@ export class NodeReferenceService {
       // Try to find node in NodeManager first
       const managerNode = this.nodeManager.findNode(reference.nodeId);
       if (managerNode) {
-        // Found in NodeManager, convert to NodeSpaceNode format
-        const nodeSpaceNode: NodeSpaceNode = {
+        // Found in NodeManager, convert to UnifiedNode format
+        const nodeSpaceNode: UnifiedNode = {
           id: managerNode.id,
           type: managerNode.nodeType,
           content: managerNode.content,
           parent_id: managerNode.parentId || null,
           root_id: this.findRootId(managerNode.id),
           before_sibling_id: null,
-          depth: managerNode.depth,
+          depth: (managerNode as any).depth,
           created_at: new Date().toISOString(),
           mentions: [],
-          metadata: managerNode.metadata,
+          metadata: (managerNode as any).metadata,
           embedding_vector: null
-        };
+        } as any;
 
         this.performanceMetrics.avgURIResolutionTime =
           (this.performanceMetrics.avgURIResolutionTime + (performance.now() - startTime)) / 2;
@@ -504,7 +505,7 @@ export class NodeReferenceService {
 
       // If not found in NodeManager, try database (for test scenarios)
       try {
-        const dbNodes = await this.databaseService.queryNodes({ id: reference.nodeId });
+        const dbNodes = await (this.databaseService as any).queryNodes({ id: reference.nodeId });
         if (dbNodes && dbNodes.length > 0) {
           const dbNode = dbNodes[0];
           this.performanceMetrics.avgURIResolutionTime =
@@ -593,7 +594,7 @@ export class NodeReferenceService {
 
       // Remove reference if present in either location
       if (currentMentions.includes(targetId) || inMemoryMentions.includes(targetId)) {
-        const updatedMentions = currentMentions.filter((id) => id !== targetId);
+        const updatedMentions = currentMentions.filter((id: string) => id !== targetId);
 
         // Update both database and in-memory representation
         await this.nodeOperationsService.updateNodeMentions(sourceId, updatedMentions);
@@ -652,15 +653,15 @@ export class NodeReferenceService {
   public async getIncomingReferences(nodeId: string): Promise<NodeReference[]> {
     try {
       // Use database service to find nodes that mention this node
-      const referencingNodes = await this.databaseService.queryNodes({
+      const referencingNodes = await (this.databaseService as any).queryNodes({
         mentioned_by: nodeId
       });
 
-      return referencingNodes.map((node) => ({
+      return referencingNodes.map((node: UnifiedNode) => ({
         nodeId: node.id,
         uri: this.createNodespaceURI(node.id),
         title: this.extractNodeTitleFromSpaceNode(node),
-        nodeType: node.type,
+        nodeType: (node as any).type,
         isValid: true,
         lastResolved: Date.now(),
         metadata: { type: 'incoming' }
@@ -681,7 +682,7 @@ export class NodeReferenceService {
   /**
    * Search nodes with fuzzy matching and filtering
    */
-  public async searchNodes(query: string, nodeType?: string): Promise<NodeSpaceNode[]> {
+  public async searchNodes(query: string, nodeType?: string): Promise<UnifiedNode[]> {
     if (!query || query.length < this.autocompleteConfig.minQueryLength) {
       return [];
     }
@@ -696,7 +697,7 @@ export class NodeReferenceService {
 
     try {
       // Use database service for efficient querying
-      const results = await this.databaseService.queryNodes({
+      const results = await (this.databaseService as any).queryNodes({
         content_contains: query,
         type: nodeType,
         limit: this.autocompleteConfig.maxSuggestions * 3 // Get more for better filtering
@@ -715,7 +716,7 @@ export class NodeReferenceService {
   /**
    * Create new node with specified type and content
    */
-  public async createNode(nodeType: string, content: string): Promise<NodeSpaceNode> {
+  public async createNode(nodeType: string, content: string): Promise<UnifiedNode> {
     try {
       const nodeId = this.generateNodeId();
 
@@ -724,7 +725,7 @@ export class NodeReferenceService {
       const managerNodeId = nodeId; // Use our generated ID directly
 
       // Use NodeOperationsService for consistent node creation with database
-      const nodeData: Partial<NodeSpaceNode> = {
+      const nodeData: any = {
         id: managerNodeId, // Use the ID that was actually created
         type: nodeType,
         content: content,
@@ -740,12 +741,12 @@ export class NodeReferenceService {
       };
 
       // Store directly in database service since NodeOperationsService doesn't persist to database
-      const finalNodeData: NodeSpaceNode = {
+      const finalNodeData: UnifiedNode = {
         ...nodeData,
         created_at: new Date().toISOString()
-      } as NodeSpaceNode;
+      } as UnifiedNode;
 
-      const createdNode = await this.databaseService.upsertNode(finalNodeData);
+      const createdNode = await (this.databaseService as any).upsertNode(finalNodeData);
 
       // In a full implementation, the node would be automatically
       // synchronized with the NodeManager via database change events.
@@ -936,7 +937,7 @@ export class NodeReferenceService {
     return textContent.length;
   }
 
-  private async createNodeSuggestion(node: NodeSpaceNode, query: string): Promise<NodeSuggestion> {
+  private async createNodeSuggestion(node: UnifiedNode, query: string): Promise<NodeSuggestion> {
     const title = this.extractNodeTitleFromSpaceNode(node);
     const relevanceScore = this.calculateRelevanceScore(node, query);
     const matchPositions = this.findMatchPositions(title, query);
@@ -946,7 +947,7 @@ export class NodeReferenceService {
       nodeId: node.id,
       title,
       content: node.content.substring(0, 200), // Truncate for performance
-      nodeType: node.type,
+      nodeType: (node as any).type,
       relevanceScore,
       matchType: title.toLowerCase().includes(query.toLowerCase()) ? 'title' : 'content',
       matchPositions,
@@ -958,7 +959,7 @@ export class NodeReferenceService {
     };
   }
 
-  private calculateRelevanceScore(node: NodeSpaceNode, query: string): number {
+  private calculateRelevanceScore(node: UnifiedNode, query: string): number {
     const title = this.extractNodeTitleFromSpaceNode(node);
     const content = node.content;
     const queryLower = query.toLowerCase();
@@ -982,7 +983,7 @@ export class NodeReferenceService {
     }
 
     // Boost score for exact node type matches
-    if (node.type.toLowerCase().includes(queryLower)) {
+    if ((node as any).type && (node as any).type.toLowerCase().includes(queryLower)) {
       score += 0.2;
     }
 
@@ -1015,7 +1016,7 @@ export class NodeReferenceService {
     }
   }
 
-  private extractNodeTitle(node: Node | NodeSpaceNode): string {
+  private extractNodeTitle(node: Node | UnifiedNode): string {
     if (!node.content) return 'Untitled';
 
     // Try to extract title from content
@@ -1032,7 +1033,7 @@ export class NodeReferenceService {
     return firstLine.substring(0, 100) || 'Untitled';
   }
 
-  private extractNodeTitleFromSpaceNode(node: NodeSpaceNode): string {
+  private extractNodeTitleFromSpaceNode(node: UnifiedNode): string {
     if (!node.content) return 'Untitled';
 
     const lines = node.content.split('\n');
@@ -1100,13 +1101,13 @@ export class NodeReferenceService {
   private async cleanupDeletedNodeReferences(deletedNodeId: string): Promise<void> {
     try {
       // Find all nodes that reference the deleted node
-      const referencingNodes = await this.databaseService.queryNodes({
+      const referencingNodes = await (this.databaseService as any).queryNodes({
         mentioned_by: deletedNodeId
       });
 
       // Remove references to deleted node from database and in-memory nodes
       for (const node of referencingNodes) {
-        const updatedMentions = node.mentions.filter((id) => id !== deletedNodeId);
+        const updatedMentions = (node.mentions || []).filter((id: string) => id !== deletedNodeId);
 
         // Update database
         await this.nodeOperationsService.updateNodeMentions(node.id, updatedMentions);

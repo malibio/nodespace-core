@@ -853,11 +853,11 @@ export class ContentProcessor {
               // Create decoration context
               const decorationContext: DecorationContext = {
                 nodeId: refNode.nodeId,
-                nodeType: referencedNode.type,
+                nodeType: (referencedNode as any).type,
                 title: refNode.reference.title || refNode.displayText,
                 content: referencedNode.content,
                 uri: refNode.uri,
-                metadata: referencedNode.metadata || {},
+                metadata: (referencedNode as any).metadata || {},
                 targetElement: null!, // Will be set when DOM element is created
                 displayContext: 'inline'
               };

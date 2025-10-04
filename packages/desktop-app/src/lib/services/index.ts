@@ -8,7 +8,8 @@
 // ============================================================================
 // Core Database and Storage
 // ============================================================================
-export * from './mockDatabaseService';
+// Temporarily commented out - mockDatabaseService deleted in Phase 1
+// export * from './mockDatabaseService';
 
 // ============================================================================
 // Node Management
@@ -47,4 +48,5 @@ export * from './performanceMonitor';
 // ============================================================================
 // Legacy and Utilities
 // ============================================================================
-export * from './mockTextService';
+// Temporarily commented out - mockTextService deleted in Phase 1
+// export * from './mockTextService';

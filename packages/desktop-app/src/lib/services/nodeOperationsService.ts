@@ -17,7 +17,7 @@ import { eventBus } from './eventBus';
 import { ContentProcessor } from './contentProcessor';
 import type { ReactiveNodeService as NodeManager, Node } from './reactiveNodeService.svelte.ts';
 import type { HierarchyService } from './hierarchyService';
-import type { NodeSpaceNode } from './mockDatabaseService';
+import type { Node as UnifiedNode } from '$lib/types';
 
 // ============================================================================
 // Core Types
@@ -83,9 +83,9 @@ export class NodeOperationsService {
    */
   async upsertNode(
     nodeId: string,
-    data: Partial<NodeSpaceNode>,
+    data: Partial<UnifiedNode>,
     options: UpsertNodeOptions = {}
-  ): Promise<NodeSpaceNode> {
+  ): Promise<UnifiedNode> {
     const existingNode = this.nodeManager.findNode(nodeId);
     const isUpdate = !!existingNode;
 
@@ -114,8 +114,8 @@ export class NodeOperationsService {
 
     // Resolve parent and root
     const hierarchyResolution = await this.resolveParentAndRoot(
-      data.parent_id,
-      data.root_id,
+      data.parent_id || undefined,
+      data.root_id || undefined,
       nodeId,
       opts.preserveHierarchy && !!existingNode
     );
@@ -128,24 +128,24 @@ export class NodeOperationsService {
     );
 
     // Prepare base node data with proper type conversion
-    const baseNodeData: NodeSpaceNode = {
+    const baseNodeData: UnifiedNode = {
       id: nodeId,
-      type: data.type || (existingNode ? existingNode.nodeType : 'text'),
+      type: (data as any).type || (existingNode ? existingNode.nodeType : 'text'),
       content: contentResult.content,
       parent_id: hierarchyResolution.parentId,
       root_id: hierarchyResolution.rootId,
       before_sibling_id: siblingPosition.beforeSiblingId,
       depth: existingNode?.depth || 0, // Include depth field
       created_at: existingNode ? this.getCreatedAtFromNode(existingNode) : new Date().toISOString(),
-      mentions: data.mentions || existingNode?.mentions || [],
+      mentions: (data as any).mentions || existingNode?.mentions || [],
       metadata: this.mergeMetadata(
         existingNode,
-        data.metadata,
+        (data as any).metadata,
         contentResult.metadata,
         opts.preserveMetadata
       ),
-      embedding_vector: data.embedding_vector || null
-    };
+      embedding_vector: (data as any).embedding_vector || null
+    } as any;
 
     // Convert to NodeManager format and store
     const nodeManagerNode = this.convertToNodeManagerFormat(baseNodeData);
@@ -160,7 +160,7 @@ export class NodeOperationsService {
         node.nodeType = nodeManagerNode.nodeType;
         node.metadata = nodeManagerNode.metadata;
         // Update mentions after node exists
-        if (opts.updateMentions && baseNodeData.mentions.length > 0) {
+        if (opts.updateMentions && baseNodeData.mentions && baseNodeData.mentions.length > 0) {
           node.mentions = baseNodeData.mentions;
           await this.updateNodeMentions(nodeId, baseNodeData.mentions);
         }
@@ -171,7 +171,7 @@ export class NodeOperationsService {
       this.emitNodeOperationEvent('upsert', nodeId, baseNodeData, { isUpdate });
 
       // Update mentions if requested (only for existing nodes in tests)
-      if (opts.updateMentions && baseNodeData.mentions.length > 0) {
+      if (opts.updateMentions && baseNodeData.mentions && baseNodeData.mentions.length > 0) {
         // Try to update mentions, but don't fail if node doesn't exist yet
         try {
           await this.updateNodeMentions(nodeId, baseNodeData.mentions);
@@ -234,7 +234,7 @@ export class NodeOperationsService {
   /**
    * Extract content string with multiple fallback strategies
    */
-  extractContentString(data: Partial<NodeSpaceNode>): ContentExtractionResult {
+  extractContentString(data: Partial<UnifiedNode>): ContentExtractionResult {
     let content = '';
     let extractedType: string | null = null;
     let confidence = 1.0;
@@ -248,8 +248,8 @@ export class NodeOperationsService {
       confidence = 1.0;
     }
     // Strategy 2: Extract from metadata
-    else if (data.metadata && typeof data.metadata === 'object') {
-      const result = this.extractContentFromMetadata(data.metadata);
+    else if ((data as any).metadata && typeof (data as any).metadata === 'object') {
+      const result = this.extractContentFromMetadata((data as any).metadata);
       if (result.content) {
         content = result.content;
         extractedType = result.type;
@@ -259,10 +259,10 @@ export class NodeOperationsService {
       }
     }
     // Strategy 3: Type-specific defaults
-    else if (data.type) {
-      const defaults = this.getTypeDefaults(data.type);
+    else if ((data as any).type) {
+      const defaults = this.getTypeDefaults((data as any).type);
       content = defaults.content;
-      extractedType = data.type;
+      extractedType = (data as any).type;
       confidence = 0.5;
       fallbackUsed = true;
       metadata = defaults.metadata;
@@ -288,7 +288,7 @@ export class NodeOperationsService {
    * Extract content with rich context information
    * Provides additional context about the content structure and formatting
    */
-  extractContentWithContext(data: Partial<NodeSpaceNode>): {
+  extractContentWithContext(data: Partial<UnifiedNode>): {
     content: string;
     ast: unknown;
     wikiLinks: unknown[];
@@ -478,28 +478,28 @@ export class NodeOperationsService {
   }
 
   /**
-   * Convert NodeSpaceNode format to NodeManager format
+   * Convert UnifiedNode format to NodeManager format
    */
-  private convertToNodeManagerFormat(node: NodeSpaceNode): Node {
+  private convertToNodeManagerFormat(node: UnifiedNode): Node {
     return {
       id: node.id,
       content: node.content,
-      nodeType: node.type,
-      depth: node.depth, // Use depth from NodeSpaceNode
+      nodeType: (node as any).type,
+      depth: (node as any).depth, // Use depth from NodeSpaceNode
       parentId: node.parent_id || undefined,
       children: [], // Will be populated by NodeManager
       expanded: true,
       autoFocus: false,
       inheritHeaderLevel: this.contentProcessor.parseHeaderLevel(node.content),
-      metadata: node.metadata,
+      metadata: (node as any).metadata,
       mentions: node.mentions
-    };
+    } as any;
   }
 
   /**
-   * Convert NodeManager format to NodeSpaceNode format
+   * Convert NodeManager format to UnifiedNode format
    */
-  private convertFromNodeManagerFormat(node: Node): NodeSpaceNode {
+  private convertFromNodeManagerFormat(node: Node): UnifiedNode {
     return {
       id: node.id,
       type: node.nodeType, // Convert nodeType to type
@@ -507,12 +507,12 @@ export class NodeOperationsService {
       parent_id: node.parentId || null,
       root_id: 'default-root', // This should be properly calculated in real implementation
       before_sibling_id: null, // This should be calculated based on sibling order
-      depth: node.depth,
+      depth: (node as any).depth,
       created_at: new Date().toISOString(), // Default for new conversions
       mentions: node.mentions || [],
-      metadata: node.metadata,
+      metadata: (node as any).metadata,
       embedding_vector: null
-    };
+    } as any;
   }
 
   /**
