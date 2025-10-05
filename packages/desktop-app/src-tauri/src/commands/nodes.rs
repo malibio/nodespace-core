@@ -15,7 +15,7 @@ pub struct CreateNodeInput {
     pub node_type: String,
     pub content: String,
     pub parent_id: Option<String>,
-    pub root_id: Option<String>,
+    pub origin_node_id: Option<String>,
     pub before_sibling_id: Option<String>,
     pub properties: serde_json::Value,
     #[serde(default)]
@@ -115,7 +115,7 @@ pub async fn create_node(
         node_type: node.node_type,
         content: node.content,
         parent_id: node.parent_id,
-        root_id: node.root_id,
+        origin_node_id: node.origin_node_id,
         before_sibling_id: node.before_sibling_id,
         created_at: now,  // Placeholder - DB will use its own timestamp
         modified_at: now, // Placeholder - DB will use its own timestamp
