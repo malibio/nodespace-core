@@ -637,6 +637,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _nodes[nodeId] = {
       ...node,
       parent_id: prevSiblingId,
+      before_sibling_id: null, // Becomes first child of new parent
       modified_at: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: (prevSiblingUIState?.depth || 0) + 1 };
@@ -687,6 +688,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _nodes[nodeId] = {
       ...node,
       parent_id: newParentId,
+      before_sibling_id: node.parent_id, // Positioned right after old parent
       modified_at: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: newDepth };

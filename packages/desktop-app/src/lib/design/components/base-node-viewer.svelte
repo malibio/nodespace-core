@@ -82,11 +82,9 @@
       // Clear content tracking
       lastSavedContent.clear();
 
-      // Filter to get direct children only
-      const children = allNodes.filter((node) => node.parent_id === parent_id);
-
-      if (children.length === 0) {
-        // No children - create placeholder
+      // Check if we have any nodes at all (including nested children)
+      if (allNodes.length === 0) {
+        // No nodes - create placeholder
         const placeholderId = globalThis.crypto.randomUUID();
         nodeManager.initializeNodes(
           [
@@ -109,12 +107,13 @@
           }
         );
       } else {
-        // Track initial content of ALL loaded nodes (not just direct children)
+        // Track initial content of ALL loaded nodes
         // This enables efficient nested node loading without additional queries
         allNodes.forEach((node) => lastSavedContent.set(node.id, node.content));
 
-        // Initialize with loaded children
-        nodeManager.initializeNodes(children, {
+        // Initialize with ALL nodes - visibleNodes will build the hierarchy
+        // based on parent_id relationships and the viewParentId context
+        nodeManager.initializeNodes(allNodes, {
           expanded: true,
           autoFocus: false,
           inheritHeaderLevel: 0
@@ -122,6 +121,42 @@
       }
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children for parent:', parent_id, error);
+    }
+  }
+
+  /**
+   * Recursively ensure all placeholder ancestors are persisted before saving a node
+   * This handles the case where a user creates nested placeholder nodes, then fills in
+   * a child before filling in the parent.
+   */
+  async function ensureAncestorsPersisted(nodeId: string): Promise<void> {
+    const node = nodeManager.findNode(nodeId);
+    if (!node || !node.parent_id) return;
+
+    const parent = nodeManager.findNode(node.parent_id);
+    if (!parent) return;
+
+    // Check if parent is a placeholder by looking at visibleNodes which includes UI state
+    const parentVisibleNode = nodeManager.visibleNodes.find((n) => n.id === parent.id);
+    const isParentPlaceholder = parentVisibleNode?.isPlaceholder || false;
+
+    // If parent is a placeholder, we need to persist it first
+    if (isParentPlaceholder) {
+      // Recursively ensure parent's ancestors are persisted
+      await ensureAncestorsPersisted(parent.id);
+
+      // Persist the placeholder parent with empty content
+      // This creates a real node in the database that child nodes can reference
+      await databaseService.saveNodeWithParent(parent.id, {
+        content: '', // Empty content for placeholder
+        node_type: parent.node_type,
+        parent_id: parent.parent_id || parentId!,
+        origin_node_id: parent.origin_node_id || parentId!,
+        before_sibling_id: parent.before_sibling_id
+      });
+
+      // Mark as persisted by updating lastSavedContent
+      lastSavedContent.set(parent.id, '');
     }
   }
 
@@ -136,17 +171,20 @@
     const timeout = setTimeout(async () => {
       try {
         const node = nodeManager.findNode(nodeId);
+
+        // Ensure all placeholder ancestors are persisted first
+        await ensureAncestorsPersisted(nodeId);
+
         await databaseService.saveNodeWithParent(nodeId, {
           content,
           node_type: nodeType,
-          parent_id: parentId!,
+          parent_id: node?.parent_id || parentId!,
           origin_node_id: node?.origin_node_id || parentId!,
           before_sibling_id: node?.before_sibling_id
         });
 
         // Update last saved content to prevent redundant saves
         lastSavedContent.set(nodeId, content);
-        console.log('[BaseNodeViewer] Saved node:', nodeId);
       } catch (error) {
         console.error('[BaseNodeViewer] Failed to save node:', nodeId, error);
       }
@@ -161,6 +199,7 @@
    * Updates immediately without debouncing since these are explicit user actions
    *
    * Uses upsert to handle both existing nodes and newly created nodes that may not be in DB yet
+   * Skips placeholder nodes - they should not be persisted yet
    */
   async function saveHierarchyChange(nodeId: string) {
     if (!parentId) return;
@@ -172,8 +211,15 @@
         return;
       }
 
-      // Use saveNodeWithParent (upsert) instead of updateNode
-      // This handles both existing nodes and newly created nodes not yet in DB
+      // Check if node is a placeholder by looking at visibleNodes which includes UI state
+      const visibleNode = nodeManager.visibleNodes.find((n) => n.id === nodeId);
+      const isPlaceholder = visibleNode?.isPlaceholder || false;
+
+      // Skip placeholder nodes - they should not be persisted yet
+      if (isPlaceholder) {
+        return;
+      }
+
       await databaseService.saveNodeWithParent(nodeId, {
         content: node.content,
         node_type: node.node_type,
@@ -181,8 +227,6 @@
         origin_node_id: node.origin_node_id || parentId,
         before_sibling_id: node.before_sibling_id
       });
-
-      console.log('[BaseNodeViewer] Saved hierarchy change for node:', nodeId);
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to save hierarchy change:', nodeId, error);
     }
@@ -369,7 +413,7 @@
   }
 
   // Handle indenting nodes (Tab key)
-  function handleIndentNode(event: CustomEvent<{ nodeId: string }>) {
+  async function handleIndentNode(event: CustomEvent<{ nodeId: string }>) {
     const { nodeId } = event.detail;
 
     try {
@@ -386,8 +430,8 @@
       const success = nodeManager.indentNode(nodeId);
 
       if (success) {
-        // Persist hierarchy change
-        saveHierarchyChange(nodeId);
+        // Persist hierarchy change - AWAIT to ensure it completes
+        await saveHierarchyChange(nodeId);
 
         // Restore cursor position after DOM update
         setTimeout(() => restoreCursorPosition(nodeId, cursorPosition), 0);
@@ -466,7 +510,7 @@
   }
 
   // Handle outdenting nodes (Shift+Tab key)
-  function handleOutdentNode(event: CustomEvent<{ nodeId: string }>) {
+  async function handleOutdentNode(event: CustomEvent<{ nodeId: string }>) {
     const { nodeId } = event.detail;
 
     try {
@@ -483,8 +527,8 @@
       const success = nodeManager.outdentNode(nodeId);
 
       if (success) {
-        // Persist hierarchy change
-        saveHierarchyChange(nodeId);
+        // Persist hierarchy change - AWAIT to ensure it completes
+        await saveHierarchyChange(nodeId);
 
         // Restore cursor position after DOM update
         setTimeout(() => restoreCursorPosition(nodeId, cursorPosition), 0);

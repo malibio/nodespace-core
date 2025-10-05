@@ -1235,6 +1235,7 @@ impl NodeService {
              VALUES (?, ?, ?, ?, ?, ?, '{}', NULL)
              ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
+                parent_id = excluded.parent_id,
                 origin_node_id = excluded.origin_node_id,
                 before_sibling_id = excluded.before_sibling_id,
                 modified_at = CURRENT_TIMESTAMP",
