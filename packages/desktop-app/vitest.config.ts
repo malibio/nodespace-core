@@ -5,6 +5,10 @@ import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { injectRuneMocks } from './src/tests/vite-plugin-inject-runes';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Early Svelte 5 rune mocks - must be defined BEFORE any module imports
 function createMockState<T>(initialValue: T): T {
@@ -134,8 +138,8 @@ export default defineConfig({
   resolve: process.env.VITEST
     ? {
         alias: {
-          $lib: '/Users/malibio/nodespace/nodespace-core/packages/desktop-app/src/lib',
-          $app: '/Users/malibio/nodespace/nodespace-core/packages/desktop-app/node_modules/@sveltejs/kit/src/runtime/app'
+          $lib: path.resolve(__dirname, 'src/lib'),
+          $app: path.resolve(__dirname, 'node_modules/@sveltejs/kit/src/runtime/app')
         },
         // Force browser conditions to load client-side Svelte runtime
         conditions: ['browser', 'import']

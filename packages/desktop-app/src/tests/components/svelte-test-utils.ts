@@ -21,7 +21,7 @@ import { tick } from 'svelte';
 /**
  * Render options for Svelte components
  */
-export interface RenderOptions<Comp extends Component<any>> {
+export interface RenderOptions<Comp extends Component> {
   /**
    * Props to pass to the component
    */
@@ -58,11 +58,16 @@ export interface RenderOptions<Comp extends Component<any>> {
  * });
  * ```
  */
-export function renderComponent<Comp extends Component<any>>(
+export function renderComponent<Comp extends Component>(
   Component: Comp,
   options: RenderOptions<Comp> = {}
 ): RenderResult<Comp> {
-  return render(Component as any, options);
+  // Type assertion required: @testing-library/svelte v5's render() has overly restrictive types
+  // that don't properly infer component props. Using 'as any' is the only viable workaround
+  // until the library's TypeScript definitions are fixed upstream.
+  // See: https://github.com/testing-library/svelte-testing-library/issues
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Library type limitation
+  return render(Component as any, options as any);
 }
 
 /**
@@ -182,8 +187,9 @@ export function mockEventHandlers<T extends Record<string, unknown>>(): {
  * ```
  */
 export function expectEventStopped(event: Event): boolean {
-  // In testing, we typically spy on stopPropagation
-  // This helper provides semantic assertion
+  // In testing, we typically spy on stopPropagation to verify it was called
+  // Type assertion required because Event.stopPropagation is not a MockInstance by default
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Runtime check for mock
   const stopPropagation = event.stopPropagation as any;
 
   if (typeof stopPropagation === 'function' && stopPropagation.mock) {
@@ -319,7 +325,7 @@ export function getAriaAttributes(element: HTMLElement): {
  * lifecycle.mount();
  * ```
  */
-export function simulateComponentLifecycle<Comp extends Component<any>>(
+export function simulateComponentLifecycle<Comp extends Component>(
   Component: Comp,
   props: Partial<ComponentProps<Comp>> = {}
 ): {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon, { type NodeType } from '$lib/design/icons';
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { onMount } from 'svelte';
 
   // Import icon configuration from registry for consistency
   import { getIconConfig } from '$lib/design/icons/registry';
@@ -29,11 +29,6 @@
   let selectedIndex: number = 0;
   let containerRef: HTMLElement | undefined = undefined; // Explicitly assigned
   let itemRefs: HTMLElement[] = [];
-
-  const dispatch = createEventDispatcher<{
-    select: NodeResult;
-    close: void;
-  }>();
 
   // Helper function to get node configuration
   function getNodeConfig(nodeType: NodeType) {
@@ -128,7 +123,6 @@
       case 'Escape':
         event.preventDefault();
         event.stopPropagation(); // Prevent any background actions
-        dispatch('close');
         onclose?.();
         break;
     }
@@ -136,7 +130,6 @@
 
   function selectResult(result: NodeResult) {
     selectedIndex = results.indexOf(result);
-    dispatch('select', result);
     onselect?.(result);
   }
 
