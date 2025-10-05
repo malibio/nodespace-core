@@ -281,44 +281,36 @@ describe('NodeAutocomplete', () => {
 
   describe('Keyboard Navigation - Enter and Escape', () => {
     it('should dispatch select event on Enter key', async () => {
-      const result = render(NodeAutocomplete, {
+      render(NodeAutocomplete, {
         props: {
           visible: true,
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false
+          loading: false,
+          onselect: onSelect
         }
       });
-
-      // Listen to select event on the container
-      result.container.addEventListener('select', onSelect);
 
       // Press Enter
       document.dispatchEvent(createKeyboardEvent('Enter'));
       await waitForEffects();
 
       expect(onSelect).toHaveBeenCalledTimes(1);
-      expect(onSelect).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail: mockResults[0]
-        })
-      );
+      expect(onSelect).toHaveBeenCalledWith(mockResults[0]);
     });
 
     it('should select correct item when Enter is pressed after navigation', async () => {
-      const result = render(NodeAutocomplete, {
+      render(NodeAutocomplete, {
         props: {
           visible: true,
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false
+          loading: false,
+          onselect: onSelect
         }
       });
-
-      // Listen to select event on the container
-      result.container.addEventListener('select', onSelect);
 
       // Navigate to second item
       document.dispatchEvent(createKeyboardEvent('ArrowDown'));
@@ -328,26 +320,20 @@ describe('NodeAutocomplete', () => {
       document.dispatchEvent(createKeyboardEvent('Enter'));
       await waitForEffects();
 
-      expect(onSelect).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail: mockResults[1]
-        })
-      );
+      expect(onSelect).toHaveBeenCalledWith(mockResults[1]);
     });
 
     it('should dispatch close event on Escape key', async () => {
-      const result = render(NodeAutocomplete, {
+      render(NodeAutocomplete, {
         props: {
           visible: true,
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false
+          loading: false,
+          onclose: onClose
         }
       });
-
-      // Listen to close event on the container
-      result.container.addEventListener('close', onClose);
 
       // Press Escape
       document.dispatchEvent(createKeyboardEvent('Escape'));
@@ -357,19 +343,17 @@ describe('NodeAutocomplete', () => {
     });
 
     it('should not handle keyboard events when not visible', async () => {
-      const result = render(NodeAutocomplete, {
+      render(NodeAutocomplete, {
         props: {
           visible: false,
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false
+          loading: false,
+          onselect: onSelect,
+          onclose: onClose
         }
       });
-
-      // Listen to events on the container
-      result.container.addEventListener('select', onSelect);
-      result.container.addEventListener('close', onClose);
 
       // Try pressing Enter and Escape
       document.dispatchEvent(createKeyboardEvent('Enter'));
@@ -381,18 +365,16 @@ describe('NodeAutocomplete', () => {
     });
 
     it('should not handle keyboard events when results are empty', async () => {
-      const result = render(NodeAutocomplete, {
+      render(NodeAutocomplete, {
         props: {
           visible: true,
           position: defaultPosition,
           query: 'test',
           results: [],
-          loading: false
+          loading: false,
+          onselect: onSelect
         }
       });
-
-      // Listen to select event on the container
-      result.container.addEventListener('select', onSelect);
 
       // Try navigation and selection with empty results
       document.dispatchEvent(createKeyboardEvent('ArrowDown'));
@@ -551,21 +533,19 @@ describe('NodeAutocomplete', () => {
     });
 
     it('should not respond to keyboard events after unmount', async () => {
-      const result = render(NodeAutocomplete, {
+      const { unmount } = render(NodeAutocomplete, {
         props: {
           visible: true,
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false
+          loading: false,
+          onselect: onSelect
         }
       });
 
-      // Listen to select event on the container
-      result.container.addEventListener('select', onSelect);
-
       // Unmount component
-      result.unmount();
+      unmount();
 
       // Try to trigger keyboard events
       document.dispatchEvent(createKeyboardEvent('Enter'));
@@ -658,29 +638,23 @@ describe('NodeAutocomplete', () => {
 
   describe('Mouse Interactions', () => {
     it('should select item on click', async () => {
-      const result = render(NodeAutocomplete, {
+      render(NodeAutocomplete, {
         props: {
           visible: true,
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false
+          loading: false,
+          onselect: onSelect
         }
       });
-
-      // Listen to select event on the container
-      result.container.addEventListener('select', onSelect);
 
       const options = screen.getAllByRole('option');
       options[1].click();
 
       await waitForEffects();
 
-      expect(onSelect).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail: mockResults[1]
-        })
-      );
+      expect(onSelect).toHaveBeenCalledWith(mockResults[1]);
     });
 
     it('should update selection on hover', async () => {

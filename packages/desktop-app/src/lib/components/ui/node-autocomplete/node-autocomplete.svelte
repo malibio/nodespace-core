@@ -21,6 +21,10 @@
   export let loading: boolean = false;
   export let visible: boolean = false;
 
+  // Event handler props (Svelte 5 pattern)
+  export let onselect: ((_result: NodeResult) => void) | undefined = undefined;
+  export let onclose: (() => void) | undefined = undefined;
+
   // State
   let selectedIndex: number = 0;
   let containerRef: HTMLElement | undefined = undefined; // Explicitly assigned
@@ -125,6 +129,7 @@
         event.preventDefault();
         event.stopPropagation(); // Prevent any background actions
         dispatch('close');
+        onclose?.();
         break;
     }
   }
@@ -132,6 +137,7 @@
   function selectResult(result: NodeResult) {
     selectedIndex = results.indexOf(result);
     dispatch('select', result);
+    onselect?.(result);
   }
 
   // Reset selection when results change
