@@ -1076,6 +1076,76 @@ impl NodeService {
         Ok(())
     }
 
+    /// Upsert a node with automatic parent creation - single transaction
+    ///
+    /// Creates parent node if it doesn't exist, then upserts the child node.
+    /// All operations happen in a single transaction to prevent database locking.
+    ///
+    /// # Arguments
+    /// * `node_id` - ID of the node to upsert
+    /// * `content` - Node content
+    /// * `node_type` - Type of node (text, task, date)
+    /// * `parent_id` - Parent node ID (will be created as date node if missing)
+    ///
+    /// # Returns
+    /// * `Ok(())` - Operation successful
+    /// * `Err(NodeServiceError)` - If transaction fails
+    pub async fn upsert_node_with_parent(
+        &self,
+        node_id: &str,
+        content: &str,
+        node_type: &str,
+        parent_id: &str,
+    ) -> Result<(), NodeServiceError> {
+        let conn = self.db.connect()?;
+
+        // Single transaction for all operations
+        conn.execute("BEGIN IMMEDIATE TRANSACTION", ()).await.map_err(|e| {
+            NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e))
+        })?;
+
+        // Use INSERT OR IGNORE for parent - won't error if already exists
+        let parent_result = conn.execute(
+            "INSERT OR IGNORE INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, properties, embedding_vector)
+             VALUES (?, 'date', ?, NULL, NULL, NULL, '{}', NULL)",
+            (parent_id, parent_id)
+        ).await;
+
+        if let Err(e) = parent_result {
+            let _rollback = conn.execute("ROLLBACK", ()).await;
+            return Err(NodeServiceError::query_failed(format!(
+                "Failed to ensure parent exists: {}",
+                e
+            )));
+        }
+
+        // Use INSERT OR REPLACE for node - upsert in single operation
+        let node_result = conn.execute(
+            "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, properties, embedding_vector)
+             VALUES (?, ?, ?, ?, ?, NULL, '{}', NULL)
+             ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                modified_at = CURRENT_TIMESTAMP",
+            (node_id, node_type, content, parent_id, parent_id)
+        ).await;
+
+        if let Err(e) = node_result {
+            let _rollback = conn.execute("ROLLBACK", ()).await;
+            return Err(NodeServiceError::query_failed(format!(
+                "Failed to upsert node: {}",
+                e
+            )));
+        }
+
+        // Commit transaction
+        conn.execute("COMMIT", ()).await.map_err(|e| {
+            std::mem::drop(conn.execute("ROLLBACK", ()));
+            NodeServiceError::transaction_failed(format!("Failed to commit transaction: {}", e))
+        })?;
+
+        Ok(())
+    }
+
     // Helper methods
 
     /// Convert a database row to a Node

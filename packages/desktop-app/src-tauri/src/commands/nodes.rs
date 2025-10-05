@@ -300,56 +300,11 @@ pub async fn save_node_with_parent(
 ) -> Result<(), CommandError> {
     validate_node_type(&node_type)?;
 
-    let now = Utc::now();
-
-    // Check if parent exists
-    let parent_exists = service.get_node(&parent_id).await?.is_some();
-
-    if !parent_exists {
-        // Create parent node (typically a date node)
-        let parent_node = Node {
-            id: parent_id.clone(),
-            node_type: "date".to_string(),
-            content: parent_id.clone(),
-            parent_id: None,
-            root_id: None,
-            before_sibling_id: None,
-            created_at: now,
-            modified_at: now,
-            properties: serde_json::Value::Object(serde_json::Map::new()),
-            embedding_vector: None,
-        };
-        service.create_node(parent_node).await?;
-    }
-
-    // Check if node exists
-    let node_exists = service.get_node(&node_id).await?.is_some();
-
-    if node_exists {
-        // Update existing node
-        let update = NodeUpdate {
-            content: Some(content),
-            ..Default::default()
-        };
-        service.update_node(&node_id, update).await?;
-    } else {
-        // Create new node
-        let node = Node {
-            id: node_id,
-            node_type,
-            content,
-            parent_id: Some(parent_id.clone()),
-            root_id: Some(parent_id),
-            before_sibling_id: None,
-            created_at: now,
-            modified_at: now,
-            properties: serde_json::Value::Object(serde_json::Map::new()),
-            embedding_vector: None,
-        };
-        service.create_node(node).await?;
-    }
-
-    Ok(())
+    // Use single-transaction upsert method
+    service
+        .upsert_node_with_parent(&node_id, &content, &node_type, &parent_id)
+        .await
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
