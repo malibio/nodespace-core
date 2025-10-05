@@ -20,7 +20,7 @@
  * - NodeManager/EnhancedNodeManager: Node data access and manipulation
  * - HierarchyService: Efficient node hierarchy operations
  * - NodeOperationsService: Advanced node operations and mentions management
- * - MockDatabaseService: Bidirectional reference storage via mentions array
+ * - TauriNodeService: Bidirectional reference storage via mentions array with native backend queries
  * - ContentProcessor: Enhanced @ trigger content processing
  */
 
