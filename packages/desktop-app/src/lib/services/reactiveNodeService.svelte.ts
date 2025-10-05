@@ -36,25 +36,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   // Manual reactivity trigger for debugging
   let _updateTrigger = $state(0);
 
-  // Helper function to get computed node data with UI state (currently unused but may be needed for future features)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  function getNodeWithUIState(node: Node) {
-    const uiState = _uiState[node.id] || createDefaultUIState(node.id);
-    const children = Object.values(_nodes)
-      .filter((n) => n.parent_id === node.id)
-      .map((n) => n.id);
-
-    return {
-      ...node,
-      depth: uiState.depth,
-      children,
-      expanded: uiState.expanded,
-      autoFocus: uiState.autoFocus,
-      inheritHeaderLevel: uiState.inheritHeaderLevel,
-      isPlaceholder: uiState.isPlaceholder
-    };
-  }
-
   // REACTIVITY FIX: Properly reactive visibleNodes computation using $derived.by
   const _visibleNodes = $derived.by(() => {
     const allNodes = Object.values(_nodes);
