@@ -147,6 +147,21 @@ pub struct Node {
     /// Optional vector embedding for semantic search (F32 blob)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_vector: Option<Vec<u8>>,
+
+    /// Outgoing mentions - IDs of nodes that THIS node references
+    /// Example: If this node's content includes "@node-123", then mentions = ["node-123"]
+    /// Stored in node_mentions table as (this.id, mentioned_node_id)
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<String>,
+
+    /// Incoming mentions - IDs of nodes that reference THIS node (backlinks)
+    /// Example: If node-456 mentions this node, then mentioned_by = ["node-456"]
+    /// Computed from node_mentions table WHERE mentions_node_id = this.id
+    /// Read-only field, populated on query
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_by: Vec<String>,
 }
 
 impl Node {
@@ -214,6 +229,8 @@ impl Node {
             modified_at: now,
             properties,
             embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
         }
     }
 
@@ -268,6 +285,8 @@ impl Node {
             modified_at: now,
             properties,
             embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
         }
     }
 
@@ -320,6 +339,8 @@ impl Node {
             modified_at: now,
             properties,
             embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
         }
     }
 
