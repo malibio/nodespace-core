@@ -135,6 +135,7 @@
           content,
           node_type: nodeType,
           parent_id: parentId!,
+          root_id: node?.root_id || parentId!,
           before_sibling_id: node?.before_sibling_id
         });
 

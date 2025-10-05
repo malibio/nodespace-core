@@ -297,6 +297,7 @@ pub async fn save_node_with_parent(
     content: String,
     node_type: String,
     parent_id: String,
+    root_id: String,
     before_sibling_id: Option<String>,
 ) -> Result<(), CommandError> {
     validate_node_type(&node_type)?;
@@ -308,6 +309,7 @@ pub async fn save_node_with_parent(
             &content,
             &node_type,
             &parent_id,
+            &root_id,
             before_sibling_id.as_deref(),
         )
         .await
