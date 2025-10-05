@@ -956,6 +956,9 @@ impl NodeService {
                 })?;
 
             let mut nodes = Vec::new();
+            // TODO(performance): This creates N+1 query pattern (2 queries per node).
+            // Consider implementing populate_mentions_batch() when queries regularly
+            // return >50 nodes. See issue #158 for batch optimization implementation.
             while let Some(row) = rows
                 .next()
                 .await
@@ -1026,6 +1029,9 @@ impl NodeService {
 
             // Collect results with mentions populated
             let mut nodes = Vec::new();
+            // TODO(performance): This creates N+1 query pattern (2 queries per node).
+            // Consider implementing populate_mentions_batch() when queries regularly
+            // return >50 nodes. See issue #158 for batch optimization implementation.
             while let Some(row) = rows
                 .next()
                 .await
@@ -1573,8 +1579,8 @@ impl NodeService {
             modified_at,
             properties,
             embedding_vector,
-            mentions: Vec::new(),      // Populated separately via populate_mentions()
-            mentioned_by: Vec::new(),  // Populated separately via populate_mentions()
+            mentions: Vec::new(), // Populated separately via populate_mentions()
+            mentioned_by: Vec::new(), // Populated separately via populate_mentions()
         })
     }
 
@@ -1689,9 +1695,7 @@ impl NodeService {
             (source_id, target_id),
         )
         .await
-        .map_err(|e| {
-            NodeServiceError::query_failed(format!("Failed to insert mention: {}", e))
-        })?;
+        .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert mention: {}", e)))?;
 
         Ok(())
     }
@@ -1731,9 +1735,7 @@ impl NodeService {
             (source_id, target_id),
         )
         .await
-        .map_err(|e| {
-            NodeServiceError::query_failed(format!("Failed to delete mention: {}", e))
-        })?;
+        .map_err(|e| NodeServiceError::query_failed(format!("Failed to delete mention: {}", e)))?;
 
         Ok(())
     }
