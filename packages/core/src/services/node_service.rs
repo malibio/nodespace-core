@@ -1097,17 +1097,13 @@ impl NodeService {
         node_type: &str,
         parent_id: &str,
     ) -> Result<(), NodeServiceError> {
-        eprintln!("[upsert_node_with_parent] Getting connection for node {}", node_id);
         let conn = self.db.connect_with_timeout().await?;
-        eprintln!("[upsert_node_with_parent] Got connection, starting transaction");
 
         // Use DEFERRED transaction for better concurrency with WAL mode
         // Lock is only acquired when first write occurs, not at BEGIN
         conn.execute("BEGIN DEFERRED", ()).await.map_err(|e| {
-            eprintln!("[upsert_node_with_parent] Failed to begin transaction: {}", e);
             NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e))
         })?;
-        eprintln!("[upsert_node_with_parent] Transaction started");
 
         // Use INSERT OR IGNORE for parent - won't error if already exists
         let parent_result = conn.execute(
