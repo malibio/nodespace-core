@@ -321,7 +321,9 @@ pub async fn get_nodes_by_origin_id(
 ///   nodeId: 'node-123',
 ///   content: 'Updated content',
 ///   nodeType: 'text',
-///   parentId: '2025-10-05'
+///   parentId: '2025-10-05',
+///   originNodeId: '2025-10-05',
+///   beforeSiblingId: null
 /// });
 /// ```
 #[tauri::command]
@@ -331,7 +333,7 @@ pub async fn save_node_with_parent(
     content: String,
     node_type: String,
     parent_id: String,
-    root_id: String,
+    origin_node_id: String,
     before_sibling_id: Option<String>,
 ) -> Result<(), CommandError> {
     validate_node_type(&node_type)?;
@@ -343,7 +345,7 @@ pub async fn save_node_with_parent(
             &content,
             &node_type,
             &parent_id,
-            &root_id,
+            &origin_node_id,
             before_sibling_id.as_deref(),
         )
         .await
