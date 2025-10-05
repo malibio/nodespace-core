@@ -717,6 +717,103 @@ impl PropertyFilter {
     }
 }
 
+/// Simple query parameters for basic node queries
+///
+/// This is a simpler alternative to `NodeFilter` for common query patterns
+/// used by the NodeReferenceService. For advanced queries, use `NodeFilter`.
+///
+/// # Examples
+///
+/// ```rust
+/// # use nodespace_core::models::NodeQuery;
+/// // Query by ID
+/// let query = NodeQuery {
+///     id: Some("node-123".to_string()),
+///     ..Default::default()
+/// };
+///
+/// // Query nodes that mention another node
+/// let query = NodeQuery {
+///     mentioned_by: Some("target-node-id".to_string()),
+///     ..Default::default()
+/// };
+///
+/// // Full-text search with limit
+/// let query = NodeQuery {
+///     content_contains: Some("search term".to_string()),
+///     limit: Some(10),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeQuery {
+    /// Query by specific node ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Query nodes that mention this node ID (in their mentions array)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mentioned_by: Option<String>,
+
+    /// Query nodes by content substring (case-insensitive LIKE)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_contains: Option<String>,
+
+    /// Query by node type
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_type: Option<String>,
+
+    /// Limit number of results
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+impl NodeQuery {
+    /// Create a new empty query
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Query by ID
+    pub fn by_id(id: String) -> Self {
+        Self {
+            id: Some(id),
+            ..Default::default()
+        }
+    }
+
+    /// Query nodes that mention a specific node
+    pub fn mentioned_by(node_id: String) -> Self {
+        Self {
+            mentioned_by: Some(node_id),
+            ..Default::default()
+        }
+    }
+
+    /// Query by content search
+    pub fn content_contains(search: String) -> Self {
+        Self {
+            content_contains: Some(search),
+            ..Default::default()
+        }
+    }
+
+    /// Query by node type
+    pub fn by_type(node_type: String) -> Self {
+        Self {
+            node_type: Some(node_type),
+            ..Default::default()
+        }
+    }
+
+    /// Set result limit
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+}
+
 /// Sort order specification for query results
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum OrderBy {

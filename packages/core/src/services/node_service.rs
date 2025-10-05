@@ -866,6 +866,223 @@ impl NodeService {
         Ok(nodes)
     }
 
+    /// Query nodes with simple query parameters
+    ///
+    /// This is a simpler alternative to `query_nodes` for common query patterns.
+    /// Supports queries by ID, mentioned_by, content_contains, and node_type.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query parameters (see NodeQuery for details)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<Node>)` - List of matching nodes
+    /// * `Err(NodeServiceError)` - If database operation fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use nodespace_core::models::NodeQuery;
+    ///
+    /// // Query by ID
+    /// let query = NodeQuery::by_id("node-123".to_string());
+    /// let nodes = service.query_nodes_simple(query).await?;
+    ///
+    /// // Query nodes that mention another node
+    /// let query = NodeQuery::mentioned_by("target-node".to_string());
+    /// let nodes = service.query_nodes_simple(query).await?;
+    ///
+    /// // Full-text search
+    /// let query = NodeQuery::content_contains("search term".to_string()).with_limit(10);
+    /// let nodes = service.query_nodes_simple(query).await?;
+    /// ```
+    pub async fn query_nodes_simple(
+        &self,
+        query: crate::models::NodeQuery,
+    ) -> Result<Vec<Node>, NodeServiceError> {
+        let conn = self.db.connect()?;
+
+        // Priority 1: Query by ID (exact match)
+        if let Some(ref id) = query.id {
+            if let Some(node) = self.get_node(id).await? {
+                return Ok(vec![node]);
+            } else {
+                return Ok(vec![]);
+            }
+        }
+
+        // Priority 2: Query nodes that mention a specific node (mentioned_by)
+        // This queries the `mentions` JSON array for nodes containing the target ID
+        if let Some(ref mentioned_node_id) = query.mentioned_by {
+            let limit_clause = query
+                .limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
+
+            // Use JSON_EACH to search for the mentioned node ID in the mentions array
+            // SQLite JSON_EACH expands the array into rows, then we check if the value matches
+            let sql_query = format!(
+                "SELECT DISTINCT n.id, n.node_type, n.content, n.parent_id, n.origin_node_id, n.before_sibling_id, n.created_at, n.modified_at, n.properties, n.embedding_vector
+                 FROM nodes n, JSON_EACH(
+                     CASE
+                         WHEN JSON_TYPE(n.properties) = 'object'
+                             AND JSON_TYPE(JSON_EXTRACT(n.properties, '$.mentions')) = 'array'
+                         THEN JSON_EXTRACT(n.properties, '$.mentions')
+                         ELSE '[]'
+                     END
+                 ) AS mention
+                 WHERE mention.value = ?{}",
+                limit_clause
+            );
+
+            let mut stmt = conn.prepare(&sql_query).await.map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to prepare mentioned_by query: {}",
+                    e
+                ))
+            })?;
+
+            let mut rows = stmt
+                .query([mentioned_node_id.as_str()])
+                .await
+                .map_err(|e| {
+                    NodeServiceError::query_failed(format!(
+                        "Failed to execute mentioned_by query: {}",
+                        e
+                    ))
+                })?;
+
+            let mut nodes = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+            {
+                nodes.push(self.row_to_node(row)?);
+            }
+
+            return Ok(nodes);
+        }
+
+        // Priority 3: Query by content substring (case-insensitive LIKE)
+        if let Some(ref content_search) = query.content_contains {
+            let content_pattern = format!("%{}%", content_search);
+            let limit_clause = query
+                .limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
+
+            // Handle two cases: with and without node_type filter
+            let nodes = if let Some(ref node_type) = query.node_type {
+                // Case 1: Filter by both content and node_type
+                let sql = format!(
+                    "SELECT id, node_type, content, parent_id, origin_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                     FROM nodes WHERE content LIKE ? AND node_type = ?{}",
+                    limit_clause
+                );
+
+                let mut stmt = conn.prepare(&sql).await.map_err(|e| {
+                    NodeServiceError::query_failed(format!(
+                        "Failed to prepare content_contains query: {}",
+                        e
+                    ))
+                })?;
+
+                let mut rows = stmt
+                    .query([content_pattern.as_str(), node_type.as_str()])
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::query_failed(format!(
+                            "Failed to execute content_contains query: {}",
+                            e
+                        ))
+                    })?;
+
+                let mut nodes = Vec::new();
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+                {
+                    nodes.push(self.row_to_node(row)?);
+                }
+
+                nodes
+            } else {
+                // Case 2: Filter by content only
+                let sql = format!(
+                    "SELECT id, node_type, content, parent_id, origin_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                     FROM nodes WHERE content LIKE ?{}",
+                    limit_clause
+                );
+
+                let mut stmt = conn.prepare(&sql).await.map_err(|e| {
+                    NodeServiceError::query_failed(format!(
+                        "Failed to prepare content_contains query: {}",
+                        e
+                    ))
+                })?;
+
+                let mut rows = stmt.query([content_pattern.as_str()]).await.map_err(|e| {
+                    NodeServiceError::query_failed(format!(
+                        "Failed to execute content_contains query: {}",
+                        e
+                    ))
+                })?;
+
+                let mut nodes = Vec::new();
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+                {
+                    nodes.push(self.row_to_node(row)?);
+                }
+
+                nodes
+            };
+
+            return Ok(nodes);
+        }
+
+        // Priority 4: Query by node_type only
+        if let Some(ref node_type) = query.node_type {
+            let limit_clause = query
+                .limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
+
+            let sql_query = format!(
+                "SELECT id, node_type, content, parent_id, origin_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                 FROM nodes WHERE node_type = ?{}",
+                limit_clause
+            );
+
+            let mut stmt = conn.prepare(&sql_query).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to prepare node_type query: {}", e))
+            })?;
+
+            let mut rows = stmt.query([node_type.as_str()]).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to execute node_type query: {}", e))
+            })?;
+
+            let mut nodes = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+            {
+                nodes.push(self.row_to_node(row)?);
+            }
+
+            return Ok(nodes);
+        }
+
+        // Default: Empty query returns no results (safer than returning all nodes)
+        Ok(vec![])
+    }
+
     // Helper methods
 
     /// Check if a node exists
