@@ -63,11 +63,10 @@ export function renderComponent<Comp extends Component>(
   options: RenderOptions<Comp> = {}
 ): RenderResult<Comp> {
   // Type assertion required: @testing-library/svelte v5's render() has overly restrictive types
-  // that don't properly infer component props. Using 'as any' is the only viable workaround
-  // until the library's TypeScript definitions are fixed upstream.
+  // that don't properly infer component props. This is a documented limitation of the library.
   // See: https://github.com/testing-library/svelte-testing-library/issues
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Library type limitation
-  return render(Component as any, options as any);
+  // We cast through unknown to bypass the incompatible type definitions
+  return render(Component as never, options as never) as unknown as RenderResult<Comp>;
 }
 
 /**
@@ -187,10 +186,10 @@ export function mockEventHandlers<T extends Record<string, unknown>>(): {
  * ```
  */
 export function expectEventStopped(event: Event): boolean {
-  // In testing, we typically spy on stopPropagation to verify it was called
-  // Type assertion required because Event.stopPropagation is not a MockInstance by default
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Runtime check for mock
-  const stopPropagation = event.stopPropagation as any;
+  // In testing, we spy on stopPropagation to verify it was called
+  // Runtime type check is required because the function may or may not be a Vitest mock
+  type StopPropagationFn = Event['stopPropagation'] & { mock?: { calls: unknown[] } };
+  const stopPropagation = event.stopPropagation as StopPropagationFn;
 
   if (typeof stopPropagation === 'function' && stopPropagation.mock) {
     return stopPropagation.mock.calls.length > 0;
