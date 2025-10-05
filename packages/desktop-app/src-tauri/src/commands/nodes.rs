@@ -123,6 +123,8 @@ pub async fn create_node(
         modified_at: now, // Placeholder - DB will use its own timestamp
         properties: node.properties,
         embedding_vector: node.embedding_vector,
+        mentions: Vec::new(),     // Empty on create - populated separately
+        mentioned_by: Vec::new(), // Empty on create - computed from database
     };
 
     service.create_node(full_node).await.map_err(Into::into)
