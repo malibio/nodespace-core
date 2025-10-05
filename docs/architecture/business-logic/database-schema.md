@@ -17,22 +17,22 @@ CREATE TABLE nodes (
     id TEXT PRIMARY KEY,                    -- UUID from frontend (or YYYY-MM-DD for date nodes)
     node_type TEXT NOT NULL,                -- "task", "invoice", "schema", "date", etc.
     content TEXT NOT NULL,                  -- Primary content/text
-    parent_id TEXT,                         -- Where node was created (creation context)
-    root_id TEXT,                           -- Root document for bulk fetch (NULL = is root)
-    before_sibling_id TEXT,                 -- Single-pointer sibling ordering
+    parent_id TEXT,                         -- Hierarchy parent (NULL = root-level node)
+    origin_node_id TEXT,                    -- Which viewer/page created this (for bulk fetch)
+    before_sibling_id TEXT,                 -- Single-pointer sibling ordering (linked list)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     properties JSON NOT NULL DEFAULT '{}',  -- ALL entity-specific fields (no complementary tables)
     embedding_vector BLOB,                  -- F32_BLOB vector embeddings
 
     FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY (root_id) REFERENCES nodes(id)
+    FOREIGN KEY (origin_node_id) REFERENCES nodes(id)
 );
 
 -- Core indexes (no ALTER TABLE ever required)
 CREATE INDEX idx_nodes_type ON nodes(node_type);
 CREATE INDEX idx_nodes_parent ON nodes(parent_id);
-CREATE INDEX idx_nodes_root ON nodes(root_id);
+CREATE INDEX idx_nodes_origin ON nodes(origin_node_id);
 CREATE INDEX idx_nodes_modified ON nodes(modified_at);
 CREATE INDEX idx_nodes_content ON nodes(content); -- For text search
 ```
@@ -42,8 +42,10 @@ CREATE INDEX idx_nodes_content ON nodes(content); -- For text search
 - **Zero migration risk**: No ALTER TABLE on user machines (critical for desktop: 10,000+ installations)
 - **Schema-as-node**: Schemas stored as nodes (`node_type = "schema"`, `id = type_name`)
 - **Hierarchy semantics**:
-  - `parent_id`: "Where was this created?" (creation context, not ownership)
-  - `root_id`: "What document does this belong to?" (for bulk fetch, NULL = is root/page)
+  - `parent_id`: Hierarchical parent relationship (enables indent/outdent, tree structure)
+  - `origin_node_id`: Which viewer/page originally created this node (enables bulk fetch via single query)
+  - `before_sibling_id`: Linked-list sibling ordering (maintains node order independent of creation time)
+- **Bulk fetch optimization**: Single query fetches all nodes by `origin_node_id`, hierarchy built in-memory
 - **Dynamic indexes**: JSON path indexes created based on query frequency (rule-based)
 
 ### Mentions Relation Table
@@ -90,7 +92,7 @@ INSERT INTO nodes (
     node_type,
     content,
     parent_id,
-    root_id,
+    origin_node_id,
     properties
 ) VALUES (
     'task',                 -- Schema id = type name
@@ -119,14 +121,14 @@ INSERT INTO nodes (
     node_type,
     content,
     parent_id,
-    root_id,
+    origin_node_id,
     properties
 ) VALUES (
     'uuid-task-123',
     'task',                 -- References schema by type
     'Implement Pure JSON schema',
-    '2025-01-03',          -- Created in daily note
-    '2025-01-03',          -- Belongs to daily note document
+    '2025-01-03',          -- Parent is the daily note (can be indented under other nodes)
+    '2025-01-03',          -- Created on daily note page (immutable, for bulk fetch)
     '{
         "status": "in_progress",
         "assignee": "person-uuid-456",
@@ -203,8 +205,8 @@ INSERT INTO nodes (
     id,                    -- "2025-01-03" (deterministic ID)
     node_type,            -- "date"
     content,              -- "2025-01-03"
-    parent_id,            -- NULL (dates are root nodes)
-    root_id,              -- NULL (self = root)
+    parent_id,            -- NULL (dates are root-level nodes)
+    origin_node_id,       -- NULL (date pages are their own origin)
     properties,           -- Optional metadata
     embedding_vector      -- NULL (dates don't need embeddings)
 ) VALUES (
@@ -281,14 +283,14 @@ INSERT INTO nodes (
     node_type,
     content,
     parent_id,
-    root_id,
+    origin_node_id,
     properties
 ) VALUES (
     'uuid-invoice-789',
     'invoice',             -- References schema
     'Invoice INV-2025-001',
-    'project-uuid-123',    -- Created in a project
-    'project-uuid-123',    -- Belongs to project document
+    'project-uuid-123',    -- Parent is the project (can be indented under other nodes)
+    'project-uuid-123',    -- Created on project page (immutable, for bulk fetch)
     '{
         "invoice_number": "INV-2025-001",
         "amount": 15000.00,
@@ -321,7 +323,7 @@ struct Node {
     node_type: String,
     content: String,
     parent_id: Option<String>,
-    root_id: Option<String>,
+    origin_node_id: Option<String>,
     properties: serde_json::Value,
     embedding_vector: Option<Vec<u8>>,
 }
@@ -446,14 +448,14 @@ impl DatabaseService {
                 node_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 parent_id TEXT,
-                root_id TEXT,
+                origin_node_id TEXT,
                 before_sibling_id TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 properties JSON NOT NULL DEFAULT '{}',
                 embedding_vector BLOB,
                 FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
-                FOREIGN KEY (root_id) REFERENCES nodes(id)
+                FOREIGN KEY (origin_node_id) REFERENCES nodes(id)
             )",
             ()
         ).await?;
