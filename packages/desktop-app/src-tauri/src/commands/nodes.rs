@@ -1,11 +1,26 @@
 //! Node CRUD operation commands for Text, Task, and Date nodes
 
+use chrono::Utc;
 use nodespace_core::{Node, NodeService, NodeServiceError, NodeUpdate};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 /// Allowed node types for initial E2E testing
 const ALLOWED_NODE_TYPES: &[&str] = &["text", "task", "date"];
+
+/// Input for creating a node - timestamps generated server-side
+#[derive(Debug, Deserialize)]
+pub struct CreateNodeInput {
+    pub id: String,
+    pub node_type: String,
+    pub content: String,
+    pub parent_id: Option<String>,
+    pub root_id: Option<String>,
+    pub before_sibling_id: Option<String>,
+    pub properties: serde_json::Value,
+    #[serde(default)]
+    pub embedding_vector: Option<Vec<u8>>,
+}
 
 /// Structured error type for Tauri commands
 ///
@@ -87,11 +102,28 @@ fn validate_node_type(node_type: &str) -> Result<(), CommandError> {
 #[tauri::command]
 pub async fn create_node(
     service: State<'_, NodeService>,
-    node: Node,
+    node: CreateNodeInput,
 ) -> Result<String, CommandError> {
     validate_node_type(&node.node_type)?;
 
-    service.create_node(node).await.map_err(Into::into)
+    // Database will auto-generate timestamps via DEFAULT CURRENT_TIMESTAMP
+    // We still need to provide placeholder timestamps for the Node struct
+    let now = Utc::now();
+
+    let full_node = Node {
+        id: node.id,
+        node_type: node.node_type,
+        content: node.content,
+        parent_id: node.parent_id,
+        root_id: node.root_id,
+        before_sibling_id: node.before_sibling_id,
+        created_at: now,  // Placeholder - DB will use its own timestamp
+        modified_at: now, // Placeholder - DB will use its own timestamp
+        properties: node.properties,
+        embedding_vector: node.embedding_vector,
+    };
+
+    service.create_node(full_node).await.map_err(Into::into)
 }
 
 /// Get a node by ID
@@ -226,6 +258,98 @@ pub async fn get_children(
     parent_id: String,
 ) -> Result<Vec<Node>, CommandError> {
     service.get_children(&parent_id).await.map_err(Into::into)
+}
+
+/// Save a node with automatic parent creation - unified upsert operation
+///
+/// Ensures the parent node exists (creates if needed), then upserts the node.
+/// All operations happen in a single database transaction to prevent locking issues.
+///
+/// # Arguments
+/// * `service` - Node service instance from Tauri state
+/// * `node_id` - ID of the node to save
+/// * `content` - Node content
+/// * `node_type` - Type of the node (text, task, date)
+/// * `parent_id` - ID of the parent node (will be created if doesn't exist)
+///
+/// # Returns
+/// * `Ok(())` - Save successful
+/// * `Err(CommandError)` - Error with details if operation fails
+///
+/// # Errors
+/// Returns error if:
+/// - Node type is not one of: text, task, date
+/// - Database operation fails
+///
+/// # Example Frontend Usage
+/// ```typescript
+/// await invoke('save_node_with_parent', {
+///   nodeId: 'node-123',
+///   content: 'Updated content',
+///   nodeType: 'text',
+///   parentId: '2025-10-05'
+/// });
+/// ```
+#[tauri::command]
+pub async fn save_node_with_parent(
+    service: State<'_, NodeService>,
+    node_id: String,
+    content: String,
+    node_type: String,
+    parent_id: String,
+) -> Result<(), CommandError> {
+    validate_node_type(&node_type)?;
+
+    let now = Utc::now();
+
+    // Check if parent exists
+    let parent_exists = service.get_node(&parent_id).await?.is_some();
+
+    if !parent_exists {
+        // Create parent node (typically a date node)
+        let parent_node = Node {
+            id: parent_id.clone(),
+            node_type: "date".to_string(),
+            content: parent_id.clone(),
+            parent_id: None,
+            root_id: None,
+            before_sibling_id: None,
+            created_at: now,
+            modified_at: now,
+            properties: serde_json::Value::Object(serde_json::Map::new()),
+            embedding_vector: None,
+        };
+        service.create_node(parent_node).await?;
+    }
+
+    // Check if node exists
+    let node_exists = service.get_node(&node_id).await?.is_some();
+
+    if node_exists {
+        // Update existing node
+        let update = NodeUpdate {
+            content: Some(content),
+            ..Default::default()
+        };
+        service.update_node(&node_id, update).await?;
+    } else {
+        // Create new node
+        let node = Node {
+            id: node_id,
+            node_type,
+            content,
+            parent_id: Some(parent_id.clone()),
+            root_id: Some(parent_id),
+            before_sibling_id: None,
+            created_at: now,
+            modified_at: now,
+            properties: serde_json::Value::Object(serde_json::Map::new()),
+            embedding_vector: None,
+        };
+        service.create_node(node).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -16,8 +16,23 @@ use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::DatabaseService;
 use crate::models::{Node, NodeFilter, NodeUpdate, OrderBy};
 use crate::services::error::NodeServiceError;
-use chrono::Utc;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use std::sync::Arc;
+
+/// Parse timestamp from database - handles both SQLite and RFC3339 formats
+fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
+    // Try SQLite format first: "YYYY-MM-DD HH:MM:SS"
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return Ok(naive.and_utc());
+    }
+
+    // Try RFC3339 format (for old data): "YYYY-MM-DDTHH:MM:SSZ"
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+
+    Err(format!("Unable to parse timestamp '{}' as SQLite or RFC3339 format", s))
+}
 
 /// Core service for node CRUD and hierarchy operations
 ///
@@ -150,14 +165,15 @@ impl NodeService {
         }
 
         // Insert into database
+        // Database defaults handle created_at and modified_at timestamps automatically
         let conn = self.db.connect()?;
 
         let properties_json = serde_json::to_string(&node.properties)
             .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
         conn.execute(
-            "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, created_at, modified_at, properties, embedding_vector)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, properties, embedding_vector)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 node.id.as_str(),
                 node.node_type.as_str(),
@@ -165,8 +181,6 @@ impl NodeService {
                 node.parent_id.as_deref(),
                 node.root_id.as_deref(),
                 node.before_sibling_id.as_deref(),
-                node.created_at.to_rfc3339().as_str(),
-                node.modified_at.to_rfc3339().as_str(),
                 properties_json.as_str(),
                 node.embedding_vector.as_deref(),
             ),
@@ -311,25 +325,22 @@ impl NodeService {
             updated.embedding_vector = embedding_vector;
         }
 
-        updated.modified_at = Utc::now();
-
         // Validate updated node
         self.behaviors.validate_node(&updated)?;
 
-        // Execute update
+        // Execute update - database will auto-update modified_at via trigger or default
         let conn = self.db.connect()?;
         let properties_json = serde_json::to_string(&updated.properties)
             .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
         conn.execute(
-            "UPDATE nodes SET node_type = ?, content = ?, parent_id = ?, root_id = ?, before_sibling_id = ?, modified_at = ?, properties = ?, embedding_vector = ? WHERE id = ?",
+            "UPDATE nodes SET node_type = ?, content = ?, parent_id = ?, root_id = ?, before_sibling_id = ?, modified_at = CURRENT_TIMESTAMP, properties = ?, embedding_vector = ? WHERE id = ?",
             (
                 updated.node_type.as_str(),
                 updated.content.as_str(),
                 updated.parent_id.as_deref(),
                 updated.root_id.as_deref(),
                 updated.before_sibling_id.as_deref(),
-                updated.modified_at.to_rfc3339().as_str(),
                 properties_json.as_str(),
                 updated.embedding_vector.as_deref(),
                 id,
@@ -828,13 +839,14 @@ impl NodeService {
         let mut ids = Vec::new();
 
         // Insert all nodes
+        // Database defaults handle created_at and modified_at timestamps automatically
         for node in &nodes {
             let properties_json = serde_json::to_string(&node.properties)
                 .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
             let result = conn.execute(
-                "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, created_at, modified_at, properties, embedding_vector)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, properties, embedding_vector)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     node.id.as_str(),
                     node.node_type.as_str(),
@@ -842,8 +854,6 @@ impl NodeService {
                     node.parent_id.as_deref(),
                     node.root_id.as_deref(),
                     node.before_sibling_id.as_deref(),
-                    node.created_at.to_rfc3339().as_str(),
-                    node.modified_at.to_rfc3339().as_str(),
                     properties_json.as_str(),
                     node.embedding_vector.as_deref(),
                 ),
@@ -965,19 +975,18 @@ impl NodeService {
                 )));
             }
 
-            // Execute update in transaction
+            // Execute update in transaction - database auto-updates modified_at
             let properties_json = serde_json::to_string(&updated.properties)
                 .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
             let result = conn.execute(
-                "UPDATE nodes SET node_type = ?, content = ?, parent_id = ?, root_id = ?, before_sibling_id = ?, modified_at = ?, properties = ?, embedding_vector = ? WHERE id = ?",
+                "UPDATE nodes SET node_type = ?, content = ?, parent_id = ?, root_id = ?, before_sibling_id = ?, modified_at = CURRENT_TIMESTAMP, properties = ?, embedding_vector = ? WHERE id = ?",
                 (
                     updated.node_type.as_str(),
                     updated.content.as_str(),
                     updated.parent_id.as_deref(),
                     updated.root_id.as_deref(),
                     updated.before_sibling_id.as_deref(),
-                    updated.modified_at.to_rfc3339().as_str(),
                     properties_json.as_str(),
                     updated.embedding_vector.as_deref(),
                     id.as_str(),
@@ -1107,17 +1116,16 @@ impl NodeService {
                 NodeServiceError::serialization_error(format!("Failed to parse properties: {}", e))
             })?;
 
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+        // Parse timestamps - handle both SQLite format and RFC3339 (for migration)
+        let created_at = parse_timestamp(&created_at)
             .map_err(|e| {
-                NodeServiceError::serialization_error(format!("Failed to parse created_at: {}", e))
-            })?
-            .with_timezone(&Utc);
+                NodeServiceError::serialization_error(format!("Failed to parse created_at '{}': {}", created_at, e))
+            })?;
 
-        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)
+        let modified_at = parse_timestamp(&modified_at)
             .map_err(|e| {
-                NodeServiceError::serialization_error(format!("Failed to parse modified_at: {}", e))
-            })?
-            .with_timezone(&Utc);
+                NodeServiceError::serialization_error(format!("Failed to parse modified_at '{}': {}", modified_at, e))
+            })?;
 
         Ok(Node {
             id,

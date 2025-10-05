@@ -30,6 +30,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   let _rootNodeIds = $state<string[]>([]);
   const _activeNodeId = $state<string | undefined>(undefined);
 
+  // View context: which parent are we viewing? (null = viewing global roots)
+  let _viewParentId = $state<string | null>(null);
+
   // Manual reactivity trigger for debugging
   let _updateTrigger = $state(0);
 
@@ -60,7 +63,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
     void _updateTrigger;
     void _rootNodeIds;
-    return getVisibleNodesRecursive(_rootNodeIds);
+    void _viewParentId;
+
+    // Determine which nodes are "roots" for this view
+    // If viewParentId is set, roots are nodes with parent_id === viewParentId
+    // If viewParentId is null, roots are nodes with no parent_id
+    const viewRoots =
+      _viewParentId !== null
+        ? Object.values(_nodes)
+            .filter((n) => n.parent_id === _viewParentId)
+            .map((n) => n.id)
+        : _rootNodeIds;
+
+    return getVisibleNodesRecursive(viewRoots);
   });
 
   const serviceName = 'ReactiveNodeService';
@@ -849,12 +864,20 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     get visibleNodes() {
       return _visibleNodes;
     },
+    get viewParentId() {
+      return _viewParentId;
+    },
     get _updateTrigger() {
       return _updateTrigger;
     },
     // Direct access to UI state for computed properties
     getUIState(nodeId: string) {
       return _uiState[nodeId];
+    },
+
+    // View context control
+    setViewParentId(parentId: string | null) {
+      _viewParentId = parentId;
     },
 
     // Node operations

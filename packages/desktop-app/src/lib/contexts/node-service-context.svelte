@@ -6,7 +6,7 @@
   requiring manual service passing through props.
 -->
 
-<script lang="ts" context="module">
+<script lang="ts" module>
   import { getContext, setContext } from 'svelte';
 
   // Context key for service access
@@ -43,6 +43,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { Snippet } from 'svelte';
 
   // Service imports
   import NodeReferenceService from '$lib/services/nodeReferenceService';
@@ -52,8 +53,12 @@
   import { tauriNodeService } from '$lib/services/tauriNodeService';
   import { ContentProcessor } from '$lib/services/contentProcessor';
 
-  // Props - external reference only for service configuration
-  export const initializationMode: 'full' | 'mock' = 'mock';
+  // Props
+  let {
+    children
+  }: {
+    children: Snippet;
+  } = $props();
 
   // Services state - wrapped in object so context can hold reference
   const servicesContainer = $state<{ services: NodeServices | null }>({ services: null });
@@ -70,7 +75,10 @@
       try {
         await tauriNodeService.initializeDatabase();
       } catch (dbError) {
-        console.warn('[NodeServiceContext] Database unavailable, continuing without persistence:', dbError);
+        console.warn(
+          '[NodeServiceContext] Database unavailable, continuing without persistence:',
+          dbError
+        );
         // Continue - services will work in memory-only mode
       }
 
@@ -176,7 +184,7 @@
 
 <!-- Service Provider Component -->
 {#if servicesInitialized}
-  <slot />
+  {@render children()}
 {:else if initializationError}
   <div class="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
     <p class="text-destructive font-medium">Service Initialization Error</p>

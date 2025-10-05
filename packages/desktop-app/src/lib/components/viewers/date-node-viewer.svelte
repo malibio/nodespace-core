@@ -18,20 +18,9 @@
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { updateTabTitle, getDateTabTitle } from '$lib/stores/navigation.js';
-  import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
-  import { v4 as uuidv4 } from 'uuid';
-  import type { Node } from '$lib/types/node';
 
   // Props using Svelte 5 runes mode
   let { tabId = 'today' }: { tabId?: string } = $props();
-
-  // Get services from context
-  const services = getNodeServices();
-  if (!services) {
-    throw new Error('NodeServices not available in DateNodeViewer');
-  }
-
-  const { nodeManager, databaseService } = services;
 
   // Normalize date to midnight local time (ignore time components)
   function normalizeDate(d: Date): Date {
@@ -50,11 +39,10 @@
     })
   );
 
-  // Derive current date ID from currentDate
-  const currentDateId = $derived(currentDate.toISOString().split('T')[0]);
-
-  // Map to track debounce timeouts for each node
-  const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  // Derive current date ID from currentDate (using local timezone, not UTC)
+  const currentDateId = $derived(
+    `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`
+  );
 
   // Update tab title when date changes using Svelte 5 $effect
   $effect(() => {
@@ -63,132 +51,6 @@
       updateTabTitle(tabId, newTitle);
     }
   });
-
-  // Load nodes from database when date changes
-  $effect(() => {
-    loadNodesForDate(currentDateId);
-  });
-
-  // Watch nodeManager for content changes and persist to database with debounce
-  $effect(() => {
-    // Access visibleNodes to trigger reactivity
-    const nodes = nodeManager.visibleNodes;
-
-    // Schedule persistence for each non-placeholder node
-    for (const node of nodes) {
-      if (node.content.trim() && !node.isPlaceholder) {
-        scheduleNodePersistence(node.id, node.content);
-      }
-    }
-  });
-
-  /**
-   * Load nodes for the current date from database
-   */
-  async function loadNodesForDate(dateId: string) {
-    let children: Node[] = [];
-
-    try {
-      // Load children from database (already in unified Node format)
-      children = await databaseService.getChildren(dateId);
-    } catch (error) {
-      console.warn('[DateNodeViewer] Failed to load nodes from database:', dateId, error);
-      // Continue with empty array - will create placeholder below
-    }
-
-    // If no children, create an empty placeholder node
-    if (children.length === 0) {
-      const placeholderId = uuidv4();
-      children = [{
-        id: placeholderId,
-        node_type: 'text',
-        content: '',
-        parent_id: null,  // Root-level node (parent doesn't exist in nodeManager)
-        root_id: placeholderId,  // It's its own root
-        before_sibling_id: null,
-        created_at: new Date().toISOString(),
-        modified_at: new Date().toISOString(),
-        properties: {}
-      }];
-    }
-
-    // Initialize with loaded nodes (or placeholder if empty)
-    nodeManager.initializeNodes(children, {
-      expanded: true,
-      autoFocus: children.length === 1 && children[0].content === '',  // Auto-focus if it's the placeholder
-      inheritHeaderLevel: 0
-    });
-  }
-
-  /**
-   * Schedule node persistence with debouncing (500ms)
-   */
-  function scheduleNodePersistence(nodeId: string, content: string) {
-    // Clear existing timeout for this node
-    const existingTimeout = saveTimeouts.get(nodeId);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-    }
-
-    // Set new debounced save
-    const saveTimeout = setTimeout(async () => {
-      if (content.trim()) {
-        try {
-          // Ensure date node exists before saving child
-          const dateNode = await databaseService.getNode(currentDateId);
-          if (!dateNode) {
-            // Create date node lazily
-            await databaseService.createNode({
-              id: currentDateId,
-              node_type: 'date',
-              content: currentDateId,
-              parent_id: null,
-              root_id: null,
-              before_sibling_id: null,
-              properties: {}
-            });
-          }
-
-          // Save or update the child node
-          const existingNode = await databaseService.getNode(nodeId);
-          if (existingNode) {
-            await databaseService.updateNode(nodeId, { content });
-          } else {
-            // Create as child of date node
-            await databaseService.createNode({
-              id: nodeId,
-              node_type: 'text',
-              content,
-              parent_id: currentDateId,  // Child of the date node
-              root_id: currentDateId,
-              before_sibling_id: null,
-              properties: {}
-            });
-
-            // Update in-memory node to reflect correct parent relationship
-            const node = nodeManager.findNode(nodeId);
-            if (node && node.parent_id === null) {
-              // This was a placeholder - update to have correct parent
-              nodeManager.nodes.set(nodeId, {
-                ...node,
-                parent_id: currentDateId,
-                root_id: currentDateId
-              });
-            }
-          }
-
-          console.log('[DateNodeViewer] Persisted node:', nodeId, 'to date:', currentDateId);
-        } catch (error) {
-          console.error('[DateNodeViewer] Failed to save node:', nodeId, error);
-        }
-      }
-
-      // Clean up timeout reference
-      saveTimeouts.delete(nodeId);
-    }, 500); // 500ms debounce
-
-    saveTimeouts.set(nodeId, saveTimeout);
-  }
 
   /**
    * Navigate to previous or next day
@@ -226,7 +88,7 @@
 <!-- Keyboard event listener -->
 <svelte:window on:keydown={handleKeydown} />
 
-<BaseNodeViewer>
+<BaseNodeViewer parentId={currentDateId}>
   {#snippet header()}
     <!-- Date Navigation Header - inherits base styling from BaseNodeViewer -->
     <div class="date-nav-container">
@@ -241,11 +103,7 @@
       </div>
 
       <div class="date-nav-buttons">
-        <button
-          class="date-nav-btn"
-          onclick={() => navigateDate('prev')}
-          aria-label="Previous day"
-        >
+        <button class="date-nav-btn" onclick={() => navigateDate('prev')} aria-label="Previous day">
           <Icon name="chevronRight" size={16} color="currentColor" className="rotate-left" />
         </button>
         <button class="date-nav-btn" onclick={() => navigateDate('next')} aria-label="Next day">

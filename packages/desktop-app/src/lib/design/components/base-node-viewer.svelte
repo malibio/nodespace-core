@@ -16,7 +16,13 @@
   import type { Snippet } from 'svelte';
 
   // Props
-  let { header }: { header?: Snippet } = $props();
+  let {
+    header,
+    parentId = null
+  }: {
+    header?: Snippet;
+    parentId?: string | null;
+  } = $props();
 
   // Get nodeManager from shared context
   const services = getNodeServices();
@@ -27,9 +33,100 @@
   }
 
   const nodeManager = services.nodeManager;
+  const { databaseService } = services;
 
   // Map to store cursor positions during node type changes
   const pendingCursorPositions = new Map<string, number>();
+
+  // Simple debounce map - one timeout per node
+  const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Set view context and load children when parentId changes
+  $effect(() => {
+    nodeManager.setViewParentId(parentId);
+
+    if (parentId) {
+      loadChildrenForParent(parentId);
+    }
+  });
+
+  // Simple persistence: watch nodes, debounce saves
+  $effect(() => {
+    if (!parentId) return;
+
+    const nodes = nodeManager.visibleNodes;
+
+    for (const node of nodes) {
+      if (node.content.trim() && !node.isPlaceholder) {
+        debounceSave(node.id, node.content, node.node_type);
+      }
+    }
+  });
+
+  async function loadChildrenForParent(parent_id: string) {
+    try {
+      const children = await databaseService.getChildren(parent_id);
+
+      if (children.length === 0) {
+        // No children - create placeholder
+        const placeholderId = globalThis.crypto.randomUUID();
+        nodeManager.initializeNodes(
+          [
+            {
+              id: placeholderId,
+              node_type: 'text',
+              content: '',
+              parent_id: parent_id,
+              root_id: parent_id,
+              before_sibling_id: null,
+              created_at: new Date().toISOString(),
+              modified_at: new Date().toISOString(),
+              properties: {}
+            }
+          ],
+          {
+            expanded: true,
+            autoFocus: true,
+            inheritHeaderLevel: 0
+          }
+        );
+      } else {
+        // Initialize with loaded children
+        nodeManager.initializeNodes(children, {
+          expanded: true,
+          autoFocus: false,
+          inheritHeaderLevel: 0
+        });
+      }
+    } catch (error) {
+      console.error('[BaseNodeViewer] Failed to load children for parent:', parent_id, error);
+    }
+  }
+
+  function debounceSave(nodeId: string, content: string, nodeType: string) {
+    if (!parentId) return;
+
+    // Clear existing timeout
+    const existing = saveTimeouts.get(nodeId);
+    if (existing) clearTimeout(existing);
+
+    // Debounce 500ms
+    const timeout = setTimeout(async () => {
+      try {
+        await databaseService.saveNodeWithParent(nodeId, {
+          content,
+          node_type: nodeType,
+          parent_id: parentId!
+        });
+        console.log('[BaseNodeViewer] Saved node:', nodeId);
+      } catch (error) {
+        console.error('[BaseNodeViewer] Failed to save node:', nodeId, error);
+      }
+      saveTimeouts.delete(nodeId);
+    }, 500);
+
+    saveTimeouts.set(nodeId, timeout);
+  }
 
   // Focus handling function with proper cursor positioning using tree walker
   function requestNodeFocus(nodeId: string, position: number) {
