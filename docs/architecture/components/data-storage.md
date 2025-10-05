@@ -22,9 +22,9 @@ interface NodeSpaceNode {
   id: string;                             // Unique node identifier
   type: string;                           // Node type ("text", "task", "entity", etc.)
   content: string;                        // Primary content/text
-  parent_id: string | null;               // Hierarchy parent (null for root nodes)
-  root_id: string;                        // Root node of the hierarchy
-  before_sibling_id: string | null;       // Single-pointer sibling ordering
+  parent_id: string | null;               // Hierarchy parent (null for root-level nodes)
+  origin_node_id: string | null;          // Which viewer/page created this (for bulk fetch)
+  before_sibling_id: string | null;       // Single-pointer sibling ordering (linked list)
   created_at: string;                     // ISO 8601 timestamp
   mentions: string[];                     // Array of referenced node IDs
   metadata: Record<string, unknown>;      // Type-specific JSON properties
@@ -41,9 +41,9 @@ interface NodeSpaceNode {
 - **`created_at`**: Creation timestamp in ISO 8601 format
 
 #### Hierarchy Management
-- **`parent_id`**: Direct parent in hierarchy (null for root nodes)
-- **`root_id`**: Reference to the root node of the entire hierarchy
-- **`before_sibling_id`**: Single-pointer approach for sibling ordering
+- **`parent_id`**: Direct parent in hierarchy (null for root-level nodes, changes with indent/outdent)
+- **`origin_node_id`**: Which viewer/page originally created this node (immutable, enables bulk fetch)
+- **`before_sibling_id`**: Linked-list sibling ordering (maintains order independent of creation time)
 
 #### Relationship System
 - **`mentions`**: Array of node IDs that this node references or mentions
@@ -64,19 +64,19 @@ interface NodeSpaceNode {
 
 ## Hierarchy Navigation System
 
-### Bulk Root Hierarchy Loading (Primary Pattern)
+### Bulk Origin Hierarchy Loading (Primary Pattern)
 
-NodeSpace uses a **bulk loading strategy** where entire hierarchies are fetched in a single query, then client-side reconstruction builds the tree structure:
+NodeSpace uses a **bulk loading strategy** where entire document hierarchies are fetched in a single query based on `origin_node_id`, then client-side reconstruction builds the tree structure:
 
 ```typescript
 class HierarchyService {
   // Primary method used throughout the application
-  async getAllNodesForRoot(rootId: string): Promise<NodeSpaceNode[]> {
-    // Single query to fetch entire hierarchy
+  async getAllNodesForOrigin(originNodeId: string): Promise<NodeSpaceNode[]> {
+    // Single query to fetch all nodes created on this viewer/page
     const allNodes = await this.database.query({
-      filter: `root_id = '${rootId}'`
+      filter: `origin_node_id = '${originNodeId}'`
     });
-    
+
     return allNodes; // Client reconstructs hierarchy from parent_id and before_sibling_id
   }
   
@@ -276,7 +276,7 @@ const queryMetadata = {
 ```typescript
 interface DatabaseAdapter {
   // PRIMARY: Bulk hierarchy loading (most important method)
-  async getAllNodesForRoot(rootId: string): Promise<NodeSpaceNode[]>;
+  async getAllNodesForOrigin(originNodeId: string): Promise<NodeSpaceNode[]>;
   
   // Core node operations
   async getNode(id: string): Promise<NodeSpaceNode | null>;
@@ -308,52 +308,52 @@ interface DatabaseAdapter {
 const indexConfiguration = {
   // Primary access patterns
   primary_key: ["id"],
-  
+
   // CRITICAL: Bulk hierarchy loading (most important index)
-  root_hierarchy: ["root_id", "parent_id", "before_sibling_id"],
-  
+  origin_hierarchy: ["origin_node_id", "parent_id", "before_sibling_id"],
+
   // Secondary hierarchy navigation (used less frequently)
   parent_index: ["parent_id", "before_sibling_id"],
-  
+
   // Type-based queries
   type_index: ["type", "created_at"],
-  
+
   // Relationship queries
   mentions_index: ["mentions"],  // Array index for backlink queries
-  
+
   // Search optimization
   content_fts: ["content"],      // Full-text search
   embedding_vector: ["embedding_vector"],  // Vector similarity
-  
+
   // Composite indexes for complex queries
-  root_type: ["root_id", "type"],  // Filter by type within root hierarchy
-  mentions_root: ["mentions", "root_id"]  // Cross-hierarchy backlinks
+  origin_type: ["origin_node_id", "type"],  // Filter by type within origin hierarchy
+  mentions_origin: ["mentions", "origin_node_id"]  // Cross-hierarchy backlinks
 }
 
 // Typical usage patterns with bulk loading
 class HierarchyService {
   private hierarchyCache = new Map<string, NodeSpaceNode[]>();
   
-  async loadHierarchy(rootId: string): Promise<HierarchyTree> {
+  async loadHierarchy(originNodeId: string): Promise<HierarchyTree> {
     // Check cache first
-    if (this.hierarchyCache.has(rootId)) {
-      const cachedNodes = this.hierarchyCache.get(rootId)!;
+    if (this.hierarchyCache.has(originNodeId)) {
+      const cachedNodes = this.hierarchyCache.get(originNodeId)!;
       return this.buildHierarchyFromNodes(cachedNodes);
     }
-    
-    // Single optimized query for entire hierarchy
-    const allNodes = await this.database.getAllNodesForRoot(rootId);
-    
+
+    // Single optimized query for entire document
+    const allNodes = await this.database.getAllNodesForOrigin(originNodeId);
+
     // Cache the flat node list
-    this.hierarchyCache.set(rootId, allNodes);
-    
+    this.hierarchyCache.set(originNodeId, allNodes);
+
     // Build tree structure client-side
     return this.buildHierarchyFromNodes(allNodes);
   }
-  
+
   // Invalidate cache when hierarchy changes
-  invalidateHierarchyCache(rootId: string) {
-    this.hierarchyCache.delete(rootId);
+  invalidateHierarchyCache(originNodeId: string) {
+    this.hierarchyCache.delete(originNodeId);
   }
 }
 ```
