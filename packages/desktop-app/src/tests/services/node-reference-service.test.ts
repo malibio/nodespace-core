@@ -46,13 +46,13 @@ function createNode(
 ) {
   return {
     id,
-    node_type: nodeType,
+    nodeType: nodeType,
     content,
-    parent_id: parentId,
-    origin_node_id: null,
-    before_sibling_id: null,
-    created_at: new Date().toISOString(),
-    modified_at: new Date().toISOString(),
+    parentId: parentId,
+    originNodeId: null,
+    beforeSiblingId: null,
+    createdAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
     mentions: [] as string[],
     properties
   };
@@ -91,11 +91,11 @@ class MockTauriNodeService {
     return this.dbPath;
   }
 
-  async createNode(node: Omit<Node, 'created_at' | 'modified_at'>): Promise<string> {
+  async createNode(node: Omit<Node, 'createdAt' | 'modifiedAt'>): Promise<string> {
     const fullNode: Node = {
       ...node,
-      created_at: new Date().toISOString(),
-      modified_at: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
     };
     nodeStore.set(fullNode.id, fullNode);
     return fullNode.id;
@@ -108,7 +108,7 @@ class MockTauriNodeService {
   async updateNode(id: string, update: Partial<Node>): Promise<void> {
     const existing = nodeStore.get(id);
     if (existing) {
-      const updated = { ...existing, ...update, modified_at: new Date().toISOString() };
+      const updated = { ...existing, ...update, modifiedAt: new Date().toISOString() };
       nodeStore.set(id, updated);
     }
   }
@@ -118,14 +118,14 @@ class MockTauriNodeService {
   }
 
   async getChildren(parentId: string): Promise<Node[]> {
-    return Array.from(nodeStore.values()).filter((node) => node.parent_id === parentId);
+    return Array.from(nodeStore.values()).filter((node) => node.parentId === parentId);
   }
 
   async searchNodes(query: string, nodeType?: string): Promise<Node[]> {
     const lowerQuery = query.toLowerCase();
     return Array.from(nodeStore.values()).filter((node) => {
       const matchesQuery = node.content.toLowerCase().includes(lowerQuery);
-      const matchesType = !nodeType || node.node_type === nodeType;
+      const matchesType = !nodeType || node.nodeType === nodeType;
       return matchesQuery && matchesType;
     });
   }
@@ -157,7 +157,7 @@ class MockTauriNodeService {
 
     // Filter by type
     if (query.type) {
-      results = results.filter((node) => node.node_type === query.type);
+      results = results.filter((node) => node.nodeType === query.type);
     }
 
     // Filter by mentions (with type guard)
@@ -316,38 +316,38 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       // Add to database for search using new schema
       await databaseService.createNode({
         id: node1.id,
-        node_type: 'project',
+        nodeType: 'project',
         content: 'Test Project Node',
-        parent_id: null,
-        origin_node_id: node1.id,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: node1.id,
+        beforeSiblingId: null,
         mentions: [],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
 
       await databaseService.createNode({
         id: node2.id,
-        node_type: 'document',
+        nodeType: 'document',
         content: 'Project Documentation',
-        parent_id: null,
-        origin_node_id: node2.id,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: node2.id,
+        beforeSiblingId: null,
         mentions: [],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
 
       await databaseService.createNode({
         id: node3.id,
-        node_type: 'text',
+        nodeType: 'text',
         content: 'Another Test',
-        parent_id: null,
-        origin_node_id: node3.id,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: node3.id,
+        beforeSiblingId: null,
         mentions: [],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
     });
 
@@ -462,7 +462,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
       expect(resolved).toMatchObject({
         id: node.id,
-        node_type: 'text', // UnifiedNode uses 'node_type'
+        nodeType: 'text', // UnifiedNode uses 'node_type'
         content: 'Test Node Content'
       });
     });
@@ -514,14 +514,14 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       // Add to database for incoming reference query using new schema
       await databaseService.createNode({
         id: sourceNodeId,
-        node_type: 'text',
+        nodeType: 'text',
         content: 'Source Node',
-        parent_id: null,
-        origin_node_id: sourceNodeId,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: sourceNodeId,
+        beforeSiblingId: null,
         mentions: [targetNodeId],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
 
       const incoming = await nodeReferenceService.getIncomingReferences(targetNodeId);
@@ -549,38 +549,38 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       // Add to database using new schema
       await databaseService.createNode({
         id: node1.id,
-        node_type: 'document',
+        nodeType: 'document',
         content: 'JavaScript Tutorial',
-        parent_id: null,
-        origin_node_id: node1.id,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: node1.id,
+        beforeSiblingId: null,
         mentions: [],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
 
       await databaseService.createNode({
         id: node2.id,
-        node_type: 'document',
+        nodeType: 'document',
         content: 'Python Guide',
-        parent_id: null,
-        origin_node_id: node2.id,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: node2.id,
+        beforeSiblingId: null,
         mentions: [],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
 
       await databaseService.createNode({
         id: node3.id,
-        node_type: 'project',
+        nodeType: 'project',
         content: 'Web Development',
-        parent_id: null,
-        origin_node_id: node3.id,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: node3.id,
+        beforeSiblingId: null,
         mentions: [],
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
     });
 
@@ -589,7 +589,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
-        node_type: 'document',
+        nodeType: 'document',
         content: 'JavaScript Tutorial'
       });
     });
@@ -599,7 +599,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
-        node_type: 'project',
+        nodeType: 'project',
         content: 'Web Development'
       });
     });
@@ -608,7 +608,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       const newNode = await nodeReferenceService.createNode('note', 'New Note Content');
 
       expect(newNode).toMatchObject({
-        node_type: 'note',
+        nodeType: 'note',
         content: 'New Note Content',
         mentions: []
       });
@@ -730,14 +730,14 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       // Add the source node to database so cleanup can find it using new schema
       await databaseService.createNode({
         id: sourceNodeId,
-        node_type: 'text',
+        nodeType: 'text',
         content: 'Source',
-        parent_id: null,
-        origin_node_id: sourceNodeId,
-        before_sibling_id: null,
+        parentId: null,
+        originNodeId: sourceNodeId,
+        beforeSiblingId: null,
         mentions: [targetNodeId], // This is what cleanup will search for
         properties: {},
-        embedding_vector: null
+        embeddingVector: null
       });
 
       // Simulate node deletion event

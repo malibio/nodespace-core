@@ -93,20 +93,20 @@ class DatabaseServiceAdapter {
         // Note: NodeUpdate doesn't include mentions - those are managed separately
         await this.tauri.updateNode(node.id, {
           content: node.content,
-          parent_id: node.parent_id,
-          before_sibling_id: node.before_sibling_id,
+          parentId: node.parentId,
+          beforeSiblingId: node.beforeSiblingId,
           properties: node.properties
         });
-        return { ...node, modified_at: new Date().toISOString() };
+        return { ...node, modifiedAt: new Date().toISOString() };
       } else {
         // Create new node
         await this.tauri.createNode({
           id: node.id,
-          node_type: node.node_type,
+          nodeType: node.nodeType,
           content: node.content,
-          parent_id: node.parent_id,
-          origin_node_id: node.origin_node_id,
-          before_sibling_id: node.before_sibling_id,
+          parentId: node.parentId,
+          originNodeId: node.originNodeId,
+          beforeSiblingId: node.beforeSiblingId,
           mentions: node.mentions,
           properties: node.properties
         });
@@ -474,7 +474,7 @@ export class NodeReferenceService {
         nodeId,
         uri,
         title: node ? this.extractNodeTitle(node) : nodeId,
-        nodeType: node?.node_type || 'unknown',
+        nodeType: node?.nodeType || 'unknown',
         isValid,
         lastResolved: Date.now(),
         metadata: {
@@ -718,7 +718,7 @@ export class NodeReferenceService {
         nodeId: mentionedId,
         uri: this.createNodespaceURI(mentionedId),
         title: targetNode ? this.extractNodeTitle(targetNode) : mentionedId,
-        nodeType: targetNode?.node_type || 'unknown',
+        nodeType: targetNode?.nodeType || 'unknown',
         isValid: !!targetNode,
         lastResolved: Date.now(),
         metadata: { type: 'outgoing' }
@@ -741,7 +741,7 @@ export class NodeReferenceService {
         nodeId: node.id,
         uri: this.createNodespaceURI(node.id),
         title: this.extractNodeTitleFromNode(node),
-        nodeType: node.node_type,
+        nodeType: node.nodeType,
         isValid: true,
         lastResolved: Date.now(),
         metadata: { type: 'incoming' }
@@ -803,13 +803,13 @@ export class NodeReferenceService {
       // Create Node with proper type structure
       const finalNodeData: Node = {
         id: nodeId,
-        node_type: nodeType,
+        nodeType: nodeType,
         content: content,
-        parent_id: null, // Root node
-        origin_node_id: nodeId,
-        before_sibling_id: null,
-        created_at: new Date().toISOString(),
-        modified_at: new Date().toISOString(),
+        parentId: null, // Root node
+        originNodeId: nodeId,
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
         mentions: [],
         properties: {
           createdBy: 'NodeReferenceService',
@@ -1019,13 +1019,13 @@ export class NodeReferenceService {
       nodeId: node.id,
       title,
       content: node.content.substring(0, 200), // Truncate for performance
-      nodeType: node.node_type,
+      nodeType: node.nodeType,
       relevanceScore,
       matchType: title.toLowerCase().includes(query.toLowerCase()) ? 'title' : 'content',
       matchPositions,
       hierarchy,
       metadata: {
-        parentId: node.parent_id,
+        parentId: node.parentId,
         hasChildren: false // Would need to calculate
       }
     };
@@ -1055,7 +1055,7 @@ export class NodeReferenceService {
     }
 
     // Boost score for exact node type matches
-    if (node.node_type && node.node_type.toLowerCase().includes(queryLower)) {
+    if (node.nodeType && node.nodeType.toLowerCase().includes(queryLower)) {
       score += 0.2;
     }
 
@@ -1123,8 +1123,8 @@ export class NodeReferenceService {
     let currentId = nodeId;
     let node = this.nodeManager.findNode(currentId);
 
-    while (node && node.parent_id) {
-      currentId = node.parent_id;
+    while (node && node.parentId) {
+      currentId = node.parentId;
       node = this.nodeManager.findNode(currentId);
     }
 

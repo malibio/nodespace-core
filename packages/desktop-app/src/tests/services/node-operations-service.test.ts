@@ -50,13 +50,13 @@ function createNode(
 ) {
   return {
     id,
-    node_type: nodeType,
+    nodeType: nodeType,
     content,
-    parent_id: parentId,
-    origin_node_id: null,
-    before_sibling_id: null,
-    created_at: new Date().toISOString(),
-    modified_at: new Date().toISOString(),
+    parentId: parentId,
+    originNodeId: null,
+    beforeSiblingId: null,
+    createdAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
     mentions: [] as string[],
     properties
   };
@@ -137,7 +137,7 @@ describe('NodeOperationsService', () => {
 
     test('extractContentString uses type defaults when no content', () => {
       const result = nodeOperationsService.extractContentString({
-        node_type: 'ai-chat'
+        nodeType: 'ai-chat'
       });
 
       expect(result.content).toBe('');
@@ -400,9 +400,9 @@ const x = 42;
   describe('Upsert Operations', () => {
     test('upsertNode creates new node with all properties', async () => {
       const nodeData: Partial<Node> = {
-        node_type: 'ai-chat',
+        nodeType: 'ai-chat',
         content: 'Test content',
-        parent_id: 'root1',
+        parentId: 'root1',
         mentions: ['child1'],
         properties: {
           chatRole: 'user',
@@ -413,14 +413,14 @@ const x = 42;
       const result = await nodeOperationsService.upsertNode('new-node', nodeData);
 
       expect(result.id).toBe('new-node');
-      expect(result.node_type).toBe('ai-chat');
+      expect(result.nodeType).toBe('ai-chat');
       expect(result.content).toBe('Test content');
-      expect(result.parent_id).toBe('root1');
+      expect(result.parentId).toBe('root1');
       expect(result.mentions).toEqual(['child1']);
       expect(result.properties).toMatchObject({
         chatRole: 'user'
       });
-      expect(result.created_at).toBeDefined();
+      expect(result.createdAt).toBeDefined();
     });
 
     test('upsertNode updates existing node preserving properties', async () => {
@@ -449,7 +449,7 @@ const x = 42;
 
     test('upsertNode handles content extraction fallbacks', async () => {
       const nodeData: Partial<Node> = {
-        node_type: 'task',
+        nodeType: 'task',
         properties: {
           description: 'Task description from properties',
           completed: false
@@ -459,7 +459,7 @@ const x = 42;
       const result = await nodeOperationsService.upsertNode('task-node', nodeData);
 
       expect(result.content).toBe('Task description from properties');
-      expect(result.node_type).toBe('task');
+      expect(result.nodeType).toBe('task');
     });
 
     test('upsertNode preserves hierarchy when requested', async () => {
@@ -477,7 +477,7 @@ const x = 42;
         }
       );
 
-      expect(result.parent_id).toBe('root1');
+      expect(result.parentId).toBe('root1');
     });
 
     test('upsertNode handles complex properties merging', async () => {
@@ -521,7 +521,7 @@ const x = 42;
     test('emits appropriate events during upsert', async () => {
       await nodeOperationsService.upsertNode('test-node', {
         content: 'Test content',
-        node_type: 'text'
+        nodeType: 'text'
       });
 
       const events = eventBus.getRecentEvents();

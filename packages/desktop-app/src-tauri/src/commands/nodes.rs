@@ -10,6 +10,7 @@ const ALLOWED_NODE_TYPES: &[&str] = &["text", "task", "date"];
 
 /// Input for creating a node - timestamps generated server-side
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateNodeInput {
     pub id: String,
     pub node_type: String,
@@ -27,6 +28,7 @@ pub struct CreateNodeInput {
 /// Provides better observability and debugging by including error codes
 /// and optional details alongside user-facing messages.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandError {
     /// User-facing error message
     pub message: String,

@@ -26,38 +26,38 @@ export interface Node {
   id: string;
 
   /** Node type (e.g., "text", "task", "date") */
-  node_type: string;
+  nodeType: string;
 
   /** Primary content/text of the node */
   content: string;
 
   /** Parent node ID (creation context) */
-  parent_id: string | null;
+  parentId: string | null;
 
   /**
    * Root document ID (NULL means this node IS root/page)
    *
-   * Rule: origin_node_id = parent_id for direct children of roots
+   * Rule: originNodeId = parentId for direct children of roots
    * Example:
-   *   Date node: { parent_id: null, origin_node_id: null }  // IS root
-   *   Child of date: { parent_id: "2025-10-04", origin_node_id: "2025-10-04" }
+   *   Date node: { parentId: null, originNodeId: null }  // IS root
+   *   Child of date: { parentId: "2025-10-04", originNodeId: "2025-10-04" }
    */
-  origin_node_id: string | null;
+  originNodeId: string | null;
 
   /** Sibling ordering reference (single-pointer linked list) */
-  before_sibling_id: string | null;
+  beforeSiblingId: string | null;
 
   /** Creation timestamp (ISO 8601) - backend sets this */
-  created_at: string;
+  createdAt: string;
 
   /** Last modification timestamp (ISO 8601) - backend auto-updates this */
-  modified_at: string;
+  modifiedAt: string;
 
   /** All entity-specific fields (Pure JSON schema) */
   properties: Record<string, unknown>;
 
   /** Optional vector embedding for semantic search (F32 blob) */
-  embedding_vector?: number[] | null;
+  embeddingVector?: number[] | null;
 
   // ============================================================================
   // Computed Fields (NOT persisted, calculated on-demand)
@@ -82,25 +82,25 @@ export interface Node {
  */
 export interface NodeUpdate {
   /** Update node type */
-  node_type?: string;
+  nodeType?: string;
 
   /** Update primary content */
   content?: string;
 
   /** Update parent reference */
-  parent_id?: string | null;
+  parentId?: string | null;
 
   /** Update root reference */
-  origin_node_id?: string | null;
+  originNodeId?: string | null;
 
   /** Update sibling ordering */
-  before_sibling_id?: string | null;
+  beforeSiblingId?: string | null;
 
   /** Update or merge properties */
   properties?: Record<string, unknown>;
 
   /** Update embedding vector */
-  embedding_vector?: number[] | null;
+  embeddingVector?: number[] | null;
 }
 
 /**
@@ -144,13 +144,13 @@ export function isNode(obj: unknown): obj is Node {
 
   return (
     typeof node.id === 'string' &&
-    typeof node.node_type === 'string' &&
+    typeof node.nodeType === 'string' &&
     typeof node.content === 'string' &&
-    (node.parent_id === null || typeof node.parent_id === 'string') &&
-    (node.origin_node_id === null || typeof node.origin_node_id === 'string') &&
-    (node.before_sibling_id === null || typeof node.before_sibling_id === 'string') &&
-    typeof node.created_at === 'string' &&
-    typeof node.modified_at === 'string' &&
+    (node.parentId === null || typeof node.parentId === 'string') &&
+    (node.originNodeId === null || typeof node.originNodeId === 'string') &&
+    (node.beforeSiblingId === null || typeof node.beforeSiblingId === 'string') &&
+    typeof node.createdAt === 'string' &&
+    typeof node.modifiedAt === 'string' &&
     typeof node.properties === 'object' &&
     node.properties !== null
   );

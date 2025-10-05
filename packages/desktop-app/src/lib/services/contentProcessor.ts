@@ -853,7 +853,7 @@ export class ContentProcessor {
               // Create decoration context
               const decorationContext: DecorationContext = {
                 nodeId: refNode.nodeId,
-                nodeType: referencedNode.node_type,
+                nodeType: referencedNode.nodeType,
                 title: refNode.reference.title || refNode.displayText,
                 content: referencedNode.content,
                 uri: refNode.uri,

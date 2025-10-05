@@ -64,7 +64,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       if (node) {
         // Compute children on-demand from parent_id relationships
         const children = Object.values(_nodes)
-          .filter((n) => n.parent_id === nodeId)
+          .filter((n) => n.parentId === nodeId)
           .map((n) => n.id);
 
         // Merge Node with UI state for components
@@ -103,7 +103,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     const uiState = _uiState[nodeId] || createDefaultUIState(nodeId);
     const children = Object.values(_nodes)
-      .filter((n) => n.parent_id === nodeId)
+      .filter((n) => n.parentId === nodeId)
       .map((n) => n.id);
 
     // Return node merged with UI state
@@ -149,10 +149,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     if (insertAtBeginning) {
       newDepth = afterUIState.depth;
-      newParentId = afterNode.parent_id;
+      newParentId = afterNode.parentId;
     } else {
       newDepth = afterUIState.depth;
-      newParentId = afterNode.parent_id;
+      newParentId = afterNode.parentId;
     }
 
     // Generate initial content with header syntax if needed
@@ -176,13 +176,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Create Node with unified type system
     const newNode: Node = {
       id: nodeId,
-      node_type: nodeType,
+      nodeType: nodeType,
       content: initialContent,
-      parent_id: newParentId,
-      origin_node_id: newParentId || nodeId, // Root ID logic
-      before_sibling_id: null,
-      created_at: new Date().toISOString(),
-      modified_at: new Date().toISOString(),
+      parentId: newParentId,
+      originNodeId: newParentId || nodeId, // Root ID logic
+      beforeSiblingId: null,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
       properties: {},
       mentions: []
     };
@@ -202,7 +202,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Handle hierarchy positioning
     if (insertAtBeginning) {
       // Cursor at beginning: new node goes ABOVE (shifts current node down)
-      if (afterNode.parent_id) {
+      if (afterNode.parentId) {
         // Insert before sibling (simplified for test - no sibling pointer updates)
       } else {
         const afterNodeIndex = _rootNodeIds.indexOf(afterNodeId);
@@ -216,7 +216,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Cursor not at beginning: new node goes AFTER as sibling
       // Transfer all children from afterNode to the new node
       const afterNodeChildren = Object.values(_nodes)
-        .filter((n) => n.parent_id === afterNodeId)
+        .filter((n) => n.parentId === afterNodeId)
         .map((n) => n.id);
 
       if (afterNodeChildren.length > 0) {
@@ -226,15 +226,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           if (child) {
             _nodes[childId] = {
               ...child,
-              parent_id: nodeId,
-              modified_at: new Date().toISOString()
+              parentId: nodeId,
+              modifiedAt: new Date().toISOString()
             };
           }
         }
       }
 
       // Insert new node as sibling after afterNode
-      if (afterNode.parent_id) {
+      if (afterNode.parentId) {
         // Insert after sibling (simplified for test)
       } else {
         const afterNodeIndex = _rootNodeIds.indexOf(afterNodeId);
@@ -284,7 +284,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _nodes[nodeId] = {
       ...node,
       content,
-      modified_at: new Date().toISOString()
+      modifiedAt: new Date().toISOString()
     };
 
     _uiState[nodeId] = {
@@ -309,8 +309,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // IMMEDIATE: Update node type for responsive UI
     _nodes[nodeId] = {
       ...node,
-      node_type: nodeType,
-      modified_at: new Date().toISOString()
+      nodeType: nodeType,
+      modifiedAt: new Date().toISOString()
     };
     _uiState[nodeId] = { ..._uiState[nodeId], autoFocus: true };
 
@@ -443,7 +443,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Compute children from parent_id relationships
     const children = Object.values(_nodes)
-      .filter((n) => n.parent_id === nodeId)
+      .filter((n) => n.parentId === nodeId)
       .map((n) => n.id);
 
     for (const childId of children) {
@@ -469,13 +469,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _nodes[previousNodeId] = {
       ...previousNode,
       content: combinedContent,
-      modified_at: new Date().toISOString()
+      modifiedAt: new Date().toISOString()
     };
     _uiState[previousNodeId] = { ..._uiState[previousNodeId], autoFocus: false };
 
     // Handle child promotion
     const currentChildren = Object.values(_nodes)
-      .filter((n) => n.parent_id === currentNodeId)
+      .filter((n) => n.parentId === currentNodeId)
       .map((n) => n.id);
 
     // Determine where children should go
@@ -483,15 +483,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const previousUIState = _uiState[previousNodeId];
     const sameDepthLevel = currentUIState?.depth === previousUIState?.depth;
 
-    const newParentForChildren = sameDepthLevel ? previousNodeId : currentNode.parent_id;
+    const newParentForChildren = sameDepthLevel ? previousNodeId : currentNode.parentId;
 
     for (const childId of currentChildren) {
       const child = _nodes[childId];
       if (child) {
         _nodes[childId] = {
           ...child,
-          parent_id: newParentForChildren,
-          modified_at: new Date().toISOString()
+          parentId: newParentForChildren,
+          modifiedAt: new Date().toISOString()
         };
 
         // Update depth based on new parent
@@ -534,9 +534,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     let siblings: string[];
     let nodeIndex: number;
 
-    if (node.parent_id) {
+    if (node.parentId) {
       siblings = Object.values(_nodes)
-        .filter((n) => n.parent_id === node.parent_id)
+        .filter((n) => n.parentId === node.parentId)
         .map((n) => n.id);
       nodeIndex = siblings.indexOf(nodeId);
     } else {
@@ -555,14 +555,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     _nodes[nodeId] = {
       ...node,
-      parent_id: prevSiblingId,
-      modified_at: new Date().toISOString()
+      parentId: prevSiblingId,
+      modifiedAt: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: (prevSiblingUIState?.depth || 0) + 1 };
 
     updateDescendantDepths(nodeId);
 
-    if (!node.parent_id) {
+    if (!node.parentId) {
       _rootNodeIds.splice(nodeIndex, 1);
     }
 
@@ -572,19 +572,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
   function outdentNode(nodeId: string): boolean {
     const node = _nodes[nodeId];
-    if (!node || !node.parent_id) return false;
+    if (!node || !node.parentId) return false;
 
-    const parent = _nodes[node.parent_id];
+    const parent = _nodes[node.parentId];
     if (!parent) return false;
 
-    const newParentId = parent.parent_id || null;
+    const newParentId = parent.parentId || null;
     const uiState = _uiState[nodeId];
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
 
     _nodes[nodeId] = {
       ...node,
-      parent_id: newParentId,
-      modified_at: new Date().toISOString()
+      parentId: newParentId,
+      modifiedAt: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: newDepth };
 
@@ -607,7 +607,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Promote children
     const children = Object.values(_nodes)
-      .filter((n) => n.parent_id === nodeId)
+      .filter((n) => n.parentId === nodeId)
       .map((n) => n.id);
 
     for (const childId of children) {
@@ -615,8 +615,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       if (child) {
         _nodes[childId] = {
           ...child,
-          parent_id: node.parent_id,
-          modified_at: new Date().toISOString()
+          parentId: node.parentId,
+          modifiedAt: new Date().toISOString()
         };
       }
     }
@@ -697,8 +697,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       visited.add(nodeId);
 
       const node = _nodes[nodeId];
-      if (!node || !node.parent_id) return 0;
-      return 1 + computeDepth(node.parent_id, visited);
+      if (!node || !node.parentId) return 0;
+      return 1 + computeDepth(node.parentId, visited);
     };
 
     // First pass: Add all nodes
@@ -714,8 +714,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Second pass: Compute depths and identify roots
-    const childIds = new Set(nodes.filter((n) => n.parent_id).map((n) => n.id));
-    _rootNodeIds = nodes.filter((n) => !n.parent_id || !childIds.has(n.id)).map((n) => n.id);
+    const childIds = new Set(nodes.filter((n) => n.parentId).map((n) => n.id));
+    _rootNodeIds = nodes.filter((n) => !n.parentId || !childIds.has(n.id)).map((n) => n.id);
 
     for (const nodeId of Object.keys(_nodes)) {
       const depth = computeDepth(nodeId);

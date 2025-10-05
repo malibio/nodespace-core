@@ -20,13 +20,13 @@ function createNode(
 ) {
   return {
     id,
-    node_type: nodeType,
+    nodeType: nodeType,
     content,
-    parent_id: parentId,
-    origin_node_id: null,
-    before_sibling_id: null,
-    created_at: new Date().toISOString(),
-    modified_at: new Date().toISOString(),
+    parentId: parentId,
+    originNodeId: null,
+    beforeSiblingId: null,
+    createdAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
     mentions: [] as string[],
     properties: {}
   };

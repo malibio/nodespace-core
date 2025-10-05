@@ -107,7 +107,7 @@ export class TauriNodeService {
    * @returns ID of the created node
    * @throws NodeOperationError if creation fails
    */
-  async createNode(node: Omit<Node, 'created_at' | 'modified_at'>): Promise<string> {
+  async createNode(node: Omit<Node, 'createdAt' | 'modifiedAt'>): Promise<string> {
     this.ensureInitialized();
 
     try {
@@ -246,10 +246,10 @@ export class TauriNodeService {
     nodeId: string,
     data: {
       content: string;
-      node_type: string;
-      parent_id: string;
-      origin_node_id: string;
-      before_sibling_id?: string | null;
+      nodeType: string;
+      parentId: string;
+      originNodeId: string;
+      beforeSiblingId?: string | null;
     }
   ): Promise<void> {
     this.ensureInitialized();
@@ -258,10 +258,10 @@ export class TauriNodeService {
       await universalInvoke<void>('save_node_with_parent', {
         nodeId,
         content: data.content,
-        nodeType: data.node_type,
-        parentId: data.parent_id,
-        rootId: data.origin_node_id,
-        beforeSiblingId: data.before_sibling_id || null
+        nodeType: data.nodeType,
+        parentId: data.parentId,
+        originNodeId: data.originNodeId,
+        beforeSiblingId: data.beforeSiblingId || null
       });
     } catch (error) {
       const err = toError(error);

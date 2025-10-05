@@ -7,7 +7,7 @@
 -->
 
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { pluginRegistry } from '$lib/components/viewers/index';
   import BaseNode from '$lib/design/components/base-node.svelte';
@@ -69,15 +69,15 @@
       // Only save if content has changed since last save
       const lastContent = lastSavedContent.get(node.id);
       if (node.content.trim() && node.content !== lastContent) {
-        debounceSave(node.id, node.content, node.node_type);
+        debounceSave(node.id, node.content, node.nodeType);
       }
     }
   });
 
-  async function loadChildrenForParent(parent_id: string) {
+  async function loadChildrenForParent(parentId: string) {
     try {
       // Use bulk fetch for efficiency - single query gets all nodes for this origin
-      const allNodes = await databaseService.getNodesByOriginId(parent_id);
+      const allNodes = await databaseService.getNodesByOriginId(parentId);
 
       // Clear content tracking
       lastSavedContent.clear();
@@ -90,13 +90,13 @@
           [
             {
               id: placeholderId,
-              node_type: 'text',
+              nodeType: 'text',
               content: '',
-              parent_id: parent_id,
-              origin_node_id: parent_id,
-              before_sibling_id: null,
-              created_at: new Date().toISOString(),
-              modified_at: new Date().toISOString(),
+              parentId: parentId,
+              originNodeId: parentId,
+              beforeSiblingId: null,
+              createdAt: new Date().toISOString(),
+              modifiedAt: new Date().toISOString(),
               properties: {}
             }
           ],
@@ -112,7 +112,7 @@
         allNodes.forEach((node) => lastSavedContent.set(node.id, node.content));
 
         // Initialize with ALL nodes - visibleNodes will build the hierarchy
-        // based on parent_id relationships and the viewParentId context
+        // based on parentId relationships and the viewParentId context
         nodeManager.initializeNodes(allNodes, {
           expanded: true,
           autoFocus: false,
@@ -120,7 +120,7 @@
         });
       }
     } catch (error) {
-      console.error('[BaseNodeViewer] Failed to load children for parent:', parent_id, error);
+      console.error('[BaseNodeViewer] Failed to load children for parent:', parentId, error);
     }
   }
 
@@ -131,9 +131,9 @@
    */
   async function ensureAncestorsPersisted(nodeId: string): Promise<void> {
     const node = nodeManager.findNode(nodeId);
-    if (!node || !node.parent_id) return;
+    if (!node || !node.parentId) return;
 
-    const parent = nodeManager.findNode(node.parent_id);
+    const parent = nodeManager.findNode(node.parentId);
     if (!parent) return;
 
     // Check if parent is a placeholder by looking at visibleNodes which includes UI state
@@ -149,10 +149,10 @@
       // This creates a real node in the database that child nodes can reference
       await databaseService.saveNodeWithParent(parent.id, {
         content: '', // Empty content for placeholder
-        node_type: parent.node_type,
-        parent_id: parent.parent_id || parentId!,
-        origin_node_id: parent.origin_node_id || parentId!,
-        before_sibling_id: parent.before_sibling_id
+        nodeType: parent.nodeType,
+        parentId: parent.parentId || parentId!,
+        originNodeId: parent.originNodeId || parentId!,
+        beforeSiblingId: parent.beforeSiblingId
       });
 
       // Mark as persisted by updating lastSavedContent
@@ -177,10 +177,10 @@
 
         await databaseService.saveNodeWithParent(nodeId, {
           content,
-          node_type: nodeType,
-          parent_id: node?.parent_id || parentId!,
-          origin_node_id: node?.origin_node_id || parentId!,
-          before_sibling_id: node?.before_sibling_id
+          nodeType: nodeType,
+          parentId: node?.parentId || parentId!,
+          originNodeId: node?.originNodeId || parentId!,
+          beforeSiblingId: node?.beforeSiblingId
         });
 
         // Update last saved content to prevent redundant saves
@@ -222,10 +222,10 @@
 
       await databaseService.saveNodeWithParent(nodeId, {
         content: node.content,
-        node_type: node.node_type,
-        parent_id: node.parent_id || parentId,
-        origin_node_id: node.origin_node_id || parentId,
-        before_sibling_id: node.before_sibling_id
+        nodeType: node.nodeType,
+        parentId: node.parentId || parentId,
+        originNodeId: node.originNodeId || parentId,
+        beforeSiblingId: node.beforeSiblingId
       });
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to save hierarchy change:', nodeId, error);
@@ -902,6 +902,15 @@
 
     await preloadComponents();
   });
+
+  // Clean up pending timeouts on component unmount to prevent memory leaks
+  onDestroy(() => {
+    // Clear all pending debounce timeouts
+    for (const timeout of saveTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    saveTimeouts.clear();
+  });
 </script>
 
 <!-- Base Node Viewer: Header + Scrollable Children Area -->
@@ -944,11 +953,11 @@
           {/if}
 
           <!-- Node viewer with stable component references -->
-          {#if node.node_type === 'text'}
-            {#key `${node.id}-${node.node_type}`}
+          {#if node.nodeType === 'text'}
+            {#key `${node.id}-${node.nodeType}`}
               <TextNodeViewer
                 nodeId={node.id}
-                nodeType={node.node_type}
+                nodeType={node.nodeType}
                 autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
                   !pendingCursorPositions.has(node.id)}
                 content={node.content}
@@ -993,7 +1002,7 @@
                   const targetNode = nodeManager.nodes.get(node.id);
                   if (targetNode) {
                     // Update both the node manager and local state
-                    targetNode.node_type = newNodeType;
+                    targetNode.nodeType = newNodeType;
 
                     // If cleanedContent is provided, update the node content too
                     if (cleanedContent !== undefined) {
@@ -1025,12 +1034,12 @@
             {/key}
           {:else}
             <!-- Use plugin registry for non-text node types with key for re-rendering -->
-            {#if node.node_type in loadedNodes}
-              {#key `${node.id}-${node.node_type}`}
-                {@const NodeComponent = loadedNodes[node.node_type] as typeof BaseNode}
+            {#if node.nodeType in loadedNodes}
+              {#key `${node.id}-${node.nodeType}`}
+                {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
                 <NodeComponent
                   nodeId={node.id}
-                  nodeType={node.node_type}
+                  nodeType={node.nodeType}
                   autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
                     !pendingCursorPositions.has(node.id)}
                   content={node.content}
@@ -1062,7 +1071,7 @@
                     const targetNode = nodeManager.nodes.get(node.id);
                     if (targetNode) {
                       // Update the node type
-                      targetNode.node_type = nodeType;
+                      targetNode.nodeType = nodeType;
 
                       // If cleanedContent is provided, update the node content too
                       if (cleanedContent !== undefined) {
@@ -1130,10 +1139,10 @@
               {/key}
             {:else}
               <!-- Final fallback to BaseNode with key for re-rendering -->
-              {#key `${node.id}-${node.node_type}`}
+              {#key `${node.id}-${node.nodeType}`}
                 <BaseNode
                   nodeId={node.id}
-                  nodeType={node.node_type}
+                  nodeType={node.nodeType}
                   autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
                     !pendingCursorPositions.has(node.id)}
                   content={node.content}

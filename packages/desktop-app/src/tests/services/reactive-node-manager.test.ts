@@ -36,13 +36,13 @@ function createNode(
 ) {
   return {
     id,
-    node_type: nodeType,
+    nodeType: nodeType,
     content,
-    parent_id: parentId,
-    origin_node_id: null,
-    before_sibling_id: null,
-    created_at: new Date().toISOString(),
-    modified_at: new Date().toISOString(),
+    parentId: parentId,
+    originNodeId: null,
+    beforeSiblingId: null,
+    createdAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
     mentions: [] as string[],
     properties
   };
@@ -142,7 +142,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
 
       // Verify the new node has correct parent
       const newNode = nodeManager.findNode(newNodeId);
-      expect(newNode?.parent_id).toBe('parent1');
+      expect(newNode?.parentId).toBe('parent1');
 
       // Verify parent's children array is computed from parent_id relationships
       // Note: children are computed from visibleNodes, not stored on the node
@@ -234,8 +234,8 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
       // Children should still have original parent
       const child1 = nodeManager.findNode('child1');
       const child2 = nodeManager.findNode('child2');
-      expect(child1?.parent_id).toBe('parent1');
-      expect(child2?.parent_id).toBe('parent1');
+      expect(child1?.parentId).toBe('parent1');
+      expect(child2?.parentId).toBe('parent1');
     });
 
     test('should transfer children from expanded nodes when creating new nodes', () => {
@@ -268,8 +268,8 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
       // Children should now have new node as parent
       const child1 = nodeManager.findNode('child1');
       const child2 = nodeManager.findNode('child2');
-      expect(child1?.parent_id).toBe(newNodeId);
-      expect(child2?.parent_id).toBe(newNodeId);
+      expect(child1?.parentId).toBe(newNodeId);
+      expect(child2?.parentId).toBe(newNodeId);
     });
   });
 
@@ -299,7 +299,7 @@ describe('ReactiveNodeService - Reactive State Synchronization', () => {
 
       // node2 should now be child of node1
       const node2 = nodeManager.findNode('node2');
-      expect(node2?.parent_id).toBe('node1');
+      expect(node2?.parentId).toBe('node1');
 
       // Check visible nodes reflect the change
       expect(nodeManager.visibleNodes).toHaveLength(2);

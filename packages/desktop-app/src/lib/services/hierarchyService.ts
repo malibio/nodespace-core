@@ -106,9 +106,9 @@ export class HierarchyService {
 
     // Walk up parent chain, caching depths along the way
     const pathNodes: string[] = [nodeId];
-    while (currentNode && currentNode.parent_id) {
+    while (currentNode && currentNode.parentId) {
       depth++;
-      const parentId = currentNode.parent_id;
+      const parentId = currentNode.parentId;
       pathNodes.push(parentId);
 
       // Check if parent depth is cached
@@ -155,7 +155,7 @@ export class HierarchyService {
 
     // Get children from all nodes with this parent_id
     const allNodes = Array.from(this.nodeManager.nodes.values());
-    const children = allNodes.filter((n) => n.parent_id === nodeId).map((n) => n.id);
+    const children = allNodes.filter((n) => n.parentId === nodeId).map((n) => n.id);
 
     // Cache the result
     this.cache.childrenCache.set(nodeId, children);
@@ -206,7 +206,7 @@ export class HierarchyService {
       nodeIds.unshift(currentId);
       depths.unshift(this.getNodeDepth(currentId));
 
-      currentId = currentNode.parent_id || undefined;
+      currentId = currentNode.parentId || undefined;
     }
 
     return {
@@ -229,7 +229,7 @@ export class HierarchyService {
       return [];
     }
 
-    const parentId = node.parent_id;
+    const parentId = node.parentId;
     const cacheKey = parentId || '__root__';
 
     // Check cache first - now with timestamp validation
@@ -375,8 +375,8 @@ export class HierarchyService {
     nodes: Array<{
       id: string;
       node: Node;
-      parent_id: string | null;
-      before_sibling_id: string | null;
+      parentId: string | null;
+      beforeSiblingId: string | null;
       depth: number;
       children_count: number;
     }>;
@@ -396,8 +396,8 @@ export class HierarchyService {
       return {
         id: nodeId,
         node: node,
-        parent_id: node.parent_id || null,
-        before_sibling_id: node.before_sibling_id || null, // For client-side ordering
+        parentId: node.parentId || null,
+        beforeSiblingId: node.beforeSiblingId || null, // For client-side ordering
         depth: this.getNodeDepth(nodeId),
         children_count: children.length
       };
@@ -430,7 +430,7 @@ export class HierarchyService {
     // Invalidate sibling caches that might include this node
     const node = this.nodeManager.findNode(nodeId);
     if (node) {
-      const parentKey = node.parent_id || '__root__';
+      const parentKey = node.parentId || '__root__';
       this.cache.siblingOrderCache.delete(parentKey);
     }
 
@@ -490,8 +490,8 @@ export class HierarchyService {
 
         // Also invalidate parent and children caches
         const node = this.nodeManager.findNode(nodeEvent.nodeId);
-        if (node?.parent_id) {
-          this.invalidateNodeCache(node.parent_id);
+        if (node?.parentId) {
+          this.invalidateNodeCache(node.parentId);
         }
       }
     });
@@ -553,7 +553,7 @@ export class HierarchyService {
 
     // Get children manually from all nodes
     const allNodes = Array.from(this.nodeManager.nodes.values());
-    const children = allNodes.filter((n) => n.parent_id === nodeId).map((n) => n.id);
+    const children = allNodes.filter((n) => n.parentId === nodeId).map((n) => n.id);
 
     if (children.length === 0) {
       return descendants;
@@ -566,7 +566,7 @@ export class HierarchyService {
       descendants.push(currentId);
 
       // Get children of current node
-      const currentChildren = allNodes.filter((n) => n.parent_id === currentId).map((n) => n.id);
+      const currentChildren = allNodes.filter((n) => n.parentId === currentId).map((n) => n.id);
 
       if (currentChildren.length > 0) {
         toProcess.push(...currentChildren);

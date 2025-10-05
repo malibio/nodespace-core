@@ -115,6 +115,7 @@ pub enum ValidationError {
 /// );
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Node {
     /// Unique identifier (UUID or deterministic like YYYY-MM-DD for dates)
     pub id: String,
@@ -489,6 +490,7 @@ impl Node {
 /// };
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeUpdate {
     /// Update node type
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -769,6 +771,7 @@ pub enum OrderBy {
 ///     .with_limit(10);
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeFilter {
     /// Filter by node type
     #[serde(skip_serializing_if = "Option::is_none")]

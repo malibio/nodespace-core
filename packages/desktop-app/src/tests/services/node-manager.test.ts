@@ -40,13 +40,13 @@ function createNode(
 ) {
   return {
     id,
-    node_type: nodeType,
+    nodeType: nodeType,
     content,
-    parent_id: parentId,
-    origin_node_id: null,
-    before_sibling_id: null,
-    created_at: new Date().toISOString(),
-    modified_at: new Date().toISOString(),
+    parentId: parentId,
+    originNodeId: null,
+    beforeSiblingId: null,
+    createdAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
     mentions: [] as string[],
     properties
   };
@@ -153,18 +153,18 @@ describe('NodeManager', () => {
 
       const node2Visible = nodeManager.visibleNodes.find((n) => n.id === 'node2');
       expect(node2Visible?.children).toEqual(['child1']);
-      expect(child1?.parent_id).toBe('node2');
+      expect(child1?.parentId).toBe('node2');
       expect(nodeManager.findNode('node3')).toBeNull();
     });
 
     test('updates parent references correctly', () => {
       const child1 = nodeManager.findNode('child1');
-      expect(child1?.parent_id).toBe('node3');
+      expect(child1?.parentId).toBe('node3');
 
       nodeManager.combineNodes('node3', 'node2');
 
       const updatedChild1 = nodeManager.findNode('child1');
-      expect(updatedChild1?.parent_id).toBe('node2');
+      expect(updatedChild1?.parentId).toBe('node2');
     });
 
     test('handles edge cases - first node combination', () => {
@@ -233,8 +233,8 @@ describe('NodeManager', () => {
       const child2Visible = nodeManager.visibleNodes.find((n) => n.id === 'child2');
       expect(child1Visible?.depth).toBe(1);
       expect(child2Visible?.depth).toBe(1);
-      expect(child1After?.parent_id).toBe('root');
-      expect(child2After?.parent_id).toBe('root');
+      expect(child1After?.parentId).toBe('root');
+      expect(child2After?.parentId).toBe('root');
 
       // Verify parent now contains the children
       const rootVisible = nodeManager.visibleNodes.find((n) => n.id === 'root');
@@ -331,7 +331,7 @@ describe('NodeManager', () => {
 
       const parentVisible = nodeManager.visibleNodes.find((n) => n.id === 'parent');
       expect(parentVisible?.children).toEqual(['child1']);
-      expect(child1?.parent_id).toBe('parent');
+      expect(child1?.parentId).toBe('parent');
       const child1Visible = nodeManager.visibleNodes.find((n) => n.id === 'child1');
       expect(child1Visible?.depth).toBe(1);
       expect(nodeManager.rootNodeIds).toEqual(['parent', 'child2']);
@@ -350,7 +350,7 @@ describe('NodeManager', () => {
 
       const parentVisible = nodeManager.visibleNodes.find((n) => n.id === 'parent');
       expect(parentVisible?.children).toEqual([]);
-      expect(child1?.parent_id).toBeNull();
+      expect(child1?.parentId).toBeNull();
       const child1Visible = nodeManager.visibleNodes.find((n) => n.id === 'child1');
       expect(child1Visible?.depth).toBe(0);
       expect(nodeManager.rootNodeIds).toEqual(['parent', 'child1', 'child2']);
@@ -395,8 +395,8 @@ describe('NodeManager', () => {
       // Both child1 and child2 should be under parent after indenting
       const parentVisible = nodeManager.visibleNodes.find((n) => n.id === 'parent');
       expect(parentVisible?.children).toEqual(['child1', 'child2']);
-      expect(child1?.parent_id).toBe('parent');
-      expect(child2?.parent_id).toBe('parent');
+      expect(child1?.parentId).toBe('parent');
+      expect(child2?.parentId).toBe('parent');
       const child1Visible = nodeManager.visibleNodes.find((n) => n.id === 'child1');
       expect(child1Visible?.depth).toBe(1);
       const child2Visible = nodeManager.visibleNodes.find((n) => n.id === 'child2');
@@ -494,11 +494,11 @@ describe('NodeManager', () => {
       // Verify consistency
       const visibleNodes = nodeManager.visibleNodes;
       for (const node of visibleNodes) {
-        if (node.parent_id) {
-          const parent = nodeManager.findNode(node.parent_id);
+        if (node.parentId) {
+          const parent = nodeManager.findNode(node.parentId);
           expect(parent).toBeTruthy();
           // children is in visibleNodes, not on Node
-          const parentVisible = visibleNodes.find((n) => n.id === node.parent_id);
+          const parentVisible = visibleNodes.find((n) => n.id === node.parentId);
           expect(parentVisible?.children).toContain(node.id);
         }
       }

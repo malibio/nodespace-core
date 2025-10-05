@@ -787,6 +787,44 @@ impl NodeService {
             }
 
             return Ok(nodes);
+        } else if let Some(ref origin_node_id) = filter.origin_node_id {
+            // Query by origin_node_id (bulk fetch optimization)
+            let order_clause = match filter.order_by {
+                Some(OrderBy::CreatedAsc) => " ORDER BY created_at ASC",
+                Some(OrderBy::CreatedDesc) => " ORDER BY created_at DESC",
+                Some(OrderBy::ModifiedAsc) => " ORDER BY modified_at ASC",
+                Some(OrderBy::ModifiedDesc) => " ORDER BY modified_at DESC",
+                _ => "",
+            };
+
+            let limit_clause = filter
+                .limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
+
+            let query = format!(
+                "SELECT id, node_type, content, parent_id, origin_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes WHERE origin_node_id = ?{}{}",
+                order_clause, limit_clause
+            );
+
+            let mut stmt = conn.prepare(&query).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to prepare query: {}", e))
+            })?;
+
+            let mut rows = stmt.query([origin_node_id.as_str()]).await.map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to execute query: {}", e))
+            })?;
+
+            let mut nodes = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+            {
+                nodes.push(self.row_to_node(row)?);
+            }
+
+            return Ok(nodes);
         }
 
         // Default: return all nodes (with optional ordering/limit)
@@ -1678,5 +1716,88 @@ mod tests {
         // Verify that valid node was NOT created (transaction rolled back)
         let check = service.get_node(&valid_node.id).await.unwrap();
         assert!(check.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_nodes_by_origin_id() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create a date node (acts as origin)
+        let date_node = Node::new_with_id(
+            "2025-10-05".to_string(),
+            "date".to_string(),
+            "2025-10-05".to_string(),
+            None,
+            json!({}),
+        );
+        service.create_node(date_node.clone()).await.unwrap();
+
+        // Create children with origin_node_id pointing to the date
+        let child1 = Node::new_with_root(
+            "text".to_string(),
+            "Child 1".to_string(),
+            Some("2025-10-05".to_string()),
+            Some("2025-10-05".to_string()),
+            json!({}),
+        );
+        let child2 = Node::new_with_root(
+            "text".to_string(),
+            "Child 2".to_string(),
+            Some("2025-10-05".to_string()),
+            Some("2025-10-05".to_string()),
+            json!({}),
+        );
+        let child3 = Node::new_with_root(
+            "task".to_string(),
+            "Child 3".to_string(),
+            Some("2025-10-05".to_string()),
+            Some("2025-10-05".to_string()),
+            json!({"status": "pending"}),
+        );
+
+        service.create_node(child1.clone()).await.unwrap();
+        service.create_node(child2.clone()).await.unwrap();
+        service.create_node(child3.clone()).await.unwrap();
+
+        // Create a different date node with a child (should not be returned)
+        let other_date = Node::new_with_id(
+            "2025-10-06".to_string(),
+            "date".to_string(),
+            "2025-10-06".to_string(),
+            None,
+            json!({}),
+        );
+        service.create_node(other_date.clone()).await.unwrap();
+
+        let other_child = Node::new_with_root(
+            "text".to_string(),
+            "Other child".to_string(),
+            Some("2025-10-06".to_string()),
+            Some("2025-10-06".to_string()),
+            json!({}),
+        );
+        service.create_node(other_child).await.unwrap();
+
+        // Bulk fetch should return only the 3 children with origin_node_id = "2025-10-05"
+        let nodes = service.get_nodes_by_origin_id("2025-10-05").await.unwrap();
+
+        assert_eq!(nodes.len(), 3, "Should return exactly 3 nodes");
+        assert!(
+            nodes
+                .iter()
+                .all(|n| n.origin_node_id == Some("2025-10-05".to_string())),
+            "All nodes should have origin_node_id = '2025-10-05'"
+        );
+
+        // Verify it returns different node types
+        let node_types: Vec<&str> = nodes.iter().map(|n| n.node_type.as_str()).collect();
+        assert!(node_types.contains(&"text"), "Should contain text nodes");
+        assert!(node_types.contains(&"task"), "Should contain task node");
+
+        // Verify the other date's child is not included
+        assert!(
+            !nodes.iter().any(|n| n.content == "Other child"),
+            "Should not return children from other origins"
+        );
     }
 }

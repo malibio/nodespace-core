@@ -105,7 +105,7 @@ export class NodeOperationsService {
     if (isUpdate && (!data.content || data.content === '') && existingNode?.content) {
       contentResult = {
         content: existingNode.content,
-        extractedType: existingNode.node_type,
+        extractedType: existingNode.nodeType,
         confidence: 1.0,
         fallbackUsed: false,
         metadata: {}
@@ -114,15 +114,15 @@ export class NodeOperationsService {
 
     // Resolve parent and root
     const hierarchyResolution = await this.resolveParentAndRoot(
-      data.parent_id || undefined,
-      data.origin_node_id || undefined,
+      data.parentId || undefined,
+      data.originNodeId || undefined,
       nodeId,
       opts.preserveHierarchy && !!existingNode
     );
 
     // Handle sibling positioning
     const siblingPosition = await this.handleSiblingPositioning(
-      data.before_sibling_id,
+      data.beforeSiblingId,
       hierarchyResolution.parentId,
       nodeId
     );
@@ -131,17 +131,17 @@ export class NodeOperationsService {
     // IMPORTANT: Preserve existing mentions unless explicitly provided in data
     const baseNodeData: Node = {
       id: nodeId,
-      node_type: data.node_type || (existingNode ? existingNode.node_type : 'text'),
+      nodeType: data.nodeType || (existingNode ? existingNode.nodeType : 'text'),
       content: contentResult.content,
-      parent_id: hierarchyResolution.parentId,
-      origin_node_id: hierarchyResolution.rootId,
-      before_sibling_id: siblingPosition.beforeSiblingId,
-      created_at: existingNode
-        ? (existingNode.properties?.created_at as string) ||
-          existingNode.created_at ||
+      parentId: hierarchyResolution.parentId,
+      originNodeId: hierarchyResolution.rootId,
+      beforeSiblingId: siblingPosition.beforeSiblingId,
+      createdAt: existingNode
+        ? (existingNode.properties?.createdAt as string) ||
+          existingNode.createdAt ||
           new Date().toISOString()
         : new Date().toISOString(),
-      modified_at: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
       mentions: data.mentions !== undefined ? data.mentions : existingNode?.mentions || [],
       properties: this.mergeMetadata(
         existingNode,
@@ -149,13 +149,13 @@ export class NodeOperationsService {
         contentResult.metadata,
         opts.preserveMetadata
       ),
-      embedding_vector: data.embedding_vector || null
+      embeddingVector: data.embeddingVector || null
     };
 
     if (isUpdate) {
       // Update existing node using proper methods
       this.nodeManager.updateNodeContent(nodeId, baseNodeData.content);
-      this.nodeManager.updateNodeType(nodeId, baseNodeData.node_type);
+      this.nodeManager.updateNodeType(nodeId, baseNodeData.nodeType);
       this.nodeManager.updateNodeProperties(nodeId, baseNodeData.properties);
 
       // Update mentions after node exists
@@ -258,7 +258,7 @@ export class NodeOperationsService {
 
     // Strategy 3: Type-specific defaults
     if (!content) {
-      const nodeType = data.node_type || '';
+      const nodeType = data.nodeType || '';
       if (nodeType) {
         const defaults = this.getTypeDefaults(nodeType);
         content = defaults.content;
@@ -351,7 +351,7 @@ export class NodeOperationsService {
       const existingNode = this.nodeManager.findNode(nodeId);
       if (existingNode) {
         return {
-          parentId: existingNode.parent_id,
+          parentId: existingNode.parentId,
           rootId: this.findNodeRootId(existingNode),
           strategy: 'explicit',
           confidence: 0.9
@@ -626,8 +626,8 @@ export class NodeOperationsService {
    */
   private findNodeRootId(node: Node): string {
     let current = node;
-    while (current.parent_id) {
-      const parent = this.nodeManager.findNode(current.parent_id);
+    while (current.parentId) {
+      const parent = this.nodeManager.findNode(current.parentId);
       if (!parent) break;
       current = parent;
     }

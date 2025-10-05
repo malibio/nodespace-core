@@ -18,7 +18,7 @@ export interface Node {
   inheritHeaderLevel: number;
   metadata: Record<string, unknown>;
   mentions?: string[];
-  before_sibling_id?: string;
+  beforeSiblingId?: string;
   isPlaceholder?: boolean;
 }
 
@@ -204,13 +204,13 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
     initializeNodes(
       nodes: Array<{
         id: string;
-        node_type: string;
+        nodeType: string;
         content: string;
-        parent_id: string | null;
-        origin_node_id: string | null;
-        before_sibling_id: string | null;
-        created_at: string;
-        modified_at: string;
+        parentId: string | null;
+        originNodeId: string | null;
+        beforeSiblingId: string | null;
+        createdAt: string;
+        modifiedAt: string;
         mentions: string[];
         properties: Record<string, unknown>;
       }>,
@@ -235,16 +235,16 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
         const node: Node = {
           id: unifiedNode.id,
           content: unifiedNode.content,
-          nodeType: unifiedNode.node_type,
+          nodeType: unifiedNode.nodeType,
           depth: 0, // Will be calculated based on hierarchy
-          parentId: unifiedNode.parent_id || undefined,
+          parentId: unifiedNode.parentId || undefined,
           children: [], // Will be computed from parent_id relationships
           expanded: defaultOptions.expanded,
           autoFocus: defaultOptions.autoFocus,
           inheritHeaderLevel: defaultOptions.inheritHeaderLevel,
           metadata: unifiedNode.properties,
           mentions: unifiedNode.mentions,
-          before_sibling_id: unifiedNode.before_sibling_id || undefined
+          beforeSiblingId: unifiedNode.beforeSiblingId || undefined
         };
         _nodes[unifiedNode.id] = node;
       }
@@ -260,7 +260,7 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
       }
 
       // Set root nodes (nodes without parents)
-      _rootNodeIds = nodes.filter((n) => !n.parent_id).map((n) => n.id);
+      _rootNodeIds = nodes.filter((n) => !n.parentId).map((n) => n.id);
 
       // Calculate depths based on parent hierarchy
       const calculateDepth = (nodeId: string, depth: number = 0): void => {
