@@ -148,6 +148,29 @@
     saveTimeouts.set(nodeId, timeout);
   }
 
+  /**
+   * Save hierarchy changes (parent_id) after indent/outdent operations
+   * Updates immediately without debouncing since these are explicit user actions
+   */
+  async function saveHierarchyChange(nodeId: string) {
+    try {
+      const node = nodeManager.findNode(nodeId);
+      if (!node) {
+        console.error('[BaseNodeViewer] Cannot save hierarchy - node not found:', nodeId);
+        return;
+      }
+
+      await databaseService.updateNode(nodeId, {
+        parent_id: node.parent_id,
+        root_id: node.root_id
+      });
+
+      console.log('[BaseNodeViewer] Saved hierarchy change for node:', nodeId);
+    } catch (error) {
+      console.error('[BaseNodeViewer] Failed to save hierarchy change:', nodeId, error);
+    }
+  }
+
   // Focus handling function with proper cursor positioning using tree walker
   function requestNodeFocus(nodeId: string, position: number) {
     // Find the target node
@@ -346,6 +369,9 @@
       const success = nodeManager.indentNode(nodeId);
 
       if (success) {
+        // Persist hierarchy change
+        saveHierarchyChange(nodeId);
+
         // Restore cursor position after DOM update
         setTimeout(() => restoreCursorPosition(nodeId, cursorPosition), 0);
       }
@@ -440,6 +466,9 @@
       const success = nodeManager.outdentNode(nodeId);
 
       if (success) {
+        // Persist hierarchy change
+        saveHierarchyChange(nodeId);
+
         // Restore cursor position after DOM update
         setTimeout(() => restoreCursorPosition(nodeId, cursorPosition), 0);
       }
