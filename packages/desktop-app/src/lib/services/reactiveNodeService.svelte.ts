@@ -187,6 +187,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const shouldFocusNewNode = focusNewNode !== undefined ? focusNewNode : !insertAtBeginning;
     const isPlaceholder = initialContent.trim() === '' || /^#{1,6}\s*$/.test(initialContent.trim());
 
+    // Determine before_sibling_id based on insertion position
+    let beforeSiblingId: string | null = null;
+    if (insertAtBeginning) {
+      // New node takes the place of afterNode, so it gets afterNode's before_sibling_id
+      beforeSiblingId = afterNode.before_sibling_id;
+    } else {
+      // New node comes after afterNode, so afterNode becomes its before_sibling
+      beforeSiblingId = afterNodeId;
+    }
+
     // Create Node with unified type system
     const newNode: Node = {
       id: nodeId,
@@ -194,7 +204,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       content: initialContent,
       parent_id: newParentId,
       root_id: newParentId || nodeId, // Root ID logic
-      before_sibling_id: null,
+      before_sibling_id: beforeSiblingId,
       created_at: new Date().toISOString(),
       modified_at: new Date().toISOString(),
       properties: {},
@@ -212,6 +222,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     _nodes[nodeId] = newNode;
     _uiState[nodeId] = newUIState;
+
+    // Update sibling linked list
+    if (insertAtBeginning) {
+      // New node takes afterNode's place, so afterNode now comes after newNode
+      _nodes[afterNodeId] = {
+        ...afterNode,
+        before_sibling_id: nodeId,
+        modified_at: new Date().toISOString()
+      };
+    }
 
     // Bug 4 fix: Transfer children from expanded nodes
     // If afterNode is expanded and has children, transfer them to the new node

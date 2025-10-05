@@ -297,12 +297,19 @@ pub async fn save_node_with_parent(
     content: String,
     node_type: String,
     parent_id: String,
+    before_sibling_id: Option<String>,
 ) -> Result<(), CommandError> {
     validate_node_type(&node_type)?;
 
     // Use single-transaction upsert method
     service
-        .upsert_node_with_parent(&node_id, &content, &node_type, &parent_id)
+        .upsert_node_with_parent(
+            &node_id,
+            &content,
+            &node_type,
+            &parent_id,
+            before_sibling_id.as_deref(),
+        )
         .await
         .map_err(Into::into)
 }

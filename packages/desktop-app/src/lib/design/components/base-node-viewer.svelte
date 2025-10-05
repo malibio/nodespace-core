@@ -130,10 +130,12 @@
     // Debounce 500ms
     const timeout = setTimeout(async () => {
       try {
+        const node = nodeManager.findNode(nodeId);
         await databaseService.saveNodeWithParent(nodeId, {
           content,
           node_type: nodeType,
-          parent_id: parentId!
+          parent_id: parentId!,
+          before_sibling_id: node?.before_sibling_id
         });
 
         // Update last saved content to prevent redundant saves
@@ -149,7 +151,7 @@
   }
 
   /**
-   * Save hierarchy changes (parent_id) after indent/outdent operations
+   * Save hierarchy changes (parent_id, before_sibling_id) after indent/outdent operations
    * Updates immediately without debouncing since these are explicit user actions
    */
   async function saveHierarchyChange(nodeId: string) {
@@ -162,7 +164,8 @@
 
       await databaseService.updateNode(nodeId, {
         parent_id: node.parent_id,
-        root_id: node.root_id
+        root_id: node.root_id,
+        before_sibling_id: node.before_sibling_id
       });
 
       console.log('[BaseNodeViewer] Saved hierarchy change for node:', nodeId);

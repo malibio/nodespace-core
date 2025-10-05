@@ -1096,6 +1096,7 @@ impl NodeService {
         content: &str,
         node_type: &str,
         parent_id: &str,
+        before_sibling_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         let conn = self.db.connect_with_timeout().await?;
 
@@ -1123,11 +1124,12 @@ impl NodeService {
         // Use INSERT ... ON CONFLICT for node - upsert in single operation
         let node_result = conn.execute(
             "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, properties, embedding_vector)
-             VALUES (?, ?, ?, ?, ?, NULL, '{}', NULL)
+             VALUES (?, ?, ?, ?, ?, ?, '{}', NULL)
              ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
+                before_sibling_id = excluded.before_sibling_id,
                 modified_at = CURRENT_TIMESTAMP",
-            (node_id, node_type, content, parent_id, parent_id)
+            (node_id, node_type, content, parent_id, parent_id, before_sibling_id)
         ).await;
 
         if let Err(e) = node_result {
