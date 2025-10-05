@@ -31,7 +31,10 @@ fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
         return Ok(dt.with_timezone(&Utc));
     }
 
-    Err(format!("Unable to parse timestamp '{}' as SQLite or RFC3339 format", s))
+    Err(format!(
+        "Unable to parse timestamp '{}' as SQLite or RFC3339 format",
+        s
+    ))
 }
 
 /// Core service for node CRUD and hierarchy operations
@@ -488,10 +491,8 @@ impl NodeService {
         }
 
         // Build a map of id -> node for quick lookup
-        let mut node_map: std::collections::HashMap<String, Node> = nodes
-            .drain(..)
-            .map(|n| (n.id.clone(), n))
-            .collect();
+        let mut node_map: std::collections::HashMap<String, Node> =
+            nodes.drain(..).map(|n| (n.id.clone(), n)).collect();
 
         // Find the first node (before_sibling_id is None)
         let first_node = node_map
@@ -1298,15 +1299,19 @@ impl NodeService {
             })?;
 
         // Parse timestamps - handle both SQLite format and RFC3339 (for migration)
-        let created_at = parse_timestamp(&created_at)
-            .map_err(|e| {
-                NodeServiceError::serialization_error(format!("Failed to parse created_at '{}': {}", created_at, e))
-            })?;
+        let created_at = parse_timestamp(&created_at).map_err(|e| {
+            NodeServiceError::serialization_error(format!(
+                "Failed to parse created_at '{}': {}",
+                created_at, e
+            ))
+        })?;
 
-        let modified_at = parse_timestamp(&modified_at)
-            .map_err(|e| {
-                NodeServiceError::serialization_error(format!("Failed to parse modified_at '{}': {}", modified_at, e))
-            })?;
+        let modified_at = parse_timestamp(&modified_at).map_err(|e| {
+            NodeServiceError::serialization_error(format!(
+                "Failed to parse modified_at '{}': {}",
+                modified_at, e
+            ))
+        })?;
 
         Ok(Node {
             id,
@@ -1465,7 +1470,10 @@ mod tests {
         let node = Node::new("text".to_string(), "Node".to_string(), None, json!({}));
         let node_id = service.create_node(node).await.unwrap();
 
-        service.move_node(&node_id, Some(&origin_node_id)).await.unwrap();
+        service
+            .move_node(&node_id, Some(&origin_node_id))
+            .await
+            .unwrap();
 
         let moved = service.get_node(&node_id).await.unwrap().unwrap();
         assert_eq!(moved.parent_id, Some(origin_node_id.clone()));

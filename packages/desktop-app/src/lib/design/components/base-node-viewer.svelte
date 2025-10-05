@@ -159,8 +159,12 @@
   /**
    * Save hierarchy changes (parent_id, before_sibling_id) after indent/outdent operations
    * Updates immediately without debouncing since these are explicit user actions
+   *
+   * Uses upsert to handle both existing nodes and newly created nodes that may not be in DB yet
    */
   async function saveHierarchyChange(nodeId: string) {
+    if (!parentId) return;
+
     try {
       const node = nodeManager.findNode(nodeId);
       if (!node) {
@@ -168,9 +172,13 @@
         return;
       }
 
-      await databaseService.updateNode(nodeId, {
-        parent_id: node.parent_id,
-        origin_node_id: node.origin_node_id,
+      // Use saveNodeWithParent (upsert) instead of updateNode
+      // This handles both existing nodes and newly created nodes not yet in DB
+      await databaseService.saveNodeWithParent(nodeId, {
+        content: node.content,
+        node_type: node.node_type,
+        parent_id: node.parent_id || parentId,
+        origin_node_id: node.origin_node_id || parentId,
         before_sibling_id: node.before_sibling_id
       });
 
