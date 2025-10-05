@@ -41,8 +41,8 @@
   // Simple debounce map - one timeout per node
   const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // Track freshly loaded nodes to prevent re-saving on load
-  const freshlyLoadedNodeIds = new Set<string>();
+  // Track last saved content to detect actual changes
+  const lastSavedContent = new Map<string, string>();
 
   // Set view context and load children when parentId changes
   $effect(() => {
@@ -54,19 +54,21 @@
   });
 
   // Simple persistence: watch nodes, debounce saves
-  // Only save nodes that have been modified after initial load
+  // Only save nodes when content actually changes
   $effect(() => {
     if (!parentId) return;
 
     const nodes = nodeManager.visibleNodes;
 
     for (const node of nodes) {
-      // Skip placeholder nodes and nodes that were just loaded
-      if (node.isPlaceholder || freshlyLoadedNodeIds.has(node.id)) {
+      // Skip placeholder nodes
+      if (node.isPlaceholder) {
         continue;
       }
 
-      if (node.content.trim()) {
+      // Only save if content has changed since last save
+      const lastContent = lastSavedContent.get(node.id);
+      if (node.content.trim() && node.content !== lastContent) {
         debounceSave(node.id, node.content, node.node_type);
       }
     }
@@ -76,8 +78,8 @@
     try {
       const children = await databaseService.getChildren(parent_id);
 
-      // Clear loaded nodes tracking
-      freshlyLoadedNodeIds.clear();
+      // Clear content tracking
+      lastSavedContent.clear();
 
       if (children.length === 0) {
         // No children - create placeholder
@@ -103,8 +105,8 @@
           }
         );
       } else {
-        // Mark all loaded nodes to prevent immediate re-save
-        children.forEach((child) => freshlyLoadedNodeIds.add(child.id));
+        // Track initial content of loaded nodes
+        children.forEach((child) => lastSavedContent.set(child.id, child.content));
 
         // Initialize with loaded children
         nodeManager.initializeNodes(children, {
@@ -112,11 +114,6 @@
           autoFocus: false,
           inheritHeaderLevel: 0
         });
-
-        // After a delay, clear the loaded nodes set so user edits will be saved
-        setTimeout(() => {
-          freshlyLoadedNodeIds.clear();
-        }, 1000); // 1 second grace period after load
       }
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children for parent:', parent_id, error);
@@ -138,6 +135,9 @@
           node_type: nodeType,
           parent_id: parentId!
         });
+
+        // Update last saved content to prevent redundant saves
+        lastSavedContent.set(nodeId, content);
         console.log('[BaseNodeViewer] Saved node:', nodeId);
       } catch (error) {
         console.error('[BaseNodeViewer] Failed to save node:', nodeId, error);

@@ -449,11 +449,14 @@ impl DatabaseService {
     /// Sets a 5-second busy timeout so operations wait instead of failing
     /// immediately when the database is locked.
     pub async fn connect_with_timeout(&self) -> Result<libsql::Connection, DatabaseError> {
+        eprintln!("[DatabaseService] Creating new connection");
         let conn = self.connect()?;
 
+        eprintln!("[DatabaseService] Setting busy timeout");
         // Set busy timeout on this connection
         self.execute_pragma(&conn, "PRAGMA busy_timeout = 5000")
             .await?;
+        eprintln!("[DatabaseService] Busy timeout set to 5000ms");
 
         Ok(conn)
     }
