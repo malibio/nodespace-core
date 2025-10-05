@@ -1099,8 +1099,9 @@ impl NodeService {
     ) -> Result<(), NodeServiceError> {
         let conn = self.db.connect()?;
 
-        // Single transaction for all operations
-        conn.execute("BEGIN IMMEDIATE TRANSACTION", ()).await.map_err(|e| {
+        // Use DEFERRED transaction for better concurrency with WAL mode
+        // Lock is only acquired when first write occurs, not at BEGIN
+        conn.execute("BEGIN DEFERRED", ()).await.map_err(|e| {
             NodeServiceError::transaction_failed(format!("Failed to begin transaction: {}", e))
         })?;
 
@@ -1119,7 +1120,7 @@ impl NodeService {
             )));
         }
 
-        // Use INSERT OR REPLACE for node - upsert in single operation
+        // Use INSERT ... ON CONFLICT for node - upsert in single operation
         let node_result = conn.execute(
             "INSERT INTO nodes (id, node_type, content, parent_id, root_id, before_sibling_id, properties, embedding_vector)
              VALUES (?, ?, ?, ?, ?, NULL, '{}', NULL)
