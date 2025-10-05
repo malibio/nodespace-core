@@ -167,14 +167,14 @@ impl DatabaseService {
                 node_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 parent_id TEXT,
-                root_id TEXT,
+                origin_node_id TEXT,
                 before_sibling_id TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 properties JSON NOT NULL DEFAULT '{}',
                 embedding_vector BLOB,
                 FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
-                FOREIGN KEY (root_id) REFERENCES nodes(id)
+                FOREIGN KEY (origin_node_id) REFERENCES nodes(id)
             )",
             (),
         )
@@ -236,9 +236,9 @@ impl DatabaseService {
             ))
         })?;
 
-        // Index on root_id (bulk fetch by document)
+        // Index on origin_node_id (bulk fetch by document)
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_nodes_root ON nodes(root_id)",
+            "CREATE INDEX IF NOT EXISTS idx_nodes_root ON nodes(origin_node_id)",
             (),
         )
         .await

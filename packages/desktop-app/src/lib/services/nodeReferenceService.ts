@@ -105,7 +105,7 @@ class DatabaseServiceAdapter {
           node_type: node.node_type,
           content: node.content,
           parent_id: node.parent_id,
-          root_id: node.root_id,
+          origin_node_id: node.origin_node_id,
           before_sibling_id: node.before_sibling_id,
           mentions: node.mentions,
           properties: node.properties
@@ -806,7 +806,7 @@ export class NodeReferenceService {
         node_type: nodeType,
         content: content,
         parent_id: null, // Root node
-        root_id: nodeId,
+        origin_node_id: nodeId,
         before_sibling_id: null,
         created_at: new Date().toISOString(),
         modified_at: new Date().toISOString(),

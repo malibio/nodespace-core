@@ -43,7 +43,7 @@ function createNode(
     node_type: nodeType,
     content,
     parent_id: parentId,
-    root_id: null,
+    origin_node_id: null,
     before_sibling_id: null,
     created_at: new Date().toISOString(),
     modified_at: new Date().toISOString(),

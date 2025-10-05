@@ -179,7 +179,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       node_type: nodeType,
       content: initialContent,
       parent_id: newParentId,
-      root_id: newParentId || nodeId, // Root ID logic
+      origin_node_id: newParentId || nodeId, // Root ID logic
       before_sibling_id: null,
       created_at: new Date().toISOString(),
       modified_at: new Date().toISOString(),

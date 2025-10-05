@@ -91,7 +91,7 @@
               node_type: 'text',
               content: '',
               parent_id: parent_id,
-              root_id: parent_id,
+              origin_node_id: parent_id,
               before_sibling_id: null,
               created_at: new Date().toISOString(),
               modified_at: new Date().toISOString(),
@@ -135,7 +135,7 @@
           content,
           node_type: nodeType,
           parent_id: parentId!,
-          root_id: node?.root_id || parentId!,
+          origin_node_id: node?.origin_node_id || parentId!,
           before_sibling_id: node?.before_sibling_id
         });
 
@@ -165,7 +165,7 @@
 
       await databaseService.updateNode(nodeId, {
         parent_id: node.parent_id,
-        root_id: node.root_id,
+        origin_node_id: node.origin_node_id,
         before_sibling_id: node.before_sibling_id
       });
 

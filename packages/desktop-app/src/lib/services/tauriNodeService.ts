@@ -215,7 +215,7 @@ export class TauriNodeService {
    * Eliminates database locking issues from multiple sequential queries.
    *
    * @param nodeId - ID of the node to save
-   * @param data - Node data including content, node_type, parent_id, root_id, and before_sibling_id
+   * @param data - Node data including content, node_type, parent_id, origin_node_id, and before_sibling_id
    * @throws NodeOperationError if operation fails
    */
   async saveNodeWithParent(
@@ -224,7 +224,7 @@ export class TauriNodeService {
       content: string;
       node_type: string;
       parent_id: string;
-      root_id: string;
+      origin_node_id: string;
       before_sibling_id?: string | null;
     }
   ): Promise<void> {
@@ -236,7 +236,7 @@ export class TauriNodeService {
         content: data.content,
         nodeType: data.node_type,
         parentId: data.parent_id,
-        rootId: data.root_id,
+        rootId: data.origin_node_id,
         beforeSiblingId: data.before_sibling_id || null
       });
     } catch (error) {

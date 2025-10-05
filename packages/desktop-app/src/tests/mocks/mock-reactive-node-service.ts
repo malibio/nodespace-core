@@ -207,7 +207,7 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
         node_type: string;
         content: string;
         parent_id: string | null;
-        root_id: string | null;
+        origin_node_id: string | null;
         before_sibling_id: string | null;
         created_at: string;
         modified_at: string;
