@@ -260,6 +260,38 @@ pub async fn get_children(
     service.get_children(&parent_id).await.map_err(Into::into)
 }
 
+/// Bulk fetch all nodes belonging to an origin node (viewer/page)
+///
+/// This is the efficient way to load a complete document tree:
+/// - Single database query fetches all nodes with the same origin_node_id
+/// - In-memory hierarchy reconstruction using parent_id and before_sibling_id
+///
+/// # Arguments
+/// * `service` - Node service instance from Tauri state
+/// * `origin_node_id` - ID of the origin node (e.g., date page ID)
+///
+/// # Returns
+/// * `Ok(Vec<Node>)` - All nodes belonging to this origin
+/// * `Err(CommandError)` - Error with details if operation fails
+///
+/// # Example Frontend Usage
+/// ```typescript
+/// const nodes = await invoke('get_nodes_by_origin_id', {
+///   originNodeId: '2025-10-05'
+/// });
+/// console.log(`Loaded ${nodes.length} nodes for this date`);
+/// ```
+#[tauri::command]
+pub async fn get_nodes_by_origin_id(
+    service: State<'_, NodeService>,
+    origin_node_id: String,
+) -> Result<Vec<Node>, CommandError> {
+    service
+        .get_nodes_by_origin_id(&origin_node_id)
+        .await
+        .map_err(Into::into)
+}
+
 /// Save a node with automatic parent creation - unified upsert operation
 ///
 /// Ensures the parent node exists (creates if needed), then upserts the node.

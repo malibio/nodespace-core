@@ -76,10 +76,14 @@
 
   async function loadChildrenForParent(parent_id: string) {
     try {
-      const children = await databaseService.getChildren(parent_id);
+      // Use bulk fetch for efficiency - single query gets all nodes for this origin
+      const allNodes = await databaseService.getNodesByOriginId(parent_id);
 
       // Clear content tracking
       lastSavedContent.clear();
+
+      // Filter to get direct children only
+      const children = allNodes.filter((node) => node.parent_id === parent_id);
 
       if (children.length === 0) {
         // No children - create placeholder
@@ -105,8 +109,9 @@
           }
         );
       } else {
-        // Track initial content of loaded nodes
-        children.forEach((child) => lastSavedContent.set(child.id, child.content));
+        // Track initial content of ALL loaded nodes (not just direct children)
+        // This enables efficient nested node loading without additional queries
+        allNodes.forEach((node) => lastSavedContent.set(node.id, node.content));
 
         // Initialize with loaded children
         nodeManager.initializeNodes(children, {
