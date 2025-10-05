@@ -7,7 +7,11 @@
  * - Event handling and propagation
  * - Component lifecycle (event listener cleanup)
  * - Smart positioning logic
+ * - Accessibility (ARIA attributes, tabindex management)
+ * - Mouse interactions (click, hover, mouseenter)
  * - Edge cases and error conditions
+ *
+ * Total: 39 test cases covering all component functionality
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
