@@ -151,6 +151,11 @@ impl DatabaseService {
         self.execute_pragma(&conn, "PRAGMA journal_mode = WAL")
             .await?;
 
+        // Set busy timeout to 5 seconds (5000ms)
+        // This makes SQLite wait up to 5s instead of failing immediately on lock
+        self.execute_pragma(&conn, "PRAGMA busy_timeout = 5000")
+            .await?;
+
         // Enable foreign key constraints
         self.execute_pragma(&conn, "PRAGMA foreign_keys = ON")
             .await?;
@@ -437,6 +442,20 @@ impl DatabaseService {
     /// Multiple connections can be used concurrently thanks to WAL mode.
     pub fn connect(&self) -> Result<libsql::Connection, DatabaseError> {
         self.db.connect().map_err(DatabaseError::LibsqlError)
+    }
+
+    /// Get a connection with busy timeout configured
+    ///
+    /// Sets a 5-second busy timeout so operations wait instead of failing
+    /// immediately when the database is locked.
+    pub async fn connect_with_timeout(&self) -> Result<libsql::Connection, DatabaseError> {
+        let conn = self.connect()?;
+
+        // Set busy timeout on this connection
+        self.execute_pragma(&conn, "PRAGMA busy_timeout = 5000")
+            .await?;
+
+        Ok(conn)
     }
 }
 

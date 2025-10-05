@@ -1097,7 +1097,7 @@ impl NodeService {
         node_type: &str,
         parent_id: &str,
     ) -> Result<(), NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         // Use DEFERRED transaction for better concurrency with WAL mode
         // Lock is only acquired when first write occurs, not at BEGIN
