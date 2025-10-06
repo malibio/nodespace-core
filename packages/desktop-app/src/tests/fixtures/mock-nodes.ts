@@ -1,45 +1,20 @@
 /**
- * Simple mock node data for testing
+ * Legacy mock node data for testing
+ *
+ * DEPRECATED: This file is kept for backward compatibility only.
+ * New tests should use the unified test helpers from '@tests/helpers'.
+ *
+ * @deprecated Use unified helpers from src/tests/helpers instead
  */
 import type { MockNodeData } from '../utils/test-utils';
 
-/**
- * Helper to create unified Node objects for integration tests
- *
- * Creates a complete node object with all required fields for testing
- * with ReactiveNodeService and EventBus integration tests.
- *
- * @param id - Unique node identifier
- * @param content - Node content text
- * @param nodeType - Type of node (default: 'text')
- * @param parentId - Parent node ID (default: null for root nodes)
- * @param properties - Additional node properties
- * @param originNodeId - Origin node ID (defaults to parentId if not specified)
- * @returns Complete node object ready for initializeNodes()
- */
-export function createNode(
-  id: string,
-  content: string,
-  nodeType: string = 'text',
-  parentId: string | null = null,
-  properties: Record<string, unknown> = {},
-  originNodeId?: string | null
-) {
-  const now = new Date().toISOString();
-  return {
-    id,
-    nodeType,
-    content,
-    parentId,
-    originNodeId: originNodeId ?? parentId,
-    beforeSiblingId: null,
-    children: [],
-    createdAt: now,
-    modifiedAt: now,
-    properties
-  };
-}
+// Re-export from unified helpers for backward compatibility
+export { createTestNode as createNode } from '../helpers/test-helpers';
+export { MOCK_AUTOCOMPLETE_RESULTS as MOCK_AUTOCOMPLETE_NODES } from '../fixtures/test-fixtures';
 
+/**
+ * @deprecated Use MOCK_TEXT_NODE from test-fixtures.ts instead
+ */
 export const sampleTextNode: MockNodeData = {
   id: 'sample-text-1',
   type: 'text',
@@ -48,6 +23,9 @@ export const sampleTextNode: MockNodeData = {
   updatedAt: new Date('2024-01-01T10:30:00Z')
 };
 
+/**
+ * @deprecated Use MOCK_TASK_NODE from test-fixtures.ts instead
+ */
 export const sampleTaskNode: MockNodeData = {
   id: 'sample-task-1',
   type: 'task',
@@ -56,6 +34,9 @@ export const sampleTaskNode: MockNodeData = {
   updatedAt: new Date('2024-01-01T11:15:00Z')
 };
 
+/**
+ * @deprecated Use MOCK_AI_CHAT_NODE from test-fixtures.ts instead
+ */
 export const sampleAIChatNode: MockNodeData = {
   id: 'sample-chat-1',
   type: 'ai-chat',
@@ -64,57 +45,12 @@ export const sampleAIChatNode: MockNodeData = {
   updatedAt: new Date('2024-01-01T12:05:00Z')
 };
 
+/**
+ * @deprecated Use MOCK_NODES from test-fixtures.ts instead
+ */
 export const sampleNodes: MockNodeData[] = [sampleTextNode, sampleTaskNode, sampleAIChatNode];
 
 /**
- * Node result type for autocomplete testing
+ * @deprecated Import from test-fixtures.ts instead
  */
-export interface NodeResult {
-  id: string;
-  title: string;
-  type: string;
-  subtitle: string;
-  metadata: string;
-}
-
-/**
- * Mock nodes for autocomplete testing
- * Used across component and integration tests for consistency
- */
-export const MOCK_AUTOCOMPLETE_NODES: NodeResult[] = [
-  {
-    id: 'node-1',
-    title: 'Test Node',
-    type: 'text',
-    subtitle: 'Sample',
-    metadata: '1 day ago'
-  },
-  {
-    id: 'node-2',
-    title: 'Testing Guide',
-    type: 'document',
-    subtitle: 'Docs',
-    metadata: '2 days ago'
-  },
-  {
-    id: 'node-3',
-    title: 'Task Example',
-    type: 'task',
-    subtitle: 'Todo',
-    metadata: 'Today'
-  },
-  {
-    id: 'node-4',
-    title: 'Another Test',
-    type: 'text',
-    subtitle: 'Sample',
-    metadata: '3 days ago'
-  },
-  {
-    id: 'node-5',
-    title: 'Project Documentation',
-    type: 'document',
-    subtitle: 'Docs',
-    metadata: '1 week ago'
-  }
-];
+export type { NodeResult } from '../fixtures/test-fixtures';

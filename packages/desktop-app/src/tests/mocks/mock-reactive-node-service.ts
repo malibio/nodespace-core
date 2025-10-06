@@ -202,18 +202,7 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
 
     // Initialize nodes with UI state options
     initializeNodes(
-      nodes: Array<{
-        id: string;
-        nodeType: string;
-        content: string;
-        parentId: string | null;
-        originNodeId: string | null;
-        beforeSiblingId: string | null;
-        createdAt: string;
-        modifiedAt: string;
-        mentions: string[];
-        properties: Record<string, unknown>;
-      }>,
+      nodes: Array<import('$lib/types/node').Node>,
       options?: {
         expanded?: boolean;
         autoFocus?: boolean;

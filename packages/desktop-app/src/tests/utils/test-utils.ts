@@ -59,7 +59,12 @@ export class SimpleMockStore {
 // Simple counter for unique test IDs
 let testNodeCounter = 0;
 
-// Test data factories
+/**
+ * @deprecated Use createTestNode from '@tests/helpers' instead
+ *
+ * This legacy version returns MockNodeData (old type).
+ * New helper returns proper Node type from unified schema.
+ */
 export function createTestNode(overrides: Partial<MockNodeData> = {}): MockNodeData {
   testNodeCounter++;
   return {

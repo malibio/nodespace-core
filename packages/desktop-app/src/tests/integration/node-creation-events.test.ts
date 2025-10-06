@@ -6,7 +6,7 @@
  * ## Architecture Flow
  * 1. User presses Enter → ContentEditableController emits event
  * 2. BaseNode handles event → emits 'createNewNode'
- * 3. BaseNodeViewer catches event → calls NodeManager.createNode()
+ * 3. BaseNodeViewer catches event → calls NodeManager.createTestNode()
  * 4. NodeManager creates node → emits EventBus events (node:created, hierarchy:changed, cache:invalidate)
  * 5. UI updates → new node appears in DOM
  * 6. Backend sync → Tauri persists node
@@ -53,27 +53,7 @@ import {
 import type { NodeManagerEvents } from '$lib/services/reactiveNodeService.svelte';
 import { eventBus } from '$lib/services/eventBus';
 import type { NodeSpaceEvent } from '$lib/services/eventTypes';
-
-// Helper to create test nodes
-function createNode(
-  id: string,
-  content: string,
-  nodeType: string = 'text',
-  parentId: string | null = null
-) {
-  return {
-    id,
-    nodeType,
-    content,
-    parentId,
-    originNodeId: null,
-    beforeSiblingId: null,
-    createdAt: new Date().toISOString(),
-    modifiedAt: new Date().toISOString(),
-    mentions: [] as string[],
-    properties: {}
-  };
-}
+import { createTestNode } from '../helpers';
 
 describe('Node Creation Event Chain', () => {
   // ============================================================================
@@ -228,7 +208,7 @@ describe('Node Creation Event Chain', () => {
 
     it('should emit all required EventBus events when node created', () => {
       // Initialize with test node
-      nodeManager.initializeNodes([createNode('root1', 'Root node')], {
+      nodeManager.initializeNodes([createTestNode('root1', 'Root node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -253,7 +233,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should emit events in correct order: created → hierarchy → cache', () => {
-      nodeManager.initializeNodes([createNode('root1', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root1', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -275,7 +255,7 @@ describe('Node Creation Event Chain', () => {
 
     it('should include correct nodeIds in event data', () => {
       const originalNodeId = 'test-node';
-      nodeManager.initializeNodes([createNode(originalNodeId, 'Original')], {
+      nodeManager.initializeNodes([createTestNode(originalNodeId, 'Original')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -296,7 +276,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should emit events for placeholder node creation', () => {
-      nodeManager.initializeNodes([createNode('root1', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root1', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -317,7 +297,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should emit events when splitting content (Enter in middle)', () => {
-      nodeManager.initializeNodes([createNode('node1', 'Hello World')], {
+      nodeManager.initializeNodes([createTestNode('node1', 'Hello World')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -364,7 +344,7 @@ describe('Node Creation Event Chain', () => {
 
     it('should create new node below when Enter pressed at end', () => {
       // Setup: one node
-      nodeManager.initializeNodes([createNode('node1', 'Content')], {
+      nodeManager.initializeNodes([createTestNode('node1', 'Content')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -387,7 +367,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should split content correctly when Enter in middle', () => {
-      nodeManager.initializeNodes([createNode('node1', 'Hello World')], {
+      nodeManager.initializeNodes([createTestNode('node1', 'Hello World')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -409,7 +389,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should handle node creation with header inheritance', () => {
-      nodeManager.initializeNodes([createNode('node1', '## Header')], {
+      nodeManager.initializeNodes([createTestNode('node1', '## Header')], {
         inheritHeaderLevel: 2,
         expanded: true,
         autoFocus: false
@@ -426,7 +406,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should maintain hierarchy after multiple node creations', () => {
-      nodeManager.initializeNodes([createNode('root', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -594,7 +574,7 @@ describe('Node Creation Event Chain', () => {
 
     it('should prepare node data for backend persistence', () => {
       // Initialize with test node
-      nodeManager.initializeNodes([createNode('root1', 'Root node')], {
+      nodeManager.initializeNodes([createTestNode('root1', 'Root node')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -621,7 +601,7 @@ describe('Node Creation Event Chain', () => {
 
     it('should maintain data integrity for backend sync', () => {
       // Create multiple nodes to test hierarchy integrity
-      nodeManager.initializeNodes([createNode('root', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -683,7 +663,7 @@ describe('Node Creation Event Chain', () => {
         return originalEmit.call(eventBus, event);
       });
 
-      nodeManager.initializeNodes([createNode('root', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -717,7 +697,7 @@ describe('Node Creation Event Chain', () => {
       nodeManager.initializeNodes(
         [
           {
-            ...createNode(testId, 'Original'),
+            ...createTestNode(testId, 'Original'),
             id: testId
           }
         ],
@@ -740,7 +720,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should maintain hierarchy integrity during rapid node creation', () => {
-      nodeManager.initializeNodes([createNode('root', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -767,7 +747,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should handle content with special characters during creation', () => {
-      nodeManager.initializeNodes([createNode('root', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
@@ -826,7 +806,7 @@ describe('Node Creation Event Chain', () => {
     });
 
     it('should process node creation events efficiently', () => {
-      nodeManager.initializeNodes([createNode('root', 'Root')], {
+      nodeManager.initializeNodes([createTestNode('root', 'Root')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false

@@ -3,14 +3,19 @@
  * Tests complete workflows across multiple components and systems
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SimpleMockStore, createTestNode, type MockNodeData } from '../utils/test-utils';
+import {
+  SimpleMockStore,
+  type MockNodeData,
+  createTestNode as createMockNode
+} from '../utils/test-utils';
+import { waitForEffects } from '../helpers';
 
 // Mock API layer for integration testing
 class MockNodeAPI {
   constructor(private dataStore: SimpleMockStore) {}
 
   async createNode(nodeData: { content: string; type: 'text' | 'task' | 'ai-chat' }) {
-    const node = createTestNode({
+    const node = createMockNode({
       content: nodeData.content,
       type: nodeData.type
     });
@@ -120,7 +125,7 @@ class MockNodeManager {
 
   private async processNode(node: MockNodeData) {
     // Simulate processing delay
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitForEffects(10);
 
     // Simulate node processing (e.g., extracting metadata, indexing, etc.)
     return node;
@@ -320,7 +325,7 @@ describe('Node Management Integration Tests', () => {
       expect(created.updatedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
 
       // Wait a bit then update
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitForEffects(50);
       const updateBefore = new Date();
 
       const updated = await nodeManager.editNode(created.id, 'Updated content');

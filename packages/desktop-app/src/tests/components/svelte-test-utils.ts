@@ -16,7 +16,6 @@ import { render, type RenderResult } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import type { Component, ComponentProps } from 'svelte';
 import { vi, type MockInstance } from 'vitest';
-import { tick } from 'svelte';
 
 /**
  * Render options for Svelte components
@@ -94,29 +93,14 @@ export function createUserEvents() {
 /**
  * Wait for Svelte effects to complete
  *
- * Waits for all pending Svelte 5 effects ($effect) and reactive updates
- * to complete. Essential for testing async component behavior.
+ * @deprecated Use waitForEffects from '@tests/helpers' instead
  *
- * @param additionalMs - Additional milliseconds to wait after tick
- * @returns Promise that resolves when effects are complete
- *
- * @example
- * ```ts
- * // After triggering a state change
- * await waitForEffects();
- * // Now DOM is updated and effects have run
- * expect(element).toBeInTheDocument();
- * ```
+ * Re-exported for backward compatibility with existing component tests.
  */
-export async function waitForEffects(additionalMs: number = 0): Promise<void> {
-  // Wait for Svelte's reactive updates
-  await tick();
+export { waitForEffects } from '../helpers/test-helpers';
 
-  // If additional wait time is needed (for animations, timers, etc.)
-  if (additionalMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, additionalMs));
-  }
-}
+// Import for internal use in this file
+import { waitForEffects as _waitForEffects } from '../helpers/test-helpers';
 
 /**
  * Event handler mock helpers
@@ -202,30 +186,11 @@ export function expectEventStopped(event: Event): boolean {
 /**
  * Create a keyboard event with proper configuration
  *
- * Helper for creating KeyboardEvent instances with correct bubbling
- * and event properties for testing keyboard interactions.
+ * @deprecated Use createKeyboardEvent from '@tests/helpers' instead
  *
- * @param key - Key name (e.g., 'Enter', 'ArrowDown', 'Escape')
- * @param options - Additional event options
- * @returns Configured KeyboardEvent
- *
- * @example
- * ```ts
- * const enterEvent = createKeyboardEvent('Enter', { shiftKey: true });
- * element.dispatchEvent(enterEvent);
- * ```
+ * Re-exported for backward compatibility with existing component tests.
  */
-export function createKeyboardEvent(
-  key: string,
-  options: globalThis.KeyboardEventInit = {}
-): KeyboardEvent {
-  return new KeyboardEvent('keydown', {
-    key,
-    bubbles: true,
-    cancelable: true,
-    ...options
-  });
-}
+export { createKeyboardEvent } from '../helpers/test-helpers';
 
 /**
  * Wait for element to be in the document
@@ -257,7 +222,7 @@ export async function waitForElement<T extends HTMLElement>(
     if (element) {
       return element;
     }
-    await waitForEffects(50);
+    await _waitForEffects(50);
   }
 
   throw new Error(`Element not found within ${timeout}ms`);
@@ -266,38 +231,11 @@ export async function waitForElement<T extends HTMLElement>(
 /**
  * Get ARIA attributes from element
  *
- * Helper for extracting and verifying ARIA attributes in tests.
- * Provides type-safe access to common ARIA properties.
+ * @deprecated Use getAriaAttributes from '@tests/helpers' instead
  *
- * @param element - HTML element to inspect
- * @returns Object with ARIA attributes
- *
- * @example
- * ```ts
- * const aria = getAriaAttributes(listbox);
- * expect(aria.role).toBe('listbox');
- * expect(aria.selected).toBe('true');
- * ```
+ * Re-exported for backward compatibility with existing component tests.
  */
-export function getAriaAttributes(element: HTMLElement): {
-  role: string | null;
-  label: string | null;
-  selected: string | null;
-  expanded: string | null;
-  hidden: string | null;
-  disabled: string | null;
-  live: string | null;
-} {
-  return {
-    role: element.getAttribute('role'),
-    label: element.getAttribute('aria-label'),
-    selected: element.getAttribute('aria-selected'),
-    expanded: element.getAttribute('aria-expanded'),
-    hidden: element.getAttribute('aria-hidden'),
-    disabled: element.getAttribute('aria-disabled'),
-    live: element.getAttribute('aria-live')
-  };
-}
+export { getAriaAttributes } from '../helpers/test-helpers';
 
 /**
  * Simulate component lifecycle
