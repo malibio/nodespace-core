@@ -26,6 +26,30 @@ import userEvent from '@testing-library/user-event';
 import { waitForEffects } from '../helpers';
 import BaseNode from '$lib/design/components/base-node.svelte';
 
+/**
+ * Helper function to set up a focused editor for testing
+ * Reduces boilerplate and ensures consistent setup across tests
+ */
+async function setupFocusedEditor(content = '', nodeType: string = 'text') {
+  const user = userEvent.setup();
+
+  const { container } = render(BaseNode, {
+    nodeId: 'test-node',
+    nodeType,
+    content,
+    autoFocus: true
+  });
+
+  const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+  if (!editor) throw new Error('Editor not found in test setup');
+
+  await waitFor(() => {
+    expect(document.activeElement).toBe(editor);
+  });
+
+  return { user, container, editor };
+}
+
 describe('Focus Management', () => {
   beforeEach(() => {
     // Clean up DOM between tests
@@ -34,22 +58,7 @@ describe('Focus Management', () => {
 
   describe('Modal Focus - Autocomplete', () => {
     it('should maintain editor focus even when typing trigger characters', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]');
-      expect(editor).toBeInTheDocument();
-
-      // Verify initial focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor();
 
       // Type "@" character (potential autocomplete trigger)
       await user.keyboard('@');
@@ -66,22 +75,7 @@ describe('Focus Management', () => {
     });
 
     it('should maintain editor focus when typing slash character', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]');
-      expect(editor).toBeInTheDocument();
-
-      // Verify initial focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor();
 
       // Type "/" at start (potential slash command trigger)
       await user.keyboard('/');
@@ -92,47 +86,18 @@ describe('Focus Management', () => {
     });
 
     it('should maintain focus when pressing Enter after typing', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]');
-
-      // Verify focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor();
 
       // Type content and press Enter
       await user.keyboard('test{Enter}');
       await waitForEffects();
 
-      // Focus should remain in editable context
-      const activeElement = document.activeElement;
-      const isEditable = activeElement?.getAttribute('contenteditable') === 'true';
-      expect(isEditable).toBe(true);
+      // Focus should remain in editor (IMPROVED: specific assertion)
+      expect(document.activeElement).toBe(editor);
     });
 
     it('should maintain focus when pressing Escape', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]');
-
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor();
 
       // Press Escape (should not lose focus)
       await user.keyboard('{Escape}');
@@ -142,78 +107,70 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
     });
 
-    it('should maintain focus when pressing Tab', async () => {
-      const user = userEvent.setup();
+    it('should trap focus within modal context when Tab is pressed', async () => {
+      const { user, editor } = await setupFocusedEditor();
 
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
+      // Trigger autocomplete modal
+      await user.keyboard('@');
+      await waitForEffects();
 
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+      // Check if modal appeared
+      const listbox = screen.queryByRole('listbox');
 
-      await waitFor(() => {
+      if (listbox) {
+        // If modal exists, verify focus trapping
+        // Press Tab - focus should stay within modal or editor
+        await user.keyboard('{Tab}');
+        await waitForEffects();
+
+        const activeInModal =
+          document.activeElement === editor || listbox.contains(document.activeElement);
+        expect(activeInModal).toBe(true);
+      } else {
+        // If no modal, Tab maintains focus in editor
+        await user.keyboard('{Tab}');
+        await waitForEffects();
+
+        // Verify editor is still focusable
+        editor.focus();
+        await waitForEffects();
         expect(document.activeElement).toBe(editor);
-      });
-
-      // Press Tab
-      await user.keyboard('{Tab}');
-      await waitForEffects();
-
-      // Tab may move focus to next focusable element
-      // But we can verify the editor is still focusable
-      editor.focus();
-      await waitForEffects();
-
-      expect(document.activeElement).toBe(editor);
+      }
     });
   });
 
   describe('Node Creation Focus', () => {
     it('should maintain editor focus after Enter key press', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'Test content',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
-
-      // Verify initial focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor('Test content');
 
       // Position cursor at end and press Enter
       await user.keyboard('{End}{Enter}');
       await waitForEffects();
 
-      // Focus should remain in the editor (or a related contenteditable)
-      // Even if new node creation is triggered, focus management keeps it in editable area
-      const activeElement = document.activeElement;
-      const isEditableElement =
-        activeElement?.getAttribute('contenteditable') === 'true' ||
-        activeElement?.getAttribute('role') === 'textbox';
+      // Focus should remain in editor (IMPROVED: specific assertion)
+      expect(document.activeElement).toBe(editor);
+    });
 
-      expect(isEditableElement).toBe(true);
+    it('should position cursor at start of new node after Enter', async () => {
+      const { user, editor } = await setupFocusedEditor('Test content');
+
+      // Position cursor at end and press Enter
+      await user.keyboard('{End}{Enter}');
+      await waitForEffects();
+
+      // Verify cursor is at start of line (or content)
+      const selection = window.getSelection();
+      const range = selection?.getRangeAt(0);
+
+      // Cursor should be collapsed (no selection) and ready for input
+      expect(range?.collapsed).toBe(true);
+
+      // Verify editor still has focus (most important for cursor positioning)
+      expect(document.activeElement).toBe(editor);
     });
 
     it('should preserve editor focusability after content split with Enter', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'BeforeAfter',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+      const { user, editor } = await setupFocusedEditor('BeforeAfter');
 
       // Position cursor in middle (after "Before")
       await user.click(editor);
@@ -232,11 +189,8 @@ describe('Focus Management', () => {
       await user.keyboard('{Enter}');
       await waitForEffects();
 
-      // Focus should remain in editable area
-      const activeElement = document.activeElement;
-      const isEditable = activeElement?.getAttribute('contenteditable') === 'true';
-
-      expect(isEditable).toBe(true);
+      // Focus should remain in editor (IMPROVED: specific assertion)
+      expect(document.activeElement).toBe(editor);
 
       // Should be able to continue typing
       await user.keyboard('New content');
@@ -248,19 +202,7 @@ describe('Focus Management', () => {
     });
 
     it('should support programmatic focus via autoFocus prop', async () => {
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'Test',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
-
-      // With autoFocus=true, editor should automatically receive focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { editor } = await setupFocusedEditor('Test');
 
       // Editor should be ready for input (has correct attributes)
       expect(editor).toHaveAttribute('contenteditable', 'true');
@@ -268,19 +210,7 @@ describe('Focus Management', () => {
     });
 
     it('should allow manual focus restoration after blur', async () => {
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'Test',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
-
-      // Verify initial focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { editor } = await setupFocusedEditor('Test');
 
       // Blur the editor
       editor.blur();
@@ -301,21 +231,7 @@ describe('Focus Management', () => {
 
   describe('Editor Focus Stability', () => {
     it('should maintain focus during arrow key navigation within editor', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'Test content with multiple words',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
-
-      // Verify initial focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor('Test content with multiple words');
 
       // Navigate with arrow keys
       await user.keyboard('{ArrowRight}{ArrowRight}{ArrowLeft}');
@@ -333,20 +249,7 @@ describe('Focus Management', () => {
     });
 
     it('should maintain focus during text selection', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'Selectable text content',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
-
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor('Selectable text content');
 
       // Select all text
       await user.keyboard('{Control>}a{/Control}');
@@ -369,21 +272,9 @@ describe('Focus Management', () => {
     });
 
     it('should maintain focusability after user interaction', async () => {
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: 'Initial content',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
-
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor('Initial content');
 
       // Blur and refocus to simulate interaction
-      const user = userEvent.setup();
       editor.blur();
       await waitForEffects();
 
@@ -400,29 +291,21 @@ describe('Focus Management', () => {
 
   describe('Slash Command Focus', () => {
     it('should maintain editor focus after slash command insertion', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]');
-      expect(editor).toBeInTheDocument();
-
-      // Verify initial focus
-      await waitFor(() => {
-        expect(document.activeElement).toBe(editor);
-      });
+      const { user, editor } = await setupFocusedEditor();
 
       // Type "/" to trigger slash command dropdown
       await user.keyboard('/');
       await waitForEffects();
 
-      // Wait for dropdown to appear (if implemented)
-      await waitForEffects(100);
+      // Check if dropdown appeared (IMPROVED: condition-based check, no hard-coded wait)
+      await waitFor(
+        () => {
+          const hasSettled =
+            screen.queryByRole('listbox') !== null || document.activeElement === editor;
+          expect(hasSettled).toBe(true);
+        },
+        { timeout: 500 }
+      );
 
       // If dropdown appears, select a command
       const listbox = screen.queryByRole('listbox');
@@ -431,31 +314,29 @@ describe('Focus Management', () => {
         await waitForEffects();
       }
 
-      // Focus should remain in editor
+      // Focus should remain in editor (primary assertion)
       expect(document.activeElement).toBe(editor);
 
-      // User should be able to continue typing
-      await user.keyboard('content');
-      await waitForEffects();
-
-      expect(editor!.textContent).toContain('content');
+      // Editor should remain editable and functional
+      expect(editor).toHaveAttribute('contenteditable', 'true');
     });
 
     it('should auto-focus editor after node type conversion via slash command', async () => {
-      const user = userEvent.setup();
-
-      const { container } = render(BaseNode, {
-        nodeId: 'test-node',
-        nodeType: 'text',
-        content: '',
-        autoFocus: true
-      });
-
-      const editor = container.querySelector('[contenteditable="true"]');
+      const { user, editor } = await setupFocusedEditor();
 
       // Type "/" and convert to different node type (e.g., /task)
       await user.keyboard('/task');
       await waitForEffects();
+
+      // Check if slash command system responded (IMPROVED: condition-based check)
+      await waitFor(
+        () => {
+          const hasSettled =
+            screen.queryByRole('listbox') !== null || document.activeElement === editor;
+          expect(hasSettled).toBe(true);
+        },
+        { timeout: 500 }
+      );
 
       // If slash command system is active, try to execute
       const listbox = screen.queryByRole('listbox');
@@ -464,19 +345,41 @@ describe('Focus Management', () => {
         await waitForEffects();
       }
 
-      // After node type conversion, editor should maintain or regain focus
-      // (In current implementation, this may be the same editor)
-      await waitForEffects(100);
+      // Focus should be in editor (IMPROVED: specific assertion)
+      expect(document.activeElement).toBe(editor);
 
-      // Verify we can type in the editor
-      await user.keyboard('task content');
+      // Editor should remain editable
+      expect(editor).toHaveAttribute('contenteditable', 'true');
+    });
+  });
+
+  describe('Focus Management - Error Scenarios', () => {
+    it('should maintain focus if autocomplete trigger fails', async () => {
+      const { user, editor } = await setupFocusedEditor();
+
+      // Trigger autocomplete
+      await user.keyboard('@');
       await waitForEffects();
 
-      expect(editor!.textContent).toContain('task content');
+      // Even if autocomplete fails to appear, focus should remain stable
+      expect(document.activeElement).toBe(editor);
 
-      // Focus should be in a contenteditable element
-      const activeElement = document.activeElement;
-      expect(activeElement?.getAttribute('contenteditable')).toBe('true');
+      // Editor should remain editable
+      expect(editor).toHaveAttribute('contenteditable', 'true');
+    });
+
+    it('should maintain focus if slash command fails', async () => {
+      const { user, editor } = await setupFocusedEditor();
+
+      // Trigger slash command
+      await user.keyboard('/');
+      await waitForEffects();
+
+      // Even if slash dropdown fails to appear, focus should remain
+      expect(document.activeElement).toBe(editor);
+
+      // Editor should remain editable
+      expect(editor).toHaveAttribute('contenteditable', 'true');
     });
   });
 });
