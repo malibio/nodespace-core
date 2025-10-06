@@ -15,6 +15,14 @@ import { eventBus } from '../../lib/services/eventBus';
 import { waitForEffects } from '../helpers';
 import type { NodeUpdatedEvent, NodeCreatedEvent } from '../../lib/services/eventTypes';
 
+// Test timing constants for maintainability and consistency
+const ASYNC_HANDLER_DELAY = 100;
+const ASYNC_ERROR_SETTLE = 10;
+const BATCH_PROCESSING_DELAY = 10;
+const BATCH_COMPLETION_WAIT = 50;
+const DEBOUNCE_DELAY = 100;
+const BATCH_DELAY = 50;
+
 describe('EventBus Async and Race Conditions', () => {
   beforeEach(() => {
     eventBus.reset();
@@ -23,6 +31,10 @@ describe('EventBus Async and Race Conditions', () => {
 
   afterEach(() => {
     eventBus.reset();
+    // Clean up timers if any tests failed before cleanup
+    if (vi.isFakeTimers()) {
+      vi.useRealTimers();
+    }
   });
 
   // ========================================================================
@@ -103,7 +115,7 @@ describe('EventBus Async and Race Conditions', () => {
         }
         debounceTimer = setTimeout(() => {
           latestValue = event.newValue as string;
-        }, 100);
+        }, DEBOUNCE_DELAY);
       });
 
       // Rapid fire 10 events
@@ -144,7 +156,7 @@ describe('EventBus Async and Race Conditions', () => {
         batchTimer = setTimeout(() => {
           // Process batch
           expect(batchedEvents.length).toBeGreaterThan(0);
-        }, 50);
+        }, BATCH_DELAY);
       });
 
       // Fire multiple events rapidly
@@ -181,12 +193,13 @@ describe('EventBus Async and Race Conditions', () => {
 
   describe('Async Handler Coordination', () => {
     it('should not block other handlers when one is slow', async () => {
+      vi.useFakeTimers();
       const executionOrder: string[] = [];
 
       // Slow async handler
       eventBus.subscribe('node:updated', async () => {
         executionOrder.push('slow-start');
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, ASYNC_HANDLER_DELAY));
         executionOrder.push('slow-end');
       });
 
@@ -206,13 +219,15 @@ describe('EventBus Async and Race Conditions', () => {
 
       await waitForEffects();
 
-      // Fast handler should execute immediately, not wait for slow handler
+      // Both handlers execute their synchronous portions immediately in registration order
       expect(executionOrder[0]).toBe('slow-start');
       expect(executionOrder[1]).toBe('fast');
 
-      // Wait for slow handler to complete
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Fast-forward timers to complete slow handler
+      await vi.runAllTimersAsync();
       expect(executionOrder[2]).toBe('slow-end');
+
+      vi.useRealTimers();
     });
 
     it('should handle async errors gracefully without breaking event flow', async () => {
@@ -224,8 +239,13 @@ describe('EventBus Async and Race Conditions', () => {
       eventBus.subscribe('node:updated', asyncErrorHandler);
       eventBus.subscribe('node:updated', successHandler);
 
-      // Suppress console.error for this test
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // Suppress only EventBus async handler errors
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((msg, ...args) => {
+        if (typeof msg === 'string' && !msg.includes('EventBus: Async handler error')) {
+          // Log unexpected errors for debugging
+          console.warn('Unexpected console.error:', msg, ...args);
+        }
+      });
 
       eventBus.emit<NodeUpdatedEvent>({
         type: 'node:updated',
@@ -237,7 +257,7 @@ describe('EventBus Async and Race Conditions', () => {
       });
 
       await waitForEffects();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, ASYNC_ERROR_SETTLE));
 
       // Success handler should still be called despite error
       expect(successHandler).toHaveBeenCalled();
@@ -262,7 +282,13 @@ describe('EventBus Async and Race Conditions', () => {
       eventBus.subscribe('node:created', rejectedHandler);
       eventBus.subscribe('node:created', otherHandler);
 
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // Suppress only EventBus async handler errors
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((msg, ...args) => {
+        if (typeof msg === 'string' && !msg.includes('EventBus: Async handler error')) {
+          // Log unexpected errors for debugging
+          console.warn('Unexpected console.error:', msg, ...args);
+        }
+      });
 
       eventBus.emit<NodeCreatedEvent>({
         type: 'node:created',
@@ -273,7 +299,7 @@ describe('EventBus Async and Race Conditions', () => {
       });
 
       await waitForEffects();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, ASYNC_ERROR_SETTLE));
 
       // Both handlers should have been called
       expect(rejectedHandler).toHaveBeenCalled();
@@ -356,8 +382,8 @@ describe('EventBus Async and Race Conditions', () => {
 
       const startTime = performance.now();
 
-      // Fire 10 rapid updates
-      for (let i = 0; i < 10; i++) {
+      // Fire 100 rapid updates to stress test the system
+      for (let i = 0; i < 100; i++) {
         eventBus.emit<NodeUpdatedEvent>({
           type: 'node:updated',
           namespace: 'lifecycle',
@@ -372,9 +398,10 @@ describe('EventBus Async and Race Conditions', () => {
 
       const duration = performance.now() - startTime;
 
-      // Should complete in under 100ms
+      // Should complete in under 100ms (per acceptance criteria)
+      // 100 synchronous events with synchronous handlers should be very fast
       expect(duration).toBeLessThan(100);
-      expect(handler).toHaveBeenCalledTimes(10);
+      expect(handler).toHaveBeenCalledTimes(100);
     });
   });
 
@@ -419,26 +446,30 @@ describe('EventBus Async and Race Conditions', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('should queue events during batch processing', async () => {
+    it('should handle events during async handler processing', async () => {
+      // NOTE: This tests application-level async handling patterns, not EventBus queuing.
+      // EventBus fires all handlers immediately when events are emitted - there is no
+      // built-in queue. This test verifies that handlers can implement their own async
+      // processing logic without losing events.
       const processedEvents: string[] = [];
       let isProcessing = false;
 
       eventBus.subscribe('node:updated', async (event: NodeUpdatedEvent) => {
         if (isProcessing) {
-          // Events should still be queued and processed
+          // Handler tracks that it received an event while processing another
           processedEvents.push(`queued-${event.nodeId}`);
         } else {
           isProcessing = true;
           processedEvents.push(`processing-${event.nodeId}`);
 
           // Simulate batch processing delay
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise((resolve) => setTimeout(resolve, BATCH_PROCESSING_DELAY));
 
           isProcessing = false;
         }
       });
 
-      // Fire multiple events rapidly while first is processing
+      // Fire multiple events rapidly - EventBus calls handler immediately for each
       eventBus.emit<NodeUpdatedEvent>({
         type: 'node:updated',
         namespace: 'lifecycle',
@@ -467,9 +498,9 @@ describe('EventBus Async and Race Conditions', () => {
       });
 
       await waitForEffects();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, BATCH_COMPLETION_WAIT));
 
-      // All events should be processed
+      // All events should trigger the handler (EventBus doesn't drop events)
       expect(processedEvents.length).toBeGreaterThanOrEqual(3);
       expect(processedEvents.some((e) => e.includes('node-1'))).toBe(true);
       expect(processedEvents.some((e) => e.includes('node-2'))).toBe(true);
