@@ -44,9 +44,9 @@ describe('Basic Function Testing', () => {
 
   describe('Node Content Validation', () => {
     it('validates node content is not empty', () => {
-      // createTestNode uses 'Test content' as default, so an empty string will fall back to default
+      // Empty string is now preserved with ?? operator
       const emptyNode = createTestNode({ content: '' });
-      expect(emptyNode.content).toBe('Test content'); // Empty string falls back to 'Test content'
+      expect(emptyNode.content).toBe(''); // Empty string preserved
 
       const validNode = createTestNode({ content: 'Valid content' });
       expect(validNode.content).toBe('Valid content');

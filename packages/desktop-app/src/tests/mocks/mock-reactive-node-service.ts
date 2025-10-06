@@ -72,6 +72,12 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
     }
   }
 
+  /**
+   * Create a node via the mock service (internal service API, not a test helper)
+   *
+   * This is part of the mock ReactiveNodeService interface.
+   * For creating test data, use createTestNode() from @tests/helpers instead.
+   */
   function createNode(
     afterNodeId: string,
     content: string = '',

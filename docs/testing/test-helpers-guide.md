@@ -27,6 +27,20 @@ import { createTestNode, waitForEffects, MOCK_TEXT_NODE } from '@tests/helpers';
 
 ## Quick Start
 
+### Import Path Alias
+
+All helpers are imported from the `@tests/helpers` alias:
+
+```typescript
+import { createTestNode, waitForEffects, MOCK_TEXT_NODE } from '@tests/helpers';
+```
+
+This alias is configured in `tsconfig.json` and maps to:
+- `src/tests/helpers/test-helpers.ts` - Core helper functions
+- `src/tests/fixtures/test-fixtures.ts` - Standard test fixtures
+
+Both files are re-exported through `src/tests/helpers/index.ts` for convenient single-import access.
+
 ### Basic Test Setup
 
 ```typescript

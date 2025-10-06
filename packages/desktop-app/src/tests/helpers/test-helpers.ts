@@ -89,7 +89,7 @@ export function createTestNode(
     return {
       id,
       nodeType: options.nodeType || 'text',
-      content: options.content || 'Test content',
+      content: options.content ?? 'Test content',
       parentId: options.parentId ?? null,
       originNodeId: options.originNodeId ?? options.parentId ?? null,
       beforeSiblingId: options.beforeSiblingId ?? null,
@@ -109,7 +109,7 @@ export function createTestNode(
   return {
     id,
     nodeType: nodeType || 'text',
-    content: content || 'Test content',
+    content: content ?? 'Test content',
     parentId: parentId ?? null,
     originNodeId: parentId ?? null,
     beforeSiblingId: null,
