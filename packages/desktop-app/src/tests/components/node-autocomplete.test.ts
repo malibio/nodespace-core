@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import NodeAutocomplete from '$lib/components/ui/node-autocomplete/node-autocomplete.svelte';
-import { createKeyboardEvent, getAriaAttributes } from './svelte-test-utils';
+import { createKeyboardEvent, getAriaAttributes } from '../helpers';
 import type { NodeType } from '$lib/design/icons';
 import { waitForEffects, MOCK_AUTOCOMPLETE_RESULTS } from '../helpers';
 

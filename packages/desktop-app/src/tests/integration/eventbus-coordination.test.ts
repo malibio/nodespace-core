@@ -38,8 +38,7 @@ import {
   isDecorationClickedEvent,
   isHierarchyChangedEvent
 } from '../utils/type-guards';
-import { waitForEffects } from '../components/svelte-test-utils';
-import { createTestNode } from '../helpers';
+import { waitForEffects, createTestNode } from '../helpers';
 import {
   ASYNC_HANDLER_TIMEOUT_MS,
   ASYNC_ERROR_PROPAGATION_TIMEOUT_MS

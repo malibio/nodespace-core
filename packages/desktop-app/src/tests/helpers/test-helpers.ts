@@ -124,24 +124,6 @@ export function createTestNode(
 }
 
 /**
- * Create a minimal test node (deprecated - kept for backward compatibility)
- *
- * @deprecated Use createTestNode() with overloads instead
- *
- * @param id - Node ID
- * @param content - Node content
- * @returns Minimal Node object
- *
- * @example
- * ```typescript
- * const node = createTestNodeMinimal('node-1', 'Hello world');
- * ```
- */
-export function createTestNodeMinimal(id: string, content: string): Node {
-  return createTestNode({ id, content });
-}
-
-/**
  * Create a text node with specific content
  *
  * @param content - Text content for the node

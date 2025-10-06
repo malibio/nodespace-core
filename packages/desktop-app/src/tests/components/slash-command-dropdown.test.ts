@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import SlashCommandDropdown from '$lib/components/ui/slash-command-dropdown/slash-command-dropdown.svelte';
-import { createKeyboardEvent, getAriaAttributes } from './svelte-test-utils';
+import { createKeyboardEvent, getAriaAttributes } from '../helpers';
 import type { SlashCommand } from '$lib/services/slashCommandService';
 import { waitForEffects, MOCK_SLASH_COMMANDS } from '../helpers';
 

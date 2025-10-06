@@ -145,6 +145,31 @@ function resize_terminal() {\n\
 # To start tmux manually: tmux new-session -A -s development\n\
 BASHRC_EOF\n\
 \n\
+# Configure Zsh with same functions\n\
+cat >> /root/.zshrc << "ZSHRC_EOF"\n\
+\n\
+# Terminal size management (same as bash)\n\
+function fix_terminal_size() {\n\
+    if [ -n "$COLUMNS" ] && [ -n "$LINES" ]; then\n\
+        stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true\n\
+    fi\n\
+}\n\
+\n\
+function resize_terminal() {\n\
+    local cols=${1:-120}\n\
+    local rows=${2:-40}\n\
+    echo "Resizing terminal to ${cols}x${rows}"\n\
+    stty cols "$cols" rows "$rows"\n\
+    export COLUMNS="$cols"\n\
+    export LINES="$rows"\n\
+    if [ -n "$TMUX" ]; then\n\
+        tmux refresh-client\n\
+    fi\n\
+}\n\
+\n\
+fix_terminal_size\n\
+ZSHRC_EOF\n\
+\n\
 # Create tmux config for better terminal handling\n\
 cat > /root/.tmux.conf << "TMUX_EOF"\n\
 # Terminal and display settings\n\

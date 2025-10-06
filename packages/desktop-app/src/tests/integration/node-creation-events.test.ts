@@ -44,7 +44,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/svelte';
-import { createUserEvents, waitForEffects } from '../components/svelte-test-utils';
+import userEvent from '@testing-library/user-event';
+import { waitForEffects } from '../helpers';
 import BaseNode from '$lib/design/components/base-node.svelte';
 import {
   createReactiveNodeService,
@@ -76,7 +77,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const user = createUserEvents();
+      const user = userEvent.setup();
       const editor = document.querySelector('[contenteditable="true"]');
       expect(editor).toBeInTheDocument();
 
@@ -99,7 +100,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const user = createUserEvents();
+      const user = userEvent.setup();
       const editor = document.querySelector('[contenteditable="true"]');
 
       // Position cursor in middle (after "Hello ")
@@ -123,7 +124,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const user = createUserEvents();
+      const user = userEvent.setup();
       const editor = document.querySelector('[contenteditable="true"]');
 
       // Select text and press Enter
@@ -147,7 +148,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const user = createUserEvents();
+      const user = userEvent.setup();
       const editor = document.querySelector('[contenteditable="true"]');
 
       await user.click(editor!);
@@ -166,7 +167,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const user = createUserEvents();
+      const user = userEvent.setup();
       const editor = document.querySelector('[contenteditable="true"]');
 
       await user.click(editor!);
@@ -448,7 +449,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const user = createUserEvents();
+      const user = userEvent.setup();
       const editor1 = container1.querySelector('[contenteditable="true"]') as HTMLElement;
       expect(editor1).toBeInTheDocument();
 
