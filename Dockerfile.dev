@@ -17,6 +17,24 @@ RUN apt-get update && apt-get install -y \
     unzip \
     ca-certificates \
     tmux \
+    gnupg \
+    software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Chromium for chrome-devtools MCP (ARM64 compatible)
+RUN apt-get update && apt-get install -y \
+    chromium-browser \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional shell utilities for better terminal experience
+RUN apt-get update && apt-get install -y \
+    zsh \
+    vim \
+    nano \
+    htop \
+    ripgrep \
+    fd-find \
+    bat \
     && rm -rf /var/lib/apt/lists/*
 
 # Install latest Node.js (required for Claude Code)
@@ -30,6 +48,16 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Install Bun
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
+
+# Install Oh My Zsh for better shell experience
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
+    && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
+    && git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+
+# Configure zsh with useful plugins
+RUN sed -i 's/plugins=(git)/plugins=(git rust bun docker zsh-autosuggestions zsh-syntax-highlighting)/' /root/.zshrc \
+    && echo 'export PATH="/root/.bun/bin:/root/.cargo/bin:$PATH"' >> /root/.zshrc \
+    && echo 'export CHROME_BIN=/usr/bin/chromium-browser' >> /root/.zshrc
 
 # Install Claude Code using the official installer
 RUN curl -fsSL https://claude.ai/install.sh | bash || \
@@ -58,6 +86,11 @@ WORKDIR /workspace
 
 # Install common Rust tools
 RUN cargo install cargo-watch
+
+# Configure Chromium to run in headless mode for MCP
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Create an entrypoint script
 RUN echo '#!/bin/bash\n\
@@ -164,9 +197,17 @@ TMUX_EOF\n\
 \n\
 echo "🚀 Claude Code Development Container Ready!"\n\
 echo "Repository: /workspace/nodespace-core"\n\
-echo "Available tools: git, rust, bun, claude (~/.local/bin/claude), gh, tmux"\n\
+echo "Available tools: git, rust, bun, claude (~/.local/bin/claude), gh, tmux, zsh"\n\
 echo "Terminal size: ${COLUMNS:-120}x${LINES:-40}"\n\
-echo "Terminal: optimized for Claude Code (plain bash, tmux available manually)"\n\
+echo "Terminal: zsh with Oh My Zsh (tmux available manually)"\n\
+echo ""\n\
+# Verify Chromium installation\n\
+if command -v chromium-browser >/dev/null 2>&1; then\n\
+  chrome_version=$(chromium-browser --version 2>/dev/null || echo "unknown")\n\
+  echo "✅ Chromium: $chrome_version (for chrome-devtools MCP)"\n\
+else\n\
+  echo "⚠️  Chromium: Not found - chrome-devtools MCP may not work"\n\
+fi\n\
 echo ""\n\
 echo "Quick start:"\n\
 echo "  git checkout -b feature/container-$(date +%s)"\n\
@@ -179,4 +220,4 @@ echo ""\n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/bin/bash"]
+CMD ["/bin/zsh"]
