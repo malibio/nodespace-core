@@ -20,6 +20,76 @@ import NodeAutocomplete from '$lib/components/ui/node-autocomplete/node-autocomp
 import SlashCommandDropdown from '$lib/components/ui/slash-command-dropdown/slash-command-dropdown.svelte';
 import { eventBus } from '$lib/services/eventBus';
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Get keydown listener counts from spies
+ */
+function getKeydownListenerCounts(
+  addSpy: ReturnType<typeof vi.spyOn>,
+  removeSpy: ReturnType<typeof vi.spyOn>
+) {
+  const added = addSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
+  const removed = removeSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
+
+  return {
+    added,
+    removed,
+    balance: added - removed
+  };
+}
+
+/**
+ * Get keydown listener handler references from spies
+ */
+function getKeydownListenerHandlers(
+  addSpy: ReturnType<typeof vi.spyOn>,
+  removeSpy: ReturnType<typeof vi.spyOn>
+) {
+  const addedHandlers = addSpy.mock.calls
+    .filter((call) => call[0] === 'keydown')
+    .map((call) => call[1]);
+
+  const removedHandlers = removeSpy.mock.calls
+    .filter((call) => call[0] === 'keydown')
+    .map((call) => call[1]);
+
+  return {
+    added: addedHandlers,
+    removed: removedHandlers
+  };
+}
+
+/**
+ * Standard baseline measurement pattern using slice()
+ */
+function measureListenerDelta(
+  addSpy: ReturnType<typeof vi.spyOn>,
+  removeSpy: ReturnType<typeof vi.spyOn>,
+  initialAdds: number,
+  initialRemoves: number
+) {
+  const newAdds = addSpy.mock.calls
+    .slice(initialAdds)
+    .filter((call) => call[0] === 'keydown').length;
+
+  const newRemoves = removeSpy.mock.calls
+    .slice(initialRemoves)
+    .filter((call) => call[0] === 'keydown').length;
+
+  return {
+    added: newAdds,
+    removed: newRemoves,
+    balance: newAdds - newRemoves
+  };
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
 describe('Event Listener Memory Leak Detection', () => {
   beforeEach(() => {
     // Clean up DOM and EventBus between tests
@@ -41,56 +111,54 @@ describe('Event Listener Memory Leak Detection', () => {
       const addSpy = vi.spyOn(document, 'addEventListener');
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-      const initialAddCount = addSpy.mock.calls.length;
-
-      // Render and unmount
+      // Render component
       const { unmount } = render(NodeAutocomplete, {
         visible: true,
         results: [],
         position: { x: 0, y: 0 }
       });
 
-      // Verify listener was added
-      const addCallsAfterMount = addSpy.mock.calls.length;
-      expect(addCallsAfterMount).toBeGreaterThan(initialAddCount);
-
-      // Find the keydown listener that was added
-      const keydownAddCalls = addSpy.mock.calls.filter((call) => call[0] === 'keydown');
-      expect(keydownAddCalls.length).toBeGreaterThan(0);
+      // Verify listener was added and capture handler reference
+      const handlers = getKeydownListenerHandlers(addSpy, removeSpy);
+      expect(handlers.added.length).toBeGreaterThan(0);
+      const addedHandler = handlers.added[0];
 
       unmount();
 
-      // Verify listener was removed
-      const keydownRemoveCalls = removeSpy.mock.calls.filter((call) => call[0] === 'keydown');
-      expect(keydownRemoveCalls.length).toBe(keydownAddCalls.length);
+      // Verify listener was removed with same handler reference
+      const handlersAfterUnmount = getKeydownListenerHandlers(addSpy, removeSpy);
+      expect(handlersAfterUnmount.removed.length).toBe(handlers.added.length);
+
+      // Critical: Verify exact handler reference is removed (not a new function)
+      const removedHandler = handlersAfterUnmount.removed[0];
+      expect(removedHandler).toBe(addedHandler);
     });
 
     it('should remove keydown listener when SlashCommandDropdown unmounts', () => {
       const addSpy = vi.spyOn(document, 'addEventListener');
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-      const initialAddCount = addSpy.mock.calls.length;
-
-      // Render and unmount
+      // Render component
       const { unmount } = render(SlashCommandDropdown, {
         visible: true,
         commands: [],
         position: { x: 0, y: 0 }
       });
 
-      // Verify listener was added
-      const addCallsAfterMount = addSpy.mock.calls.length;
-      expect(addCallsAfterMount).toBeGreaterThan(initialAddCount);
-
-      // Find the keydown listener that was added
-      const keydownAddCalls = addSpy.mock.calls.filter((call) => call[0] === 'keydown');
-      expect(keydownAddCalls.length).toBeGreaterThan(0);
+      // Verify listener was added and capture handler reference
+      const handlers = getKeydownListenerHandlers(addSpy, removeSpy);
+      expect(handlers.added.length).toBeGreaterThan(0);
+      const addedHandler = handlers.added[0];
 
       unmount();
 
-      // Verify listener was removed
-      const keydownRemoveCalls = removeSpy.mock.calls.filter((call) => call[0] === 'keydown');
-      expect(keydownRemoveCalls.length).toBe(keydownAddCalls.length);
+      // Verify listener was removed with same handler reference
+      const handlersAfterUnmount = getKeydownListenerHandlers(addSpy, removeSpy);
+      expect(handlersAfterUnmount.removed.length).toBe(handlers.added.length);
+
+      // Critical: Verify exact handler reference is removed (not a new function)
+      const removedHandler = handlersAfterUnmount.removed[0];
+      expect(removedHandler).toBe(addedHandler);
     });
 
     it('should not accumulate listeners over multiple mount/unmount cycles', () => {
@@ -98,7 +166,8 @@ describe('Event Listener Memory Leak Detection', () => {
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
       const cycles = 10;
-      const initialAddCount = addSpy.mock.calls.length;
+      const initialAdds = addSpy.mock.calls.length;
+      const initialRemoves = removeSpy.mock.calls.length;
 
       // Mount and unmount multiple times
       for (let i = 0; i < cycles; i++) {
@@ -110,20 +179,20 @@ describe('Event Listener Memory Leak Detection', () => {
         unmount();
       }
 
-      // Calculate keydown listener adds and removes
-      const keydownAddCalls =
-        addSpy.mock.calls.filter((call) => call[0] === 'keydown').length - initialAddCount;
-
-      const keydownRemoveCalls = removeSpy.mock.calls.filter(
-        (call) => call[0] === 'keydown'
-      ).length;
+      // Use standard measurement pattern
+      const delta = measureListenerDelta(addSpy, removeSpy, initialAdds, initialRemoves);
 
       // All added listeners should have been removed
-      expect(keydownRemoveCalls).toBe(keydownAddCalls);
-      expect(keydownAddCalls).toBe(cycles);
+      expect(delta.removed).toBe(delta.added);
+      expect(delta.added).toBe(cycles);
+      expect(delta.balance).toBe(0);
     });
 
-    it('should cleanup listeners even if error during unmount', () => {
+    it('should cleanup listeners during normal unmount lifecycle', () => {
+      // Note: This test verifies normal cleanup behavior. Svelte's onDestroy
+      // cleanup is guaranteed to run even if user code throws errors, making
+      // explicit error injection testing unnecessary and potentially fragile.
+
       const addSpy = vi.spyOn(document, 'addEventListener');
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
@@ -134,17 +203,16 @@ describe('Event Listener Memory Leak Detection', () => {
         position: { x: 0, y: 0 }
       });
 
-      // Capture the handler that was added
-      const keydownAddCalls = addSpy.mock.calls.filter((call) => call[0] === 'keydown');
-      expect(keydownAddCalls.length).toBeGreaterThan(0);
+      // Verify listener was added
+      const countsBeforeUnmount = getKeydownListenerCounts(addSpy, removeSpy);
+      expect(countsBeforeUnmount.added).toBeGreaterThan(0);
 
-      // Standard unmount - Svelte's onDestroy cleanup should run
-      // even if user code has errors
+      // Standard unmount - Svelte's onDestroy cleanup runs reliably
       unmount();
 
-      // Verify cleanup happened (resilient to errors)
-      const keydownRemoveCalls = removeSpy.mock.calls.filter((call) => call[0] === 'keydown');
-      expect(keydownRemoveCalls.length).toBe(keydownAddCalls.length);
+      // Verify cleanup happened
+      const countsAfterUnmount = getKeydownListenerCounts(addSpy, removeSpy);
+      expect(countsAfterUnmount.balance).toBe(0);
     });
   });
 
@@ -158,7 +226,8 @@ describe('Event Listener Memory Leak Detection', () => {
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
       const cycles = 100;
-      const initialKeydownCount = addSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
+      const initialAdds = addSpy.mock.calls.length;
+      const initialRemoves = removeSpy.mock.calls.length;
 
       // Rapid mount/unmount cycles
       for (let i = 0; i < cycles; i++) {
@@ -170,23 +239,21 @@ describe('Event Listener Memory Leak Detection', () => {
         unmount();
       }
 
+      // Use standard measurement pattern
+      const delta = measureListenerDelta(addSpy, removeSpy, initialAdds, initialRemoves);
+
       // Verify all listeners removed
-      const addedKeydownCount =
-        addSpy.mock.calls.filter((call) => call[0] === 'keydown').length - initialKeydownCount;
-
-      const removedKeydownCount = removeSpy.mock.calls.filter(
-        (call) => call[0] === 'keydown'
-      ).length;
-
-      expect(removedKeydownCount).toBe(addedKeydownCount);
-      expect(addedKeydownCount).toBe(cycles);
+      expect(delta.removed).toBe(delta.added);
+      expect(delta.added).toBe(cycles);
+      expect(delta.balance).toBe(0);
     });
 
     it('should return listener count to baseline after rapid operations', () => {
       const addSpy = vi.spyOn(document, 'addEventListener');
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-      const baseline = addSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
+      const initialAdds = addSpy.mock.calls.length;
+      const initialRemoves = removeSpy.mock.calls.length;
 
       // Perform rapid operations
       for (let i = 0; i < 50; i++) {
@@ -198,21 +265,18 @@ describe('Event Listener Memory Leak Detection', () => {
         unmount();
       }
 
-      // Calculate net listener count change
-      const finalAddCount = addSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
-      const finalRemoveCount = removeSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
-
-      const netChange = finalAddCount - baseline - finalRemoveCount;
+      // Use standard measurement pattern
+      const delta = measureListenerDelta(addSpy, removeSpy, initialAdds, initialRemoves);
 
       // Net change should be 0 (all added listeners were removed)
-      expect(netChange).toBe(0);
+      expect(delta.balance).toBe(0);
+      expect(delta.removed).toBe(delta.added);
     });
 
     it('should maintain acceptable memory usage during rapid operations', () => {
       const addSpy = vi.spyOn(document, 'addEventListener');
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-      // Baseline measurements
       const initialAdds = addSpy.mock.calls.length;
       const initialRemoves = removeSpy.mock.calls.length;
 
@@ -234,19 +298,12 @@ describe('Event Listener Memory Leak Detection', () => {
         unmount2();
       }
 
-      // Verify no listener accumulation
-      const totalRemoves = removeSpy.mock.calls.length - initialRemoves;
+      // Use standard measurement pattern
+      const delta = measureListenerDelta(addSpy, removeSpy, initialAdds, initialRemoves);
 
       // All added listeners should be removed
-      const keydownAdds = addSpy.mock.calls
-        .slice(initialAdds)
-        .filter((call) => call[0] === 'keydown').length;
-      const keydownRemoves = removeSpy.mock.calls
-        .slice(initialRemoves)
-        .filter((call) => call[0] === 'keydown').length;
-
-      expect(keydownRemoves).toBe(keydownAdds);
-      expect(totalRemoves).toBeGreaterThanOrEqual(keydownRemoves);
+      expect(delta.removed).toBe(delta.added);
+      expect(delta.balance).toBe(0);
     });
   });
 
@@ -345,26 +402,24 @@ describe('Event Listener Memory Leak Detection', () => {
       const addSpy = vi.spyOn(document, 'addEventListener');
       const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-      const getListenerBalance = () => {
-        const added = addSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
-        const removed = removeSpy.mock.calls.filter((call) => call[0] === 'keydown').length;
-        return added - removed;
-      };
-
-      const initialBalance = getListenerBalance();
+      const initialBalance = getKeydownListenerCounts(addSpy, removeSpy).balance;
 
       // Create a leak by not unmounting
-      render(NodeAutocomplete, {
+      const { unmount } = render(NodeAutocomplete, {
         visible: true,
         results: [],
         position: { x: 0, y: 0 }
       });
 
-      const balanceWithLeak = getListenerBalance();
+      const balanceWithLeak = getKeydownListenerCounts(addSpy, removeSpy).balance;
       expect(balanceWithLeak).toBeGreaterThan(initialBalance);
 
-      // Clean up properly
-      document.body.innerHTML = '';
+      // Clean up properly - call unmount to remove the listener
+      unmount();
+
+      // Verify cleanup worked - balance should return to initial state
+      const finalBalance = getKeydownListenerCounts(addSpy, removeSpy).balance;
+      expect(finalBalance).toBe(initialBalance);
     });
 
     it('should measure handler count accurately', () => {
