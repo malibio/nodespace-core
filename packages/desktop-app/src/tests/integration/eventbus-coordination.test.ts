@@ -28,36 +28,14 @@ import type {
   NodeUpdatedEvent,
   NodeStatusChangedEvent
 } from '../../lib/services/eventTypes';
-import { isNodeCreatedEvent, isNodeUpdatedEvent } from '../utils/type-guards';
-
-// Helper to create unified Node objects for tests
-function createNode(
-  id: string,
-  content: string,
-  nodeType: string = 'text',
-  parentId: string | null = null,
-  properties: Record<string, unknown> = {},
-  originNodeId?: string | null
-) {
-  const now = new Date().toISOString();
-  return {
-    id,
-    nodeType: nodeType,
-    content,
-    parentId: parentId,
-    originNodeId: originNodeId ?? parentId,
-    beforeSiblingId: null,
-    children: [],
-    createdAt: now,
-    modifiedAt: now,
-    properties
-  };
-}
-
-// Helper to wait for async effects (used by future tests)
-function waitForEffects(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
+import {
+  isNodeCreatedEvent,
+  isNodeUpdatedEvent,
+  isDecorationUpdateNeededEvent,
+  isReferencesUpdateNeededEvent
+} from '../utils/type-guards';
+import { createNode } from '../fixtures/mock-nodes';
+import { waitForEffects } from '../components/svelte-test-utils';
 
 // Timeout constants for async operations
 const ASYNC_HANDLER_TIMEOUT_MS = 10;
@@ -282,14 +260,15 @@ describe('EventBus Multi-Service Coordination', () => {
       // Update node content
       nodeManager.updateNodeContent('node-1', 'New content');
 
-      // Verify decoration update was triggered
+      // Verify decoration update was triggered using type guards
       expect(decorationHandler).toHaveBeenCalled();
-      expect(decorationHandler.mock.calls[0][0]).toMatchObject({
-        type: 'decoration:update-needed',
-        namespace: 'interaction',
-        nodeId: 'node-1',
-        reason: 'content-changed'
-      });
+      const event = decorationHandler.mock.calls[0][0];
+      expect(isDecorationUpdateNeededEvent(event)).toBe(true);
+      if (isDecorationUpdateNeededEvent(event)) {
+        expect(event.nodeId).toBe('node-1');
+        expect(event.reason).toBe('content-changed');
+        expect(event.namespace).toBe('interaction');
+      }
     });
 
     it('should trigger cache invalidation on node deletion', () => {
@@ -360,14 +339,15 @@ describe('EventBus Multi-Service Coordination', () => {
       // Update content - should trigger reference update
       nodeManager.updateNodeContent('node-1', 'Updated content with [[reference]]');
 
-      // Verify reference update event was emitted
+      // Verify reference update event was emitted using type guards
       expect(referenceHandler).toHaveBeenCalled();
-      expect(referenceHandler.mock.calls[0][0]).toMatchObject({
-        type: 'references:update-needed',
-        namespace: 'coordination',
-        nodeId: 'node-1',
-        updateType: 'content'
-      });
+      const event = referenceHandler.mock.calls[0][0];
+      expect(isReferencesUpdateNeededEvent(event)).toBe(true);
+      if (isReferencesUpdateNeededEvent(event)) {
+        expect(event.nodeId).toBe('node-1');
+        expect(event.updateType).toBe('content');
+        expect(event.namespace).toBe('coordination');
+      }
     });
 
     it('should propagate hierarchy changes', () => {
@@ -638,15 +618,14 @@ describe('EventBus Multi-Service Coordination', () => {
         newValue: 'updated'
       });
 
-      await waitForEffects();
-      await new Promise((resolve) => setTimeout(resolve, ASYNC_ERROR_PROPAGATION_TIMEOUT_MS));
+      // Wait for async handlers to complete and errors to propagate
+      await waitForEffects(ASYNC_ERROR_PROPAGATION_TIMEOUT_MS);
 
       // Both handlers should have been called
       expect(asyncErrorHandler).toHaveBeenCalled();
       expect(asyncSuccessHandler).toHaveBeenCalled();
 
       // Async error should have been logged
-      await waitForEffects();
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         'EventBus: Async handler error',
         expect.objectContaining({

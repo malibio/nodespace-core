@@ -21,11 +21,9 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Google Chrome for chrome-devtools MCP
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
+# Install Chromium for chrome-devtools MCP (ARM64 compatible)
+RUN apt-get update && apt-get install -y \
+    chromium-browser \
     && rm -rf /var/lib/apt/lists/*
 
 # Install additional shell utilities for better terminal experience
@@ -59,7 +57,7 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
 # Configure zsh with useful plugins
 RUN sed -i 's/plugins=(git)/plugins=(git rust bun docker zsh-autosuggestions zsh-syntax-highlighting)/' /root/.zshrc \
     && echo 'export PATH="/root/.bun/bin:/root/.cargo/bin:$PATH"' >> /root/.zshrc \
-    && echo 'export CHROME_BIN=/usr/bin/google-chrome-stable' >> /root/.zshrc
+    && echo 'export CHROME_BIN=/usr/bin/chromium-browser' >> /root/.zshrc
 
 # Install Claude Code using the official installer
 RUN curl -fsSL https://claude.ai/install.sh | bash || \
@@ -89,10 +87,10 @@ WORKDIR /workspace
 # Install common Rust tools
 RUN cargo install cargo-watch
 
-# Configure Chrome to run in headless mode for MCP
-ENV CHROME_BIN=/usr/bin/google-chrome-stable
+# Configure Chromium to run in headless mode for MCP
+ENV CHROME_BIN=/usr/bin/chromium-browser
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Create an entrypoint script
 RUN echo '#!/bin/bash\n\
@@ -203,12 +201,12 @@ echo "Available tools: git, rust, bun, claude (~/.local/bin/claude), gh, tmux, z
 echo "Terminal size: ${COLUMNS:-120}x${LINES:-40}"\n\
 echo "Terminal: zsh with Oh My Zsh (tmux available manually)"\n\
 echo ""\n\
-# Verify Chrome installation\n\
-if command -v google-chrome-stable >/dev/null 2>&1; then\n\
-  chrome_version=$(google-chrome-stable --version 2>/dev/null || echo "unknown")\n\
-  echo "✅ Chrome: $chrome_version (for chrome-devtools MCP)"\n\
+# Verify Chromium installation\n\
+if command -v chromium-browser >/dev/null 2>&1; then\n\
+  chrome_version=$(chromium-browser --version 2>/dev/null || echo "unknown")\n\
+  echo "✅ Chromium: $chrome_version (for chrome-devtools MCP)"\n\
 else\n\
-  echo "⚠️  Chrome: Not found - chrome-devtools MCP may not work"\n\
+  echo "⚠️  Chromium: Not found - chrome-devtools MCP may not work"\n\
 fi\n\
 echo ""\n\
 echo "Quick start:"\n\
