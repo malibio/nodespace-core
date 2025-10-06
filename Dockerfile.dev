@@ -94,35 +94,8 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Create an entrypoint script
 RUN echo '#!/bin/bash\n\
-# Configure git to use token for GitHub if GITHUB_TOKEN is set\n\
-if [ -n "$GITHUB_TOKEN" ]; then\n\
-  git config --global credential.helper "!f() { echo username=token; echo password=$GITHUB_TOKEN; }; f"\n\
-  git config --global url.\"https://github.com/\".insteadOf \"git@github.com:\"\n\
-fi\n\
-\n\
-# Clone repository if it doesn'\''t exist\n\
-if [ ! -d "/workspace/nodespace-core" ]; then\n\
-  echo "📥 Cloning nodespace-core repository..."\n\
-  if [ -n "$GITHUB_TOKEN" ]; then\n\
-    git clone https://github.com/malibio/nodespace-core.git /workspace/nodespace-core\n\
-  else\n\
-    echo "⚠️ No GITHUB_TOKEN found. Trying GitHub CLI authentication..."\n\
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then\n\
-      gh repo clone malibio/nodespace-core /workspace/nodespace-core\n\
-    else\n\
-      echo "❌ No GitHub authentication available. Please provide GITHUB_TOKEN or authenticate GitHub CLI."\n\
-    fi\n\
-  fi\n\
-  if [ $? -ne 0 ] || [ ! -d "/workspace/nodespace-core" ]; then\n\
-    echo "❌ Failed to clone repository. Creating empty workspace..."\n\
-    mkdir -p /workspace/nodespace-core\n\
-    cd /workspace/nodespace-core\n\
-    git init\n\
-    echo "# NodeSpace Development Container" > README.md\n\
-    echo "Repository clone failed. You can manually clone or initialize your repo here." >> README.md\n\
-  fi\n\
-fi\n\
-\n\
+# Create workspace directory\n\
+mkdir -p /workspace/nodespace-core\n\
 cd /workspace/nodespace-core\n\
 \n\
 # Set up terminal environment with proper sizing\n\
@@ -203,19 +176,24 @@ echo "Terminal: zsh with Oh My Zsh (tmux available manually)"\n\
 echo ""\n\
 # Verify Chromium installation\n\
 if command -v chromium-browser >/dev/null 2>&1; then\n\
-  chrome_version=$(chromium-browser --version 2>/dev/null || echo "unknown")\n\
-  echo "✅ Chromium: $chrome_version (for chrome-devtools MCP)"\n\
+  chrome_version=$(dpkg -l | grep chromium-browser | awk '\''{print $3}'\'' | head -1)\n\
+  echo "✅ Chromium: Installed (version $chrome_version) - ready for chrome-devtools MCP"\n\
 else\n\
   echo "⚠️  Chromium: Not found - chrome-devtools MCP may not work"\n\
 fi\n\
 echo ""\n\
-echo "Quick start:"\n\
-echo "  git checkout -b feature/container-$(date +%s)"\n\
+echo "First-time setup:"\n\
+echo "  gh auth login                              # Authenticate GitHub"\n\
+echo "  gh repo clone malibio/nodespace-core .     # Clone repository"\n\
+echo "  ~/.local/bin/claude auth login             # Authenticate Claude"\n\
+echo ""\n\
+echo "After setup, quick start:"\n\
+echo "  git checkout -b feature/my-feature"\n\
 echo "  ~/.local/bin/claude"\n\
 echo ""\n\
-echo "If terminal sizing is wrong, use: resize_terminal [cols] [rows]"\n\
-echo "To start tmux manually: tmux new-session -A -s development"\n\
-echo "Multiple containers can run simultaneously with unique branches!"\n\
+echo "Utilities:"\n\
+echo "  resize_terminal [cols] [rows]              # Fix terminal size"\n\
+echo "  tmux new-session -A -s development         # Start tmux (optional)"\n\
 echo ""\n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
