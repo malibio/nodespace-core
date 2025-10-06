@@ -8,23 +8,8 @@
  * - Error handling for failed/async subscribers
  */
 
-// Mock Svelte 5 runes immediately before any imports - using proper type assertions
-(globalThis as Record<string, unknown>).$state = function <T>(initialValue: T): T {
-  if (typeof initialValue !== 'object' || initialValue === null) {
-    return initialValue;
-  }
-  return initialValue;
-};
-
-(globalThis as Record<string, unknown>).$derived = {
-  by: function <T>(getter: () => T): T {
-    return getter();
-  }
-};
-
-(globalThis as Record<string, unknown>).$effect = function (fn: () => void | (() => void)): void {
-  fn();
-};
+// Mock Svelte 5 runes using shared test utility
+import '../setup-svelte-mocks';
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
@@ -43,6 +28,7 @@ import type {
   NodeUpdatedEvent,
   NodeStatusChangedEvent
 } from '../../lib/services/eventTypes';
+import { isNodeCreatedEvent, isNodeUpdatedEvent } from '../utils/type-guards';
 
 // Helper to create unified Node objects for tests
 function createNode(
@@ -68,10 +54,14 @@ function createNode(
   };
 }
 
-// Helper to wait for async effects
+// Helper to wait for async effects (used by future tests)
 function waitForEffects(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// Timeout constants for async operations
+const ASYNC_HANDLER_TIMEOUT_MS = 10;
+const ASYNC_ERROR_PROPAGATION_TIMEOUT_MS = 20;
 
 describe('EventBus Multi-Service Coordination', () => {
   let nodeManager: NodeManager;
@@ -79,10 +69,8 @@ describe('EventBus Multi-Service Coordination', () => {
   let eventLog: NodeSpaceEvent[] = [];
 
   beforeEach(() => {
-    // Clear event log
     eventLog.length = 0;
 
-    // Set up mock events
     mockEvents = {
       focusRequested: vi.fn(),
       hierarchyChanged: vi.fn(),
@@ -90,12 +78,9 @@ describe('EventBus Multi-Service Coordination', () => {
       nodeDeleted: vi.fn()
     };
 
-    // Create service instances
     nodeManager = createReactiveNodeService(mockEvents);
-    // Initialize DecorationCoordinator to set up its event subscriptions
     DecorationCoordinator.getInstance();
 
-    // Reset event bus
     eventBus.reset();
 
     // Set up event logging for testing
@@ -139,23 +124,27 @@ describe('EventBus Multi-Service Coordination', () => {
       expect(handler2).toHaveBeenCalled();
       expect(handler3).toHaveBeenCalled();
 
-      // Verify event content (not just type)
-      const event1 = handler1.mock.calls[0][0] as NodeCreatedEvent;
-      const event2 = handler2.mock.calls[0][0] as NodeCreatedEvent;
-      const event3 = handler3.mock.calls[0][0] as NodeCreatedEvent;
+      // Verify event content using type guards
+      const event1 = handler1.mock.calls[0][0];
+      const event2 = handler2.mock.calls[0][0];
+      const event3 = handler3.mock.calls[0][0];
 
-      // All should receive the same event with correct payload
-      expect(event1.type).toBe('node:created');
-      expect(event1.nodeId).toBe(newNodeId);
-      expect(event1.nodeType).toBe('text');
-      expect(event1.source).toBe('ReactiveNodeService');
-      expect(event1.namespace).toBe('lifecycle');
+      expect(isNodeCreatedEvent(event1)).toBe(true);
+      expect(isNodeCreatedEvent(event2)).toBe(true);
+      expect(isNodeCreatedEvent(event3)).toBe(true);
+
+      if (isNodeCreatedEvent(event1)) {
+        expect(event1.nodeId).toBe(newNodeId);
+        expect(event1.nodeType).toBe('text');
+        expect(event1.source).toBe('ReactiveNodeService');
+        expect(event1.namespace).toBe('lifecycle');
+      }
 
       expect(event2).toEqual(event1);
       expect(event3).toEqual(event1);
     });
 
-    it('should deliver correct filtered events to subscribers', () => {
+    it('should deliver correct filtered events to subscribers (integration with NodeManager)', () => {
       const coordinationHandler = vi.fn();
       const interactionHandler = vi.fn();
       const lifecycleHandler = vi.fn();
@@ -408,7 +397,7 @@ describe('EventBus Multi-Service Coordination', () => {
   // ========================================================================
 
   describe('Event Filtering', () => {
-    it('should filter events by namespace', () => {
+    it('should filter events by namespace (direct emit)', () => {
       const coordinationEvents: NodeSpaceEvent[] = [];
       const interactionEvents: NodeSpaceEvent[] = [];
       const lifecycleEvents: NodeSpaceEvent[] = [];
@@ -570,12 +559,18 @@ describe('EventBus Multi-Service Coordination', () => {
         newValue: 'updated'
       });
 
-      // Verify nodeId filtering
+      // Verify nodeId filtering using type guards
       expect(node1Events.length).toBe(1);
-      expect((node1Events[0] as NodeUpdatedEvent).nodeId).toBe('node-1');
+      expect(isNodeUpdatedEvent(node1Events[0])).toBe(true);
+      if (isNodeUpdatedEvent(node1Events[0])) {
+        expect(node1Events[0].nodeId).toBe('node-1');
+      }
 
       expect(node2Events.length).toBe(1);
-      expect((node2Events[0] as NodeUpdatedEvent).nodeId).toBe('node-2');
+      expect(isNodeUpdatedEvent(node2Events[0])).toBe(true);
+      if (isNodeUpdatedEvent(node2Events[0])) {
+        expect(node2Events[0].nodeId).toBe('node-2');
+      }
     });
   });
 
@@ -626,16 +621,14 @@ describe('EventBus Multi-Service Coordination', () => {
         throw new Error('Async handler failed');
       });
       const asyncSuccessHandler = vi.fn(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, ASYNC_HANDLER_TIMEOUT_MS));
       });
 
       eventBus.subscribe('node:updated', asyncErrorHandler);
       eventBus.subscribe('node:updated', asyncSuccessHandler);
 
-      // Suppress console.error for this test
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      // Emit event
       eventBus.emit<NodeUpdatedEvent>({
         type: 'node:updated',
         namespace: 'lifecycle',
@@ -645,9 +638,8 @@ describe('EventBus Multi-Service Coordination', () => {
         newValue: 'updated'
       });
 
-      // Wait for async handlers to complete
       await waitForEffects();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, ASYNC_ERROR_PROPAGATION_TIMEOUT_MS));
 
       // Both handlers should have been called
       expect(asyncErrorHandler).toHaveBeenCalled();
