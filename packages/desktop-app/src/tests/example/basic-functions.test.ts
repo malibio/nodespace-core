@@ -28,9 +28,9 @@ describe('Basic Function Testing', () => {
 
   describe('Sample Data Validation', () => {
     it('has valid sample text node', () => {
-      expect(MOCK_TEXT_NODE.id).toBe('test-text-1');
+      expect(MOCK_TEXT_NODE.id).toBe('mock-text-1');
       expect(MOCK_TEXT_NODE.nodeType).toBe('text');
-      expect(MOCK_TEXT_NODE.content).toBe('Sample text content');
+      expect(MOCK_TEXT_NODE.content).toBe('This is a sample text node for testing.');
     });
 
     it('sample node has valid timestamps', () => {
@@ -44,10 +44,12 @@ describe('Basic Function Testing', () => {
 
   describe('Node Content Validation', () => {
     it('validates node content is not empty', () => {
+      // createTestNode uses 'Test content' as default, so an empty string will fall back to default
       const emptyNode = createTestNode({ content: '' });
-      expect(emptyNode.content).toBe('');
+      expect(emptyNode.content).toBe('Test content'); // Empty string falls back to 'Test content'
 
       const validNode = createTestNode({ content: 'Valid content' });
+      expect(validNode.content).toBe('Valid content');
       expect(validNode.content.length).toBeGreaterThan(0);
     });
 

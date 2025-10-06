@@ -355,8 +355,12 @@ describe('Node Management Integration Tests', () => {
 
     it('memory usage remains reasonable', () => {
       // This is a simplified check - in real apps you might use memory profiling
+      // Each test starts with a fresh API instance, so create some nodes first
+      const contents = Array.from({ length: 50 }, (_, i) => `Memory test node ${i + 1}`);
+      contents.forEach((content) => api.createNode({ content, nodeType: 'text' }));
+
       const initialNodes = api.getAll().length;
-      expect(initialNodes).toBeGreaterThan(0); // Should have nodes from previous test
+      expect(initialNodes).toBe(50); // Should have the nodes we just created
 
       // Clear the API to verify cleanup
       api.clear();
