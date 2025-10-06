@@ -50,7 +50,8 @@ function createNode(
   content: string,
   nodeType: string = 'text',
   parentId: string | null = null,
-  properties: Record<string, unknown> = {}
+  properties: Record<string, unknown> = {},
+  originNodeId?: string | null
 ) {
   const now = new Date().toISOString();
   return {
@@ -58,7 +59,7 @@ function createNode(
     nodeType: nodeType,
     content,
     parentId: parentId,
-    originNodeId: parentId, // For tests, use parentId as originNodeId
+    originNodeId: originNodeId ?? parentId,
     beforeSiblingId: null,
     children: [],
     createdAt: now,
@@ -130,21 +131,28 @@ describe('EventBus Multi-Service Coordination', () => {
       eventBus.subscribe('node:created', handler2);
       eventBus.subscribe('node:created', handler3);
 
-      // Clear initial setup events
-      eventLog.length = 0;
-
       // Create a new node - this will emit node:created event
-      nodeManager.createNode('root-1', 'Test content');
+      const newNodeId = nodeManager.createNode('root-1', 'Test content');
 
       // All three handlers should have been called
       expect(handler1).toHaveBeenCalled();
       expect(handler2).toHaveBeenCalled();
       expect(handler3).toHaveBeenCalled();
 
-      // All should receive the same event
-      expect(handler1.mock.calls[0][0].type).toBe('node:created');
-      expect(handler2.mock.calls[0][0].type).toBe('node:created');
-      expect(handler3.mock.calls[0][0].type).toBe('node:created');
+      // Verify event content (not just type)
+      const event1 = handler1.mock.calls[0][0] as NodeCreatedEvent;
+      const event2 = handler2.mock.calls[0][0] as NodeCreatedEvent;
+      const event3 = handler3.mock.calls[0][0] as NodeCreatedEvent;
+
+      // All should receive the same event with correct payload
+      expect(event1.type).toBe('node:created');
+      expect(event1.nodeId).toBe(newNodeId);
+      expect(event1.nodeType).toBe('text');
+      expect(event1.source).toBe('ReactiveNodeService');
+      expect(event1.namespace).toBe('lifecycle');
+
+      expect(event2).toEqual(event1);
+      expect(event3).toEqual(event1);
     });
 
     it('should deliver correct filtered events to subscribers', () => {
@@ -163,17 +171,12 @@ describe('EventBus Multi-Service Coordination', () => {
         filter: { namespace: 'lifecycle' }
       });
 
-      // Clear initial setup events
-      eventLog.length = 0;
-
-      // Trigger node update - emits coordination, interaction, and lifecycle events
+      // Initialize node and update content to trigger events
       nodeManager.initializeNodes([createNode('node-1', 'Original')], {
         inheritHeaderLevel: 0,
         expanded: true,
         autoFocus: false
       });
-
-      eventLog.length = 0;
 
       nodeManager.updateNodeContent('node-1', 'Updated content');
 
@@ -214,9 +217,6 @@ describe('EventBus Multi-Service Coordination', () => {
           filter: { namespace: 'interaction' }
         }
       );
-
-      // Clear initial events
-      eventLog.length = 0;
 
       // Emit coordination event
       eventBus.emit<CacheInvalidateEvent>({
@@ -261,10 +261,6 @@ describe('EventBus Multi-Service Coordination', () => {
         wildcardEvents.push(e);
       });
 
-      // Clear initial setup events
-      wildcardEvents.length = 0;
-      eventLog.length = 0;
-
       // Update content - this will emit multiple events
       nodeManager.updateNodeContent('node-1', 'Updated content');
 
@@ -294,8 +290,6 @@ describe('EventBus Multi-Service Coordination', () => {
         autoFocus: false
       });
 
-      eventLog.length = 0;
-
       // Update node content
       nodeManager.updateNodeContent('node-1', 'New content');
 
@@ -323,7 +317,6 @@ describe('EventBus Multi-Service Coordination', () => {
         }
       );
 
-      eventLog.length = 0;
       cacheHandler.mockClear();
 
       // Delete node
@@ -373,7 +366,6 @@ describe('EventBus Multi-Service Coordination', () => {
         autoFocus: false
       });
 
-      eventLog.length = 0;
       referenceHandler.mockClear();
 
       // Update content - should trigger reference update
@@ -400,7 +392,6 @@ describe('EventBus Multi-Service Coordination', () => {
         autoFocus: false
       });
 
-      eventLog.length = 0;
       hierarchyHandler.mockClear();
 
       // Create child node - changes hierarchy
