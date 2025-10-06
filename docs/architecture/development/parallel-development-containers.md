@@ -49,18 +49,16 @@ bun run container:build
 
 ---
 
-## Step 2: Run Your First Container
+## Step 2: First-Time Setup (One-Time Only)
+
+This setup only needs to be done once. After this, all future containers will start pre-authenticated.
+
+**Terminal 1 - Start container:**
 
 ```bash
 # Start a new development container
 bun run container:run
 ```
-
-**What happens:**
-1. Container starts with isolated Ubuntu environment
-2. Automatically clones `nodespace-core` repository inside container
-3. Drops you into Zsh shell with Oh My Zsh
-4. Container gets unique name: `nodespace-dev-[timestamp]`
 
 **You'll see:**
 ```
@@ -70,66 +68,88 @@ Available tools: git, rust, bun, claude (~/.local/bin/claude), gh, tmux, zsh
 Terminal size: 120x40
 Terminal: zsh with Oh My Zsh (tmux available manually)
 
-✅ Chromium: Chromium 131.x.x.x (for chrome-devtools MCP)
+✅ Chromium: Installed (version 1:85.0.4183.83...) - ready for chrome-devtools MCP
 
-Quick start:
-  git checkout -b feature/container-[timestamp]
-  ~/.local/bin/claude
+First-time setup:
+  gh auth login                              # Authenticate GitHub
+  gh repo clone malibio/nodespace-core .     # Clone repository
+  ~/.local/bin/claude auth login             # Authenticate Claude
 
 root@nodespace-dev-[timestamp]:/workspace/nodespace-core#
 ```
 
----
-
-## Step 3: Authenticate Claude Code (One-Time Setup)
-
-**Inside the container**, authenticate Claude Code:
+**Inside Terminal 1 - Authenticate:**
 
 ```bash
-# Authenticate with Claude
-~/.local/bin/claude auth login
+# 1. Authenticate GitHub
+gh auth login
+# Follow the prompts
 
-# Follow the prompts to complete authentication
+# 2. Clone the repository
+gh repo clone malibio/nodespace-core .
+
+# 3. Authenticate Claude (this will launch Claude Code)
+~/.local/bin/claude auth login
+# Complete authentication, then exit Claude
+
+# 4. KEEP CONTAINER RUNNING - Don't exit yet!
 ```
 
-**After authentication**, you can save this state:
+**Terminal 2 - Save the authenticated container (while Terminal 1 is still running):**
 
 ```bash
-# Exit the container (Ctrl+D or type exit)
-exit
-
-# Save the authenticated container as a new image
+# While the container is still running in Terminal 1, save it:
 bun run container:save
 ```
 
-**Update the default image** in `scripts/container.ts`:
-- Change line 13 from: `const CONTAINER_IMAGE = "claude-code-dev:authenticated";`
-- To use the saved image name
-
-Now all future containers will start pre-authenticated!
-
----
-
-## Step 4: Start Working on a Feature
-
-**Inside the container:**
+**Terminal 1 - Now you can exit:**
 
 ```bash
-# 1. Create your feature branch
-git checkout -b feature/my-awesome-feature
-
-# 2. Start Claude Code
-~/.local/bin/claude
-
-# 3. Now you can use all Claude Code features including:
-#    - chrome-devtools MCP (Chromium is installed and configured)
-#    - Status line (Zsh is fully compatible)
-#    - All normal development tools
+# Exit the container
+exit
 ```
+
+Now all future containers will start pre-authenticated! The script already uses `claude-code-dev:authenticated` by default.
 
 ---
 
-## Step 5: Parallel Development (Multiple Containers)
+## Step 3: Regular Usage (After First-Time Setup)
+
+Every future session is simple - just start and work:
+
+```bash
+# Start a new container (already authenticated!)
+bun run container:run
+
+# Inside container - repository is already cloned, auth is done
+cd nodespace-core  # or it should already be your working directory
+git pull  # Get latest changes
+
+# Create your feature branch
+git checkout -b feature/my-awesome-feature
+
+# Start working with Claude Code
+~/.local/bin/claude
+
+# Work on your feature...
+# When done, push your changes
+git push origin feature/my-awesome-feature
+
+# Exit container
+exit
+```
+
+**Each new container:**
+- ✅ Already has GitHub authentication
+- ✅ Already has Claude authentication
+- ✅ Already has the repository cloned
+- ✅ Chromium ready for chrome-devtools MCP
+- ✅ Fresh, isolated environment
+- ❌ Your local changes from previous session are gone (unless you pushed them)
+
+---
+
+## Step 4: Parallel Development (Multiple Containers)
 
 To work on multiple features simultaneously:
 
