@@ -150,6 +150,42 @@ After:  # Header|Other Content (### syntax automatically stripped)
 
 ## Cursor Positioning
 
+### Coordinate System and Navigation
+
+#### Viewport-Relative Positioning (2024 Enhancement)
+
+The cursor positioning system uses **viewport-relative coordinates** for consistent horizontal position tracking across nodes with different properties:
+
+- **Reference Frame**: Coordinates measured from viewport left edge + horizontal scroll offset
+- **Formula**: `cursorRect.left + window.scrollX`
+- **Benefits**:
+  - Maintains visual cursor position when navigating between headers (H1, H2) and regular text
+  - Handles nodes at different depth levels correctly
+  - Accounts for horizontal scrolling
+  - Provides stable positioning across multi-line content
+
+**Previous Issue**: Element-relative coordinates (`cursorRect.left - elementRect.left`) caused cursor drift because each node had a different left edge reference point.
+
+**Implementation**:
+- `getCurrentPixelOffset()`: Returns viewport-relative cursor position
+- `setCursorAtPixelOffset()`: Positions cursor using viewport coordinates
+- Both methods account for `window.scrollX` to handle horizontal scroll
+
+#### Arrow Key Navigation
+
+When navigating with arrow keys (up/down), the system:
+
+1. **Captures pixel offset** from current cursor position (viewport-relative)
+2. **Stores offset** in `lastKnownPixelOffset` for cross-node navigation
+3. **Finds target line** in destination node
+4. **Positions cursor** at closest character to the stored pixel offset
+5. **Uses linear search** through character positions for accuracy
+
+This ensures cursor maintains its horizontal position when moving between:
+- Headers with different font sizes (H1, H2, H3)
+- Nodes at different depth levels
+- Multi-line content blocks
+
 ### Smart Positioning After Operations
 
 #### After Inherited Syntax
@@ -165,6 +201,49 @@ Complex format: # **|cursor after all opening markers
 Before merge: Content A| + Content B
 After merge:  Content A|Content B (cursor at junction point)
 ```
+
+#### Shift+Enter Ready-to-Type Positioning (2024 Enhancement)
+
+When using Shift+Enter to create a new line within a node, the cursor is automatically positioned after any syntax markers to enable immediate typing:
+
+**Header Syntax**:
+```
+Before: ## Header Te|xt
+Press Shift+Enter
+After:  ## Header Te
+        ## |xt (cursor after "## ", ready to type)
+```
+
+**Task Checkbox Syntax**:
+```
+Before: [ ] Task ite|m
+Press Shift+Enter
+After:  [ ] Task ite
+        [ ] |m (cursor after "[ ] ", ready to type)
+```
+
+**Quote Syntax**:
+```
+Before: > Quote te|xt
+Press Shift+Enter
+After:  > Quote te
+        > |xt (cursor after "> ", ready to type)
+```
+
+**Plain Text** (no syntax):
+```
+Before: Plain te|xt
+Press Shift+Enter
+After:  Plain te
+        |xt (cursor at line start, no syntax to skip)
+```
+
+**Implementation**: The `positionCursorAfterSyntax()` method:
+1. Detects syntax patterns using regex (headers, tasks, quotes)
+2. Calculates syntax length (e.g., "## " = 3 characters)
+3. Uses TreeWalker to navigate text nodes
+4. Positions cursor after the syntax markers
+5. Falls back gracefully for plain text or edge cases
 
 ### Positioning Algorithm
 
@@ -187,6 +266,14 @@ After merge:  Content A|Content B (cursor at junction point)
 
 - **`smartTextSplit()`**: Formatting-aware content splitting
 - **`handleKeyDown()`**: Cursor position detection and behavior routing
+- **`getCurrentPixelOffset()`**: Returns viewport-relative cursor position (+ scroll offset)
+- **`positionCursorAfterSyntax()`**: Positions cursor after markdown syntax on Shift+Enter
+
+#### BaseNodeViewer
+
+- **`setCursorAtPixelOffset()`**: Positions cursor in node using viewport-relative coordinates
+- **Arrow navigation handling**: Maintains pixel offset across node transitions
+- **Defensive fallback**: Handles empty text nodes gracefully
 
 #### ReactiveNodeManager
 
@@ -273,6 +360,8 @@ After:  # **__Bold underline te__**
 3. **Complex hierarchy transfers**: Validate depth preservation
 4. **Cursor positioning**: Ensure optimal placement after operations
 5. **State synchronization**: Check expanded/collapsed consistency
+6. **Arrow navigation**: Verify horizontal position maintained across nodes (2024)
+7. **Shift+Enter syntax positioning**: Confirm cursor placement after syntax markers (2024)
 
 ### Test Cases
 
@@ -293,7 +382,19 @@ testBackspaceDepthPreservation();
 testCollapsedStateSynchronization();
 testAutoExpansion();
 testReactivityTriggers();
+
+// Cursor positioning (2024)
+testViewportRelativeCoordinates();
+testScrollOffsetHandling();
+testArrowNavigationPixelOffset();
+testShiftEnterHeaderSyntax();
+testShiftEnterTaskCheckboxSyntax();
+testShiftEnterQuoteSyntax();
+testShiftEnterPlainText();
+testEmptyLineHandling();
 ```
+
+**Test Coverage**: See `src/tests/integration/cursor-positioning.test.ts` for comprehensive cursor positioning tests (added December 2024).
 
 ---
 
