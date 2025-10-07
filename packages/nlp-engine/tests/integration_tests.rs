@@ -1,7 +1,6 @@
 /// Integration tests for the embedding service
 /// These tests require the bge-small-en-v1.5 model to be downloaded
 /// See packages/nlp-engine/models/README.md for download instructions
-
 #[cfg(all(test, feature = "embedding-service"))]
 mod integration_tests {
     use nodespace_nlp_engine::{EmbeddingConfig, EmbeddingService};

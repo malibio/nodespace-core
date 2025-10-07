@@ -29,9 +29,7 @@ impl EmbeddingService {
     /// Create a new embedding service with the given configuration
     pub fn new(config: EmbeddingConfig) -> Result<Self> {
         // Validate config
-        config
-            .validate()
-            .map_err(|e| EmbeddingError::ConfigError(e))?;
+        config.validate().map_err(EmbeddingError::ConfigError)?;
 
         #[cfg(feature = "embedding-service")]
         let device = {

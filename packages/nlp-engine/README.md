@@ -103,25 +103,35 @@ service.initialize().await?;
 
 ### Directory Structure
 
+Models are stored in the centralized NodeSpace data directory (same pattern as database):
+
 ```
-packages/nlp-engine/
+~/.nodespace/
+├── database/
+│   └── nodespace.db          # Database location
 └── models/
-    └── bge-small-en-v1.5/
-        ├── model.onnx       # ONNX model file
-        └── tokenizer.json   # Tokenizer configuration
+    └── BAAI-bge-small-en-v1.5/   # Model location
+        ├── model.onnx
+        └── tokenizer.json
 ```
 
 ### Downloading the Model
 
-1. **Install huggingface-hub CLI**:
+1. **Install huggingface-hub CLI** (developers only):
    ```bash
    pip install huggingface-hub
    ```
 
-2. **Download model files**:
+2. **Download model files to ~/.nodespace/models/**:
    ```bash
-   huggingface-cli download BAAI/bge-small-en-v1.5 --local-dir packages/nlp-engine/models/bge-small-en-v1.5
+   # Create directory
+   mkdir -p ~/.nodespace/models
+
+   # Download model
+   huggingface-cli download BAAI/bge-small-en-v1.5 --local-dir ~/.nodespace/models/BAAI-bge-small-en-v1.5
    ```
+
+**Note for end users**: The model will be bundled with the application. Manual download is only needed for development.
 
 3. **Convert to ONNX** (if not already in ONNX format):
    ```python

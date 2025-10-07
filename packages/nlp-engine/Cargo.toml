@@ -28,6 +28,9 @@ thiserror = { workspace = true }
 # Logging
 tracing = "0.1"
 
+# Path utilities
+dirs = "5.0"
+
 [dev-dependencies]
 tokio-test = { workspace = true }
 criterion = { workspace = true }

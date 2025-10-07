@@ -1,12 +1,13 @@
 # Model Files Directory
 
-This directory contains bundled ONNX models for the NodeSpace NLP Engine.
+**Note**: This directory is for documentation only. Models are stored in the centralized `~/.nodespace/models/` directory.
 
 ## Required Model: bge-small-en-v1.5
 
-The embedding service requires the `bge-small-en-v1.5` model in ONNX format.
+The embedding service requires the `bge-small-en-v1.5` model in ONNX format at:
+- **Location**: `~/.nodespace/models/BAAI-bge-small-en-v1.5/`
 
-### Download Instructions
+### Download Instructions (Developers Only)
 
 #### Option 1: Using huggingface-hub CLI (Recommended)
 
@@ -14,9 +15,11 @@ The embedding service requires the `bge-small-en-v1.5` model in ONNX format.
 # Install huggingface-hub
 pip install huggingface-hub
 
-# Download model files to this directory
-cd packages/nlp-engine/models
-huggingface-cli download BAAI/bge-small-en-v1.5 --local-dir bge-small-en-v1.5
+# Create directory
+mkdir -p ~/.nodespace/models
+
+# Download model files to centralized location
+huggingface-cli download BAAI/bge-small-en-v1.5 --local-dir ~/.nodespace/models/BAAI-bge-small-en-v1.5
 ```
 
 #### Option 2: Convert from PyTorch to ONNX
@@ -49,13 +52,14 @@ EOF
 After downloading, you should have:
 
 ```
-models/
-└── bge-small-en-v1.5/
-    ├── model.onnx          # ONNX model file (~130MB)
-    ├── tokenizer.json      # Tokenizer configuration
-    ├── tokenizer_config.json
-    ├── special_tokens_map.json
-    └── vocab.txt
+~/.nodespace/
+└── models/
+    └── BAAI-bge-small-en-v1.5/      # Note: "/" replaced with "-"
+        ├── model.onnx               # ONNX model file (~130MB)
+        ├── tokenizer.json           # Tokenizer configuration
+        ├── tokenizer_config.json
+        ├── special_tokens_map.json
+        └── vocab.txt
 ```
 
 **Minimum required files:**
@@ -67,7 +71,7 @@ models/
 After downloading, verify the files exist:
 
 ```bash
-ls -lh bge-small-en-v1.5/
+ls -lh ~/.nodespace/models/BAAI-bge-small-en-v1.5/
 ```
 
 You should see `model.onnx` (approximately 130MB) and `tokenizer.json`.

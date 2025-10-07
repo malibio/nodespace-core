@@ -34,7 +34,17 @@ impl Default for EmbeddingConfig {
 }
 
 impl EmbeddingConfig {
-    /// Get the model path, resolving it relative to the executable if needed
+    /// Get the model path, resolving it from ~/.nodespace/models/
+    ///
+    /// Uses centralized data directory pattern (same as database):
+    /// - macOS/Linux: ~/.nodespace/models/bge-small-en-v1.5/
+    /// - Windows: %USERPROFILE%\.nodespace\models\bge-small-en-v1.5\
+    ///
+    /// This allows:
+    /// - Consistent location with database (~/.nodespace/database/)
+    /// - Easy version updates without app reinstall
+    /// - User-friendly management of data
+    /// - Shared models across app versions
     pub fn resolve_model_path(&self) -> Result<PathBuf, std::io::Error> {
         if let Some(path) = &self.model_path {
             if path.exists() {
@@ -42,35 +52,30 @@ impl EmbeddingConfig {
             }
         }
 
-        // Try to find bundled model relative to executable
-        let exe_path = std::env::current_exe()?;
-        let exe_dir = exe_path.parent().ok_or_else(|| {
+        // Use centralized ~/.nodespace/models/ directory
+        let home_dir = dirs::home_dir().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                "Cannot determine executable directory",
+                "Cannot determine home directory",
             )
         })?;
 
-        // Try common bundled locations
-        let mut possible_paths = vec![
-            exe_dir.join("models").join("bge-small-en-v1.5"),
-            exe_dir.join("..").join("models").join("bge-small-en-v1.5"),
-        ];
+        let model_path = home_dir
+            .join(".nodespace")
+            .join("models")
+            .join(self.model_name.replace('/', "-")); // BAAI/bge-small-en-v1.5 → BAAI-bge-small-en-v1.5
 
-        if let Some(parent) = exe_dir.parent() {
-            possible_paths.push(parent.join("models").join("bge-small-en-v1.5"));
+        if model_path.exists() {
+            Ok(model_path)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "Model not found at {:?}. Please install model to ~/.nodespace/models/",
+                    model_path
+                ),
+            ))
         }
-
-        for path in possible_paths {
-            if path.exists() {
-                return Ok(path);
-            }
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Model not found for {}", self.model_name),
-        ))
     }
 
     /// Validate configuration
