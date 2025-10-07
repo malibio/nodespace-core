@@ -140,6 +140,7 @@
 
   // Track structural changes (parentId, beforeSiblingId) and persist to database
   // This is critical for operations like node deletion that reassign children
+  // Using $effect.pre to ensure this runs BEFORE the deletion watcher
   let previousStructure = new Map<
     string,
     { parentId: string | null; beforeSiblingId: string | null }
@@ -149,7 +150,7 @@
   // This is a Promise that resolves when all pending structural updates complete
   let pendingStructuralUpdatesPromise: Promise<void> | null = null;
 
-  $effect(() => {
+  $effect.pre(() => {
     if (!parentId) return;
 
     const visibleNodes = nodeManager.visibleNodes;
