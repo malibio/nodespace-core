@@ -754,13 +754,43 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         searchNode = parentId ?? null;
       }
 
+      // Find existing children of the new parent to append after them
+      const existingChildren = Object.values(_nodes)
+        .filter((n) => n.parentId === newParentForChildren && !currentChildren.includes(n.id))
+        .map((n) => n.id);
+
+      let lastSiblingId: string | null = null;
+      if (existingChildren.length > 0) {
+        // Get sorted children to find the last one
+        const sortedChildren = sortChildrenByBeforeSiblingId(
+          existingChildren,
+          newParentForChildren
+        );
+        lastSiblingId = sortedChildren[sortedChildren.length - 1];
+      }
+
+      // Find the first child in the deleted node's children (the one with beforeSiblingId pointing outside or null)
+      const sortedDeletedChildren = sortChildrenByBeforeSiblingId(currentChildren, currentNodeId);
+      const firstChildId = sortedDeletedChildren[0];
+
+      // Process each child
       for (const childId of currentChildren) {
         const child = _nodes[childId];
         if (child) {
-          _nodes[childId] = {
-            ...child,
+          // Only update the first child's beforeSiblingId to append after existing children
+          // All other children keep their existing beforeSiblingId to maintain their chain
+          const updates: Partial<typeof child> = {
             parentId: newParentForChildren,
             modifiedAt: new Date().toISOString()
+          };
+
+          if (childId === firstChildId) {
+            updates.beforeSiblingId = lastSiblingId;
+          }
+
+          _nodes[childId] = {
+            ...child,
+            ...updates
           };
 
           // Update depth: children maintain their relative position in the outline
