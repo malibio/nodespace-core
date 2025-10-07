@@ -9,12 +9,19 @@
  *
  * Usage:
  * ```typescript
- * import { queueDatabaseWrite } from '$lib/utils/databaseWriteQueue';
+ * import { queueDatabaseWrite, getQueueDepth } from '$lib/utils/databaseWriteQueue';
  *
+ * // Queue a database operation
  * await queueDatabaseWrite(() => databaseService.updateNode(nodeId, updates));
+ *
+ * // Monitor queue depth
+ * const depth = getQueueDepth();
  * ```
+ *
+ * @module databaseWriteQueue
  */
 
+// Module-level state
 let pendingDatabaseWritePromise: Promise<void> | null = null;
 let queueDepth = 0;
 
@@ -81,4 +88,20 @@ export async function queueDatabaseWrite<T>(operation: () => Promise<T>): Promis
  */
 export function getQueueDepth(): number {
   return queueDepth;
+}
+
+/**
+ * Reset queue state for testing purposes only
+ * This function should only be called in test environments to reset module-level state
+ * between test runs, ensuring test isolation.
+ *
+ * @throws Error if called outside of test environment
+ * @internal
+ */
+export function __resetQueueForTesting(): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('__resetQueueForTesting() can only be called in test environment');
+  }
+  pendingDatabaseWritePromise = null;
+  queueDepth = 0;
 }
