@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/svelte';
+import { render } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { tick } from 'svelte';
 import BaseNode from '$lib/design/components/base-node.svelte';
@@ -82,21 +82,6 @@ function getCursorPixelPosition(): number {
 
   const rect = cursorRange.getBoundingClientRect();
   return rect.left + window.scrollX;
-}
-
-/**
- * Helper to get cursor text offset from start of element
- */
-function getCursorTextOffset(element: HTMLElement): number {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return 0;
-
-  const range = selection.getRangeAt(0);
-  const preCaretRange = range.cloneRange();
-  preCaretRange.selectNodeContents(element);
-  preCaretRange.setEnd(range.startContainer, range.startOffset);
-
-  return preCaretRange.toString().length;
 }
 
 describe('Cursor Positioning', () => {
