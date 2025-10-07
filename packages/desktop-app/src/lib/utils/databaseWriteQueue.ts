@@ -4,6 +4,9 @@
  * SQLite only allows one write transaction at a time. This queue serializes
  * all database write operations to prevent concurrent access errors.
  *
+ * IMPORTANT: This uses module-level state intentionally.
+ * SQLite's write lock is process-global, so a singleton queue is correct.
+ *
  * Usage:
  * ```typescript
  * import { queueDatabaseWrite } from '$lib/utils/databaseWriteQueue';
@@ -14,6 +17,12 @@
 
 let pendingDatabaseWritePromise: Promise<void> | null = null;
 let queueDepth = 0;
+
+/**
+ * Threshold for warning about high queue depth
+ * When queue depth exceeds this value, a console warning is emitted
+ */
+const QUEUE_DEPTH_WARNING_THRESHOLD = 10;
 
 /**
  * Queue a database write operation to ensure it doesn't overlap with other writes
@@ -27,8 +36,10 @@ export async function queueDatabaseWrite<T>(operation: () => Promise<T>): Promis
 
   // Track queue depth for monitoring
   queueDepth++;
-  if (queueDepth > 10) {
-    console.warn('[DatabaseWriteQueue] High queue depth detected:', queueDepth);
+  if (queueDepth > QUEUE_DEPTH_WARNING_THRESHOLD) {
+    console.warn(
+      `[DatabaseWriteQueue] High queue depth detected: ${queueDepth} (threshold: ${QUEUE_DEPTH_WARNING_THRESHOLD})`
+    );
   }
 
   // Create a new promise that waits for the previous operation before running ours
@@ -42,7 +53,8 @@ export async function queueDatabaseWrite<T>(operation: () => Promise<T>): Promis
     try {
       await previousPromise;
     } catch {
-      // Ignore errors from previous operations
+      // Ignore errors from previous operations - they're handled by their own callers
+      // We only care that the operation completed (successfully or not) before we proceed
     }
   }
 
