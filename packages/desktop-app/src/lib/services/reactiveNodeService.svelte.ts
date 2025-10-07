@@ -712,7 +712,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     if (!currentNode || !previousNode) return;
 
-    // const isChildToParent = currentNode.parentId === previousNodeId;
     const cleanedContent = stripFormattingSyntax(currentNode.content);
     const combinedContent = previousNode.content + cleanedContent;
     const mergePosition = previousNode.content.length;
@@ -724,39 +723,48 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     };
     _uiState[previousNodeId] = { ..._uiState[previousNodeId], autoFocus: false };
 
-    // Handle child promotion if needed
+    // Handle child promotion: children shift up while maintaining their level
+    // Get all children of the node being deleted
     const currentChildren = Object.values(_nodes)
       .filter((n) => n.parentId === currentNodeId)
       .map((n) => n.id);
 
-    // Determine where children should go:
-    // - If nodes are at same depth/level, transfer to target (previousNode)
-    // - If there's a depth mismatch, promote to source's parent
-    const currentUIState = _uiState[currentNodeId];
-    const previousUIState = _uiState[previousNodeId];
-    const sameDepthLevel = currentUIState?.depth === previousUIState?.depth;
+    if (currentChildren.length > 0) {
+      // Determine where children should go when node is deleted:
+      // - If merging siblings (same parent): children transfer to the previous node
+      // - If merging into parent: children still transfer to the target node
+      // In both cases: children shift up one level in hierarchy
+      const areSiblings = currentNode.parentId === previousNode.parentId;
+      const newParentForChildren = areSiblings ? previousNodeId : currentNode.parentId;
 
-    const newParentForChildren = sameDepthLevel ? previousNodeId : currentNode.parentId;
+      for (const childId of currentChildren) {
+        const child = _nodes[childId];
+        if (child) {
+          _nodes[childId] = {
+            ...child,
+            parentId: newParentForChildren,
+            modifiedAt: new Date().toISOString()
+          };
 
-    for (const childId of currentChildren) {
-      const child = _nodes[childId];
-      if (child) {
-        _nodes[childId] = {
-          ...child,
-          parentId: newParentForChildren,
-          modifiedAt: new Date().toISOString()
-        };
+          // Update depth: children shift up to maintain their position
+          // Calculate target depth based on new parent
+          const currentChildDepth = _uiState[childId]?.depth ?? 0;
+          const targetDepth = newParentForChildren
+            ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
+            : 0;
 
-        // Update depth based on new parent
-        const newParentUIState = newParentForChildren ? _uiState[newParentForChildren] : null;
-        const newDepth = newParentUIState ? newParentUIState.depth + 1 : 0;
-        _uiState[childId] = {
-          ..._uiState[childId],
-          depth: newDepth
-        };
+          // Preserve depth: never increase, only maintain or decrease
+          // This ensures nodes shift UP, not down
+          const newDepth = Math.min(currentChildDepth, targetDepth);
 
-        // Recursively update descendant depths
-        updateDescendantDepths(childId);
+          _uiState[childId] = {
+            ..._uiState[childId],
+            depth: newDepth
+          };
+
+          // Recursively update descendant depths
+          updateDescendantDepths(childId);
+        }
       }
     }
 
@@ -771,9 +779,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds.splice(rootIndex, 1);
     }
 
-    // Invalidate sorted children cache for parent (node removed, children promoted)
+    // Invalidate sorted children cache for both old parent and new parent
     invalidateSortedChildrenCache(currentNode.parentId);
-    // Also invalidate cache for the deleted node itself (in case it's still referenced)
     invalidateSortedChildrenCache(currentNodeId);
 
     clearAllAutoFocus();
