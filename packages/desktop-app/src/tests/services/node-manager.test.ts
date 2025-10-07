@@ -251,6 +251,98 @@ describe('NodeManager', () => {
       expect(realtimeAfter?.content).toBe('Node C (target)Source Node');
     });
 
+    test('combineNodes maintains sibling chain when reassigning children', () => {
+      // Test that children's beforeSiblingId is properly updated when moved to new parent
+      // to avoid "multiple first children" corruption
+      //
+      // Structure:
+      // Parent 1
+      //   ├── Existing Child 1
+      //   ├── Existing Child 2
+      //   └── Existing Child 3
+      // Parent 2 ← will be deleted
+      //   ├── Moving Child 1
+      //   └── Moving Child 2
+      //
+      // After deleting Parent 2 (merged into Parent 1's child), Moving Children should:
+      // - Have correct parentId
+      // - Have proper beforeSiblingId chain (Moving Child 1 points to Existing Child 3)
+      // - Moving Child 2 keeps its beforeSiblingId pointing to Moving Child 1
+
+      const testNodes = [
+        createTestNode({ id: 'parent1', content: 'Parent 1', beforeSiblingId: null }),
+        createTestNode({
+          id: 'existing1',
+          content: 'Existing Child 1',
+          parentId: 'parent1',
+          beforeSiblingId: null
+        }),
+        createTestNode({
+          id: 'existing2',
+          content: 'Existing Child 2',
+          parentId: 'parent1',
+          beforeSiblingId: 'existing1'
+        }),
+        createTestNode({
+          id: 'existing3',
+          content: 'Existing Child 3',
+          parentId: 'parent1',
+          beforeSiblingId: 'existing2'
+        }),
+        createTestNode({
+          id: 'deepchild',
+          content: 'Deep Child',
+          parentId: 'existing1',
+          beforeSiblingId: null
+        }),
+        createTestNode({ id: 'parent2', content: 'Parent 2', beforeSiblingId: 'parent1' }),
+        createTestNode({
+          id: 'moving1',
+          content: 'Moving Child 1',
+          parentId: 'parent2',
+          beforeSiblingId: null
+        }),
+        createTestNode({
+          id: 'moving2',
+          content: 'Moving Child 2',
+          parentId: 'parent2',
+          beforeSiblingId: 'moving1'
+        })
+      ];
+
+      nodeManager.initializeNodes(testNodes, {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0
+      });
+
+      // Merge parent2 into deepchild (cross-depth merge)
+      // Children of parent2 should become children of parent1 (nearest ancestor at same depth)
+      nodeManager.combineNodes('parent2', 'deepchild');
+
+      // Verify children were reassigned to correct parent
+      const moving1After = nodeManager.findNode('moving1');
+      const moving2After = nodeManager.findNode('moving2');
+      expect(moving1After?.parentId).toBe('parent1');
+      expect(moving2After?.parentId).toBe('parent1');
+
+      // Verify sibling chain integrity:
+      // - moving1 should point to existing3 (last existing child)
+      // - moving2 should still point to moving1 (maintaining internal chain)
+      expect(moving1After?.beforeSiblingId).toBe('existing3');
+      expect(moving2After?.beforeSiblingId).toBe('moving1');
+
+      // Verify no duplicate first children (no null beforeSiblingId except for first)
+      const parent1Children = [
+        moving1After,
+        moving2After,
+        ...testNodes.slice(1, 4).map((n) => nodeManager.findNode(n.id))
+      ].filter((n) => n?.parentId === 'parent1');
+      const firstChildren = parent1Children.filter((n) => n?.beforeSiblingId === null);
+      expect(firstChildren).toHaveLength(1);
+      expect(firstChildren[0]?.id).toBe('existing1');
+    });
+
     test('combineNodes fires nodeDeleted event for database cleanup', () => {
       // Reset event tracking
       nodeDeletedCalls.length = 0;
