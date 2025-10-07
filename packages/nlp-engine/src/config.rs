@@ -109,8 +109,10 @@ impl EmbeddingConfig {
 
 /// Sanitize model name to be filesystem-safe
 /// Replaces all filesystem-unsafe characters with hyphens
+/// Filters out control characters for additional safety
 fn sanitize_model_name(name: &str) -> String {
     name.chars()
+        .filter(|c| !c.is_control()) // Remove control characters (0x00-0x1F)
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '<' | '>' | '|' | '"' => '-',
             _ => c,

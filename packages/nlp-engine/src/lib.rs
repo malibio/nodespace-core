@@ -20,7 +20,7 @@
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let config = EmbeddingConfig::default();
 ///     let mut service = EmbeddingService::new(config)?;
-///     service.initialize().await?;
+///     service.initialize()?;
 ///
 ///     let embedding = service.generate_embedding("Hello, world!").await?;
 ///     println!("Generated embedding with {} dimensions", embedding.len());

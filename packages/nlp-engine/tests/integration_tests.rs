@@ -27,7 +27,7 @@ mod integration_tests {
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
 
-        let result = service.initialize().await;
+        let result = service.initialize();
         assert!(result.is_ok(), "Failed to initialize service: {:?}", result);
         assert!(service.is_initialized());
     }
@@ -41,7 +41,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let text = "This is a test sentence for embedding generation.";
         let embedding = service.generate_embedding(text).await;
@@ -71,7 +71,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let texts = vec![
             "First test sentence",
@@ -99,7 +99,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let text = "Cache test sentence";
 
@@ -137,7 +137,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let text1 = "The cat sits on the mat";
         let text2 = "A feline rests on a rug";
@@ -176,7 +176,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let text = "Test for blob conversion";
         let embedding = service.generate_embedding(text).await.unwrap();
@@ -209,7 +209,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         // Empty string should still generate an embedding
         let result = service.generate_embedding("").await;
@@ -228,7 +228,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         // Text longer than max_sequence_length (512 tokens)
         let long_text = "word ".repeat(1000); // ~1000 tokens
@@ -249,7 +249,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let device_info = service.device_info();
 
@@ -270,7 +270,7 @@ mod integration_tests {
 
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let service = std::sync::Arc::new(tokio::sync::Mutex::new(service));
 
@@ -315,7 +315,7 @@ mod stub_tests {
     async fn test_stub_initialization() {
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        let result = service.initialize().await;
+        let result = service.initialize();
         assert!(result.is_ok());
         assert!(service.is_initialized());
     }
@@ -324,7 +324,7 @@ mod stub_tests {
     async fn test_stub_embedding() {
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let embedding = service.generate_embedding("test").await.unwrap();
         assert_eq!(embedding.len(), 384);

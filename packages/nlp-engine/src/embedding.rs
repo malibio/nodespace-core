@@ -57,8 +57,8 @@ impl EmbeddingService {
         })
     }
 
-    /// Initialize the model (async, loads from bundled path)
-    pub async fn initialize(&mut self) -> Result<()> {
+    /// Initialize the model (loads from bundled path)
+    pub fn initialize(&mut self) -> Result<()> {
         if self.initialized {
             return Ok(());
         }
@@ -115,6 +115,17 @@ impl EmbeddingService {
     }
 
     /// Generate embedding for a single text
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Service not initialized (`ModelNotInitialized`)
+    /// - Tokenization fails (`TokenizationError`)
+    /// - Model inference fails (`InferenceError`)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cache mutex is poisoned (unrecoverable concurrency error)
     pub async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
         // Check cache first
         {
@@ -130,7 +141,7 @@ impl EmbeddingService {
 
         #[cfg(feature = "embedding-service")]
         {
-            let embedding = self.generate_embedding_internal(text).await?;
+            let embedding = self.generate_embedding_internal(text)?;
 
             // Cache the result (LRU will automatically evict oldest if full)
             {
@@ -150,6 +161,17 @@ impl EmbeddingService {
 
     /// Generate embeddings for multiple texts (true batch operation)
     /// Checks cache first, then processes all uncached texts in a single forward pass
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Service not initialized (`ModelNotInitialized`)
+    /// - Tokenization fails for any text (`TokenizationError`)
+    /// - Model inference fails (`InferenceError`)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cache mutex is poisoned (unrecoverable concurrency error)
     pub async fn generate_batch(&self, texts: Vec<&str>) -> Result<Vec<Vec<f32>>> {
         if !self.initialized {
             return Err(EmbeddingError::ModelNotInitialized);
@@ -177,7 +199,7 @@ impl EmbeddingService {
 
             // Process uncached texts as a single batch
             if !uncached_texts.is_empty() {
-                let batch_embeddings = self.generate_batch_internal(&uncached_texts).await?;
+                let batch_embeddings = self.generate_batch_internal(&uncached_texts)?;
 
                 // Insert into cache and results (LRU will auto-evict if full)
                 {
@@ -205,7 +227,7 @@ impl EmbeddingService {
 
     /// Internal batch processing - processes multiple texts in a single forward pass
     #[cfg(feature = "embedding-service")]
-    async fn generate_batch_internal(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+    fn generate_batch_internal(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -277,7 +299,7 @@ impl EmbeddingService {
             .ok_or_else(|| EmbeddingError::InferenceError("No output from model".to_string()))?;
 
         // Apply mean pooling to entire batch
-        let pooled = self.mean_pooling(hidden_state, &attention_mask_tensor)?;
+        let pooled = Self::mean_pooling(hidden_state, &attention_mask_tensor)?;
 
         // Convert to Vec<Vec<f32>> - one embedding per input text
         let mut embeddings = Vec::with_capacity(batch_size);
@@ -293,7 +315,7 @@ impl EmbeddingService {
     }
 
     #[cfg(feature = "embedding-service")]
-    async fn generate_embedding_internal(&self, text: &str) -> Result<Vec<f32>> {
+    fn generate_embedding_internal(&self, text: &str) -> Result<Vec<f32>> {
         let model = self
             .model
             .as_ref()
@@ -336,7 +358,7 @@ impl EmbeddingService {
             .ok_or_else(|| EmbeddingError::InferenceError("No output from model".to_string()))?;
 
         // Apply mean pooling with attention mask
-        let pooled = self.mean_pooling(hidden_state, &attention_mask_tensor)?;
+        let pooled = Self::mean_pooling(hidden_state, &attention_mask_tensor)?;
 
         // Convert to Vec<f32>
         let embedding: Vec<f32> = pooled
@@ -351,7 +373,7 @@ impl EmbeddingService {
     /// Takes hidden states [batch, seq_len, hidden_dim] and attention mask [batch, seq_len]
     /// Returns pooled embeddings [batch, hidden_dim] with L2 normalization
     #[cfg(feature = "embedding-service")]
-    fn mean_pooling(&self, hidden_state: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn mean_pooling(hidden_state: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         // Expand attention mask to [batch, seq_len, hidden_dim]
         let mask_expanded = attention_mask
             .unsqueeze(2)?
@@ -390,11 +412,13 @@ impl EmbeddingService {
     }
 
     /// Convert embedding vector to F32_BLOB format for Turso storage
+    #[must_use]
     pub fn to_blob(embedding: &[f32]) -> Vec<u8> {
         embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 
     /// Convert F32_BLOB format back to embedding vector
+    #[must_use]
     pub fn from_blob(blob: &[u8]) -> Vec<f32> {
         blob.chunks_exact(4)
             .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
@@ -476,7 +500,7 @@ mod tests {
     async fn test_stub_embedding() {
         let config = EmbeddingConfig::default();
         let mut service = EmbeddingService::new(config).unwrap();
-        service.initialize().await.unwrap();
+        service.initialize().unwrap();
 
         let embedding = service.generate_embedding("test").await.unwrap();
         assert_eq!(embedding.len(), 384); // bge-small-en-v1.5 dimension

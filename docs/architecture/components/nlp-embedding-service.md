@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut service = EmbeddingService::new(config)?;
 
     // Initialize (loads model from bundled path)
-    service.initialize().await?;
+    service.initialize()?;
 
     // Generate single embedding
     let embedding = service.generate_embedding("Hello, world!").await?;
@@ -96,7 +96,7 @@ let config = EmbeddingConfig {
 };
 
 let mut service = EmbeddingService::new(config)?;
-service.initialize().await?;
+service.initialize()?;
 ```
 
 ## Model Bundling
