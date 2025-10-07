@@ -980,10 +980,33 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const uiState = _uiState[nodeId];
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
 
+    // Find where to position the outdented node in its new parent's child list
+    // It should come right after its old parent (which is now a sibling)
+    let positionBeforeSibling: string | null = oldParentId;
+
+    // Check if old parent has a valid position in the new parent's context
+    const oldParentNode = _nodes[oldParentId];
+    if (oldParentNode && oldParentNode.parentId === newParentId) {
+      // Old parent is a valid sibling in the new context
+      positionBeforeSibling = oldParentId;
+    } else {
+      // Old parent is not in the same parent context (shouldn't happen in normal outdent)
+      // Position at the end by finding the last sibling
+      const siblings = Object.values(_nodes)
+        .filter((n) => n.parentId === newParentId && n.id !== nodeId)
+        .map((n) => n.id);
+      if (siblings.length > 0) {
+        const sortedSiblings = sortChildrenByBeforeSiblingId(siblings, newParentId);
+        positionBeforeSibling = sortedSiblings[sortedSiblings.length - 1];
+      } else {
+        positionBeforeSibling = null;
+      }
+    }
+
     _nodes[nodeId] = {
       ...node,
       parentId: newParentId,
-      beforeSiblingId: node.parentId, // Positioned right after old parent
+      beforeSiblingId: positionBeforeSibling,
       modifiedAt: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: newDepth };
