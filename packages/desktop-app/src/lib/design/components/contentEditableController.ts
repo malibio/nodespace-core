@@ -1701,9 +1701,10 @@ export class ContentEditableController {
 
       const cursorRect = cursorRange.getBoundingClientRect();
 
-      // Return absolute pixel position from viewport left
+      // Return absolute pixel position including horizontal scroll offset
       // This maintains horizontal position when navigating between nodes with different font sizes
-      return cursorRect.left;
+      // and accounts for viewport scroll state
+      return cursorRect.left + window.scrollX;
     } catch (e) {
       console.warn('[getCurrentPixelOffset] Error measuring pixel offset:', e);
       return 0;
@@ -3579,15 +3580,15 @@ export class ContentEditableController {
       syntaxLength = headerMatch[0].length; // Length of "## " or "### " etc.
     }
     // Check for task checkbox syntax ([ ] , [x] , etc.)
-    else if (lineText.match(/^\[\s*[x\s]\s*\]\s/i)) {
+    else {
       const checkboxMatch = lineText.match(/^\[\s*[x\s]\s*\]\s/i);
       if (checkboxMatch) {
         syntaxLength = checkboxMatch[0].length; // Length of "[ ] " or "[x] "
       }
-    }
-    // Check for quote syntax (> )
-    else if (lineText.startsWith('> ')) {
-      syntaxLength = 2; // Length of "> "
+      // Check for quote syntax (> )
+      else if (lineText.startsWith('> ')) {
+        syntaxLength = 2; // Length of "> "
+      }
     }
 
     // If there's syntax, position cursor after it

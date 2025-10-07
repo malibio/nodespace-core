@@ -644,10 +644,11 @@
       return;
     }
 
-    // Binary search through character positions to find closest to target pixel offset
-    // Target is viewport-relative, so compare directly with testRect.left
+    // Linear search through character positions to find closest to target pixel offset
+    // Target is viewport-relative (including scroll offset), so compare with testRect.left + scrollX
     let bestOffset = 0;
     let bestDistance = Infinity;
+    let bestNode: Text | null = null;
 
     for (const textNode of textNodes) {
       const textContent = textNode.textContent || '';
@@ -657,14 +658,13 @@
           testRange.setStart(textNode, i);
           testRange.setEnd(textNode, i);
           const testRect = testRange.getBoundingClientRect();
-          const currentPixel = testRect.left;
+          const currentPixel = testRect.left + window.scrollX;
           const distance = Math.abs(currentPixel - targetPixelOffset);
 
           if (distance < bestDistance) {
             bestDistance = distance;
             bestOffset = i;
-            // Save the node for later use
-            (setCursorAtPixelOffset as { bestNode?: Text }).bestNode = textNode;
+            bestNode = textNode;
           }
 
           // Early exit if we've gone past the target
@@ -677,9 +677,16 @@
 
     // Set cursor at best position
     const selection = window.getSelection();
-    if (selection && (setCursorAtPixelOffset as { bestNode?: Text }).bestNode) {
+    if (selection && bestNode) {
       const range = document.createRange();
-      range.setStart((setCursorAtPixelOffset as { bestNode?: Text }).bestNode!, bestOffset);
+      range.setStart(bestNode, bestOffset);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } else if (selection) {
+      // Fallback: position at start of line element if no valid text node found
+      const range = document.createRange();
+      range.selectNodeContents(lineElement);
       range.collapse(true);
       selection.removeAllRanges();
       selection.addRange(range);
