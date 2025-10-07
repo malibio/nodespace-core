@@ -1,4 +1,4 @@
-///! Model management - extract bundled models to ~/.nodespace/models/
+//! Model management - extract bundled models to ~/.nodespace/models/
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 use tokio::fs;
