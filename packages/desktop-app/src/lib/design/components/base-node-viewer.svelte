@@ -195,9 +195,23 @@
     // Persist updates sequentially to avoid SQLite "database is locked" errors
     // SQLite doesn't handle concurrent writes well, so we must serialize them
     if (updates.length > 0) {
+      // CRITICAL: Wait for any existing update batch to complete before starting new batch
+      // This prevents overlapping $effect.pre runs from creating concurrent database writes
+      const previousPromise = pendingStructuralUpdatesPromise;
+
       // Create a promise that tracks the completion of all updates
       // This allows the deletion watcher to await this promise before proceeding
       pendingStructuralUpdatesPromise = (async () => {
+        // Wait for previous batch to complete first
+        if (previousPromise) {
+          try {
+            await previousPromise;
+          } catch {
+            // Ignore errors from previous batch, we'll handle our own
+          }
+        }
+
+        // Now process our batch sequentially
         for (const update of updates) {
           try {
             await databaseService.updateNode(update.nodeId, {
