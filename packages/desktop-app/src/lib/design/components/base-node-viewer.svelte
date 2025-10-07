@@ -103,6 +103,60 @@
     }
   });
 
+  // Track structural changes (parentId, beforeSiblingId) and persist to database
+  // This is critical for operations like node deletion that reassign children
+  let previousStructure = new Map<
+    string,
+    { parentId: string | null; beforeSiblingId: string | null }
+  >();
+
+  $effect(() => {
+    if (!parentId) return;
+
+    const visibleNodes = nodeManager.visibleNodes;
+
+    for (const node of visibleNodes) {
+      // Skip placeholder nodes
+      if (node.isPlaceholder) {
+        continue;
+      }
+
+      const currentStructure = {
+        parentId: node.parentId,
+        beforeSiblingId: node.beforeSiblingId
+      };
+
+      const prevStructure = previousStructure.get(node.id);
+
+      if (
+        prevStructure &&
+        (prevStructure.parentId !== currentStructure.parentId ||
+          prevStructure.beforeSiblingId !== currentStructure.beforeSiblingId)
+      ) {
+        // Structural change detected - persist immediately to prevent CASCADE delete issues
+        databaseService
+          .updateNode(node.id, {
+            parentId: node.parentId,
+            beforeSiblingId: node.beforeSiblingId
+          })
+          .catch((error) => {
+            console.error('[BaseNodeViewer] Failed to persist structural change:', node.id, error);
+          });
+      }
+
+      // Update tracking
+      previousStructure.set(node.id, currentStructure);
+    }
+
+    // Clean up tracking for nodes that no longer exist
+    const currentNodeIds = new Set(visibleNodes.map((n) => n.id));
+    for (const [nodeId] of previousStructure) {
+      if (!currentNodeIds.has(nodeId)) {
+        previousStructure.delete(nodeId);
+      }
+    }
+  });
+
   async function loadChildrenForParent(parentId: string) {
     try {
       // Use bulk fetch for efficiency - single query gets all nodes for this origin

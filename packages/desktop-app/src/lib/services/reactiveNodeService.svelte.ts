@@ -793,6 +793,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             ...updates
           };
 
+          // Note: Database persistence is handled by UI layer's $effect watchers
+          // in base-node-viewer.svelte, which detects structural changes and persists them
+
           // Update depth: children maintain their relative position in the outline
           // Calculate target depth based on new parent
           const currentChildDepth = _uiState[childId]?.depth ?? 0;
