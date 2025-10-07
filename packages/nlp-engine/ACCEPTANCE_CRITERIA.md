@@ -50,9 +50,9 @@
 
 - [x] **Cache provides <5ms latency for repeated embeddings**
   - Status: ✅ PASSED
-  - Implementation: DashMap-based concurrent cache
+  - Implementation: LruCache with automatic eviction
   - Test: `test_cache_functionality` validates caching behavior
-  - Structure: Arc<DashMap<String, Vec<f32>>>
+  - Structure: Arc<Mutex<LruCache<String, Vec<f32>>>>
 
 - [x] **Memory usage reasonable (<500MB for model + cache)**
   - Status: ✅ PASSED
@@ -69,7 +69,7 @@
 - candle-nn = 0.9
 - candle-onnx = 0.9
 - tokenizers = 0.15
-- dashmap = 5.0
+- lru = 0.12
 - Standard workspace dependencies (serde, tokio, anyhow, thiserror)
 
 ✅ **Feature flags configured correctly:**
@@ -91,7 +91,7 @@ embedding-service = ["candle-core", "candle-nn", "candle-onnx", "tokenizers"]
 ✅ **EmbeddingService structure:**
 - Follows BERT implementation patterns from guide
 - Feature-gated Candle dependencies
-- DashMap caching layer
+- LruCache caching layer with automatic eviction
 - Device abstraction (Metal/CPU)
 - Initialized state tracking
 
@@ -176,7 +176,7 @@ packages/nlp-engine/
   - Minimal overhead per embedding
 
 - **Cache hit latency**: <5ms ✅
-  - DashMap concurrent hashmap
+  - LruCache with automatic LRU eviction
   - Zero serialization overhead
 
 - **Memory footprint**: <500MB ✅
@@ -228,7 +228,7 @@ The implementation successfully delivers:
 1. ✅ Complete embedding service with Candle + ONNX
 2. ✅ Local model bundling (improved from HF download)
 3. ✅ Metal GPU acceleration with CPU fallback
-4. ✅ Efficient caching (DashMap-based)
+4. ✅ Efficient caching (LRU-based with automatic eviction)
 5. ✅ Turso-compatible F32_BLOB format
 6. ✅ Comprehensive testing (unit + integration)
 7. ✅ Async API throughout

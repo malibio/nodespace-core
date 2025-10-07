@@ -6,7 +6,7 @@ Unified vector embedding service using Candle + ONNX for semantic search across 
 
 - **Local Model Bundling**: Models bundled with application, no network required
 - **Metal GPU Acceleration**: Optimized performance on macOS with automatic CPU fallback
-- **Efficient Caching**: DashMap-based caching for <5ms cache hits
+- **Efficient Caching**: LRU cache with automatic eviction for <5ms cache hits
 - **Batch Operations**: Efficient batch embedding generation
 - **Turso Integration**: F32_BLOB format for direct database storage
 
@@ -15,7 +15,7 @@ Unified vector embedding service using Candle + ONNX for semantic search across 
 - **Model**: BAAI/bge-small-en-v1.5 (384 dimensions)
 - **Runtime**: Candle + ONNX
 - **GPU Support**: Metal (macOS) with CPU fallback
-- **Cache**: DashMap for thread-safe concurrent access
+- **Cache**: LruCache with automatic LRU eviction
 
 ## Performance Targets
 
@@ -207,7 +207,7 @@ match service.generate_embedding("text").await {
 - `candle-nn`: Neural network primitives
 - `candle-onnx`: ONNX model loading
 - `tokenizers`: Text tokenization
-- `dashmap`: Concurrent hashmap for caching
+- `lru`: LRU cache with automatic eviction
 - `tokio`: Async runtime
 
 ## License

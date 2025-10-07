@@ -7,7 +7,7 @@
 ///
 /// - **Local Model Bundling**: Models bundled with application, no network required
 /// - **Metal GPU Acceleration**: Optimized performance on macOS with automatic CPU fallback
-/// - **Efficient Caching**: DashMap-based caching for <5ms cache hits
+/// - **Efficient Caching**: LRU cache with automatic eviction for <5ms cache hits
 /// - **Batch Operations**: Efficient batch embedding generation
 /// - **Turso Integration**: F32_BLOB format for direct database storage
 ///
