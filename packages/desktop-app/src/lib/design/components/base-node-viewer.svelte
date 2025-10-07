@@ -44,6 +44,9 @@
   // Track last saved content to detect actual changes
   const lastSavedContent = new Map<string, string>();
 
+  // Time to wait for setRawMarkdown() to complete and create DIV structure
+  const DOM_STRUCTURE_SETTLE_DELAY_MS = 20;
+
   // Set view context and load children when parentId changes
   $effect(() => {
     nodeManager.setViewParentId(parentId);
@@ -684,12 +687,21 @@
       selection.removeAllRanges();
       selection.addRange(range);
     } else if (selection) {
-      // Fallback: position at start of line element if no valid text node found
-      const range = document.createRange();
-      range.selectNodeContents(lineElement);
-      range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
+      // Defensive fallback: ensure lineElement is valid before using it
+      if (lineElement && lineElement.nodeType === Node.ELEMENT_NODE) {
+        const range = document.createRange();
+        range.selectNodeContents(lineElement);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } else {
+        // Ultimate fallback: position at element start if lineElement is invalid
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
     }
   }
 
@@ -749,7 +761,7 @@
 
         // Show caret after positioning is complete
         targetElement.style.caretColor = '';
-      }, 20); // Delay for setRawMarkdown() to complete and create DIV structure
+      }, DOM_STRUCTURE_SETTLE_DELAY_MS);
     }, 0);
 
     return true;

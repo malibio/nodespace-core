@@ -70,6 +70,11 @@ export interface ContentEditableConfig {
 }
 
 export class ContentEditableController {
+  // Syntax detection patterns for cursor positioning
+  private static readonly HEADER_PATTERN = /^(#{1,6})\s/;
+  private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
+  private static readonly QUOTE_PATTERN = /^>\s/;
+
   private element: HTMLDivElement;
   private nodeId: string;
   private nodeType: string;
@@ -3575,18 +3580,18 @@ export class ContentEditableController {
     let syntaxLength = 0;
 
     // Check for header syntax (## , ### , etc.)
-    const headerMatch = lineText.match(/^(#{1,6})\s/);
+    const headerMatch = lineText.match(ContentEditableController.HEADER_PATTERN);
     if (headerMatch) {
       syntaxLength = headerMatch[0].length; // Length of "## " or "### " etc.
     }
     // Check for task checkbox syntax ([ ] , [x] , etc.)
     else {
-      const checkboxMatch = lineText.match(/^\[\s*[x\s]\s*\]\s/i);
+      const checkboxMatch = lineText.match(ContentEditableController.CHECKBOX_PATTERN);
       if (checkboxMatch) {
         syntaxLength = checkboxMatch[0].length; // Length of "[ ] " or "[x] "
       }
       // Check for quote syntax (> )
-      else if (lineText.startsWith('> ')) {
+      else if (ContentEditableController.QUOTE_PATTERN.test(lineText)) {
         syntaxLength = 2; // Length of "> "
       }
     }
