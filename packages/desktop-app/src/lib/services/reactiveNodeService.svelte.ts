@@ -989,21 +989,42 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _uiState[nodeId] = { ...uiState, depth: newDepth };
 
     // Transfer siblings below the outdented node as its children
-    for (const siblingId of siblingsBelow) {
-      const sibling = _nodes[siblingId];
-      if (sibling) {
-        _nodes[siblingId] = {
-          ...sibling,
-          parentId: nodeId,
-          modifiedAt: new Date().toISOString()
-        };
-        // Update depth for transferred sibling
-        const siblingUIState = _uiState[siblingId];
-        if (siblingUIState) {
-          _uiState[siblingId] = { ...siblingUIState, depth: newDepth + 1 };
+    // Need to rebuild their before_sibling_id chain to be valid in new parent context
+    if (siblingsBelow.length > 0) {
+      // Find existing children of the outdented node to append after them
+      const existingChildren = Object.values(_nodes)
+        .filter((n) => n.parentId === nodeId && !siblingsBelow.includes(n.id))
+        .map((n) => n.id);
+
+      let lastSiblingId: string | null = null;
+      if (existingChildren.length > 0) {
+        const sortedChildren = sortChildrenByBeforeSiblingId(existingChildren, nodeId);
+        lastSiblingId = sortedChildren[sortedChildren.length - 1];
+      }
+
+      // Transfer each sibling, updating their before_sibling_id chain
+      for (let i = 0; i < siblingsBelow.length; i++) {
+        const siblingId = siblingsBelow[i];
+        const sibling = _nodes[siblingId];
+        if (sibling) {
+          // First transferred sibling points to last existing child (or null)
+          // Subsequent siblings point to the previous transferred sibling
+          const beforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];
+
+          _nodes[siblingId] = {
+            ...sibling,
+            parentId: nodeId,
+            beforeSiblingId,
+            modifiedAt: new Date().toISOString()
+          };
+          // Update depth for transferred sibling
+          const siblingUIState = _uiState[siblingId];
+          if (siblingUIState) {
+            _uiState[siblingId] = { ...siblingUIState, depth: newDepth + 1 };
+          }
+          // Recalculate depths for descendants of transferred sibling
+          updateDescendantDepths(siblingId);
         }
-        // Recalculate depths for descendants of transferred sibling
-        updateDescendantDepths(siblingId);
       }
     }
 
