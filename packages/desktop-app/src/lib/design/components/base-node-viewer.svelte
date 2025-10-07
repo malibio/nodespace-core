@@ -623,17 +623,13 @@
 
   /**
    * Position cursor at a target pixel offset within a line by iterating through characters.
-   * This works correctly with proportional fonts without needing character width conversion.
+   * Uses viewport-relative positioning to maintain horizontal position across nodes with different font sizes.
    */
   function setCursorAtPixelOffset(
     element: HTMLElement,
     lineElement: Element,
     targetPixelOffset: number
   ) {
-    // Calculate offset relative to the element's left edge, not the root container
-    // This ensures the horizontal position is preserved when navigating between nodes
-    const elementRect = element.getBoundingClientRect();
-
     const textNodes = getTextNodes(lineElement as HTMLElement);
     if (textNodes.length === 0) {
       // Empty line - position at start
@@ -649,6 +645,7 @@
     }
 
     // Binary search through character positions to find closest to target pixel offset
+    // Target is viewport-relative, so compare directly with testRect.left
     let bestOffset = 0;
     let bestDistance = Infinity;
 
@@ -660,7 +657,7 @@
           testRange.setStart(textNode, i);
           testRange.setEnd(textNode, i);
           const testRect = testRange.getBoundingClientRect();
-          const currentPixel = testRect.left - elementRect.left;
+          const currentPixel = testRect.left;
           const distance = Math.abs(currentPixel - targetPixelOffset);
 
           if (distance < bestDistance) {
