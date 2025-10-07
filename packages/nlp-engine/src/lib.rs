@@ -22,7 +22,7 @@
 ///     let mut service = EmbeddingService::new(config)?;
 ///     service.initialize()?;
 ///
-///     let embedding = service.generate_embedding("Hello, world!").await?;
+///     let embedding = service.generate_embedding("Hello, world!")?;
 ///     println!("Generated embedding with {} dimensions", embedding.len());
 ///
 ///     Ok(())

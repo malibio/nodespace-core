@@ -126,7 +126,7 @@ impl EmbeddingService {
     /// # Panics
     ///
     /// Panics if the cache mutex is poisoned (unrecoverable concurrency error)
-    pub async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
+    pub fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
         // Check cache first
         {
             let mut cache = self.cache.lock().unwrap();
@@ -172,7 +172,7 @@ impl EmbeddingService {
     /// # Panics
     ///
     /// Panics if the cache mutex is poisoned (unrecoverable concurrency error)
-    pub async fn generate_batch(&self, texts: Vec<&str>) -> Result<Vec<Vec<f32>>> {
+    pub fn generate_batch(&self, texts: Vec<&str>) -> Result<Vec<Vec<f32>>> {
         if !self.initialized {
             return Err(EmbeddingError::ModelNotInitialized);
         }
@@ -502,7 +502,7 @@ mod tests {
         let mut service = EmbeddingService::new(config).unwrap();
         service.initialize().unwrap();
 
-        let embedding = service.generate_embedding("test").await.unwrap();
+        let embedding = service.generate_embedding("test").unwrap();
         assert_eq!(embedding.len(), 384); // bge-small-en-v1.5 dimension
         assert!(embedding.iter().all(|&x| x == 0.0)); // Stub returns zeros
     }

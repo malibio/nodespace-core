@@ -51,12 +51,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     service.initialize()?;
 
     // Generate single embedding
-    let embedding = service.generate_embedding("Hello, world!").await?;
+    let embedding = service.generate_embedding("Hello, world!")?;
     println!("Generated embedding with {} dimensions", embedding.len());
 
     // Generate batch embeddings
     let texts = vec!["First text", "Second text", "Third text"];
-    let embeddings = service.generate_batch(texts).await?;
+    let embeddings = service.generate_batch(texts)?;
     println!("Generated {} embeddings", embeddings.len());
 
     Ok(())
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nodespace_nlp_engine::EmbeddingService;
 
 // Generate embedding
-let embedding = service.generate_embedding("search query").await?;
+let embedding = service.generate_embedding("search query")?;
 
 // Convert to F32_BLOB for Turso storage
 let blob = EmbeddingService::to_blob(&embedding);

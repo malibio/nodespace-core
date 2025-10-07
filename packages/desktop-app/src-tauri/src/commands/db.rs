@@ -126,7 +126,6 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
         .map_err(|e| format!("Failed to initialize database: {}", e))?;
 
     let node_service = NodeService::new(db_service.clone())
-        .await
         .map_err(|e| format!("Failed to initialize node service: {}", e))?;
 
     app.manage(db_service);

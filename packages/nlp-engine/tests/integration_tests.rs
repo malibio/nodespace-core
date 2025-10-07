@@ -44,7 +44,7 @@ mod integration_tests {
         service.initialize().unwrap();
 
         let text = "This is a test sentence for embedding generation.";
-        let embedding = service.generate_embedding(text).await;
+        let embedding = service.generate_embedding(text);
 
         assert!(embedding.is_ok(), "Failed to generate embedding");
         let embedding = embedding.unwrap();
@@ -79,7 +79,7 @@ mod integration_tests {
             "Third test sentence",
         ];
 
-        let embeddings = service.generate_batch(texts.clone()).await;
+        let embeddings = service.generate_batch(texts.clone());
         assert!(embeddings.is_ok(), "Failed to generate batch embeddings");
 
         let embeddings = embeddings.unwrap();
@@ -104,14 +104,14 @@ mod integration_tests {
         let text = "Cache test sentence";
 
         // Generate embedding first time
-        let embedding1 = service.generate_embedding(text).await.unwrap();
+        let embedding1 = service.generate_embedding(text).unwrap();
 
         // Check cache stats
         let (cache_size, _capacity) = service.cache_stats();
         assert_eq!(cache_size, 1, "Cache should have 1 entry");
 
         // Generate same embedding again (should hit cache)
-        let embedding2 = service.generate_embedding(text).await.unwrap();
+        let embedding2 = service.generate_embedding(text).unwrap();
 
         // Embeddings should be identical
         assert_eq!(embedding1.len(), embedding2.len());
@@ -143,9 +143,9 @@ mod integration_tests {
         let text2 = "A feline rests on a rug";
         let text3 = "Python is a programming language";
 
-        let emb1 = service.generate_embedding(text1).await.unwrap();
-        let emb2 = service.generate_embedding(text2).await.unwrap();
-        let emb3 = service.generate_embedding(text3).await.unwrap();
+        let emb1 = service.generate_embedding(text1).unwrap();
+        let emb2 = service.generate_embedding(text2).unwrap();
+        let emb3 = service.generate_embedding(text3).unwrap();
 
         // Cosine similarity helper
         fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -179,7 +179,7 @@ mod integration_tests {
         service.initialize().unwrap();
 
         let text = "Test for blob conversion";
-        let embedding = service.generate_embedding(text).await.unwrap();
+        let embedding = service.generate_embedding(text).unwrap();
 
         // Convert to blob
         let blob = EmbeddingService::to_blob(&embedding);
@@ -212,7 +212,7 @@ mod integration_tests {
         service.initialize().unwrap();
 
         // Empty string should still generate an embedding
-        let result = service.generate_embedding("").await;
+        let result = service.generate_embedding("");
         assert!(result.is_ok(), "Should handle empty strings");
 
         let embedding = result.unwrap();
@@ -233,7 +233,7 @@ mod integration_tests {
         // Text longer than max_sequence_length (512 tokens)
         let long_text = "word ".repeat(1000); // ~1000 tokens
 
-        let result = service.generate_embedding(&long_text).await;
+        let result = service.generate_embedding(&long_text);
         assert!(result.is_ok(), "Should handle long texts (with truncation)");
 
         let embedding = result.unwrap();
@@ -281,7 +281,7 @@ mod integration_tests {
             let handle = tokio::spawn(async move {
                 let service = service_clone.lock().await;
                 let text = format!("Concurrent request {}", i);
-                service.generate_embedding(&text).await
+                service.generate_embedding(&text)
             });
             handles.push(handle);
         }
@@ -326,7 +326,7 @@ mod stub_tests {
         let mut service = EmbeddingService::new(config).unwrap();
         service.initialize().unwrap();
 
-        let embedding = service.generate_embedding("test").await.unwrap();
+        let embedding = service.generate_embedding("test").unwrap();
         assert_eq!(embedding.len(), 384);
         assert!(embedding.iter().all(|&x| x == 0.0));
     }
