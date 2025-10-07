@@ -97,19 +97,29 @@
       // This prevents CASCADE delete from removing children before their parentId is updated
       if (deletedNodeIds.length > 0) {
         (async () => {
-          // Poll until all pending updates complete (with timeout)
-          const startTime = Date.now();
-          while (pendingStructuralUpdates > 0 && Date.now() - startTime < 5000) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
+          // CRITICAL FIX: Await the promise that tracks structural updates
+          // This ensures updates complete before deletion proceeds
+          if (pendingStructuralUpdatesPromise) {
+            try {
+              // Wait for all structural updates to complete with timeout
+              await Promise.race([
+                pendingStructuralUpdatesPromise,
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () => reject(new Error('Timeout waiting for structural updates')),
+                    5000
+                  )
+                )
+              ]);
+            } catch (error) {
+              console.warn(
+                '[BaseNodeViewer] Timeout or error waiting for structural updates:',
+                error
+              );
+            }
           }
 
-          if (pendingStructuralUpdates > 0) {
-            console.warn(
-              '[BaseNodeViewer] Timeout waiting for structural updates, proceeding with deletion'
-            );
-          }
-
-          // Now safe to delete nodes
+          // Now safe to delete nodes - children have been reassigned
           for (const nodeId of deletedNodeIds) {
             try {
               await databaseService.deleteNode(nodeId);
@@ -136,7 +146,8 @@
   >();
 
   // Track pending updates to prevent race conditions with deletions
-  let pendingStructuralUpdates = 0;
+  // This is a Promise that resolves when all pending structural updates complete
+  let pendingStructuralUpdatesPromise: Promise<void> | null = null;
 
   $effect(() => {
     if (!parentId) return;
@@ -183,9 +194,9 @@
     // Persist updates sequentially to avoid SQLite "database is locked" errors
     // SQLite doesn't handle concurrent writes well, so we must serialize them
     if (updates.length > 0) {
-      pendingStructuralUpdates += updates.length;
-
-      (async () => {
+      // Create a promise that tracks the completion of all updates
+      // This allows the deletion watcher to await this promise before proceeding
+      pendingStructuralUpdatesPromise = (async () => {
         for (const update of updates) {
           try {
             await databaseService.updateNode(update.nodeId, {
@@ -198,10 +209,10 @@
               update.nodeId,
               error
             );
-          } finally {
-            pendingStructuralUpdates--;
           }
         }
+        // Clear the promise once all updates complete
+        pendingStructuralUpdatesPromise = null;
       })();
     }
 
