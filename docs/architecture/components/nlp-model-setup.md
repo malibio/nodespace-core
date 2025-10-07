@@ -1,13 +1,21 @@
-# Model Files Directory
+# NLP Model Setup Guide
 
-**Note**: This directory is for documentation only. Models are stored in the centralized `~/.nodespace/models/` directory.
+**Note**: Models are stored in the centralized `~/.nodespace/models/` directory, following the same pattern as the database.
 
 ## Required Model: bge-small-en-v1.5
 
 The embedding service requires the `bge-small-en-v1.5` model in ONNX format at:
 - **Location**: `~/.nodespace/models/BAAI-bge-small-en-v1.5/`
 
-### Download Instructions (Developers Only)
+## For End Users
+
+Models are automatically bundled with the NodeSpace application. No manual setup required.
+
+On first run, the application extracts bundled models to `~/.nodespace/models/`.
+
+## For Developers
+
+### Download Instructions
 
 #### Option 1: Using huggingface-hub CLI (Recommended)
 
@@ -41,9 +49,9 @@ model = ORTModelForFeatureExtraction.from_pretrained(
 
 tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-small-en-v1.5")
 
-# Save to models directory
-model.save_pretrained("packages/nlp-engine/models/bge-small-en-v1.5")
-tokenizer.save_pretrained("packages/nlp-engine/models/bge-small-en-v1.5")
+# Save to centralized models directory
+model.save_pretrained("~/.nodespace/models/BAAI-bge-small-en-v1.5")
+tokenizer.save_pretrained("~/.nodespace/models/BAAI-bge-small-en-v1.5")
 EOF
 ```
 
@@ -53,10 +61,12 @@ After downloading, you should have:
 
 ```
 ~/.nodespace/
+├── database/
+│   └── nodespace.db             # Database location
 └── models/
-    └── BAAI-bge-small-en-v1.5/      # Note: "/" replaced with "-"
-        ├── model.onnx               # ONNX model file (~130MB)
-        ├── tokenizer.json           # Tokenizer configuration
+    └── BAAI-bge-small-en-v1.5/  # Note: "/" replaced with "-"
+        ├── model.onnx           # ONNX model file (~130MB)
+        ├── tokenizer.json       # Tokenizer configuration
         ├── tokenizer_config.json
         ├── special_tokens_map.json
         └── vocab.txt
@@ -90,22 +100,33 @@ You should see `model.onnx` (approximately 130MB) and `tokenizer.json`.
 Run tests to verify the model loads correctly:
 
 ```bash
-cd ../..  # Back to workspace root
 cargo test --features embedding-service --package nodespace-nlp-engine
+```
+
+## Build-Time Model Bundling
+
+For CI/CD and releases, models are downloaded during the build process:
+
+```bash
+# Download models for bundling (happens automatically during build)
+bun run download:models
+
+# Models are downloaded to packages/desktop-app/src-tauri/resources/models/
+# Then bundled with the Tauri application
 ```
 
 ## Alternative Models (Future)
 
-This directory can support additional models for specialized use cases:
+This system can support additional models for specialized use cases:
 
 - `nomic-embed-text`: Better code understanding (768 dims)
 - `all-MiniLM-L6-v2`: Faster, smaller alternative (384 dims)
 
 Currently, only `bge-small-en-v1.5` is supported.
 
-## gitignore
+## Version Control
 
-Model files are large binary files and should not be committed to git. The `.gitignore` should exclude:
+Model files are large binaries and should not be committed to git. The `.gitignore` excludes:
 
 ```
 *.onnx
