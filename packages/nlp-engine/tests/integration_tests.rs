@@ -6,15 +6,21 @@ mod integration_tests {
     use nodespace_nlp_engine::{EmbeddingConfig, EmbeddingService};
     use std::path::PathBuf;
 
+    const MODEL_PATH: &str = "packages/nlp-engine/models/bge-small-en-v1.5/model.onnx";
+
     fn model_exists() -> bool {
-        let model_path = PathBuf::from("packages/nlp-engine/models/bge-small-en-v1.5/model.onnx");
+        let model_path = PathBuf::from(MODEL_PATH);
         model_path.exists()
     }
 
     #[tokio::test]
     async fn test_service_initialization() {
         if !model_exists() {
-            eprintln!("Skipping test: model not found. Run 'make download-models' first.");
+            eprintln!(
+                "Skipping test: model not found at '{}'. \
+                See docs/architecture/components/nlp-model-setup.md for setup instructions.",
+                MODEL_PATH
+            );
             return;
         }
 

@@ -16,7 +16,7 @@ candle-onnx = { version = "0.9", optional = true }
 tokenizers = { version = "0.15", default-features = false, features = ["onig"], optional = true }
 
 # Caching layer
-dashmap = "5.0"
+lru = "0.12"
 
 # Workspace dependencies
 serde = { workspace = true }

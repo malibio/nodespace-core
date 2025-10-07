@@ -3,8 +3,11 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum EmbeddingError {
-    #[error("Model not initialized")]
-    NotInitialized,
+    #[error("Model not initialized - call initialize() first")]
+    ModelNotInitialized,
+
+    #[error("Tokenizer not initialized - call initialize() first")]
+    TokenizerNotInitialized,
 
     #[error("Model loading failed: {0}")]
     ModelLoadError(String),

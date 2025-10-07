@@ -2,8 +2,9 @@
 /// Follows patterns from nodespace BERT implementation guide
 use crate::config::EmbeddingConfig;
 use crate::error::{EmbeddingError, Result};
-use dashmap::DashMap;
-use std::sync::Arc;
+use lru::LruCache;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "embedding-service")]
 use candle_core::{Device, Tensor};
@@ -21,7 +22,7 @@ pub struct EmbeddingService {
     tokenizer: Option<Tokenizer>,
     #[cfg(feature = "embedding-service")]
     device: Device,
-    cache: Arc<DashMap<String, Vec<f32>>>,
+    cache: Arc<Mutex<LruCache<String, Vec<f32>>>>,
     initialized: bool,
 }
 
@@ -40,7 +41,8 @@ impl EmbeddingService {
             })
         };
 
-        let cache_capacity = config.cache_capacity;
+        let cache_capacity = NonZeroUsize::new(config.cache_capacity)
+            .ok_or_else(|| EmbeddingError::ConfigError("cache_capacity must be > 0".to_string()))?;
 
         Ok(Self {
             config,
@@ -50,7 +52,7 @@ impl EmbeddingService {
             tokenizer: None,
             #[cfg(feature = "embedding-service")]
             device,
-            cache: Arc::new(DashMap::with_capacity(cache_capacity)),
+            cache: Arc::new(Mutex::new(LruCache::new(cache_capacity))),
             initialized: false,
         })
     }
@@ -115,21 +117,25 @@ impl EmbeddingService {
     /// Generate embedding for a single text
     pub async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
         // Check cache first
-        if let Some(cached) = self.cache.get(text) {
-            return Ok(cached.clone());
+        {
+            let mut cache = self.cache.lock().unwrap();
+            if let Some(cached) = cache.get(text) {
+                return Ok(cached.clone());
+            }
         }
 
         if !self.initialized {
-            return Err(EmbeddingError::NotInitialized);
+            return Err(EmbeddingError::ModelNotInitialized);
         }
 
         #[cfg(feature = "embedding-service")]
         {
             let embedding = self.generate_embedding_internal(text).await?;
 
-            // Cache the result
-            if self.cache.len() < self.config.cache_capacity {
-                self.cache.insert(text.to_string(), embedding.clone());
+            // Cache the result (LRU will automatically evict oldest if full)
+            {
+                let mut cache = self.cache.lock().unwrap();
+                cache.put(text.to_string(), embedding.clone());
             }
 
             Ok(embedding)
@@ -142,24 +148,160 @@ impl EmbeddingService {
         }
     }
 
-    /// Generate embeddings for multiple texts (batch operation)
+    /// Generate embeddings for multiple texts (true batch operation)
+    /// Checks cache first, then processes all uncached texts in a single forward pass
     pub async fn generate_batch(&self, texts: Vec<&str>) -> Result<Vec<Vec<f32>>> {
-        let mut results = Vec::with_capacity(texts.len());
-
-        for text in texts {
-            results.push(self.generate_embedding(text).await?);
+        if !self.initialized {
+            return Err(EmbeddingError::ModelNotInitialized);
         }
 
-        Ok(results)
+        #[cfg(feature = "embedding-service")]
+        {
+            // Separate cached and uncached texts
+            let mut results: Vec<Option<Vec<f32>>> = Vec::with_capacity(texts.len());
+            let mut uncached_indices = Vec::new();
+            let mut uncached_texts = Vec::new();
+
+            {
+                let mut cache = self.cache.lock().unwrap();
+                for (i, text) in texts.iter().enumerate() {
+                    if let Some(cached) = cache.get(*text) {
+                        results.push(Some(cached.clone()));
+                    } else {
+                        results.push(None);
+                        uncached_indices.push(i);
+                        uncached_texts.push(*text);
+                    }
+                }
+            }
+
+            // Process uncached texts as a single batch
+            if !uncached_texts.is_empty() {
+                let batch_embeddings = self.generate_batch_internal(&uncached_texts).await?;
+
+                // Insert into cache and results (LRU will auto-evict if full)
+                {
+                    let mut cache = self.cache.lock().unwrap();
+                    for (idx, embedding) in uncached_indices.into_iter().zip(batch_embeddings) {
+                        cache.put(texts[idx].to_string(), embedding.clone());
+                        results[idx] = Some(embedding);
+                    }
+                }
+            }
+
+            // Unwrap all results (all should be Some at this point)
+            Ok(results
+                .into_iter()
+                .map(|r| r.expect("All results should be populated"))
+                .collect())
+        }
+
+        #[cfg(not(feature = "embedding-service"))]
+        {
+            // Stub: return zero vectors
+            Ok(vec![vec![0.0; 384]; texts.len()])
+        }
+    }
+
+    /// Internal batch processing - processes multiple texts in a single forward pass
+    #[cfg(feature = "embedding-service")]
+    async fn generate_batch_internal(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let model = self
+            .model
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotInitialized)?;
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or(EmbeddingError::TokenizerNotInitialized)?;
+
+        // Tokenize all texts
+        let mut all_token_ids = Vec::with_capacity(texts.len());
+        let mut all_attention_masks = Vec::with_capacity(texts.len());
+        let mut max_len = 0;
+
+        for text in texts {
+            let encoding = tokenizer
+                .encode(*text, true)
+                .map_err(|e| EmbeddingError::TokenizationError(e.to_string()))?;
+
+            let tokens = encoding.get_ids().to_vec();
+            let attention_mask = encoding.get_attention_mask().to_vec();
+
+            max_len = max_len.max(tokens.len());
+            all_token_ids.push(tokens);
+            all_attention_masks.push(attention_mask);
+        }
+
+        // Pad all sequences to max_len
+        for tokens in &mut all_token_ids {
+            while tokens.len() < max_len {
+                tokens.push(0); // Padding token
+            }
+        }
+        for mask in &mut all_attention_masks {
+            while mask.len() < max_len {
+                mask.push(0); // Padding mask
+            }
+        }
+
+        // Flatten into [batch_size * seq_len] and reshape to [batch_size, seq_len]
+        let batch_size = texts.len();
+        let flattened_tokens: Vec<u32> = all_token_ids.into_iter().flatten().collect();
+        let flattened_masks: Vec<u32> = all_attention_masks.into_iter().flatten().collect();
+
+        let token_ids = Tensor::from_vec(flattened_tokens, (batch_size, max_len), &self.device)
+            .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+
+        let attention_mask_tensor =
+            Tensor::from_vec(flattened_masks, (batch_size, max_len), &self.device)
+                .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+
+        // Run inference
+        let inputs = std::collections::HashMap::from([
+            ("input_ids".to_string(), token_ids),
+            ("attention_mask".to_string(), attention_mask_tensor.clone()),
+        ]);
+
+        let outputs = simple_eval(model, inputs)
+            .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+
+        // Extract last_hidden_state [batch_size, seq_len, hidden_dim]
+        let hidden_state = outputs
+            .get("last_hidden_state")
+            .or_else(|| outputs.values().next())
+            .ok_or_else(|| EmbeddingError::InferenceError("No output from model".to_string()))?;
+
+        // Apply mean pooling to entire batch
+        let pooled = self.mean_pooling(hidden_state, &attention_mask_tensor)?;
+
+        // Convert to Vec<Vec<f32>> - one embedding per input text
+        let mut embeddings = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let embedding_tensor = pooled.get(i)?;
+            let embedding: Vec<f32> = embedding_tensor
+                .to_vec1()
+                .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+            embeddings.push(embedding);
+        }
+
+        Ok(embeddings)
     }
 
     #[cfg(feature = "embedding-service")]
     async fn generate_embedding_internal(&self, text: &str) -> Result<Vec<f32>> {
-        let model = self.model.as_ref().ok_or(EmbeddingError::NotInitialized)?;
+        let model = self
+            .model
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotInitialized)?;
         let tokenizer = self
             .tokenizer
             .as_ref()
-            .ok_or(EmbeddingError::NotInitialized)?;
+            .ok_or(EmbeddingError::TokenizerNotInitialized)?;
 
         // Tokenize input
         let encoding = tokenizer
@@ -172,34 +314,79 @@ impl EmbeddingService {
         // Create tensors
         let token_ids = Tensor::new(tokens, &self.device)
             .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?
-            .unsqueeze(0)?; // Add batch dimension
+            .unsqueeze(0)?; // Add batch dimension [1, seq_len]
 
-        let attention_mask = Tensor::new(attention_mask, &self.device)
+        let attention_mask_tensor = Tensor::new(attention_mask, &self.device)
             .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?
-            .unsqueeze(0)?;
+            .unsqueeze(0)?; // [1, seq_len]
 
         // Run inference
         let inputs = std::collections::HashMap::from([
             ("input_ids".to_string(), token_ids),
-            ("attention_mask".to_string(), attention_mask),
+            ("attention_mask".to_string(), attention_mask_tensor.clone()),
         ]);
 
         let outputs = simple_eval(model, inputs)
             .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
 
-        // Extract embeddings (output should be a vector of tensors)
-        let embedding_tensor = outputs
+        // Extract last_hidden_state [batch_size, seq_len, hidden_dim]
+        let hidden_state = outputs
             .get("last_hidden_state")
             .or_else(|| outputs.values().next())
             .ok_or_else(|| EmbeddingError::InferenceError("No output from model".to_string()))?;
 
+        // Apply mean pooling with attention mask
+        let pooled = self.mean_pooling(hidden_state, &attention_mask_tensor)?;
+
         // Convert to Vec<f32>
-        let embedding: Vec<f32> = embedding_tensor
+        let embedding: Vec<f32> = pooled
             .squeeze(0)?
             .to_vec1()
             .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
 
         Ok(embedding)
+    }
+
+    /// Mean pooling with attention mask weighting
+    /// Takes hidden states [batch, seq_len, hidden_dim] and attention mask [batch, seq_len]
+    /// Returns pooled embeddings [batch, hidden_dim] with L2 normalization
+    #[cfg(feature = "embedding-service")]
+    fn mean_pooling(&self, hidden_state: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+        // Expand attention mask to [batch, seq_len, hidden_dim]
+        let mask_expanded = attention_mask
+            .unsqueeze(2)?
+            .broadcast_as(hidden_state.shape())
+            .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+
+        // Apply mask: hidden_state * mask
+        let masked = hidden_state
+            .mul(&mask_expanded)
+            .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+
+        // Sum over sequence dimension
+        let summed = masked.sum(1)?;
+
+        // Count non-padding tokens and add small epsilon to avoid division by zero
+        let count = attention_mask
+            .sum(1)?
+            .unsqueeze(1)?
+            .clamp(1.0, f64::INFINITY)?; // Minimum 1.0 to avoid division by zero
+
+        // Mean pooling: sum / count
+        let pooled = summed
+            .div(&count)
+            .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
+
+        // L2 normalize
+        let norm = pooled
+            .sqr()?
+            .sum_keepdim(1)?
+            .sqrt()?
+            .clamp(1e-12, f64::INFINITY)?; // Avoid division by zero
+
+        pooled
+            .div(&norm)
+            .map_err(|e| EmbeddingError::InferenceError(e.to_string()))
     }
 
     /// Convert embedding vector to F32_BLOB format for Turso storage
@@ -216,13 +403,15 @@ impl EmbeddingService {
 
     /// Clear the embedding cache
     pub fn clear_cache(&self) {
-        self.cache.clear();
+        let mut cache = self.cache.lock().unwrap();
+        cache.clear();
     }
 
     /// Get cache statistics (size, capacity)
     pub fn cache_stats(&self) -> (usize, usize) {
-        let len = self.cache.len();
-        let capacity = self.cache.capacity();
+        let cache = self.cache.lock().unwrap();
+        let len = cache.len();
+        let capacity = cache.cap().get();
         (len, capacity)
     }
 

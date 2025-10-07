@@ -2,6 +2,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Maximum supported sequence length for transformer models
+/// Limited by attention matrix memory requirements (O(n²))
+const MAX_SUPPORTED_SEQUENCE_LENGTH: usize = 8192;
+
 /// Configuration for BERT embedding model
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -63,7 +67,7 @@ impl EmbeddingConfig {
         let model_path = home_dir
             .join(".nodespace")
             .join("models")
-            .join(self.model_name.replace('/', "-")); // BAAI/bge-small-en-v1.5 → BAAI-bge-small-en-v1.5
+            .join(sanitize_model_name(&self.model_name));
 
         if model_path.exists() {
             Ok(model_path)
@@ -88,8 +92,11 @@ impl EmbeddingConfig {
             return Err("max_sequence_length must be greater than 0".to_string());
         }
 
-        if self.max_sequence_length > 8192 {
-            return Err("max_sequence_length cannot exceed 8192".to_string());
+        if self.max_sequence_length > MAX_SUPPORTED_SEQUENCE_LENGTH {
+            return Err(format!(
+                "max_sequence_length cannot exceed {} (transformer attention matrix memory limit)",
+                MAX_SUPPORTED_SEQUENCE_LENGTH
+            ));
         }
 
         if self.cache_capacity == 0 {
@@ -98,6 +105,17 @@ impl EmbeddingConfig {
 
         Ok(())
     }
+}
+
+/// Sanitize model name to be filesystem-safe
+/// Replaces all filesystem-unsafe characters with hyphens
+fn sanitize_model_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '<' | '>' | '|' | '"' => '-',
+            _ => c,
+        })
+        .collect()
 }
 
 #[cfg(test)]
