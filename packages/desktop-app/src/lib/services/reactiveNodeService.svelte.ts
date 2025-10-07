@@ -723,19 +723,36 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     };
     _uiState[previousNodeId] = { ..._uiState[previousNodeId], autoFocus: false };
 
-    // Handle child promotion: children shift up while maintaining their level
+    // Handle child promotion: children shift up while maintaining outline structure
     // Get all children of the node being deleted
     const currentChildren = Object.values(_nodes)
       .filter((n) => n.parentId === currentNodeId)
       .map((n) => n.id);
 
     if (currentChildren.length > 0) {
-      // Determine where children should go when node is deleted:
-      // - If merging siblings (same parent): children transfer to the previous node
-      // - If merging into parent: children still transfer to the target node
-      // In both cases: children shift up one level in hierarchy
-      const areSiblings = currentNode.parentId === previousNode.parentId;
-      const newParentForChildren = areSiblings ? previousNodeId : currentNode.parentId;
+      // Find the nearest ancestor node above the deleted node at the SAME depth,
+      // walking up until we reach a node that is one or more levels higher
+      // (because there are no other nodes at the same level)
+      const deletedNodeDepth = _uiState[currentNodeId]?.depth ?? 0;
+      let newParentForChildren = previousNodeId;
+      let searchNode: string | null = previousNodeId;
+
+      while (searchNode) {
+        const searchDepth = _uiState[searchNode]?.depth ?? 0;
+        if (searchDepth === deletedNodeDepth) {
+          // Found a node at the same level as the deleted node
+          newParentForChildren = searchNode;
+          break;
+        }
+        if (searchDepth < deletedNodeDepth) {
+          // Reached a node at a higher level (shallower), stop here
+          newParentForChildren = searchNode;
+          break;
+        }
+        // Keep walking up the tree
+        const parentId: string | null | undefined = _nodes[searchNode]?.parentId;
+        searchNode = parentId ?? null;
+      }
 
       for (const childId of currentChildren) {
         const child = _nodes[childId];
@@ -746,7 +763,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             modifiedAt: new Date().toISOString()
           };
 
-          // Update depth: children shift up to maintain their position
+          // Update depth: children maintain their relative position in the outline
           // Calculate target depth based on new parent
           const currentChildDepth = _uiState[childId]?.depth ?? 0;
           const targetDepth = newParentForChildren
@@ -754,7 +771,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             : 0;
 
           // Preserve depth: never increase, only maintain or decrease
-          // This ensures nodes shift UP, not down
+          // This ensures nodes shift UP in the outline, not down
           const newDepth = Math.min(currentChildDepth, targetDepth);
 
           _uiState[childId] = {

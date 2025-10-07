@@ -188,7 +188,25 @@ describe('NodeManager', () => {
 
     test('combineNodes maintains proper depth hierarchy for children during cross-depth merge', () => {
       // Test cross-depth merge where shallow node is merged onto deeper node
-      // Children should maintain proper relative depth and parent assignments
+      // Children should shift up to maintain outline structure by finding the
+      // nearest ancestor at the same depth as the deleted node
+      //
+      // Structure before:
+      // root (depth 0)
+      // ├── features (depth 1)
+      // │   ├── hierarchical (depth 2)
+      // │   └── realtime (depth 2) ← merge target
+      // └── formatting (depth 1) ← being deleted
+      //     ├── child1 (depth 2)
+      //     └── child2 (depth 2)
+      //
+      // After merge:
+      // root (depth 0)
+      // └── features (depth 1) ← nearest ancestor at deleted node's depth
+      //     ├── hierarchical (depth 2)
+      //     ├── realtime (depth 2, now contains merged content)
+      //     ├── child1 (depth 2) ← shifted up, became child of features
+      //     └── child2 (depth 2) ← shifted up, became child of features
 
       const depthTestNodes = [
         createTestNode({ id: 'root', content: 'Root' }),
@@ -209,21 +227,21 @@ describe('NodeManager', () => {
       // Perform the merge: shallow node onto deeper node
       nodeManager.combineNodes('formatting', 'realtime');
 
-      // Verify the children preserve their original depth and get correct parent
+      // Verify the children shifted to the correct parent (features, not root)
       const child1After = nodeManager.findNode('child1');
       const child2After = nodeManager.findNode('child2');
 
       const child1Visible = nodeManager.visibleNodes.find((n) => n.id === 'child1');
       const child2Visible = nodeManager.visibleNodes.find((n) => n.id === 'child2');
-      expect(child1Visible?.depth).toBe(1);
-      expect(child2Visible?.depth).toBe(1);
-      expect(child1After?.parentId).toBe('root');
-      expect(child2After?.parentId).toBe('root');
+      expect(child1Visible?.depth).toBe(2);
+      expect(child2Visible?.depth).toBe(2);
+      expect(child1After?.parentId).toBe('features');
+      expect(child2After?.parentId).toBe('features');
 
-      // Verify parent now contains the children
-      const rootVisible = nodeManager.visibleNodes.find((n) => n.id === 'root');
-      expect(rootVisible?.children).toContain('child1');
-      expect(rootVisible?.children).toContain('child2');
+      // Verify features now contains the children
+      const featuresVisible = nodeManager.visibleNodes.find((n) => n.id === 'features');
+      expect(featuresVisible?.children).toContain('child1');
+      expect(featuresVisible?.children).toContain('child2');
 
       // Verify the source node was deleted
       expect(nodeManager.findNode('formatting')).toBeNull();
