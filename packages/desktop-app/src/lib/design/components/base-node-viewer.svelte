@@ -86,13 +86,38 @@
     // Skip the first run (when previousNodeIds is empty)
     if (previousNodeIds.size > 0) {
       // Detect deleted nodes by comparing with previous state
+      const deletedNodeIds: string[] = [];
       for (const prevId of previousNodeIds) {
         if (!currentNodeIds.has(prevId) && !nodeManager.findNode(prevId)) {
-          // Node was deleted - persist deletion to database
-          databaseService.deleteNode(prevId).catch((error) => {
-            console.error('[BaseNodeViewer] Failed to delete node from database:', prevId, error);
-          });
+          deletedNodeIds.push(prevId);
         }
+      }
+
+      // Wait for any pending structural updates before processing deletions
+      // This prevents CASCADE delete from removing children before their parentId is updated
+      if (deletedNodeIds.length > 0) {
+        (async () => {
+          // Poll until all pending updates complete (with timeout)
+          const startTime = Date.now();
+          while (pendingStructuralUpdates > 0 && Date.now() - startTime < 5000) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+
+          if (pendingStructuralUpdates > 0) {
+            console.warn(
+              '[BaseNodeViewer] Timeout waiting for structural updates, proceeding with deletion'
+            );
+          }
+
+          // Now safe to delete nodes
+          for (const nodeId of deletedNodeIds) {
+            try {
+              await databaseService.deleteNode(nodeId);
+            } catch (error) {
+              console.error('[BaseNodeViewer] Failed to delete node from database:', nodeId, error);
+            }
+          }
+        })();
       }
     }
 
@@ -110,10 +135,20 @@
     { parentId: string | null; beforeSiblingId: string | null }
   >();
 
+  // Track pending updates to prevent race conditions with deletions
+  let pendingStructuralUpdates = 0;
+
   $effect(() => {
     if (!parentId) return;
 
     const visibleNodes = nodeManager.visibleNodes;
+
+    // Collect all structural changes first
+    const updates: Array<{
+      nodeId: string;
+      parentId: string | null;
+      beforeSiblingId: string | null;
+    }> = [];
 
     for (const node of visibleNodes) {
       // Skip placeholder nodes
@@ -133,19 +168,41 @@
         (prevStructure.parentId !== currentStructure.parentId ||
           prevStructure.beforeSiblingId !== currentStructure.beforeSiblingId)
       ) {
-        // Structural change detected - persist immediately to prevent CASCADE delete issues
-        databaseService
-          .updateNode(node.id, {
-            parentId: node.parentId,
-            beforeSiblingId: node.beforeSiblingId
-          })
-          .catch((error) => {
-            console.error('[BaseNodeViewer] Failed to persist structural change:', node.id, error);
-          });
+        // Structural change detected - queue for persistence
+        updates.push({
+          nodeId: node.id,
+          parentId: node.parentId,
+          beforeSiblingId: node.beforeSiblingId
+        });
       }
 
       // Update tracking
       previousStructure.set(node.id, currentStructure);
+    }
+
+    // Persist updates sequentially to avoid SQLite "database is locked" errors
+    // SQLite doesn't handle concurrent writes well, so we must serialize them
+    if (updates.length > 0) {
+      pendingStructuralUpdates += updates.length;
+
+      (async () => {
+        for (const update of updates) {
+          try {
+            await databaseService.updateNode(update.nodeId, {
+              parentId: update.parentId,
+              beforeSiblingId: update.beforeSiblingId
+            });
+          } catch (error) {
+            console.error(
+              '[BaseNodeViewer] Failed to persist structural change:',
+              update.nodeId,
+              error
+            );
+          } finally {
+            pendingStructuralUpdates--;
+          }
+        }
+      })();
     }
 
     // Clean up tracking for nodes that no longer exist
