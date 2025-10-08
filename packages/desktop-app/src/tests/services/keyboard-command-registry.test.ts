@@ -9,8 +9,8 @@ import {
   KeyboardCommandRegistry,
   type KeyboardCommand,
   type KeyboardContext
-} from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+} from '$lib/services/keyboard-command-registry';
+import type { ContentEditableController } from '$lib/design/components/content-editable-controller';
 
 describe('KeyboardCommandRegistry', () => {
   let registry: KeyboardCommandRegistry;

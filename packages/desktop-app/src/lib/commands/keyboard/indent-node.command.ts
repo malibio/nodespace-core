@@ -15,7 +15,7 @@
  * - Maintains tree integrity
  */
 
-import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
 
 export class IndentNodeCommand implements KeyboardCommand {
   id = 'indent-node';

@@ -6,8 +6,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IndentNodeCommand } from '$lib/commands/keyboard/indent-node.command';
-import type { KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardContext } from '$lib/services/keyboard-command-registry';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboard-command-registry';
 
 describe('IndentNodeCommand', () => {
   let command: IndentNodeCommand;

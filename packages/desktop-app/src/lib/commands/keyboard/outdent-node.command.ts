@@ -14,7 +14,7 @@
  * - Updates parent-child relationships
  */
 
-import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
 
 export class OutdentNodeCommand implements KeyboardCommand {
   id = 'outdent-node';

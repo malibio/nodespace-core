@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { KeyboardCommandRegistry } from '$lib/services/keyboardCommandRegistry';
+import { KeyboardCommandRegistry } from '$lib/services/keyboard-command-registry';
 import { CreateNodeCommand } from '$lib/commands/keyboard/create-node.command';
 import { IndentNodeCommand } from '$lib/commands/keyboard/indent-node.command';
 import { OutdentNodeCommand } from '$lib/commands/keyboard/outdent-node.command';
@@ -18,7 +18,7 @@ import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
 import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
-import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboard-command-registry';
 
 describe('Keyboard Command Integration', () => {
   let registry: KeyboardCommandRegistry;

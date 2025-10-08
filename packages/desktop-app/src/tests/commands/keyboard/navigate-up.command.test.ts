@@ -10,8 +10,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
-import type { KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardContext } from '$lib/services/keyboard-command-registry';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboard-command-registry';
 
 describe('NavigateUpCommand', () => {
   let command: NavigateUpCommand;

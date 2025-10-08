@@ -15,8 +15,8 @@
  * - Slash command dropdown interactions - checked before command execution
  */
 
-import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import { splitMarkdownContent } from '$lib/utils/markdownSplitter';
+import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
+import { splitMarkdownContent } from '$lib/utils/markdown-splitter';
 
 export class CreateNodeCommand implements KeyboardCommand {
   id = 'create-node';

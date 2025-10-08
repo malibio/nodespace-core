@@ -5,7 +5,7 @@
  * Provides a singleton registry for keyboard commands that can be extended by plugins.
  */
 
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+import type { ContentEditableController } from '$lib/design/components/content-editable-controller';
 
 /**
  * Extended controller interface for keyboard commands

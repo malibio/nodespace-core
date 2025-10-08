@@ -15,7 +15,7 @@
  * - Modal dropdown interactions (checked before command execution)
  */
 
-import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
 
 export class NavigateDownCommand implements KeyboardCommand {
   id = 'navigate-down';

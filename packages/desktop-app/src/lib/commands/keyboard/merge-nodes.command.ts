@@ -16,7 +16,7 @@
  * - `new MergeNodesCommand('down')` for Delete (merge with below) - not yet implemented
  */
 
-import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
 
 export type MergeDirection = 'up' | 'down';
 

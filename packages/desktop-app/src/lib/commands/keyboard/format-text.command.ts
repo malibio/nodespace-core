@@ -18,7 +18,7 @@
  * - Smart context detection
  */
 
-import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboardCommandRegistry';
+import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
 
 type FormatType = 'bold' | 'italic' | 'underline';
 
