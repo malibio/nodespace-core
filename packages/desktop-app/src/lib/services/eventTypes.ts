@@ -291,6 +291,13 @@ export interface PersistenceFailedEvent extends BaseEvent {
   namespace: 'error';
   message: string;
   failedNodeIds: string[];
+  failureReason: 'timeout' | 'foreign-key-constraint' | 'database-locked' | 'unknown';
+  canRetry: boolean; // Whether retry might succeed
+  affectedOperations: Array<{
+    nodeId: string;
+    operation: 'create' | 'update' | 'delete';
+    error?: string;
+  }>;
   metadata?: Record<string, unknown>;
 }
 

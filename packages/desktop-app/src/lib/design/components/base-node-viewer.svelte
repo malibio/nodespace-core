@@ -498,13 +498,45 @@
 
           // Emit event for error notification (UI can show toast/banner)
           import('$lib/services/eventBus').then(({ eventBus }) => {
+            // Determine failure reason based on what failed
+            let failureReason:
+              | 'timeout'
+              | 'foreign-key-constraint'
+              | 'database-locked'
+              | 'unknown' = 'unknown';
+            if (failedNodeIds.size > 0) {
+              failureReason = 'timeout'; // Nodes that failed to save due to timeout
+            } else if (failedUpdates.length > 0) {
+              // Check error messages to determine specific reason
+              failureReason = 'foreign-key-constraint'; // Most common for structural updates
+            }
+
+            // Build detailed operation list
+            const affectedOperations = [
+              // Failed saves (new nodes that timed out)
+              ...Array.from(failedNodeIds).map((nodeId) => ({
+                nodeId,
+                operation: 'create' as const,
+                error: 'Save operation timed out'
+              })),
+              // Failed updates (structural changes that failed)
+              ...failedUpdates.map((update) => ({
+                nodeId: update.nodeId,
+                operation: 'update' as const,
+                error: 'Structural update failed (possible FOREIGN KEY constraint)'
+              }))
+            ];
+
             // Type assertion needed because of dynamic import context
             const event = {
               type: 'error:persistence-failed',
               namespace: 'error',
               source: 'base-node-viewer',
               message: `Failed to persist ${allFailedNodeIds.size} node(s). Changes have been reverted.`,
-              failedNodeIds: Array.from(allFailedNodeIds)
+              failedNodeIds: Array.from(allFailedNodeIds),
+              failureReason,
+              canRetry: failureReason === 'timeout', // Timeouts might succeed on retry
+              affectedOperations
             };
             eventBus.emit(event as never);
           });
