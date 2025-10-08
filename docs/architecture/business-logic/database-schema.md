@@ -80,11 +80,71 @@ WHERE m.node_id = 'source-node-id';
 
 ## Schema-as-Node Pattern
 
+### Schema Field Definition
+
+Every schema field includes type information, protection levels, and optional constraints:
+
+```typescript
+interface SchemaField {
+  name: string;                // Field name (e.g., "status", "due_date")
+  type: string;                // Field type: 'text', 'number', 'boolean', 'date', 'enum', 'array', 'json', or schema reference
+  protection: 'core' | 'user' | 'system';  // Protection level
+
+  // Enum-specific properties
+  core_values?: string[];      // Protected enum values (cannot be removed)
+  user_values?: string[];      // User-extensible enum values
+
+  indexed: boolean;            // Whether to create JSON path index
+  required?: boolean;          // Field is required
+  extensible?: boolean;        // Allow extending enum values
+  default?: unknown;           // Default value
+  description?: string;        // Field description
+  item_type?: string;          // For array types
+}
+```
+
+**Protection Levels:**
+
+| Level | Can Delete? | Can Modify Type? | Can Remove Enum Values? | Use Case |
+|-------|-------------|------------------|------------------------|----------|
+| `core` | ❌ No | ❌ No | ❌ No (core_values only) | Fields UI components depend on |
+| `user` | ✅ Yes | ✅ Yes | ✅ Yes | User-added custom fields |
+| `system` | ❌ No | ❌ No | ❌ No | Auto-managed read-only fields |
+
+**Field Types:**
+
+- **Primitive Types**: `text`, `number`, `boolean`, `json`
+- **Special Types**: `date` (references date node by ID), `enum` (validated string with allowed values)
+- **Schema References**: Any schema name (e.g., `person`, `project`) for entity relationships
+- **Collections**: `array` with `item_type` specifying element type
+
+**Enum Fields:**
+
+Enum fields support protected core values and user-extensible values:
+
+```json
+{
+  "name": "status",
+  "type": "enum",
+  "protection": "core",
+  "core_values": ["OPEN", "IN_PROGRESS", "DONE"],  // Cannot be removed
+  "user_values": ["BLOCKED", "WAITING"],           // User can add/remove
+  "extensible": true                                // Allows user extension
+}
+```
+
+Users can extend enum values through the SchemaService API:
+- Add new values to `user_values` array
+- Cannot remove `core_values` (UI depends on these)
+- Cannot delete core-protected enum fields
+
 ### Core Built-In Schemas
 
 NodeSpace includes pre-seeded core schemas stored as nodes. **Convention**: Schema nodes have `id = type_name` and `node_type = "schema"`.
 
 #### Task Schema
+
+**Schema Definition with Protection Levels:**
 
 ```sql
 INSERT INTO nodes (
@@ -102,17 +162,56 @@ INSERT INTO nodes (
     NULL,
     '{
         "is_core": true,
-        "description": "Task tracking with status, assignee, and due dates",
+        "version": 1,
+        "description": "Task tracking with status and due dates",
         "fields": [
-            {"name": "status", "type": "text", "indexed": true, "required": true},
-            {"name": "assignee", "type": "person", "indexed": true},
-            {"name": "due_date", "type": "date", "indexed": true},
-            {"name": "priority", "type": "text", "indexed": true},
-            {"name": "description", "type": "text", "indexed": false}
+            {
+                "name": "status",
+                "type": "enum",
+                "protection": "core",
+                "core_values": ["OPEN", "IN_PROGRESS", "DONE"],
+                "user_values": [],
+                "indexed": true,
+                "required": true,
+                "extensible": true,
+                "default": "OPEN",
+                "description": "Task status - core values protected, users can extend"
+            },
+            {
+                "name": "due_date",
+                "type": "date",
+                "protection": "core",
+                "indexed": true,
+                "description": "Date node ID (YYYY-MM-DD format)"
+            },
+            {
+                "name": "completed_at",
+                "type": "date",
+                "protection": "core",
+                "indexed": true,
+                "description": "Date node ID when task was completed"
+            },
+            {
+                "name": "started_at",
+                "type": "date",
+                "protection": "core",
+                "indexed": true,
+                "description": "Date node ID when task was started"
+            }
         ]
     }'
 );
 ```
+
+**Protection Levels:**
+- `core`: Cannot be deleted, type cannot change. Core enum values cannot be removed. (TaskNode UI depends on these)
+- `user`: User-added fields, fully modifiable/deletable
+- `system`: Auto-managed fields, read-only (future use)
+
+**Enum Field Structure:**
+- `core_values`: Protected enum values (["OPEN", "IN_PROGRESS", "DONE"]) - cannot be removed
+- `user_values`: User-extensible values (e.g., ["BLOCKED", "WAITING"]) - can be added/removed
+- `extensible`: true allows users to add new values via UI
 
 **Task Instance Example:**
 ```sql
@@ -130,23 +229,46 @@ INSERT INTO nodes (
     '2025-01-03',          -- Parent is the daily note (can be indented under other nodes)
     '2025-01-03',          -- Created on daily note page (immutable, for bulk fetch)
     '{
-        "status": "in_progress",
-        "assignee": "person-uuid-456",
+        "status": "IN_PROGRESS",
         "due_date": "2025-01-10",
-        "priority": "high",
-        "description": "Migrate from hybrid to Pure JSON architecture"
+        "started_at": "2025-01-03"
+    }'
+);
+```
+
+**User-Extended Task Example:**
+```sql
+-- User extended status enum with "BLOCKED" value
+-- User added custom field "priority" (protection: user)
+INSERT INTO nodes (
+    id,
+    node_type,
+    content,
+    parent_id,
+    origin_node_id,
+    properties
+) VALUES (
+    'uuid-task-456',
+    'task',
+    'Fix critical bug',
+    '2025-01-03',
+    '2025-01-03',
+    '{
+        "status": "BLOCKED",
+        "due_date": "2025-01-05",
+        "priority": "URGENT",
+        "assignee": "person-uuid-789"
     }'
 );
 ```
 
 **Query with JSON Path Index:**
 ```sql
--- Find high priority tasks (uses JSON path index on properties->>'$.priority')
+-- Find tasks with specific status (enum validation ensures valid values)
 SELECT * FROM nodes
 WHERE node_type = 'task'
-  AND properties->>'$.priority' = 'high'
-  AND properties->>'$.status' != 'completed';
-```
+  AND properties->>'$.status' = 'IN_PROGRESS'
+  AND properties->>'$.due_date' IS NOT NULL;
 
 #### Person Schema
 
