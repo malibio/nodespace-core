@@ -8,8 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   KeyboardCommandRegistry,
   type KeyboardCommand,
-  type KeyboardContext,
-  type KeyCombination
+  type KeyboardContext
 } from '$lib/services/keyboardCommandRegistry';
 import type { ContentEditableController } from '$lib/design/components/contentEditableController';
 

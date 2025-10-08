@@ -167,10 +167,7 @@ export class KeyboardCommandRegistry {
 
       return handled;
     } catch (error) {
-      console.error(
-        `[KeyboardCommandRegistry] Error executing command ${command.id}:`,
-        error
-      );
+      console.error(`[KeyboardCommandRegistry] Error executing command ${command.id}:`, error);
       return false;
     }
   }
