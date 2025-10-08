@@ -6,7 +6,7 @@
  * This interface is for documentation and implementation guidance only.
  */
 
-import type { NodeViewerEventDetails, NodeViewerProps } from './node-viewers.js';
+import type { NodeViewerEventDetails, NodeViewerProps } from '../../types/node-viewers';
 
 export interface BaseNodeViewerInterface {
   // Props - use NodeViewerProps in actual components

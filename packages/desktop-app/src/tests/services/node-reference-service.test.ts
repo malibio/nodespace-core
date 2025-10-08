@@ -219,7 +219,7 @@ describe('NodeReferenceService - Universal Node Reference System', () => {
       nodeManager,
       hierarchyService,
       nodeOperationsService,
-      databaseService as unknown as import('../../lib/services/tauriNodeService').TauriNodeService,
+      databaseService as unknown as import('../../lib/services/tauri-node-service').TauriNodeService,
       contentProcessor
     );
   });

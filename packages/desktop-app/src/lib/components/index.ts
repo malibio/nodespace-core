@@ -16,7 +16,7 @@ export interface AutocompleteModalProps {
   visible: boolean;
   position: { x: number; y: number };
   query: string;
-  nodeReferenceService: import('$lib/services/nodeReferenceService').NodeReferenceService;
+  nodeReferenceService: import('$lib/services/node-reference-service').NodeReferenceService;
 }
 
 export interface NewNodeRequest {

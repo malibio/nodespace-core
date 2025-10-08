@@ -7,7 +7,7 @@
  */
 
 import type { SvelteComponent } from 'svelte';
-import type { ComponentDecoration } from './component-decoration';
+import type { ComponentDecoration } from '../types/component-decoration';
 import { getNodeReferenceComponent } from '../components/references';
 import { pluginRegistry } from '../plugins/index';
 import { performanceTracker } from './performance-tracker';

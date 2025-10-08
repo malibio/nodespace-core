@@ -661,7 +661,7 @@ describe('HierarchyService', () => {
       void initialCacheSize; // Used for cache size verification
 
       // Emit hierarchy update event
-      eventBus.emit<import('../../lib/services/eventTypes').NodeUpdatedEvent>({
+      eventBus.emit<import('../../lib/services/event-types').NodeUpdatedEvent>({
         type: 'node:updated',
         namespace: 'lifecycle',
         source: 'test',
@@ -699,7 +699,7 @@ describe('HierarchyService', () => {
       hierarchyService.getNodeDepth('node2');
 
       // Emit hierarchy changed event
-      eventBus.emit<import('../../lib/services/eventTypes').HierarchyChangedEvent>({
+      eventBus.emit<import('../../lib/services/event-types').HierarchyChangedEvent>({
         type: 'hierarchy:changed',
         namespace: 'lifecycle',
         source: 'test',

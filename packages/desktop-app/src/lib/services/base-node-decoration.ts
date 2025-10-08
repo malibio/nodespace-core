@@ -15,7 +15,7 @@
  */
 
 import type { NodeReferenceService } from './node-reference-service';
-import type { ComponentDecoration } from './component-decoration';
+import type { ComponentDecoration } from '../types/component-decoration';
 import { getNodeReferenceComponent } from '../components/references';
 
 // ============================================================================

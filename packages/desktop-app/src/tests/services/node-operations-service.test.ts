@@ -539,7 +539,7 @@ const x = 42;
       }
 
       // Simulate content update that should trigger mention processing
-      eventBus.emit<import('../../lib/services/eventTypes').NodeUpdatedEvent>({
+      eventBus.emit<import('../../lib/services/event-types').NodeUpdatedEvent>({
         type: 'node:updated',
         namespace: 'lifecycle',
         source: 'test',
