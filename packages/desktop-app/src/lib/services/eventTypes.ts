@@ -285,6 +285,15 @@ export interface NodeReferencePropagationEvent extends BaseEvent {
 // Event Union Type
 // ============================================================================
 
+// Error Events
+export interface PersistenceFailedEvent extends BaseEvent {
+  type: 'error:persistence-failed';
+  namespace: 'error';
+  message: string;
+  failedNodeIds: string[];
+  metadata?: Record<string, unknown>;
+}
+
 export type NodeSpaceEvent =
   // Dynamic State Coordination
   | NodeStatusChangedEvent
@@ -316,7 +325,9 @@ export type NodeSpaceEvent =
   | NavigationEvent
   // Performance and Debug
   | PerformanceMetricEvent
-  | DebugEvent;
+  | DebugEvent
+  // Error Events
+  | PersistenceFailedEvent;
 
 // ============================================================================
 // Event Handler Types

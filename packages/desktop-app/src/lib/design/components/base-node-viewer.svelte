@@ -65,6 +65,10 @@
   const CONTENT_SAVE_TIMEOUT_MS = 5000; // 5 seconds
   const TIMEOUT_GRACE_PERIOD_MS = 50; // 50ms grace period after timeout
 
+  // Explicit coordination: Track when content save watcher has completed its current run
+  // This makes the dependency between watchers explicit rather than relying on declaration order
+  let contentSavePhaseComplete = $state(false);
+
   /**
    * Wait for a pending node save to complete, with timeout and grace period
    * @param nodeIds - Array of node IDs to wait for
@@ -88,8 +92,30 @@
       ]);
     } catch (error) {
       console.error('[BaseNodeViewer] Timeout or error waiting for content saves:', error);
+
       // Add grace period to allow in-flight saves to complete
       await new Promise((resolve) => setTimeout(resolve, TIMEOUT_GRACE_PERIOD_MS));
+
+      // After grace period, verify nodes actually exist in database
+      // This catches cases where the save is truly stuck and hasn't completed
+      for (const nodeId of nodeIds) {
+        const promise = pendingContentSavePromises.get(nodeId);
+        if (promise) {
+          // Node still has pending save - check if it exists in database
+          try {
+            const exists = await databaseService.getNode(nodeId);
+            if (!exists) {
+              console.error(
+                '[BaseNodeViewer] CRITICAL: Node not saved to database after timeout:',
+                nodeId
+              );
+              // Don't throw - let validation below handle skipping the update
+            }
+          } catch (dbError) {
+            console.error('[BaseNodeViewer] Failed to verify node existence:', nodeId, dbError);
+          }
+        }
+      }
     }
   }
 
@@ -108,7 +134,13 @@
   // DO NOT move this watcher below the structural change watcher - it will break coordination
   // ============================================================================
   $effect.pre(() => {
-    if (!parentId) return;
+    if (!parentId) {
+      contentSavePhaseComplete = true;
+      return;
+    }
+
+    // Reset flag at start of content save phase
+    contentSavePhaseComplete = false;
 
     const nodes = nodeManager.visibleNodes;
 
@@ -127,10 +159,17 @@
         if (isNewNode) {
           // Save immediately without debounce - structural updates may need to reference this node
           // Track the promise per node ID so structural updates can wait for it
-          const savePromise = (async () => {
-            await saveNode(node.id, node.content, node.nodeType);
-            pendingContentSavePromises.delete(node.id);
-          })();
+          const savePromise = saveNode(node.id, node.content, node.nodeType);
+
+          // Clean up Map entry when save completes (success or failure)
+          // Using finally() ensures atomic cleanup with promise resolution
+          // This prevents race conditions where structural watcher checks Map
+          // between save completion and cleanup
+          savePromise.finally(() => {
+            // Use microtask timing to ensure Map is available during awaits
+            Promise.resolve().then(() => pendingContentSavePromises.delete(node.id));
+          });
+
           pendingContentSavePromises.set(node.id, savePromise);
         } else {
           // Existing node - use debounce for performance
@@ -138,6 +177,9 @@
         }
       }
     }
+
+    // Mark content save phase as complete
+    contentSavePhaseComplete = true;
   });
 
   // Track node IDs to detect deletions
@@ -164,15 +206,23 @@
       if (deletedNodeIds.length > 0) {
         // Clean up previousStructure: null out any beforeSiblingId references to deleted nodes
         // This prevents FOREIGN KEY errors when other nodes reference the deleted node
+        // Uses reverse index for O(1) lookup instead of O(n) iteration
         for (const deletedId of deletedNodeIds) {
-          for (const [nodeId, structure] of previousStructure) {
-            if (structure.beforeSiblingId === deletedId) {
+          const affectedNodes = siblingToNodesMap.get(deletedId) || new Set();
+          for (const nodeId of affectedNodes) {
+            const structure = previousStructure.get(nodeId);
+            if (structure) {
+              const oldBeforeSiblingId = structure.beforeSiblingId;
               previousStructure.set(nodeId, {
                 ...structure,
                 beforeSiblingId: null
               });
+              // Update reverse index
+              updateSiblingIndex(nodeId, oldBeforeSiblingId, null);
             }
           }
+          // Clean up the deleted node's entry
+          siblingToNodesMap.delete(deletedId);
         }
 
         (async () => {
@@ -222,8 +272,49 @@
     { parentId: string | null; beforeSiblingId: string | null }
   >();
 
+  // Reverse index: Map from beforeSiblingId -> Set of node IDs that reference it
+  // This allows O(1) lookup when cleaning up deleted sibling references
+  const siblingToNodesMap = new Map<string, Set<string>>();
+
+  /**
+   * Update reverse index when tracking structure changes
+   */
+  function updateSiblingIndex(
+    nodeId: string,
+    oldBeforeSiblingId: string | null,
+    newBeforeSiblingId: string | null
+  ): void {
+    // Remove from old index entry
+    if (oldBeforeSiblingId) {
+      const nodes = siblingToNodesMap.get(oldBeforeSiblingId);
+      if (nodes) {
+        nodes.delete(nodeId);
+        if (nodes.size === 0) {
+          siblingToNodesMap.delete(oldBeforeSiblingId);
+        }
+      }
+    }
+
+    // Add to new index entry
+    if (newBeforeSiblingId) {
+      if (!siblingToNodesMap.has(newBeforeSiblingId)) {
+        siblingToNodesMap.set(newBeforeSiblingId, new Set());
+      }
+      siblingToNodesMap.get(newBeforeSiblingId)!.add(nodeId);
+    }
+  }
+
   $effect.pre(() => {
     if (!parentId) return;
+
+    // EXPLICIT GUARD: Wait for content save phase to complete
+    // This prevents race conditions if watchers run out of expected order
+    if (!contentSavePhaseComplete) {
+      console.warn(
+        '[BaseNodeViewer] Structural watcher running before content save completed - possible ordering issue'
+      );
+      return;
+    }
 
     const visibleNodes = nodeManager.visibleNodes;
 
@@ -262,7 +353,17 @@
         // No change detected OR new node - update tracking to current state
         // New nodes have their structure saved via saveNodeWithParent() in content save watcher
         // So we can safely track them here to avoid redundant structural updates
+        const prevStructure = previousStructure.get(node.id);
         previousStructure.set(node.id, currentStructure);
+
+        // Update reverse index if beforeSiblingId changed
+        if (!prevStructure || prevStructure.beforeSiblingId !== currentStructure.beforeSiblingId) {
+          updateSiblingIndex(
+            node.id,
+            prevStructure?.beforeSiblingId || null,
+            currentStructure.beforeSiblingId
+          );
+        }
       }
     }
 
@@ -284,6 +385,9 @@
         // Wait for all relevant saves with timeout and grace period
         await waitForNodeSavesIfPending(nodeIdsToWaitFor);
 
+        // Track failed updates for rollback
+        const failedUpdates: typeof updates = [];
+
         for (const update of updates) {
           try {
             // Validate both parentId and beforeSiblingId references exist to prevent FOREIGN KEY errors
@@ -300,12 +404,13 @@
                 const parentNode = nodeManager.nodes.get(validatedParentId);
                 if (!parentNode) {
                   console.warn(
-                    '[BaseNodeViewer] parentId references deleted node, cannot update:',
+                    '[BaseNodeViewer] parentId references deleted node, queuing rollback:',
                     update.nodeId,
                     'referenced parent:',
                     validatedParentId
                   );
-                  // Skip this update entirely - we can't update without a valid parent
+                  // Queue for rollback instead of skipping silently
+                  failedUpdates.push(update);
                   continue;
                 }
               }
@@ -337,17 +442,51 @@
             );
 
             // Update tracking after successful persistence
+            const oldStructure = previousStructure.get(update.nodeId);
             previousStructure.set(update.nodeId, {
               parentId: validatedParentId,
               beforeSiblingId: validatedBeforeSiblingId
             });
+
+            // Update reverse index
+            updateSiblingIndex(
+              update.nodeId,
+              oldStructure?.beforeSiblingId || null,
+              validatedBeforeSiblingId
+            );
           } catch (error) {
             console.error(
               '[BaseNodeViewer] Failed to persist structural change:',
               update.nodeId,
               error
             );
+            // Queue for rollback
+            failedUpdates.push(update);
           }
+        }
+
+        // Handle failed updates: emit error event for user notification
+        if (failedUpdates.length > 0) {
+          console.warn(
+            '[BaseNodeViewer] Failed to persist updates:',
+            failedUpdates.length,
+            'nodes affected'
+          );
+
+          // Emit event for error notification (UI can show toast/banner)
+          // TODO: Implement rollback mechanism to revert in-memory state to match database
+          // This requires adding updateNodeStructure() method to nodeManager
+          import('$lib/services/eventBus').then(({ eventBus }) => {
+            // Type assertion needed because of dynamic import context
+            const event = {
+              type: 'error:persistence-failed',
+              namespace: 'error',
+              source: 'base-node-viewer',
+              message: `Failed to persist ${failedUpdates.length} structural update(s). Please refresh to sync state.`,
+              failedNodeIds: failedUpdates.map((u) => u.nodeId)
+            };
+            eventBus.emit(event as never);
+          });
         }
       })();
     }
