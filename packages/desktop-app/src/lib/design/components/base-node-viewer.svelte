@@ -69,6 +69,10 @@
   // This makes the dependency between watchers explicit rather than relying on declaration order
   let contentSavePhasePromise: Promise<void> = Promise.resolve();
 
+  // Explicit coordination: Promise that resolves when structural updates complete
+  // The deletion watcher awaits this to ensure children are reassigned before parent deletion
+  let pendingStructuralUpdatesPromise: Promise<void> | null = null;
+
   /**
    * Wait for a pending node save to complete, with timeout and grace period
    * @param nodeIds - Array of node IDs to wait for
@@ -228,7 +232,28 @@
         }
 
         (async () => {
-          // Safe to delete nodes - queue ensures proper ordering
+          // CRITICAL: Await structural updates to complete before deleting
+          // This ensures children are reassigned BEFORE parent deletion triggers CASCADE
+          if (pendingStructuralUpdatesPromise) {
+            try {
+              await Promise.race([
+                pendingStructuralUpdatesPromise,
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () => reject(new Error('Timeout waiting for structural updates')),
+                    CONTENT_SAVE_TIMEOUT_MS
+                  )
+                )
+              ]);
+            } catch (error) {
+              console.warn(
+                '[BaseNodeViewer] Timeout or error waiting for structural updates:',
+                error
+              );
+            }
+          }
+
+          // Now safe to delete nodes - children have been reassigned
           for (const nodeId of deletedNodeIds) {
             try {
               await queueDatabaseWrite(() => databaseService.deleteNode(nodeId));
@@ -370,7 +395,8 @@
     // All writes go through the global queue to ensure serialization
     if (updates.length > 0) {
       // Process updates asynchronously - queue ensures proper serialization
-      (async () => {
+      // Track this promise so deletion watcher can await completion
+      pendingStructuralUpdatesPromise = (async () => {
         // CRITICAL: Wait for content save phase to complete first
         // This ensures new nodes are added to pendingContentSavePromises Map
         await contentSavePhasePromise;
@@ -555,7 +581,13 @@
             eventBus.emit(event as never);
           });
         }
+
+        // Clear promise after all updates complete
+        pendingStructuralUpdatesPromise = null;
       })();
+    } else {
+      // No updates to process - clear promise immediately
+      pendingStructuralUpdatesPromise = null;
     }
 
     // Clean up tracking for nodes that no longer exist

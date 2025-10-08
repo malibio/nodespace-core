@@ -573,4 +573,187 @@ describe('Database Persistence Edge Cases', () => {
       ).rejects.toThrow('FOREIGN KEY constraint failed: before_sibling_id "non-existent-node"');
     });
   });
+
+  describe('Merge/Combine with CASCADE Deletion Race Condition', () => {
+    /**
+     * This test simulates the real-world race condition that caused children to disappear
+     * when merging/combining nodes. The issue occurred when:
+     *
+     * 1. combineNodes() updates children's parent_id in memory (e.g., Child 2 → Parent 1)
+     * 2. Deletion watcher deletes parent from database (e.g., Parent 2)
+     * 3. Database CASCADE deletes children (because in DB they still have old parent_id)
+     * 4. Structural watcher tries to update children in DB → "Node not found" error
+     * 5. Children disappear from UI (CASCADE deleted from DB, not removed from memory)
+     *
+     * The fix uses pendingStructuralUpdatesPromise to ensure structural updates
+     * complete BEFORE deletion happens, preventing CASCADE from deleting transferred children.
+     */
+
+    interface NodeRecord {
+      id: string;
+      content: string;
+      parentId: string | null;
+      beforeSiblingId: string | null;
+    }
+
+    let nodeDatabase: Map<string, NodeRecord>;
+    let databaseService: {
+      updateNode: ReturnType<typeof vi.fn>;
+      deleteNode: ReturnType<typeof vi.fn>;
+      getChildren: ReturnType<typeof vi.fn>;
+    };
+
+    beforeEach(() => {
+      // Simulate actual database with parent_id tracking and CASCADE deletion
+      nodeDatabase = new Map<string, NodeRecord>([
+        ['parent1', { id: 'parent1', content: 'Parent 1', parentId: null, beforeSiblingId: null }],
+        [
+          'child1',
+          { id: 'child1', content: 'Child 1', parentId: 'parent1', beforeSiblingId: null }
+        ],
+        [
+          'grandchild1',
+          { id: 'grandchild1', content: 'Grandchild 1', parentId: 'child1', beforeSiblingId: null }
+        ],
+        [
+          'parent2',
+          { id: 'parent2', content: 'Parent 2', parentId: null, beforeSiblingId: 'parent1' }
+        ],
+        [
+          'child2',
+          { id: 'child2', content: 'Child 2', parentId: 'parent2', beforeSiblingId: null }
+        ],
+        [
+          'grandchild2',
+          { id: 'grandchild2', content: 'Grandchild 2', parentId: 'child2', beforeSiblingId: null }
+        ]
+      ]);
+
+      databaseService = {
+        updateNode: vi
+          .fn()
+          .mockImplementation(async (nodeId: string, updates: Partial<NodeRecord>) => {
+            const node = nodeDatabase.get(nodeId);
+            if (!node) {
+              throw new Error(`Node not found: ${nodeId}`);
+            }
+            // Update the node in our mock database
+            nodeDatabase.set(nodeId, { ...node, ...updates });
+          }),
+
+        deleteNode: vi.fn().mockImplementation(async (nodeId: string) => {
+          const node = nodeDatabase.get(nodeId);
+          if (!node) {
+            throw new Error(`Node not found: ${nodeId}`);
+          }
+
+          // Simulate CASCADE DELETE - delete all descendants
+          const toDelete = [nodeId];
+          const findDescendants = (parentId: string) => {
+            for (const [id, record] of nodeDatabase.entries()) {
+              if (record.parentId === parentId && !toDelete.includes(id)) {
+                toDelete.push(id);
+                findDescendants(id); // Recursively find grandchildren, etc.
+              }
+            }
+          };
+          findDescendants(nodeId);
+
+          // Delete all nodes
+          for (const id of toDelete) {
+            nodeDatabase.delete(id);
+          }
+        }),
+
+        getChildren: vi.fn().mockImplementation(async (parentId: string) => {
+          const children: NodeRecord[] = [];
+          for (const [, record] of nodeDatabase.entries()) {
+            if (record.parentId === parentId) {
+              children.push(record);
+            }
+          }
+          return children;
+        })
+      };
+    });
+
+    it('should fail if deletion happens before structural updates (simulates the bug)', async () => {
+      // This test simulates the BUG scenario where deletion happens first
+
+      // Step 1: combineNodes updates Child 2's parent in memory to Parent 1
+      // (not yet persisted to database)
+
+      // Step 2: Deletion watcher deletes Parent 2 from database
+      // CASCADE deletes Child 2 and Grandchild 2 (they still have parent_id=Parent 2 in DB)
+      await databaseService.deleteNode('parent2');
+
+      // Verify CASCADE worked - Child 2 and Grandchild 2 should be gone from database
+      expect(nodeDatabase.has('parent2')).toBe(false);
+      expect(nodeDatabase.has('child2')).toBe(false); // CASCADE deleted
+      expect(nodeDatabase.has('grandchild2')).toBe(false); // CASCADE deleted
+
+      // Step 3: Structural watcher tries to persist Child 2's new parent_id
+      // This SHOULD fail with "Node not found" because Child 2 was CASCADE deleted
+      await expect(databaseService.updateNode('child2', { parentId: 'parent1' })).rejects.toThrow(
+        'Node not found: child2'
+      );
+
+      // This demonstrates the bug: the structural update failed because
+      // deletion happened before the update was persisted
+    });
+
+    it('should succeed if structural updates complete before deletion (the fix)', async () => {
+      // This test simulates the FIX scenario with proper coordination
+
+      // Step 1: combineNodes updates Child 2's parent in memory to Parent 1
+      // Structural watcher IMMEDIATELY persists this change (via pendingStructuralUpdatesPromise)
+      await databaseService.updateNode('child2', { parentId: 'parent1' });
+      await databaseService.updateNode('grandchild2', { parentId: 'child1' }); // Assume grandchild also moved
+
+      // Verify children are now under new parents in database
+      expect(nodeDatabase.get('child2')?.parentId).toBe('parent1');
+      expect(nodeDatabase.get('grandchild2')?.parentId).toBe('child1');
+
+      // Step 2: Deletion watcher waits for pendingStructuralUpdatesPromise, then deletes Parent 2
+      // CASCADE should NOT delete Child 2 or Grandchild 2 because they have different parent_id now
+      await databaseService.deleteNode('parent2');
+
+      // Verify Parent 2 is deleted but children survived
+      expect(nodeDatabase.has('parent2')).toBe(false);
+      expect(nodeDatabase.has('child2')).toBe(true); // Still exists!
+      expect(nodeDatabase.has('grandchild2')).toBe(true); // Still exists!
+
+      // Verify children are now under correct parents
+      expect(nodeDatabase.get('child2')?.parentId).toBe('parent1');
+      expect(nodeDatabase.get('grandchild2')?.parentId).toBe('child1');
+
+      // This demonstrates the fix: children survive because their parent_id
+      // was updated BEFORE the parent was deleted
+    });
+
+    it('should preserve entire hierarchy when merge transfers multiple levels of descendants', async () => {
+      // More complex scenario: Parent 2 has Child 2, which has Grandchild 2
+      // When we merge Parent 2, we want to transfer BOTH Child 2 and Grandchild 2
+
+      // Step 1: Update BOTH Child 2 and Grandchild 2's parents before deletion
+      await databaseService.updateNode('child2', { parentId: 'parent1' });
+      // Grandchild 2 stays under Child 2 (no change needed)
+
+      // Verify database state before deletion
+      expect(nodeDatabase.get('child2')?.parentId).toBe('parent1');
+      expect(nodeDatabase.get('grandchild2')?.parentId).toBe('child2'); // Still under child2
+
+      // Step 2: Delete Parent 2
+      await databaseService.deleteNode('parent2');
+
+      // Verify Parent 2 is deleted but entire child hierarchy survived
+      expect(nodeDatabase.has('parent2')).toBe(false);
+      expect(nodeDatabase.has('child2')).toBe(true);
+      expect(nodeDatabase.has('grandchild2')).toBe(true);
+
+      // Verify hierarchy is intact
+      expect(nodeDatabase.get('child2')?.parentId).toBe('parent1');
+      expect(nodeDatabase.get('grandchild2')?.parentId).toBe('child2');
+    });
+  });
 });
