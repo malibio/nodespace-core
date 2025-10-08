@@ -136,15 +136,14 @@ export class KeyboardCommandRegistry {
 
   /**
    * Register a keyboard command for a specific key combination
+   * If command already exists, silently skip (idempotent operation)
    */
   public register(keyCombination: KeyCombination, command: KeyboardCommand): void {
     const key = this.serializeKeyCombination(keyCombination);
 
+    // Idempotent: if command already registered, skip (supports hot reload & multiple registrations)
     if (this.commands.has(key)) {
-      console.warn(
-        `[KeyboardCommandRegistry] Overwriting existing command for key: ${key}`,
-        this.commands.get(key)?.description
-      );
+      return;
     }
 
     this.commands.set(key, command);
