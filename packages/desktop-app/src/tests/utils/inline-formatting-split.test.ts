@@ -110,8 +110,8 @@ describe('Inline Formatting Split', () => {
     });
   });
 
-  describe('Strikethrough formatting (~~text~~)', () => {
-    it('should split strikethrough text in the middle', () => {
+  describe('Strikethrough formatting (~~text~~ and ~text~)', () => {
+    it('should split double tilde strikethrough text in the middle', () => {
       const content = '~~crossed out~~';
       const position = 9; // ~~crossed| out~~
 
@@ -120,6 +120,28 @@ describe('Inline Formatting Split', () => {
       expect(result.beforeContent).toBe('~~crossed~~');
       expect(result.afterContent).toBe('~~ out~~');
       expect(result.newNodeCursorPosition).toBe(2);
+    });
+
+    it('should split single tilde strikethrough text in the middle', () => {
+      const content = '~strikethrough~';
+      const position = 7; // ~strike|through~
+
+      const result = splitMarkdownContent(content, position);
+
+      expect(result.beforeContent).toBe('~strike~');
+      expect(result.afterContent).toBe('~through~');
+      expect(result.newNodeCursorPosition).toBe(1);
+    });
+
+    it('should handle single tilde in mixed content', () => {
+      const content = 'Testing some in-line **bold**, *italic*, and ~strikethrough~';
+      const position = 52; // Testing some in-line **bold**, *italic*, and ~strike|through~
+
+      const result = splitMarkdownContent(content, position);
+
+      expect(result.beforeContent).toBe('Testing some in-line **bold**, *italic*, and ~strike~');
+      expect(result.afterContent).toBe('~through~');
+      expect(result.newNodeCursorPosition).toBe(1);
     });
   });
 
