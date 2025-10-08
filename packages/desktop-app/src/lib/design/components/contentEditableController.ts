@@ -1132,11 +1132,10 @@ export class ContentEditableController {
         // Apply live formatting
         this.setLiveFormattedContent(newContent);
 
-        // Position cursor at the start of the new line (after opening markers)
-        // Calculate position: length of beforeContent + 1 (for newline) + opening markers
-        const newCursorPosition =
-          splitResult.beforeContent.length + 1 + splitResult.newNodeCursorPosition;
-        this.restoreCursorPosition(newCursorPosition);
+        // Position cursor in the second line (after opening markers)
+        // Since setLiveFormattedContent converts \n to <div> structure,
+        // we need to position relative to the second div's content
+        this.restoreCursorPosition(splitResult.newNodeCursorPosition, 1);
 
         // Notify of content change
         this.events.contentChanged(newContent);
@@ -2049,10 +2048,48 @@ export class ContentEditableController {
     return preCaretRange.toString().length === 0;
   }
 
-  private restoreCursorPosition(textOffset: number): void {
+  private restoreCursorPosition(textOffset: number, lineNumber?: number): void {
     const selection = window.getSelection();
     if (!selection) return;
 
+    // If lineNumber is specified and we're in multiline mode, position within that specific line
+    if (lineNumber !== undefined && this.config.allowMultiline) {
+      const divs = Array.from(this.element.querySelectorAll('div'));
+      if (lineNumber < divs.length) {
+        const targetDiv = divs[lineNumber];
+        const walker = document.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT, null);
+
+        let currentOffset = 0;
+        let currentNode;
+
+        while ((currentNode = walker.nextNode())) {
+          const nodeLength = currentNode.textContent?.length || 0;
+
+          if (currentOffset + nodeLength >= textOffset) {
+            const range = document.createRange();
+            const offsetInNode = textOffset - currentOffset;
+            range.setStart(currentNode, Math.min(offsetInNode, nodeLength));
+            range.setEnd(currentNode, Math.min(offsetInNode, nodeLength));
+
+            selection.removeAllRanges();
+            selection.addRange(range);
+            return;
+          }
+
+          currentOffset += nodeLength;
+        }
+
+        // If we didn't find the position, place cursor at end of the div
+        const range = document.createRange();
+        range.selectNodeContents(targetDiv);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+    }
+
+    // Default behavior: position linearly through all text nodes
     const walker = document.createTreeWalker(this.element, NodeFilter.SHOW_TEXT, null);
 
     let currentOffset = 0;
