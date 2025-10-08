@@ -117,19 +117,29 @@ NodeSpace supports the following field types for schema definitions:
 
 | Type | Description | Example Value | Notes |
 |------|-------------|---------------|-------|
-| `text` | String value | `"Hello World"` | General text content |
+| `text` | String value | `"Hello World"` | No size limit (SQLite TEXT supports up to ~2GB) |
 | `number` | Numeric value (integer or float) | `42`, `3.14`, `15000.00` | No currency formatting built-in |
 | `boolean` | True/false value | `true`, `false` | Stored as JSON boolean |
 | `date` | Reference to date node | `"2025-01-15"` | Date node ID (YYYY-MM-DD format) |
 | `enum` | Validated string from allowed values | `"OPEN"`, `"IN_PROGRESS"` | Requires `core_values` and/or `user_values` |
 | `array` | List of values | `["tag1", "tag2"]` | Requires `item_type` field |
-| `json` | Arbitrary JSON object | `{"key": "value"}` | Unstructured data |
+| `json` | Arbitrary JSON object | `{"key": "value"}` | No size limit - can store large objects |
 | **Schema Reference** | Reference to another entity | `"person-uuid-123"` | Any schema name (e.g., `person`, `project`, `invoice`) |
 
 **Primitive Types** (auto-detected, no schema lookup required):
 ```rust
 const PRIMITIVE_TYPES: &[&str] = &["text", "number", "boolean", "date", "json"];
 ```
+
+**Size Limits:**
+- **`text` fields**: No enforced limit. SQLite TEXT type supports up to ~2GB per field.
+- **`json` fields**: No enforced limit. Can store arbitrarily large JSON objects.
+- **`content` column**: No enforced limit (also SQLite TEXT).
+- **`properties` column**: No enforced limit (SQLite JSON/TEXT).
+- **Practical considerations**:
+  - Very large text (>1MB) may impact query performance
+  - Consider chunking large documents into multiple nodes
+  - Use `content` for primary text, `properties` for structured metadata
 
 **Special Type: enum**
 - Requires `core_values` (protected) and/or `user_values` (extensible)
