@@ -488,10 +488,13 @@ export class ContentEditableController {
     if (this.config.allowMultiline) {
       if (this.isEditing) {
         // During editing: convert \n to <div> structure for native browser editing
-        // Split by newlines and wrap each part in a div
-        const lines = html.split('\n');
+        // Trim leading/trailing newlines - let browser handle blank lines naturally
+        const trimmedHtml = html.replace(/^\n+|\n+$/g, '');
+        const lines = trimmedHtml.split('\n');
         if (lines.length > 1) {
           html = lines.map((line) => `<div>${line}</div>`).join('');
+        } else {
+          html = trimmedHtml; // Single line, no DIV needed
         }
       } else {
         // During display: convert \n to <br> tags for formatted display
@@ -757,15 +760,8 @@ export class ContentEditableController {
         // Convert any remaining \n characters to <br> tags for display
         htmlContent = htmlContent.replace(/\n/g, '<br>');
 
-        // Ensure trailing line breaks are visible by adding a non-breaking space after trailing <br> tags
-        if (htmlContent.endsWith('<br>')) {
-          // Count consecutive trailing <br> tags
-          const trailingBrMatch = htmlContent.match(/(<br>)+$/);
-          if (trailingBrMatch) {
-            // Replace the last <br> with <br>&nbsp; to ensure it renders visually
-            htmlContent = htmlContent.slice(0, -4) + '<br>&nbsp;';
-          }
-        }
+        // Let browser handle trailing/leading blank lines naturally
+        // Don't try to preserve them with &nbsp; or other tricks
       }
 
       this.element.innerHTML = htmlContent;
@@ -1235,9 +1231,22 @@ export class ContentEditableController {
             this.recentShiftEnter = false;
           }, 100);
 
-          // Position cursor after any syntax on the new line
+          // Position cursor correctly on the new line
+          // Browser may position after leading whitespace; we want it at position 0
           setTimeout(() => {
-            this.positionCursorAfterSyntax();
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0) return;
+
+            const range = selection.getRangeAt(0);
+
+            // If cursor is in a text node and not at position 0, move it to position 0
+            if (range.startContainer.nodeType === Node.TEXT_NODE && range.startOffset > 0) {
+              const newRange = document.createRange();
+              newRange.setStart(range.startContainer, 0);
+              newRange.collapse(true);
+              selection.removeAllRanges();
+              selection.addRange(newRange);
+            }
           }, 0);
         }
 
@@ -2268,7 +2277,9 @@ export class ContentEditableController {
 
     const range = selection.getRangeAt(0);
     const selectedText = range.toString();
-    const textContent = this.element.textContent || '';
+
+    // Use getMarkdownContent() to preserve newlines in multiline nodes
+    const textContent = this.config.allowMultiline ? this.getMarkdownContent() : (this.element.textContent || '');
 
     if (selectedText) {
       // Get the actual selection positions using DOM position calculation
@@ -3700,9 +3711,42 @@ export class ContentEditableController {
       currentNode = currentNode.parentNode;
     }
 
-    // If not in a DIV, we're in the top-level element (single line or before first DIV)
+    // If not in a DIV, the cursor position might be in a text node or BR
+    // Try to find the correct DIV by checking all DIVs
     if (!lineElement) {
-      lineElement = this.element;
+      const divs = Array.from(this.element.querySelectorAll('div'));
+
+      if (divs.length > 0) {
+        // Check if cursor is actually inside any DIV
+        for (const div of divs) {
+          if (div.contains(range.startContainer) || div === range.startContainer) {
+            lineElement = div;
+            break;
+          }
+        }
+
+        // If still not found, check if cursor is between DIVs or after all DIVs
+        if (!lineElement) {
+          // Get all nodes and find cursor position
+          const allNodes = Array.from(this.element.childNodes);
+          for (let i = 0; i < allNodes.length; i++) {
+            if (allNodes[i] === range.startContainer || allNodes[i].contains(range.startContainer)) {
+              // Found the node - if it's a DIV, use it, otherwise use the next/previous DIV
+              if ((allNodes[i] as Element).tagName === 'DIV') {
+                lineElement = allNodes[i] as Element;
+              }
+              break;
+            }
+          }
+        }
+
+        // Final fallback: use first DIV (shouldn't jump to last, that was wrong)
+        if (!lineElement) {
+          lineElement = divs[0];
+        }
+      } else {
+        lineElement = this.element; // No DIVs, single line
+      }
     }
 
     // Get the text content of the current line
@@ -3754,7 +3798,21 @@ export class ContentEditableController {
       }
     }
 
-    // If no syntax or positioning failed, cursor stays where it is (beginning of line)
+    // If no syntax found, explicitly position cursor at beginning of line
+    // But only if we're in a DIV (multiline), not the top-level element
+    // Without this, browser may place cursor one character to the right
+    if (syntaxLength === 0 && lineElement !== this.element) {
+      const walker = document.createTreeWalker(lineElement, NodeFilter.SHOW_TEXT, null);
+      const firstTextNode = walker.nextNode() as Text | null;
+
+      if (firstTextNode) {
+        const newRange = document.createRange();
+        newRange.setStart(firstTextNode, 0);
+        newRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+      }
+    }
   }
 
   /**
