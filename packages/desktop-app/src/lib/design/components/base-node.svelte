@@ -26,15 +26,15 @@
     ContentEditableController,
     type ContentEditableEvents,
     type ContentEditableConfig
-  } from './contentEditableController.js';
+  } from './content-editable-controller.js';
   import { NodeAutocomplete, type NodeResult } from '$lib/components/ui/node-autocomplete';
   import { SlashCommandDropdown } from '$lib/components/ui/slash-command-dropdown';
   import {
     SlashCommandService,
     type SlashCommand,
     type SlashCommandContext
-  } from '$lib/services/slashCommandService';
-  import type { TriggerContext } from '$lib/services/nodeReferenceService';
+  } from '$lib/services/slash-command-service';
+  import type { TriggerContext } from '$lib/services/node-reference-service';
   import { getIconConfig, resolveNodeState, type NodeType } from '$lib/design/icons/registry';
 
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
@@ -180,8 +180,7 @@
   }
 
   // Slash command event handlers
-  function handleSlashCommandSelect(event: CustomEvent<SlashCommand>) {
-    const command = event.detail;
+  function handleSlashCommandSelect(command: SlashCommand) {
     let calculatedCursorPosition = 0;
 
     if (controller) {
@@ -390,6 +389,13 @@
     }
   });
 
+  // Update controller config when editableConfig prop changes
+  $effect(() => {
+    if (controller && editableConfig) {
+      controller.updateConfig(editableConfig);
+    }
+  });
+
   // Focus programmatically when autoFocus changes
   $effect(() => {
     if (controller && autoFocus) {
@@ -533,8 +539,8 @@
   commands={slashCommands}
   loading={false}
   visible={showSlashCommands}
-  on:select={handleSlashCommandSelect}
-  on:close={handleSlashCommandClose}
+  onselect={handleSlashCommandSelect}
+  onclose={handleSlashCommandClose}
 />
 
 <style>

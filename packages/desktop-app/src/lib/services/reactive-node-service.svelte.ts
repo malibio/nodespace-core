@@ -11,8 +11,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { ContentProcessor } from './contentProcessor';
-import { eventBus } from './eventBus';
+import { ContentProcessor } from './content-processor';
+import { eventBus } from './event-bus';
 import type { Node, NodeUIState } from '$lib/types';
 import { createDefaultUIState } from '$lib/types';
 
@@ -150,7 +150,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           }
         );
 
-        eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+        eventBus.emit<import('./event-types').CacheInvalidateEvent>({
           type: 'cache:invalidate',
           namespace: 'coordination',
           source: serviceName,
@@ -471,7 +471,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.nodeCreated(nodeId);
     events.hierarchyChanged();
 
-    eventBus.emit<import('./eventTypes').NodeCreatedEvent>({
+    eventBus.emit<import('./event-types').NodeCreatedEvent>({
       type: 'node:created',
       namespace: 'lifecycle',
       source: serviceName,
@@ -480,7 +480,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       metadata: {}
     });
 
-    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+    eventBus.emit<import('./event-types').HierarchyChangedEvent>({
       type: 'hierarchy:changed',
       namespace: 'lifecycle',
       source: serviceName,
@@ -488,7 +488,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       affectedNodes: [nodeId]
     });
 
-    eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+    eventBus.emit<import('./event-types').CacheInvalidateEvent>({
       type: 'cache:invalidate',
       namespace: 'coordination',
       source: serviceName,
@@ -663,7 +663,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitReferenceUpdateNeeded(nodeId: string): void {
-    eventBus.emit<import('./eventTypes').ReferencesUpdateNeededEvent>({
+    eventBus.emit<import('./event-types').ReferencesUpdateNeededEvent>({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: serviceName,
@@ -674,7 +674,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitExpensivePersistenceNeeded(nodeId: string, content: string): void {
-    eventBus.emit<import('./eventTypes').NodePersistenceEvent>({
+    eventBus.emit<import('./event-types').NodePersistenceEvent>({
       type: 'node:persistence-needed',
       namespace: 'backend',
       source: serviceName,
@@ -685,7 +685,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitVectorEmbeddingNeeded(nodeId: string, content: string): void {
-    eventBus.emit<import('./eventTypes').NodeEmbeddingEvent>({
+    eventBus.emit<import('./event-types').NodeEmbeddingEvent>({
       type: 'node:embedding-needed',
       namespace: 'ai',
       source: serviceName,
@@ -696,7 +696,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitReferencePropagatationNeeded(nodeId: string, content: string): void {
-    eventBus.emit<import('./eventTypes').NodeReferencePropagationEvent>({
+    eventBus.emit<import('./event-types').NodeReferencePropagationEvent>({
       type: 'node:reference-propagation-needed',
       namespace: 'references',
       source: serviceName,
@@ -712,7 +712,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     if (!currentNode || !previousNode) return;
 
-    // const isChildToParent = currentNode.parentId === previousNodeId;
     const cleanedContent = stripFormattingSyntax(currentNode.content);
     const combinedContent = previousNode.content + cleanedContent;
     const mergePosition = previousNode.content.length;
@@ -724,41 +723,103 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     };
     _uiState[previousNodeId] = { ..._uiState[previousNodeId], autoFocus: false };
 
-    // Handle child promotion if needed
+    // Handle child promotion: children shift up while maintaining outline structure
+    // Get all children of the node being deleted
     const currentChildren = Object.values(_nodes)
       .filter((n) => n.parentId === currentNodeId)
       .map((n) => n.id);
 
-    // Determine where children should go:
-    // - If nodes are at same depth/level, transfer to target (previousNode)
-    // - If there's a depth mismatch, promote to source's parent
-    const currentUIState = _uiState[currentNodeId];
-    const previousUIState = _uiState[previousNodeId];
-    const sameDepthLevel = currentUIState?.depth === previousUIState?.depth;
+    if (currentChildren.length > 0) {
+      // Find the nearest ancestor node above the deleted node at the SAME depth,
+      // walking up until we reach a node that is one or more levels higher
+      // (because there are no other nodes at the same level)
+      const deletedNodeDepth = _uiState[currentNodeId]?.depth ?? 0;
+      let newParentForChildren = previousNodeId;
+      let searchNode: string | null = previousNodeId;
 
-    const newParentForChildren = sameDepthLevel ? previousNodeId : currentNode.parentId;
+      while (searchNode) {
+        const searchDepth = _uiState[searchNode]?.depth ?? 0;
+        if (searchDepth === deletedNodeDepth) {
+          // Found a node at the same level as the deleted node
+          newParentForChildren = searchNode;
+          break;
+        }
+        if (searchDepth < deletedNodeDepth) {
+          // Reached a node at a higher level (shallower), stop here
+          newParentForChildren = searchNode;
+          break;
+        }
+        // Keep walking up the tree
+        const parentId: string | null | undefined = _nodes[searchNode]?.parentId;
+        searchNode = parentId ?? null;
+      }
 
-    for (const childId of currentChildren) {
-      const child = _nodes[childId];
-      if (child) {
-        _nodes[childId] = {
-          ...child,
-          parentId: newParentForChildren,
-          modifiedAt: new Date().toISOString()
-        };
+      // Find existing children of the new parent to append after them
+      const existingChildren = Object.values(_nodes)
+        .filter((n) => n.parentId === newParentForChildren && !currentChildren.includes(n.id))
+        .map((n) => n.id);
 
-        // Update depth based on new parent
-        const newParentUIState = newParentForChildren ? _uiState[newParentForChildren] : null;
-        const newDepth = newParentUIState ? newParentUIState.depth + 1 : 0;
-        _uiState[childId] = {
-          ..._uiState[childId],
-          depth: newDepth
-        };
+      let lastSiblingId: string | null = null;
+      if (existingChildren.length > 0) {
+        // Get sorted children to find the last one
+        const sortedChildren = sortChildrenByBeforeSiblingId(
+          existingChildren,
+          newParentForChildren
+        );
+        lastSiblingId = sortedChildren[sortedChildren.length - 1];
+      }
 
-        // Recursively update descendant depths
-        updateDescendantDepths(childId);
+      // Find the first child in the deleted node's children (the one with beforeSiblingId pointing outside or null)
+      const sortedDeletedChildren = sortChildrenByBeforeSiblingId(currentChildren, currentNodeId);
+      const firstChildId = sortedDeletedChildren[0];
+
+      // Process each child
+      for (const childId of currentChildren) {
+        const child = _nodes[childId];
+        if (child) {
+          // Only update the first child's beforeSiblingId to append after existing children
+          // All other children keep their existing beforeSiblingId to maintain their chain
+          const updates: Partial<typeof child> = {
+            parentId: newParentForChildren,
+            modifiedAt: new Date().toISOString()
+          };
+
+          if (childId === firstChildId) {
+            updates.beforeSiblingId = lastSiblingId;
+          }
+
+          _nodes[childId] = {
+            ...child,
+            ...updates
+          };
+
+          // Note: Database persistence is handled by UI layer's $effect watchers
+          // in base-node-viewer.svelte, which detects structural changes and persists them
+
+          // Update depth: children maintain their relative position in the outline
+          // Calculate target depth based on new parent
+          const currentChildDepth = _uiState[childId]?.depth ?? 0;
+          const targetDepth = newParentForChildren
+            ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
+            : 0;
+
+          // Preserve depth: never increase, only maintain or decrease
+          // This ensures nodes shift UP in the outline, not down
+          const newDepth = Math.min(currentChildDepth, targetDepth);
+
+          _uiState[childId] = {
+            ..._uiState[childId],
+            depth: newDepth
+          };
+
+          // Recursively update descendant depths
+          updateDescendantDepths(childId);
+        }
       }
     }
+
+    // Remove node from sibling chain BEFORE deletion to prevent orphans
+    removeFromSiblingChain(currentNodeId);
 
     delete _nodes[currentNodeId];
     delete _uiState[currentNodeId];
@@ -768,8 +829,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds.splice(rootIndex, 1);
     }
 
+    // Invalidate sorted children cache for both old parent and new parent
+    invalidateSortedChildrenCache(currentNode.parentId);
+    invalidateSortedChildrenCache(currentNodeId);
+
     clearAllAutoFocus();
     events.focusRequested(previousNodeId, mergePosition);
+    events.nodeDeleted(currentNodeId);
     events.hierarchyChanged();
   }
 
@@ -870,7 +936,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+    eventBus.emit<import('./event-types').HierarchyChangedEvent>({
       type: 'hierarchy:changed',
       namespace: 'lifecycle',
       source: serviceName,
@@ -878,7 +944,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       affectedNodes: [nodeId]
     });
 
-    eventBus.emit<import('./eventTypes').ReferencesUpdateNeededEvent>({
+    eventBus.emit<import('./event-types').ReferencesUpdateNeededEvent>({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: serviceName,
@@ -914,30 +980,99 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const uiState = _uiState[nodeId];
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
 
+    // Find where to position the outdented node in its new parent's child list
+    // It should come right after its old parent (which is now a sibling)
+    let positionBeforeSibling: string | null = oldParentId;
+
+    // Check if old parent has a valid position in the new parent's context
+    const oldParentNode = _nodes[oldParentId];
+    if (oldParentNode && oldParentNode.parentId === newParentId) {
+      // Old parent is a valid sibling in the new context
+      positionBeforeSibling = oldParentId;
+    } else {
+      // Old parent is not in the same parent context (shouldn't happen in normal outdent)
+      // Position at the end by finding the last sibling
+      const siblings = Object.values(_nodes)
+        .filter((n) => n.parentId === newParentId && n.id !== nodeId)
+        .map((n) => n.id);
+      if (siblings.length > 0) {
+        const sortedSiblings = sortChildrenByBeforeSiblingId(siblings, newParentId);
+        positionBeforeSibling = sortedSiblings[sortedSiblings.length - 1];
+      } else {
+        positionBeforeSibling = null;
+      }
+    }
+
     _nodes[nodeId] = {
       ...node,
       parentId: newParentId,
-      beforeSiblingId: node.parentId, // Positioned right after old parent
+      beforeSiblingId: positionBeforeSibling,
       modifiedAt: new Date().toISOString()
     };
     _uiState[nodeId] = { ...uiState, depth: newDepth };
 
-    // Transfer siblings below the outdented node as its children
-    for (const siblingId of siblingsBelow) {
-      const sibling = _nodes[siblingId];
-      if (sibling) {
-        _nodes[siblingId] = {
-          ...sibling,
-          parentId: nodeId,
-          modifiedAt: new Date().toISOString()
-        };
-        // Update depth for transferred sibling
-        const siblingUIState = _uiState[siblingId];
-        if (siblingUIState) {
-          _uiState[siblingId] = { ...siblingUIState, depth: newDepth + 1 };
+    // Insert the outdented node into the new parent's sibling chain
+    // Find any sibling in the new parent that currently points to positionBeforeSibling
+    // and update it to point to the outdented node instead
+    if (positionBeforeSibling !== null) {
+      // Optimization: Only check direct siblings, not all nodes
+      const siblingIds = Object.keys(_nodes).filter(
+        (id) => id !== nodeId && _nodes[id].parentId === newParentId
+      );
+
+      for (const siblingId of siblingIds) {
+        const sibling = _nodes[siblingId];
+        if (sibling.beforeSiblingId === positionBeforeSibling) {
+          _nodes[siblingId] = {
+            ...sibling,
+            beforeSiblingId: nodeId,
+            modifiedAt: new Date().toISOString()
+          };
+          break; // Only one sibling can point to positionBeforeSibling
         }
-        // Recalculate depths for descendants of transferred sibling
-        updateDescendantDepths(siblingId);
+      }
+    }
+
+    // Transfer siblings below the outdented node as its children
+    // Need to rebuild their before_sibling_id chain to be valid in new parent context
+    if (siblingsBelow.length > 0) {
+      // Find existing children of the outdented node to append after them
+      const existingChildren = Object.values(_nodes)
+        .filter((n) => n.parentId === nodeId && !siblingsBelow.includes(n.id))
+        .map((n) => n.id);
+
+      let lastSiblingId: string | null = null;
+      if (existingChildren.length > 0) {
+        const sortedChildren = sortChildrenByBeforeSiblingId(existingChildren, nodeId);
+        lastSiblingId = sortedChildren[sortedChildren.length - 1];
+      }
+
+      // Transfer each sibling, updating their before_sibling_id chain
+      for (let i = 0; i < siblingsBelow.length; i++) {
+        const siblingId = siblingsBelow[i];
+        const sibling = _nodes[siblingId];
+        if (sibling) {
+          // Remove from current sibling chain BEFORE updating beforeSiblingId
+          removeFromSiblingChain(siblingId);
+
+          // First transferred sibling points to last existing child (or null)
+          // Subsequent siblings point to the previous transferred sibling
+          const beforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];
+
+          _nodes[siblingId] = {
+            ...sibling,
+            parentId: nodeId,
+            beforeSiblingId,
+            modifiedAt: new Date().toISOString()
+          };
+          // Update depth for transferred sibling
+          const siblingUIState = _uiState[siblingId];
+          if (siblingUIState) {
+            _uiState[siblingId] = { ...siblingUIState, depth: newDepth + 1 };
+          }
+          // Recalculate depths for descendants of transferred sibling
+          updateDescendantDepths(siblingId);
+        }
       }
     }
 
@@ -957,7 +1092,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+    eventBus.emit<import('./event-types').HierarchyChangedEvent>({
       type: 'hierarchy:changed',
       namespace: 'lifecycle',
       source: serviceName,
@@ -1010,7 +1145,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    eventBus.emit<import('./eventTypes').NodeDeletedEvent>({
+    eventBus.emit<import('./event-types').NodeDeletedEvent>({
       type: 'node:deleted',
       namespace: 'lifecycle',
       source: serviceName,
@@ -1018,7 +1153,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       parentId: node.parentId || undefined
     });
 
-    eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+    eventBus.emit<import('./event-types').HierarchyChangedEvent>({
       type: 'hierarchy:changed',
       namespace: 'lifecycle',
       source: serviceName,
@@ -1026,7 +1161,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       affectedNodes: [nodeId, ...children]
     });
 
-    eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+    eventBus.emit<import('./event-types').CacheInvalidateEvent>({
       type: 'cache:invalidate',
       namespace: 'coordination',
       source: serviceName,
@@ -1035,7 +1170,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       reason: 'node-deleted'
     });
 
-    eventBus.emit<import('./eventTypes').ReferencesUpdateNeededEvent>({
+    eventBus.emit<import('./event-types').ReferencesUpdateNeededEvent>({
       type: 'references:update-needed',
       namespace: 'coordination',
       source: serviceName,
@@ -1056,11 +1191,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       events.hierarchyChanged();
       _updateTrigger++;
 
-      const status: import('./eventTypes').NodeStatus = newExpandedState ? 'expanded' : 'collapsed';
-      const changeType: import('./eventTypes').HierarchyChangedEvent['changeType'] =
+      const status: import('./event-types').NodeStatus = newExpandedState
+        ? 'expanded'
+        : 'collapsed';
+      const changeType: import('./event-types').HierarchyChangedEvent['changeType'] =
         newExpandedState ? 'expand' : 'collapse';
 
-      eventBus.emit<import('./eventTypes').NodeStatusChangedEvent>({
+      eventBus.emit<import('./event-types').NodeStatusChangedEvent>({
         type: 'node:status-changed',
         namespace: 'coordination',
         source: serviceName,
@@ -1068,7 +1205,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         status
       });
 
-      eventBus.emit<import('./eventTypes').HierarchyChangedEvent>({
+      eventBus.emit<import('./event-types').HierarchyChangedEvent>({
         type: 'hierarchy:changed',
         namespace: 'lifecycle',
         source: serviceName,
@@ -1093,17 +1230,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   function emitNodeUpdated(nodeId: string, updateType: string, newValue: unknown): void {
-    eventBus.emit<import('./eventTypes').NodeUpdatedEvent>({
+    eventBus.emit<import('./event-types').NodeUpdatedEvent>({
       type: 'node:updated',
       namespace: 'lifecycle',
       source: serviceName,
       nodeId,
-      updateType: updateType as import('./eventTypes').NodeUpdatedEvent['updateType'],
+      updateType: updateType as import('./event-types').NodeUpdatedEvent['updateType'],
       newValue
     });
 
     if (updateType === 'content') {
-      eventBus.emit<import('./eventTypes').DecorationUpdateNeededEvent>({
+      eventBus.emit<import('./event-types').DecorationUpdateNeededEvent>({
         type: 'decoration:update-needed',
         namespace: 'interaction',
         source: serviceName,
@@ -1113,7 +1250,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         metadata: {}
       });
 
-      eventBus.emit<import('./eventTypes').CacheInvalidateEvent>({
+      eventBus.emit<import('./event-types').CacheInvalidateEvent>({
         type: 'cache:invalidate',
         namespace: 'coordination',
         source: serviceName,
