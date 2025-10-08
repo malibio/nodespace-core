@@ -219,10 +219,15 @@ class NodeOperationsService {
 ### TaskNode Metadata
 ```typescript
 const taskMetadata = {
-  status: "in_progress" | "completed" | "pending" | "cancelled",
-  due_date: "2025-02-01T10:00:00Z",
-  priority: "high" | "medium" | "low" | "critical",
-  assignee: "user-001",
+  status: "OPEN" | "IN_PROGRESS" | "DONE",  // Core enum values (protected)
+  // Users can extend with: "BLOCKED" | "WAITING" | etc.
+  due_date: "2025-02-01",          // Date node ID (YYYY-MM-DD)
+  started_at: "2025-01-15",        // Date node ID
+  completed_at: "2025-02-01",      // Date node ID
+
+  // Optional user-added fields
+  priority: "HIGH" | "MEDIUM" | "LOW" | "URGENT",
+  assignee: "person-uuid-001",     // Person node ID
   estimated_hours: 8.5,
   actual_hours: 6.2,
   tags: ["urgent", "feature", "backend"]
