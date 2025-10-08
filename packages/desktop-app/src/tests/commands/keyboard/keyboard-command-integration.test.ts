@@ -15,6 +15,9 @@ import { CreateNodeCommand } from '$lib/commands/keyboard/create-node.command';
 import { IndentNodeCommand } from '$lib/commands/keyboard/indent-node.command';
 import { OutdentNodeCommand } from '$lib/commands/keyboard/outdent-node.command';
 import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
+import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
+import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
+import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 import type { ContentEditableController } from '$lib/design/components/contentEditableController';
 
 describe('Keyboard Command Integration', () => {
@@ -26,6 +29,7 @@ describe('Keyboard Command Integration', () => {
     outdentNode: ReturnType<typeof vi.fn>;
     combineWithPrevious: ReturnType<typeof vi.fn>;
     deleteNode: ReturnType<typeof vi.fn>;
+    navigateArrow: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -38,24 +42,45 @@ describe('Keyboard Command Integration', () => {
       indentNode: vi.fn(),
       outdentNode: vi.fn(),
       combineWithPrevious: vi.fn(),
-      deleteNode: vi.fn()
+      deleteNode: vi.fn(),
+      navigateArrow: vi.fn()
     };
 
     // Create mock controller
     mockController = {
       events: mockEvents as any,
-      element: {
-        textContent: 'test content',
-        innerHTML: 'test content'
-      } as any,
-      getCurrentColumn: vi.fn(() => 5)
+      element: document.createElement('div'),
+      getCurrentColumn: vi.fn(() => 5),
+      isEditing: true,
+      justCreated: false,
+      slashCommandDropdownActive: false,
+      autocompleteDropdownActive: false,
+      isAtFirstLine: vi.fn(() => true),
+      isAtLastLine: vi.fn(() => true),
+      getCurrentPixelOffset: vi.fn(() => 100),
+      toggleFormatting: vi.fn()
     } as any;
 
+    // Add text content to element
+    mockController.element.textContent = 'test content';
+    mockController.element.innerHTML = 'test content';
+
     // Register commands (simulating what ContentEditableController does)
+    // Phase 1 & 2 commands
     registry.register({ key: 'Enter' }, new CreateNodeCommand());
     registry.register({ key: 'Tab' }, new IndentNodeCommand());
     registry.register({ key: 'Tab', shift: true }, new OutdentNodeCommand());
     registry.register({ key: 'Backspace' }, new MergeNodesCommand('up'));
+
+    // Phase 3 commands
+    registry.register({ key: 'ArrowUp' }, new NavigateUpCommand());
+    registry.register({ key: 'ArrowDown' }, new NavigateDownCommand());
+    registry.register({ key: 'b', meta: true }, new FormatTextCommand('bold'));
+    registry.register({ key: 'b', ctrl: true }, new FormatTextCommand('bold'));
+    registry.register({ key: 'i', meta: true }, new FormatTextCommand('italic'));
+    registry.register({ key: 'i', ctrl: true }, new FormatTextCommand('italic'));
+    registry.register({ key: 'u', meta: true }, new FormatTextCommand('underline'));
+    registry.register({ key: 'u', ctrl: true }, new FormatTextCommand('underline'));
   });
 
   afterEach(() => {
@@ -227,14 +252,174 @@ describe('Keyboard Command Integration', () => {
     });
 
     it('should handle multiple commands registered correctly', async () => {
-      // Verify all commands are registered
+      // Verify all commands are registered (Phase 1, 2, and 3)
       const commands = registry.getCommands();
 
-      expect(commands.size).toBe(4);
+      expect(commands.size).toBe(12); // 4 basic + 2 navigation + 6 formatting (3 types x 2 modifiers each)
       expect(commands.has('Enter')).toBe(true);
       expect(commands.has('Tab')).toBe(true);
       expect(commands.has('Shift+Tab')).toBe(true);
       expect(commands.has('Backspace')).toBe(true);
+      expect(commands.has('ArrowUp')).toBe(true);
+      expect(commands.has('ArrowDown')).toBe(true);
+      expect(commands.has('Meta+b')).toBe(true);
+      expect(commands.has('Ctrl+b')).toBe(true);
+      expect(commands.has('Meta+i')).toBe(true);
+      expect(commands.has('Ctrl+i')).toBe(true);
+      expect(commands.has('Meta+u')).toBe(true);
+      expect(commands.has('Ctrl+u')).toBe(true);
+    });
+  });
+
+  describe('Arrow Key Navigation Integration', () => {
+    it('should execute NavigateUpCommand and emit navigateArrow event', async () => {
+      const event = new KeyboardEvent('keydown', { key: 'ArrowUp' });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(true);
+      expect(mockEvents.navigateArrow).toHaveBeenCalledWith({
+        nodeId: 'test-node',
+        direction: 'up',
+        pixelOffset: 100
+      });
+    });
+
+    it('should execute NavigateDownCommand and emit navigateArrow event', async () => {
+      const event = new KeyboardEvent('keydown', { key: 'ArrowDown' });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(true);
+      expect(mockEvents.navigateArrow).toHaveBeenCalledWith({
+        nodeId: 'test-node',
+        direction: 'down',
+        pixelOffset: 100
+      });
+    });
+
+    it('should not navigate when dropdown is active', async () => {
+      (mockController as any).slashCommandDropdownActive = true;
+
+      const event = new KeyboardEvent('keydown', { key: 'ArrowUp' });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(false);
+      expect(mockEvents.navigateArrow).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Text Formatting Integration', () => {
+    it('should execute FormatTextCommand for Cmd+B (bold)', async () => {
+      const event = new KeyboardEvent('keydown', { key: 'b', metaKey: true });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(true);
+      expect(mockController.toggleFormatting).toHaveBeenCalledWith('**');
+    });
+
+    it('should execute FormatTextCommand for Ctrl+B (bold on Windows/Linux)', async () => {
+      const event = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(true);
+      expect(mockController.toggleFormatting).toHaveBeenCalledWith('**');
+    });
+
+    it('should execute FormatTextCommand for Cmd+I (italic)', async () => {
+      const event = new KeyboardEvent('keydown', { key: 'i', metaKey: true });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(true);
+      expect(mockController.toggleFormatting).toHaveBeenCalledWith('*');
+    });
+
+    it('should execute FormatTextCommand for Cmd+U (underline)', async () => {
+      const event = new KeyboardEvent('keydown', { key: 'u', metaKey: true });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(true);
+      expect(mockController.toggleFormatting).toHaveBeenCalledWith('__');
+    });
+
+    it('should not execute FormatTextCommand when not editing', async () => {
+      (mockController as any).isEditing = false;
+
+      const event = new KeyboardEvent('keydown', { key: 'b', metaKey: true });
+      const context = {
+        nodeId: 'test-node',
+        nodeType: 'text',
+        content: 'test content',
+        cursorPosition: 5,
+        allowMultiline: false,
+        metadata: {}
+      };
+
+      const handled = await registry.execute(event, mockController as any, context);
+
+      expect(handled).toBe(false);
+      expect(mockController.toggleFormatting).not.toHaveBeenCalled();
     });
   });
 

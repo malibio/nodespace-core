@@ -16,6 +16,9 @@ import { CreateNodeCommand } from '$lib/commands/keyboard/create-node.command';
 import { IndentNodeCommand } from '$lib/commands/keyboard/indent-node.command';
 import { OutdentNodeCommand } from '$lib/commands/keyboard/outdent-node.command';
 import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
+import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
+import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
+import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 
 export interface ContentEditableEvents {
   contentChanged: (content: string) => void;
@@ -157,17 +160,26 @@ export class ContentEditableController {
   private registerKeyboardCommands(): void {
     const registry = KeyboardCommandRegistry.getInstance();
 
-    // Register Enter key command
+    // Phase 1: Core commands
     registry.register({ key: 'Enter' }, new CreateNodeCommand());
 
-    // Register Tab key command (indent)
+    // Phase 2: Basic keyboard commands
     registry.register({ key: 'Tab' }, new IndentNodeCommand());
-
-    // Register Shift+Tab command (outdent)
     registry.register({ key: 'Tab', shift: true }, new OutdentNodeCommand());
-
-    // Register Backspace command (merge with previous)
     registry.register({ key: 'Backspace' }, new MergeNodesCommand('up'));
+
+    // Phase 3: Advanced commands
+    // Navigation commands
+    registry.register({ key: 'ArrowUp' }, new NavigateUpCommand());
+    registry.register({ key: 'ArrowDown' }, new NavigateDownCommand());
+
+    // Text formatting commands (cross-platform: Cmd on Mac, Ctrl on Windows/Linux)
+    registry.register({ key: 'b', meta: true }, new FormatTextCommand('bold'));
+    registry.register({ key: 'b', ctrl: true }, new FormatTextCommand('bold'));
+    registry.register({ key: 'i', meta: true }, new FormatTextCommand('italic'));
+    registry.register({ key: 'i', ctrl: true }, new FormatTextCommand('italic'));
+    registry.register({ key: 'u', meta: true }, new FormatTextCommand('underline'));
+    registry.register({ key: 'u', ctrl: true }, new FormatTextCommand('underline'));
   }
 
   /**
@@ -1101,20 +1113,6 @@ export class ContentEditableController {
     }
 
     // Fall back to existing code for commands not yet migrated
-    // Handle formatting shortcuts (Cmd+B, Cmd+I)
-    if ((event.metaKey || event.ctrlKey) && this.isEditing) {
-      if (event.key === 'b' || event.key === 'B') {
-        event.preventDefault();
-        this.toggleFormatting('**');
-        return;
-      }
-      if (event.key === 'i' || event.key === 'I') {
-        event.preventDefault();
-        this.toggleFormatting('*');
-        return;
-      }
-    }
-
     // Check for immediate header detection when space is typed
     if (event.key === ' ' && this.isEditing) {
       // Get content that will exist after this space is added
@@ -1232,106 +1230,6 @@ export class ContentEditableController {
         }
         return;
       }
-    }
-
-    // Tab key indents node
-    if (event.key === 'Tab' && !event.shiftKey) {
-      event.preventDefault();
-      this.events.indentNode({ nodeId: this.nodeId });
-      return;
-    }
-
-    // Shift+Tab outdents node
-    if (event.key === 'Tab' && event.shiftKey) {
-      event.preventDefault();
-      this.events.outdentNode({ nodeId: this.nodeId });
-      return;
-    }
-
-    // Arrow keys for navigation
-    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-      // If node was just created, wait for layout to settle before allowing navigation
-      if (this.justCreated) {
-        return;
-      }
-
-      // If any modal is active, let the modal handle the arrow keys
-      if (this.slashCommandDropdownActive || this.autocompleteDropdownActive) {
-        return;
-      }
-      const direction = event.key === 'ArrowUp' ? 'up' : 'down';
-
-      // Determine if we should navigate between nodes
-      let shouldNavigate = false;
-
-      if (this.config.allowMultiline) {
-        // Check if the node actually has multiple lines (DIVs exist)
-        const lineElements = Array.from(this.element.children).filter(
-          (child) => child.tagName === 'DIV'
-        );
-        const hasMultipleLines = lineElements.length > 0;
-
-        if (hasMultipleLines) {
-          // For nodes with actual multiple lines, navigate when on first/last line
-          // This creates seamless vertical navigation like a single document
-          if (direction === 'up') {
-            shouldNavigate = this.isAtFirstLine();
-          } else {
-            shouldNavigate = this.isAtLastLine();
-          }
-
-          if (!shouldNavigate) {
-            // Not on first/last line - let browser handle line-by-line navigation
-            return;
-          }
-        } else {
-          // Node supports multiline but currently has only single line
-          // Allow navigation from anywhere (like single-line nodes)
-          shouldNavigate = true;
-        }
-      } else {
-        // For single-line nodes, always navigate on arrow up/down
-        // (there's only one line, so we're always on first/last line)
-        shouldNavigate = true;
-      }
-
-      // Navigate between nodes
-      event.preventDefault();
-      const pixelOffset = this.getCurrentPixelOffset();
-
-      this.events.navigateArrow({
-        nodeId: this.nodeId,
-        direction,
-        pixelOffset
-      });
-      return;
-    }
-
-    // Backspace at start of node
-    if (event.key === 'Backspace' && this.isAtStart()) {
-      // For multi-line nodes, check if we're at the start of the first line or just at the start of a line
-      if (this.config.allowMultiline) {
-        const isAtStartOfFirstLine = this.isAtStartOfFirstLine();
-        if (!isAtStartOfFirstLine) {
-          // We're at the start of a line other than the first line
-          // Allow default backspace behavior to delete the line break
-          return;
-        }
-        // We're at the start of the first line, so combine with previous node
-      }
-
-      event.preventDefault();
-      const currentContent = this.element.textContent || '';
-
-      if (currentContent.trim() === '') {
-        this.events.deleteNode({ nodeId: this.nodeId });
-      } else {
-        this.events.combineWithPrevious({
-          nodeId: this.nodeId,
-          currentContent
-        });
-      }
-      return;
     }
   }
 
