@@ -113,30 +113,147 @@ interface SchemaField {
 
 **Field Types:**
 
-- **Primitive Types**: `text`, `number`, `boolean`, `json`
-- **Special Types**: `date` (references date node by ID), `enum` (validated string with allowed values)
-- **Schema References**: Any schema name (e.g., `person`, `project`) for entity relationships
-- **Collections**: `array` with `item_type` specifying element type
+NodeSpace supports the following field types for schema definitions:
 
-**Enum Fields:**
+| Type | Description | Example Value | Notes |
+|------|-------------|---------------|-------|
+| `text` | String value | `"Hello World"` | General text content |
+| `number` | Numeric value (integer or float) | `42`, `3.14`, `15000.00` | No currency formatting built-in |
+| `boolean` | True/false value | `true`, `false` | Stored as JSON boolean |
+| `date` | Reference to date node | `"2025-01-15"` | Date node ID (YYYY-MM-DD format) |
+| `enum` | Validated string from allowed values | `"OPEN"`, `"IN_PROGRESS"` | Requires `core_values` and/or `user_values` |
+| `array` | List of values | `["tag1", "tag2"]` | Requires `item_type` field |
+| `json` | Arbitrary JSON object | `{"key": "value"}` | Unstructured data |
+| **Schema Reference** | Reference to another entity | `"person-uuid-123"` | Any schema name (e.g., `person`, `project`, `invoice`) |
 
-Enum fields support protected core values and user-extensible values:
+**Primitive Types** (auto-detected, no schema lookup required):
+```rust
+const PRIMITIVE_TYPES: &[&str] = &["text", "number", "boolean", "date", "json"];
+```
+
+**Special Type: enum**
+- Requires `core_values` (protected) and/or `user_values` (extensible)
+- Validation ensures only allowed values are accepted
+- `extensible: true` allows users to add new values
+
+**Special Type: array**
+- Requires `item_type` field specifying element type
+- `item_type` can be any primitive, enum, or schema reference
+- Examples:
+  - `{"type": "array", "item_type": "text"}` → `["tag1", "tag2"]`
+  - `{"type": "array", "item_type": "person"}` → `["person-uuid-1", "person-uuid-2"]`
+
+**Schema References** (auto-detected):
+- Any type name that matches an existing schema becomes a reference
+- Auto-reference detection: if type is not primitive and schema exists, it's a reference
+- Examples: `person`, `project`, `invoice`, `task`
+
+**Complete Field Type Examples:**
 
 ```json
 {
-  "name": "status",
-  "type": "enum",
-  "protection": "core",
-  "core_values": ["OPEN", "IN_PROGRESS", "DONE"],  // Cannot be removed
-  "user_values": ["BLOCKED", "WAITING"],           // User can add/remove
-  "extensible": true                                // Allows user extension
+  "fields": [
+    // Primitive types
+    {
+      "name": "title",
+      "type": "text",
+      "protection": "core",
+      "indexed": true
+    },
+    {
+      "name": "price",
+      "type": "number",
+      "protection": "user",
+      "indexed": true
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "protection": "user",
+      "indexed": false
+    },
+    {
+      "name": "due_date",
+      "type": "date",
+      "protection": "core",
+      "indexed": true,
+      "description": "Date node ID (YYYY-MM-DD)"
+    },
+    {
+      "name": "metadata",
+      "type": "json",
+      "protection": "user",
+      "indexed": false,
+      "description": "Arbitrary unstructured data"
+    },
+
+    // Enum type
+    {
+      "name": "status",
+      "type": "enum",
+      "protection": "core",
+      "core_values": ["OPEN", "IN_PROGRESS", "DONE"],
+      "user_values": [],
+      "indexed": true,
+      "required": true,
+      "extensible": true,
+      "default": "OPEN"
+    },
+
+    // Array types
+    {
+      "name": "tags",
+      "type": "array",
+      "item_type": "text",
+      "protection": "user",
+      "indexed": false
+    },
+    {
+      "name": "assignees",
+      "type": "array",
+      "item_type": "person",
+      "protection": "user",
+      "indexed": true,
+      "description": "Multiple person node IDs"
+    },
+
+    // Schema references
+    {
+      "name": "owner",
+      "type": "person",
+      "protection": "user",
+      "indexed": true,
+      "description": "Person node ID"
+    },
+    {
+      "name": "project",
+      "type": "project",
+      "protection": "user",
+      "indexed": true,
+      "description": "Project node ID"
+    }
+  ]
 }
 ```
+
+**Enum Field Extension:**
 
 Users can extend enum values through the SchemaService API:
 - Add new values to `user_values` array
 - Cannot remove `core_values` (UI depends on these)
 - Cannot delete core-protected enum fields
+
+```typescript
+// User extends status enum
+await schemaService.extendEnumField('task', 'status', 'BLOCKED');
+// Result: user_values = ["BLOCKED"]
+
+// User adds another value
+await schemaService.extendEnumField('task', 'status', 'WAITING');
+// Result: user_values = ["BLOCKED", "WAITING"]
+
+// Valid values now: ["OPEN", "IN_PROGRESS", "DONE", "BLOCKED", "WAITING"]
+```
 
 ### Core Built-In Schemas
 
