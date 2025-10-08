@@ -15,7 +15,7 @@ import type { ContentEditableControllerExtended } from '$lib/services/keyboard-c
 
 describe('NavigateDownCommand', () => {
   let command: NavigateDownCommand;
-  let mockController: Partial<ContentEditableControllerExtended>;
+  let mockController: ContentEditableControllerExtended;
   let navigateArrowSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -30,9 +30,9 @@ describe('NavigateDownCommand', () => {
       justCreated: false,
       slashCommandDropdownActive: false,
       autocompleteDropdownActive: false,
-      isAtLastLine: vi.fn(() => true),
-      getCurrentPixelOffset: vi.fn(() => 100)
-    } as unknown as ContentEditableControllerExtended;
+      isAtLastLine: vi.fn(() => true) as vi.Mock<[], boolean>,
+      getCurrentPixelOffset: vi.fn(() => 100) as vi.Mock<[], number>
+    } as ContentEditableControllerExtended;
   });
 
   describe('canExecute', () => {

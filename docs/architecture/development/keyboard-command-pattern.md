@@ -64,6 +64,7 @@ KeyboardContext
 - ✅ `IndentNodeCommand` - Tab key (hierarchy indentation)
 - ✅ `OutdentNodeCommand` - Shift+Tab (hierarchy outdentation)
 - ✅ `MergeNodesCommand` - Backspace (merge with previous node)
+  - ⏳ Delete key support deferred (architecture ready, requires event system changes)
 - ✅ Unit tests (48 tests) + Integration tests (10 tests)
 
 ### Phase 3: Advanced Commands
@@ -295,9 +296,9 @@ export class TaskToggleCommand implements KeyboardCommand {
 
 ## Related Documentation
 
-- [ContentEditableController Architecture](/docs/architecture/components/content-editable-controller.md)
-- [Keyboard Handling Evolution](/docs/architecture/development/features/sophisticated-keyboard-handling.md)
-- [Plugin System](/docs/architecture/plugins/plugin-architecture.md)
+- [Keyboard Handling Evolution](/docs/architecture/development/features/sophisticated-keyboard-handling.md) - Historical context and design evolution
+- [Plugin System](/docs/architecture/plugins/plugin-architecture.md) - Plugin architecture for extensibility
+- [Unified Plugin Registry](/docs/architecture/plugins/unified-plugin-registry.md) - Central plugin management system
 
 ## Test Coverage
 
@@ -316,14 +317,20 @@ export class TaskToggleCommand implements KeyboardCommand {
 
 ## Performance Metrics
 
-| Operation | Before | After | Delta |
-|-----------|--------|-------|-------|
-| Enter key | 8.2ms | 8.7ms | +0.5ms |
-| Tab key | 5.1ms | 5.4ms | +0.3ms |
-| Arrow navigation | 12.3ms | 12.9ms | +0.6ms |
-| Text formatting | 6.7ms | 7.1ms | +0.4ms |
+**Note**: These metrics are theoretical estimates based on architecture analysis, not measured benchmarks.
 
-All operations remain well under 16ms single-frame budget.
+| Operation | Overhead Estimate | Notes |
+|-----------|-------------------|-------|
+| Registry lookup | ~0.1ms | O(1) Map access for key combination |
+| Context building | ~0.2ms | O(1) object creation with controller state |
+| Command execution | ~0.2-0.5ms | Varies by command complexity |
+| **Total overhead** | **~0.5-1ms** | Negligible impact on user experience |
+
+**Target**: All keyboard operations must complete within 16ms (single frame budget) to maintain 60fps responsiveness.
+
+**Validation**: Manual testing confirms all operations feel instant with no perceivable lag. The command pattern adds minimal overhead while providing significant architectural benefits (testability, maintainability, extensibility).
+
+**Future Work**: Add performance benchmarks to test suite for automated performance regression detection.
 
 ## Conclusion
 

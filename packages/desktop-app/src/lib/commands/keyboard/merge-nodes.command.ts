@@ -5,15 +5,23 @@
  * Unified command for merging nodes with directional parameter.
  *
  * Behavior:
- * - Backspace at start of node (direction='up'): Merge with previous node
- * - Delete at end of node (direction='down'): Merge with next node (future)
+ * - Backspace at start of node (direction='up'): Merge with previous node ✅ IMPLEMENTED
+ * - Delete at end of node (direction='down'): Merge with next node ⏳ DEFERRED (see TODO below)
  * - Empty node: Deletes the node entirely
  * - Non-empty node: Combines content with adjacent node
  * - Multiline nodes: Only merges when at start of first line
  *
  * Usage:
  * - `new MergeNodesCommand('up')` for Backspace (merge with above)
- * - `new MergeNodesCommand('down')` for Delete (merge with below) - not yet implemented
+ * - `new MergeNodesCommand('down')` for Delete (merge with below) - architecture ready, implementation deferred
+ *
+ * TODO: Implement Delete key functionality (direction='down')
+ * Requires:
+ * - Add `combineWithNext` event to ContentEditableController.events
+ * - Implement isAtEnd() and isAtEndOfLastLine() helper methods
+ * - Add node service support for merging with next sibling
+ * - Add comprehensive tests for Delete key behavior
+ * - Update documentation when complete
  */
 
 import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
@@ -81,8 +89,9 @@ export class MergeNodesCommand implements KeyboardCommand {
         });
       }
     } else {
-      // Delete: merge with next node (future implementation)
-      // Would emit combineWithNext or similar event
+      // Delete: merge with next node (deferred implementation - see TODO in file header)
+      // When implemented, would emit combineWithNext event (not yet available)
+      // Architecture is ready, but requires event system and node service changes
       return false;
     }
 

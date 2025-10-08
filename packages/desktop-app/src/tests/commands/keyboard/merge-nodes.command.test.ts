@@ -10,7 +10,7 @@ import type { KeyboardContext } from '$lib/services/keyboard-command-registry';
 import type { ContentEditableControllerExtended } from '$lib/services/keyboard-command-registry';
 
 describe('MergeNodesCommand', () => {
-  let mockController: Partial<ContentEditableControllerExtended>;
+  let mockController: ContentEditableControllerExtended;
   let deleteNodeSpy: ReturnType<typeof vi.fn>;
   let combineWithPreviousSpy: ReturnType<typeof vi.fn>;
 
@@ -25,8 +25,8 @@ describe('MergeNodesCommand', () => {
       },
       element: {
         textContent: 'test content'
-      }
-    } as unknown as ContentEditableControllerExtended;
+      } as HTMLDivElement
+    } as ContentEditableControllerExtended;
   });
 
   describe('direction: up (Backspace)', () => {

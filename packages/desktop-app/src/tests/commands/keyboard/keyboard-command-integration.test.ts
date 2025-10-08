@@ -22,7 +22,7 @@ import type { ContentEditableControllerExtended } from '$lib/services/keyboard-c
 
 describe('Keyboard Command Integration', () => {
   let registry: KeyboardCommandRegistry;
-  let mockController: Partial<ContentEditableControllerExtended>;
+  let mockController: ContentEditableControllerExtended;
   let mockEvents: {
     createNewNode: ReturnType<typeof vi.fn>;
     indentNode: ReturnType<typeof vi.fn>;
@@ -50,16 +50,16 @@ describe('Keyboard Command Integration', () => {
     mockController = {
       events: mockEvents,
       element: document.createElement('div'),
-      getCurrentColumn: vi.fn(() => 5),
+      getCurrentColumn: vi.fn(() => 5) as vi.Mock<[], number>,
       isEditing: true,
       justCreated: false,
       slashCommandDropdownActive: false,
       autocompleteDropdownActive: false,
-      isAtFirstLine: vi.fn(() => true),
-      isAtLastLine: vi.fn(() => true),
-      getCurrentPixelOffset: vi.fn(() => 100),
-      toggleFormatting: vi.fn()
-    };
+      isAtFirstLine: vi.fn(() => true) as vi.Mock<[], boolean>,
+      isAtLastLine: vi.fn(() => true) as vi.Mock<[], boolean>,
+      getCurrentPixelOffset: vi.fn(() => 100) as vi.Mock<[], number>,
+      toggleFormatting: vi.fn() as vi.Mock<[string], void>
+    } as ContentEditableControllerExtended;
 
     // Add text content to element
     mockController.element.textContent = 'test content';
