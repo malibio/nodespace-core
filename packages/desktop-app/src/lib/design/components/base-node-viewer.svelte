@@ -463,12 +463,20 @@
               beforeSiblingId: validatedBeforeSiblingId
             });
           } catch (error) {
+            // Check if error is due to node being deleted (common during merge/combine operations)
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (errorMessage.includes('Node not found') || errorMessage.includes('not found')) {
+              // Node was deleted (e.g., via merge) - this is expected, just skip silently
+              console.debug('[BaseNodeViewer] Skipping update for deleted node:', update.nodeId);
+              continue; // Don't treat as failure - node was intentionally deleted
+            }
+
+            // Real error - log and queue for rollback
             console.error(
               '[BaseNodeViewer] Failed to persist structural change:',
               update.nodeId,
               error
             );
-            // Queue for rollback
             failedUpdates.push(update);
           }
         }
