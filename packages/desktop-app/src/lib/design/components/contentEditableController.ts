@@ -72,6 +72,7 @@ export interface ContentEditableConfig {
 export class ContentEditableController {
   // Constants
   private static readonly SECOND_LINE_INDEX = 1; // Index of second line in multiline content after Shift+Enter
+  private static readonly MIN_DIV_COUNT_FOR_MULTILINE = 2; // Minimum DIVs expected after Shift+Enter
 
   private element: HTMLDivElement;
   private nodeId: string;
@@ -1126,24 +1127,35 @@ export class ContentEditableController {
         // Use markdown-aware splitting to preserve formatting across lines
         const splitResult = splitMarkdownContent(currentContent, cursorPosition);
 
+        // Defensive validation: ensure split result is valid before proceeding
+        if (!splitResult || typeof splitResult.beforeContent !== 'string') {
+          console.error('Invalid split result from splitMarkdownContent', {
+            currentContent,
+            cursorPosition
+          });
+          return; // Gracefully abort Shift+Enter operation
+        }
+
         // Update content to show both lines with proper formatting
         // The before content gets closing markers, after content gets opening markers
         const newContent = splitResult.beforeContent + '\n' + splitResult.afterContent;
 
-        // Update the element with new content
+        // Update content in three stages to maintain dual-representation consistency:
+        // 1. Store markdown (originalContent) - source of truth for raw content
+        // 2. Set text content - clears formatted HTML and prepares for conversion
+        // 3. Apply live formatting - converts \n to <div> structure with syntax highlighting
         this.originalContent = newContent;
         this.element.textContent = newContent;
-
-        // Apply live formatting
         this.setLiveFormattedContent(newContent);
 
         // Position cursor in the second line (after opening markers)
         // Use requestAnimationFrame to ensure DOM has updated after setLiveFormattedContent
-        // converts \n to <div> structure before positioning cursor
+        // converts \n to <div> structure before positioning cursor. Without this,
+        // cursor positioning would fail because DIVs haven't been created yet.
         requestAnimationFrame(() => {
           // Verify DIV structure exists before positioning
           const divs = this.element.querySelectorAll('div');
-          if (divs.length > ContentEditableController.SECOND_LINE_INDEX) {
+          if (divs.length >= ContentEditableController.MIN_DIV_COUNT_FOR_MULTILINE) {
             this.restoreCursorPosition(
               splitResult.newNodeCursorPosition,
               ContentEditableController.SECOND_LINE_INDEX
@@ -1151,7 +1163,12 @@ export class ContentEditableController {
           } else {
             // Fallback: position linearly if DIV structure doesn't exist
             console.warn(
-              `Expected at least ${ContentEditableController.SECOND_LINE_INDEX + 1} DIVs after Shift+Enter, found ${divs.length}`
+              `Expected at least ${ContentEditableController.MIN_DIV_COUNT_FOR_MULTILINE} DIVs after Shift+Enter, found ${divs.length}`,
+              {
+                nodeId: this.nodeId,
+                content: newContent,
+                elementHTML: this.element.innerHTML.substring(0, 100) // First 100 chars
+              }
             );
             this.restoreCursorPosition(
               splitResult.beforeContent.length + 1 + splitResult.newNodeCursorPosition
