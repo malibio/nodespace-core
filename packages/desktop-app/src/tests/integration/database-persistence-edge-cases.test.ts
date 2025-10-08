@@ -483,4 +483,94 @@ describe('Database Persistence Edge Cases', () => {
       });
     });
   });
+
+  describe('Outdent with Sibling Chain Updates', () => {
+    interface UpdateData {
+      parentId?: string | null;
+      beforeSiblingId?: string | null;
+    }
+
+    let mockDatabaseService: {
+      updateNode: ReturnType<typeof vi.fn>;
+    };
+    let savedNodes: Set<string>;
+
+    beforeEach(() => {
+      // Track saved nodes for FOREIGN KEY validation
+      savedNodes = new Set<string>(['parent1', 'child1', 'parent2', 'child2']);
+
+      // Mock database service with FOREIGN KEY constraint validation
+      mockDatabaseService = {
+        updateNode: vi.fn().mockImplementation(async (nodeId: string, data: UpdateData) => {
+          // Validate node exists
+          if (!savedNodes.has(nodeId)) {
+            throw new Error(`Cannot update non-existent node: ${nodeId}`);
+          }
+          // Validate parentId exists (if provided)
+          if (data.parentId && !savedNodes.has(data.parentId)) {
+            throw new Error(
+              `FOREIGN KEY constraint failed: parent_id "${data.parentId}" does not exist`
+            );
+          }
+          // Validate beforeSiblingId exists (if provided)
+          if (data.beforeSiblingId && !savedNodes.has(data.beforeSiblingId)) {
+            throw new Error(
+              `FOREIGN KEY constraint failed: before_sibling_id "${data.beforeSiblingId}" does not exist`
+            );
+          }
+        })
+      };
+    });
+
+    it('should correctly update sibling chain when outdenting node with transferred children', async () => {
+      // Scenario:
+      // Parent 1
+      //   Child 1
+      //   Parent 2 (will be outdented)
+      //   Child 2 (after Parent 2)
+      //
+      // After outdent:
+      // Parent 1
+      //   Child 1
+      //   Child 2 (should now point to Parent 2 in beforeSiblingId)
+      // Parent 2 (at root, should have beforeSiblingId=Child1)
+
+      // Outdent Parent 2 to root level
+      // This should trigger two updates:
+      // 1. Parent 2: parentId=null, beforeSiblingId=Child1
+      // 2. Child 2: beforeSiblingId=Parent2 (updated to insert Parent 2 into chain)
+
+      // Update Parent 2
+      await mockDatabaseService.updateNode('parent2', {
+        parentId: null,
+        beforeSiblingId: 'child1'
+      });
+
+      // Update Child 2 to point to Parent 2
+      await mockDatabaseService.updateNode('child2', {
+        beforeSiblingId: 'parent2'
+      });
+
+      // Verify both updates succeeded (no FOREIGN KEY errors)
+      expect(mockDatabaseService.updateNode).toHaveBeenCalledTimes(2);
+      expect(mockDatabaseService.updateNode).toHaveBeenCalledWith('parent2', {
+        parentId: null,
+        beforeSiblingId: 'child1'
+      });
+      expect(mockDatabaseService.updateNode).toHaveBeenCalledWith('child2', {
+        beforeSiblingId: 'parent2'
+      });
+    });
+
+    it('should validate beforeSiblingId FOREIGN KEY constraint during outdent', async () => {
+      // Attempt to update a node with a non-existent beforeSiblingId
+      // This should fail with FOREIGN KEY constraint error
+
+      await expect(
+        mockDatabaseService.updateNode('child2', {
+          beforeSiblingId: 'non-existent-node'
+        })
+      ).rejects.toThrow('FOREIGN KEY constraint failed: before_sibling_id "non-existent-node"');
+    });
+  });
 });

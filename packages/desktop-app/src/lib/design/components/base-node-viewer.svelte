@@ -65,20 +65,22 @@
   const CONTENT_SAVE_TIMEOUT_MS = 5000; // 5 seconds
   const TIMEOUT_GRACE_PERIOD_MS = 50; // 50ms grace period after timeout
 
-  // Explicit coordination: Track when content save watcher has completed its current run
+  // Explicit coordination: Promise that resolves when content save phase completes
   // This makes the dependency between watchers explicit rather than relying on declaration order
-  let contentSavePhaseComplete = $state(false);
+  let contentSavePhasePromise: Promise<void> = Promise.resolve();
 
   /**
    * Wait for a pending node save to complete, with timeout and grace period
    * @param nodeIds - Array of node IDs to wait for
+   * @returns Set of node IDs that failed to save (should be excluded from updates)
    */
-  async function waitForNodeSavesIfPending(nodeIds: string[]): Promise<void> {
+  async function waitForNodeSavesIfPending(nodeIds: string[]): Promise<Set<string>> {
+    const failedNodeIds = new Set<string>();
     const relevantSaves = nodeIds
       .map((id) => pendingContentSavePromises.get(id))
       .filter((p): p is Promise<void> => p !== undefined);
 
-    if (relevantSaves.length === 0) return;
+    if (relevantSaves.length === 0) return failedNodeIds;
 
     try {
       await Promise.race([
@@ -97,7 +99,7 @@
       await new Promise((resolve) => setTimeout(resolve, TIMEOUT_GRACE_PERIOD_MS));
 
       // After grace period, verify nodes actually exist in database
-      // This catches cases where the save is truly stuck and hasn't completed
+      // If they don't exist, mark them as failed to prevent FOREIGN KEY errors
       for (const nodeId of nodeIds) {
         const promise = pendingContentSavePromises.get(nodeId);
         if (promise) {
@@ -106,41 +108,45 @@
             const exists = await databaseService.getNode(nodeId);
             if (!exists) {
               console.error(
-                '[BaseNodeViewer] CRITICAL: Node not saved to database after timeout:',
+                '[BaseNodeViewer] Node save failed, will skip structural updates:',
                 nodeId
               );
-              // Don't throw - let validation below handle skipping the update
+              failedNodeIds.add(nodeId);
             }
           } catch (dbError) {
-            console.error('[BaseNodeViewer] Failed to verify node existence:', nodeId, dbError);
+            console.error(
+              '[BaseNodeViewer] Failed to verify node existence, assuming failed:',
+              nodeId,
+              dbError
+            );
+            failedNodeIds.add(nodeId);
           }
         }
       }
     }
+
+    return failedNodeIds;
   }
 
   // ============================================================================
-  // CONTENT SAVE WATCHER - Must run FIRST (declared before structural watcher)
+  // CONTENT SAVE WATCHER - Initiates content saves for new nodes
   // ============================================================================
-  // CRITICAL EXECUTION ORDER:
-  // This $effect.pre MUST execute before the structural change watcher below.
-  // Svelte guarantees execution order based on declaration order in the same component.
-  //
-  // Why this matters:
-  // 1. This watcher initiates saves for new nodes and adds Promises to pendingContentSavePromises
-  // 2. The structural watcher below checks pendingContentSavePromises to wait for these saves
-  // 3. If structural watcher runs first, it won't see the pending save and will fail
-  //
-  // DO NOT move this watcher below the structural change watcher - it will break coordination
+  // This watcher creates a promise that the structural watcher awaits, ensuring
+  // new nodes are saved to the database before structural updates reference them.
+  // This prevents FOREIGN KEY constraint errors.
   // ============================================================================
   $effect.pre(() => {
     if (!parentId) {
-      contentSavePhaseComplete = true;
+      contentSavePhasePromise = Promise.resolve();
       return;
     }
 
-    // Reset flag at start of content save phase
-    contentSavePhaseComplete = false;
+    // Create a new promise for this content save phase
+    // The structural watcher will await this before processing updates
+    let resolvePhase: () => void;
+    contentSavePhasePromise = new Promise((resolve) => {
+      resolvePhase = resolve;
+    });
 
     const nodes = nodeManager.visibleNodes;
 
@@ -163,11 +169,8 @@
 
           // Clean up Map entry when save completes (success or failure)
           // Using finally() ensures atomic cleanup with promise resolution
-          // This prevents race conditions where structural watcher checks Map
-          // between save completion and cleanup
           savePromise.finally(() => {
-            // Use microtask timing to ensure Map is available during awaits
-            Promise.resolve().then(() => pendingContentSavePromises.delete(node.id));
+            pendingContentSavePromises.delete(node.id);
           });
 
           pendingContentSavePromises.set(node.id, savePromise);
@@ -178,8 +181,9 @@
       }
     }
 
-    // Mark content save phase as complete
-    contentSavePhaseComplete = true;
+    // Mark content save phase as complete by resolving the promise
+    // Use Promise.resolve().then() to ensure this happens after all synchronous code
+    Promise.resolve().then(() => resolvePhase());
   });
 
   // Track node IDs to detect deletions
@@ -212,13 +216,11 @@
           for (const nodeId of affectedNodes) {
             const structure = previousStructure.get(nodeId);
             if (structure) {
-              const oldBeforeSiblingId = structure.beforeSiblingId;
-              previousStructure.set(nodeId, {
+              // Use centralized tracking function
+              trackStructureChange(nodeId, {
                 ...structure,
                 beforeSiblingId: null
               });
-              // Update reverse index
-              updateSiblingIndex(nodeId, oldBeforeSiblingId, null);
             }
           }
           // Clean up the deleted node's entry
@@ -246,22 +248,14 @@
   });
 
   // ============================================================================
-  // STRUCTURAL CHANGE WATCHER - Must run SECOND (after content save watcher)
+  // STRUCTURAL CHANGE WATCHER - Persists structural changes
   // ============================================================================
-  // CRITICAL EXECUTION ORDER:
-  // This $effect.pre MUST execute AFTER the content save watcher above.
-  // It waits for pending saves from that watcher before persisting structural changes.
-  //
-  // Why this matters:
-  // 1. Checks pendingContentSavePromises Map for any saves affecting this update
-  // 2. Waits for relevant saves to complete before updating parentId/beforeSiblingId
-  // 3. Prevents FOREIGN KEY errors from referencing nodes not yet in database
+  // This watcher awaits contentSavePhasePromise to ensure new nodes are saved
+  // before structural updates reference them. This prevents FOREIGN KEY errors.
   //
   // IMPORTANT: saveNodeWithParent() saves BOTH content AND structure
   // This means new nodes don't need a separate structural update - they're already persisted
   // This watcher only handles structural changes to EXISTING nodes (indent, outdent, reorder)
-  //
-  // DO NOT move this watcher above the content save watcher - it will break coordination
   // ============================================================================
   // previousStructure is updated in three places (all necessary):
   // 1. Deletion watcher (line ~138): Cleans up beforeSiblingId references to deleted nodes
@@ -304,17 +298,32 @@
     }
   }
 
+  /**
+   * Update previousStructure tracking and reverse index
+   * Centralizes structure change tracking logic used in three places:
+   * 1. Deletion watcher - cleaning up beforeSiblingId references
+   * 2. Structural watcher - tracking unchanged nodes
+   * 3. Structural watcher - tracking successfully persisted changes
+   */
+  function trackStructureChange(
+    nodeId: string,
+    newStructure: { parentId: string | null; beforeSiblingId: string | null }
+  ): void {
+    const oldStructure = previousStructure.get(nodeId);
+    previousStructure.set(nodeId, newStructure);
+
+    // Update reverse index if beforeSiblingId changed
+    if (!oldStructure || oldStructure.beforeSiblingId !== newStructure.beforeSiblingId) {
+      updateSiblingIndex(
+        nodeId,
+        oldStructure?.beforeSiblingId || null,
+        newStructure.beforeSiblingId
+      );
+    }
+  }
+
   $effect.pre(() => {
     if (!parentId) return;
-
-    // EXPLICIT GUARD: Wait for content save phase to complete
-    // This prevents race conditions if watchers run out of expected order
-    if (!contentSavePhaseComplete) {
-      console.warn(
-        '[BaseNodeViewer] Structural watcher running before content save completed - possible ordering issue'
-      );
-      return;
-    }
 
     const visibleNodes = nodeManager.visibleNodes;
 
@@ -353,17 +362,7 @@
         // No change detected OR new node - update tracking to current state
         // New nodes have their structure saved via saveNodeWithParent() in content save watcher
         // So we can safely track them here to avoid redundant structural updates
-        const prevStructure = previousStructure.get(node.id);
-        previousStructure.set(node.id, currentStructure);
-
-        // Update reverse index if beforeSiblingId changed
-        if (!prevStructure || prevStructure.beforeSiblingId !== currentStructure.beforeSiblingId) {
-          updateSiblingIndex(
-            node.id,
-            prevStructure?.beforeSiblingId || null,
-            currentStructure.beforeSiblingId
-          );
-        }
+        trackStructureChange(node.id, currentStructure);
       }
     }
 
@@ -372,10 +371,12 @@
     if (updates.length > 0) {
       // Process updates asynchronously - queue ensures proper serialization
       (async () => {
-        // CRITICAL: Wait for any pending content saves to complete first
-        // New nodes must be persisted before structural updates can reference them
+        // CRITICAL: Wait for content save phase to complete first
+        // This ensures new nodes are added to pendingContentSavePromises Map
+        await contentSavePhasePromise;
 
-        // Collect all node IDs that updates might reference
+        // Then wait for any pending content saves to complete
+        // New nodes must be persisted before structural updates can reference them
         const nodeIdsToWaitFor: string[] = [];
         for (const update of updates) {
           if (update.parentId) nodeIdsToWaitFor.push(update.parentId);
@@ -383,12 +384,21 @@
         }
 
         // Wait for all relevant saves with timeout and grace period
-        await waitForNodeSavesIfPending(nodeIdsToWaitFor);
+        // Returns set of node IDs that failed to save
+        const failedNodeIds = await waitForNodeSavesIfPending(nodeIdsToWaitFor);
 
-        // Track failed updates for rollback
+        // Filter out updates that reference failed nodes to prevent FOREIGN KEY errors
+        const validUpdates = updates.filter(
+          (update) =>
+            !failedNodeIds.has(update.nodeId) &&
+            (!update.parentId || !failedNodeIds.has(update.parentId)) &&
+            (!update.beforeSiblingId || !failedNodeIds.has(update.beforeSiblingId))
+        );
+
+        // Track failed updates for rollback (separate from nodes that failed to save)
         const failedUpdates: typeof updates = [];
 
-        for (const update of updates) {
+        for (const update of validUpdates) {
           try {
             // Validate both parentId and beforeSiblingId references exist to prevent FOREIGN KEY errors
             let validatedParentId = update.parentId;
@@ -442,18 +452,10 @@
             );
 
             // Update tracking after successful persistence
-            const oldStructure = previousStructure.get(update.nodeId);
-            previousStructure.set(update.nodeId, {
+            trackStructureChange(update.nodeId, {
               parentId: validatedParentId,
               beforeSiblingId: validatedBeforeSiblingId
             });
-
-            // Update reverse index
-            updateSiblingIndex(
-              update.nodeId,
-              oldStructure?.beforeSiblingId || null,
-              validatedBeforeSiblingId
-            );
           } catch (error) {
             console.error(
               '[BaseNodeViewer] Failed to persist structural change:',
@@ -465,25 +467,44 @@
           }
         }
 
-        // Handle failed updates: emit error event for user notification
-        if (failedUpdates.length > 0) {
+        // Handle failed updates: rollback in-memory state and emit error event
+        // Include both nodes that failed to save AND nodes that failed to update
+        const allFailedNodeIds = new Set([...failedNodeIds, ...failedUpdates.map((u) => u.nodeId)]);
+
+        if (allFailedNodeIds.size > 0) {
           console.warn(
-            '[BaseNodeViewer] Failed to persist updates:',
+            '[BaseNodeViewer] Failed to persist changes:',
+            failedNodeIds.size,
+            'save failure(s),',
             failedUpdates.length,
-            'nodes affected'
+            'update failure(s)'
           );
 
+          // Rollback in-memory state for failed updates to match last known database state
+          for (const update of failedUpdates) {
+            const lastGoodState = previousStructure.get(update.nodeId);
+            if (lastGoodState) {
+              // Revert node's in-memory structure to last successfully persisted state
+              const node = nodeManager.nodes.get(update.nodeId);
+              if (node) {
+                nodeManager.nodes.set(update.nodeId, {
+                  ...node,
+                  parentId: lastGoodState.parentId,
+                  beforeSiblingId: lastGoodState.beforeSiblingId
+                });
+              }
+            }
+          }
+
           // Emit event for error notification (UI can show toast/banner)
-          // TODO: Implement rollback mechanism to revert in-memory state to match database
-          // This requires adding updateNodeStructure() method to nodeManager
           import('$lib/services/eventBus').then(({ eventBus }) => {
             // Type assertion needed because of dynamic import context
             const event = {
               type: 'error:persistence-failed',
               namespace: 'error',
               source: 'base-node-viewer',
-              message: `Failed to persist ${failedUpdates.length} structural update(s). Please refresh to sync state.`,
-              failedNodeIds: failedUpdates.map((u) => u.nodeId)
+              message: `Failed to persist ${allFailedNodeIds.size} node(s). Changes have been reverted.`,
+              failedNodeIds: Array.from(allFailedNodeIds)
             };
             eventBus.emit(event as never);
           });
