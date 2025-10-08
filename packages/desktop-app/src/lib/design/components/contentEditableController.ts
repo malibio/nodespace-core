@@ -1109,13 +1109,35 @@ export class ContentEditableController {
       }
 
       if (event.shiftKey && this.config.allowMultiline) {
-        // Shift+Enter for multiline nodes: allow default browser behavior
-        // Don't preventDefault() - let the browser handle newline insertion naturally
-        // Set flag to prevent live formatting from interfering with the newline
-        this.recentShiftEnter = true;
-        setTimeout(() => {
-          this.recentShiftEnter = false;
-        }, 100); // Clear flag after brief delay
+        // Shift+Enter for multiline nodes: insert newline with markdown-aware splitting
+        event.preventDefault();
+
+        const currentContent = this.element.textContent || '';
+        const cursorPosition = this.getCurrentColumn();
+
+        // Use markdown-aware splitting to preserve formatting across lines
+        const splitResult = splitMarkdownContent(currentContent, cursorPosition);
+
+        // Update content to show both lines with proper formatting
+        // The before content gets closing markers, after content gets opening markers
+        const newContent = splitResult.beforeContent + '\n' + splitResult.afterContent;
+
+        // Update the element with new content
+        this.originalContent = newContent;
+        this.element.textContent = newContent;
+
+        // Apply live formatting
+        this.setLiveFormattedContent(newContent);
+
+        // Position cursor at the start of the new line (after opening markers)
+        // Calculate position: length of beforeContent + 1 (for newline) + opening markers
+        const newCursorPosition =
+          splitResult.beforeContent.length + 1 + splitResult.newNodeCursorPosition;
+        this.restoreCursorPosition(newCursorPosition);
+
+        // Notify of content change
+        this.events.contentChanged(newContent);
+
         return;
       }
 
