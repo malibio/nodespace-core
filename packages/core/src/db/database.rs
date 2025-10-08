@@ -174,7 +174,8 @@ impl DatabaseService {
                 properties JSON NOT NULL DEFAULT '{}',
                 embedding_vector BLOB,
                 FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
-                FOREIGN KEY (origin_node_id) REFERENCES nodes(id)
+                FOREIGN KEY (origin_node_id) REFERENCES nodes(id),
+                FOREIGN KEY (before_sibling_id) REFERENCES nodes(id) ON DELETE SET NULL
             )",
             (),
         )
