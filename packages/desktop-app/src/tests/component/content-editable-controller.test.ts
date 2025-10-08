@@ -8,7 +8,7 @@ import { JSDOM } from 'jsdom';
 import {
   ContentEditableController,
   type ContentEditableEvents
-} from '$lib/design/components/content-editable-controller.js';
+} from '$lib/design/components/content-editable-controller';
 
 // Setup DOM environment for this test file
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>');
@@ -22,6 +22,28 @@ globalThis.FocusEvent = dom.window.FocusEvent;
 globalThis.KeyboardEvent = dom.window.KeyboardEvent;
 globalThis.InputEvent = dom.window.InputEvent;
 globalThis.NodeFilter = dom.window.NodeFilter;
+
+// Mock document.execCommand for Happy-DOM compatibility
+if (typeof document.execCommand !== 'function') {
+  (document as unknown as { execCommand: (command: string) => boolean }).execCommand = vi.fn(
+    (command: string) => {
+      if (command === 'insertLineBreak') {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          const br = document.createElement('br');
+          range.insertNode(br);
+          range.setStartAfter(br);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        return true;
+      }
+      return false;
+    }
+  );
+}
 
 // Type for tracking event calls in tests
 interface EventCallRecord {
