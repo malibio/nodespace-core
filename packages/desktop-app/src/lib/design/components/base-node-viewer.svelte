@@ -230,16 +230,22 @@
 
             // Check parentId exists in memory
             if (validatedParentId) {
-              const parentNode = nodeManager.nodes.get(validatedParentId);
-              if (!parentNode) {
-                console.warn(
-                  '[BaseNodeViewer] parentId references deleted node, cannot update:',
-                  update.nodeId,
-                  'referenced parent:',
-                  validatedParentId
-                );
-                // Skip this update entirely - we can't update without a valid parent
-                continue;
+              // Special case: if the parent is this viewer's parentId, we know it exists
+              // (the parent node itself is not loaded in nodeManager.nodes, only its children are)
+              const isViewerParent = validatedParentId === parentId;
+
+              if (!isViewerParent) {
+                const parentNode = nodeManager.nodes.get(validatedParentId);
+                if (!parentNode) {
+                  console.warn(
+                    '[BaseNodeViewer] parentId references deleted node, cannot update:',
+                    update.nodeId,
+                    'referenced parent:',
+                    validatedParentId
+                  );
+                  // Skip this update entirely - we can't update without a valid parent
+                  continue;
+                }
               }
               // Note: We've already awaited pendingContentSavePromise above,
               // so any new parent nodes are guaranteed to be saved by now
