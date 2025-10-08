@@ -283,9 +283,9 @@
   // This watcher only handles structural changes to EXISTING nodes (indent, outdent, reorder)
   // ============================================================================
   // previousStructure is updated in three places (all necessary):
-  // 1. Deletion watcher (line ~138): Cleans up beforeSiblingId references to deleted nodes
-  // 2. This watcher (line ~225): Tracks unchanged nodes to prevent redundant updates
-  // 3. This watcher (line ~316): Tracks successfully persisted structural changes (source of truth)
+  // 1. Deletion watcher (line ~218): Cleans up beforeSiblingId references to deleted nodes
+  // 2. This watcher (line ~388): Tracks unchanged nodes to prevent redundant updates
+  // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
   let previousStructure = new Map<
     string,
     { parentId: string | null; beforeSiblingId: string | null }
@@ -489,17 +489,39 @@
               beforeSiblingId: validatedBeforeSiblingId
             });
           } catch (error) {
-            // Check if error is due to node being deleted (common during merge/combine operations)
+            // Categorize errors for better debugging and potential retry logic
             const errorMessage = error instanceof Error ? error.message : String(error);
+
+            // Expected: Node was deleted via merge/combine
             if (errorMessage.includes('Node not found') || errorMessage.includes('not found')) {
-              // Node was deleted (e.g., via merge) - this is expected, just skip silently
               console.debug('[BaseNodeViewer] Skipping update for deleted node:', update.nodeId);
               continue; // Don't treat as failure - node was intentionally deleted
             }
 
-            // Real error - log and queue for rollback
+            // Critical: FOREIGN KEY constraint violation - coordination failed
+            if (errorMessage.includes('FOREIGN KEY constraint')) {
+              console.error(
+                '[BaseNodeViewer] FOREIGN KEY violation - coordination failed:',
+                update.nodeId,
+                error
+              );
+              failedUpdates.push(update);
+              continue;
+            }
+
+            // Retryable: Database locked (despite busy timeout and queue)
+            if (errorMessage.includes('database is locked')) {
+              console.warn(
+                '[BaseNodeViewer] Database locked, queueing for rollback:',
+                update.nodeId
+              );
+              failedUpdates.push(update);
+              continue;
+            }
+
+            // Unknown error - log and queue for rollback
             console.error(
-              '[BaseNodeViewer] Failed to persist structural change:',
+              '[BaseNodeViewer] Unexpected error persisting structural change:',
               update.nodeId,
               error
             );
@@ -1498,6 +1520,10 @@
       clearTimeout(timeout);
     }
     saveTimeouts.clear();
+
+    // Clear pending promise tracking to prevent memory leaks
+    pendingContentSavePromises.clear();
+    pendingStructuralUpdatesPromise = null;
   });
 </script>
 
