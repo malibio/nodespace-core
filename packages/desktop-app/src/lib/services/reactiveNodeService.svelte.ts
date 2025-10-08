@@ -1052,6 +1052,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const siblingId = siblingsBelow[i];
         const sibling = _nodes[siblingId];
         if (sibling) {
+          // Remove from current sibling chain BEFORE updating beforeSiblingId
+          removeFromSiblingChain(siblingId);
+
           // First transferred sibling points to last existing child (or null)
           // Subsequent siblings point to the previous transferred sibling
           const beforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];

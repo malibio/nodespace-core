@@ -61,6 +61,38 @@
   // Structural updates must wait for these to complete to avoid FOREIGN KEY errors
   const pendingContentSavePromises = new Map<string, Promise<void>>();
 
+  // Timeout configuration for promise coordination
+  const CONTENT_SAVE_TIMEOUT_MS = 5000; // 5 seconds
+  const TIMEOUT_GRACE_PERIOD_MS = 50; // 50ms grace period after timeout
+
+  /**
+   * Wait for a pending node save to complete, with timeout and grace period
+   * @param nodeIds - Array of node IDs to wait for
+   */
+  async function waitForNodeSavesIfPending(nodeIds: string[]): Promise<void> {
+    const relevantSaves = nodeIds
+      .map((id) => pendingContentSavePromises.get(id))
+      .filter((p): p is Promise<void> => p !== undefined);
+
+    if (relevantSaves.length === 0) return;
+
+    try {
+      await Promise.race([
+        Promise.all(relevantSaves),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Timeout waiting for content saves')),
+            CONTENT_SAVE_TIMEOUT_MS
+          )
+        )
+      ]);
+    } catch (error) {
+      console.error('[BaseNodeViewer] Timeout or error waiting for content saves:', error);
+      // Add grace period to allow in-flight saves to complete
+      await new Promise((resolve) => setTimeout(resolve, TIMEOUT_GRACE_PERIOD_MS));
+    }
+  }
+
   // ============================================================================
   // CONTENT SAVE WATCHER - Must run FIRST (declared before structural watcher)
   // ============================================================================
@@ -242,33 +274,15 @@
         // CRITICAL: Wait for any pending content saves to complete first
         // New nodes must be persisted before structural updates can reference them
 
-        // Collect all pending saves that updates might reference
-        const relevantSaves: Promise<void>[] = [];
+        // Collect all node IDs that updates might reference
+        const nodeIdsToWaitFor: string[] = [];
         for (const update of updates) {
-          // Wait for parent node save if pending
-          if (update.parentId && pendingContentSavePromises.has(update.parentId)) {
-            relevantSaves.push(pendingContentSavePromises.get(update.parentId)!);
-          }
-          // Wait for sibling node save if pending
-          if (update.beforeSiblingId && pendingContentSavePromises.has(update.beforeSiblingId)) {
-            relevantSaves.push(pendingContentSavePromises.get(update.beforeSiblingId)!);
-          }
+          if (update.parentId) nodeIdsToWaitFor.push(update.parentId);
+          if (update.beforeSiblingId) nodeIdsToWaitFor.push(update.beforeSiblingId);
         }
 
-        // Wait for all relevant saves with timeout
-        if (relevantSaves.length > 0) {
-          try {
-            await Promise.race([
-              Promise.all(relevantSaves),
-              new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Timeout waiting for content saves')), 5000)
-              )
-            ]);
-          } catch (error) {
-            console.error('[BaseNodeViewer] Timeout or error waiting for content saves:', error);
-            // Continue anyway - validation below will catch missing references
-          }
-        }
+        // Wait for all relevant saves with timeout and grace period
+        await waitForNodeSavesIfPending(nodeIdsToWaitFor);
 
         for (const update of updates) {
           try {
