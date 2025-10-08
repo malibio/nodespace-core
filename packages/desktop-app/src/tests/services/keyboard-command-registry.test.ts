@@ -75,9 +75,7 @@ describe('KeyboardCommandRegistry', () => {
       expect(commands.get('Ctrl+Alt+Shift+Meta+A')).toBe(mockCommand);
     });
 
-    it('should warn when overwriting an existing command', () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
+    it('should be idempotent when registering the same key combination multiple times', () => {
       const command1: KeyboardCommand = {
         id: 'test-1',
         description: 'First command',
@@ -92,15 +90,17 @@ describe('KeyboardCommandRegistry', () => {
         execute: async () => true
       };
 
+      // Register first command
       registry.register({ key: 'Enter' }, command1);
+
+      // Attempt to register second command with same key - should be silently skipped
       registry.register({ key: 'Enter' }, command2);
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Overwriting existing command'),
-        'First command'
-      );
-
-      consoleSpy.mockRestore();
+      // Verify the first command is still registered (idempotent behavior)
+      const commands = registry.getCommands();
+      const result = commands.get('Enter');
+      expect(result).toBe(command1);
+      expect(result?.id).toBe('test-1');
     });
   });
 
