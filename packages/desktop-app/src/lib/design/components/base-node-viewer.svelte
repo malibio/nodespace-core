@@ -57,14 +57,24 @@
     }
   });
 
-  // Track pending content saves for new nodes
+  // Track pending content saves for new nodes (keyed by node ID)
   // Structural updates must wait for these to complete to avoid FOREIGN KEY errors
-  let pendingContentSavePromise: Promise<void> | null = null;
+  const pendingContentSavePromises = new Map<string, Promise<void>>();
 
-  // Simple persistence: watch nodes, debounce saves
-  // Only save nodes when content actually changes
-  // CRITICAL: Use $effect.pre to run BEFORE structural change watcher checks pendingContentSavePromise
-  // This ensures new node saves are initiated before structural updates try to reference them
+  // ============================================================================
+  // CONTENT SAVE WATCHER - Must run FIRST (declared before structural watcher)
+  // ============================================================================
+  // CRITICAL EXECUTION ORDER:
+  // This $effect.pre MUST execute before the structural change watcher below.
+  // Svelte guarantees execution order based on declaration order in the same component.
+  //
+  // Why this matters:
+  // 1. This watcher initiates saves for new nodes and adds Promises to pendingContentSavePromises
+  // 2. The structural watcher below checks pendingContentSavePromises to wait for these saves
+  // 3. If structural watcher runs first, it won't see the pending save and will fail
+  //
+  // DO NOT move this watcher below the structural change watcher - it will break coordination
+  // ============================================================================
   $effect.pre(() => {
     if (!parentId) return;
 
@@ -84,11 +94,12 @@
 
         if (isNewNode) {
           // Save immediately without debounce - structural updates may need to reference this node
-          // Track the promise so structural updates can wait for it
-          pendingContentSavePromise = (async () => {
+          // Track the promise per node ID so structural updates can wait for it
+          const savePromise = (async () => {
             await saveNode(node.id, node.content, node.nodeType);
-            pendingContentSavePromise = null;
+            pendingContentSavePromises.delete(node.id);
           })();
+          pendingContentSavePromises.set(node.id, savePromise);
         } else {
           // Existing node - use debounce for performance
           debounceSave(node.id, node.content, node.nodeType);
@@ -152,9 +163,28 @@
     }
   });
 
-  // Track structural changes (parentId, beforeSiblingId) and persist to database
-  // This is critical for operations like node deletion that reassign children
-  // Using $effect.pre to ensure this runs BEFORE the deletion watcher
+  // ============================================================================
+  // STRUCTURAL CHANGE WATCHER - Must run SECOND (after content save watcher)
+  // ============================================================================
+  // CRITICAL EXECUTION ORDER:
+  // This $effect.pre MUST execute AFTER the content save watcher above.
+  // It waits for pending saves from that watcher before persisting structural changes.
+  //
+  // Why this matters:
+  // 1. Checks pendingContentSavePromises Map for any saves affecting this update
+  // 2. Waits for relevant saves to complete before updating parentId/beforeSiblingId
+  // 3. Prevents FOREIGN KEY errors from referencing nodes not yet in database
+  //
+  // IMPORTANT: saveNodeWithParent() saves BOTH content AND structure
+  // This means new nodes don't need a separate structural update - they're already persisted
+  // This watcher only handles structural changes to EXISTING nodes (indent, outdent, reorder)
+  //
+  // DO NOT move this watcher above the content save watcher - it will break coordination
+  // ============================================================================
+  // previousStructure is updated in three places (all necessary):
+  // 1. Deletion watcher (line ~138): Cleans up beforeSiblingId references to deleted nodes
+  // 2. This watcher (line ~225): Tracks unchanged nodes to prevent redundant updates
+  // 3. This watcher (line ~316): Tracks successfully persisted structural changes (source of truth)
   let previousStructure = new Map<
     string,
     { parentId: string | null; beforeSiblingId: string | null }
@@ -197,7 +227,9 @@
           beforeSiblingId: node.beforeSiblingId
         });
       } else {
-        // No change detected - update tracking to current state
+        // No change detected OR new node - update tracking to current state
+        // New nodes have their structure saved via saveNodeWithParent() in content save watcher
+        // So we can safely track them here to avoid redundant structural updates
         previousStructure.set(node.id, currentStructure);
       }
     }
@@ -209,16 +241,32 @@
       (async () => {
         // CRITICAL: Wait for any pending content saves to complete first
         // New nodes must be persisted before structural updates can reference them
-        if (pendingContentSavePromise) {
+
+        // Collect all pending saves that updates might reference
+        const relevantSaves: Promise<void>[] = [];
+        for (const update of updates) {
+          // Wait for parent node save if pending
+          if (update.parentId && pendingContentSavePromises.has(update.parentId)) {
+            relevantSaves.push(pendingContentSavePromises.get(update.parentId)!);
+          }
+          // Wait for sibling node save if pending
+          if (update.beforeSiblingId && pendingContentSavePromises.has(update.beforeSiblingId)) {
+            relevantSaves.push(pendingContentSavePromises.get(update.beforeSiblingId)!);
+          }
+        }
+
+        // Wait for all relevant saves with timeout
+        if (relevantSaves.length > 0) {
           try {
             await Promise.race([
-              pendingContentSavePromise,
+              Promise.all(relevantSaves),
               new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Timeout waiting for content save')), 5000)
+                setTimeout(() => reject(new Error('Timeout waiting for content saves')), 5000)
               )
             ]);
           } catch (error) {
-            console.warn('[BaseNodeViewer] Timeout waiting for content save:', error);
+            console.error('[BaseNodeViewer] Timeout or error waiting for content saves:', error);
+            // Continue anyway - validation below will catch missing references
           }
         }
 
@@ -251,10 +299,18 @@
               // so any new parent nodes are guaranteed to be saved by now
             }
 
-            // Check beforeSiblingId
+            // Check beforeSiblingId references exist
             if (validatedBeforeSiblingId) {
               const siblingExists = nodeManager.nodes.has(validatedBeforeSiblingId);
               if (!siblingExists) {
+                // WARNING: Sibling node was deleted - null-ing the reference
+                // This is expected when nodes are deleted, but log for debugging
+                console.warn(
+                  '[BaseNodeViewer] beforeSiblingId references deleted node, null-ing reference:',
+                  update.nodeId,
+                  'referenced sibling:',
+                  validatedBeforeSiblingId
+                );
                 validatedBeforeSiblingId = null;
               }
             }

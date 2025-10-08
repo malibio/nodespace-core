@@ -23,11 +23,25 @@ import { tick } from 'svelte';
  */
 describe('Database Persistence Edge Cases', () => {
   describe('Merge-Split with Child Reassignment', () => {
+    interface NodeData {
+      content: string;
+      nodeType: string;
+      parentId: string | null;
+      originNodeId: string | null;
+      beforeSiblingId: string | null;
+    }
+
+    interface UpdateData {
+      parentId?: string | null;
+      beforeSiblingId?: string | null;
+    }
+
     let mockDatabaseService: {
       saveNodeWithParent: ReturnType<typeof vi.fn>;
       updateNode: ReturnType<typeof vi.fn>;
       deleteNode: ReturnType<typeof vi.fn>;
     };
+    let savedNodes: Set<string>;
     let pendingContentSavePromise: Promise<void> | null = null;
     let nodeManager: {
       visibleNodes: Array<{
@@ -40,15 +54,66 @@ describe('Database Persistence Edge Cases', () => {
     };
 
     beforeEach(() => {
-      // Mock database service with proper typing
+      // Track saved nodes for FOREIGN KEY validation
+      savedNodes = new Set<string>();
+
+      // Mock database service with FOREIGN KEY constraint validation
       mockDatabaseService = {
-        saveNodeWithParent: vi.fn().mockResolvedValue(undefined),
-        updateNode: vi.fn().mockResolvedValue(undefined),
-        deleteNode: vi.fn().mockResolvedValue(undefined)
+        saveNodeWithParent: vi.fn().mockImplementation(async (nodeId: string, data: NodeData) => {
+          // Validate parentId exists (if provided)
+          if (data.parentId && !savedNodes.has(data.parentId)) {
+            throw new Error(
+              `FOREIGN KEY constraint failed: parent_id "${data.parentId}" does not exist`
+            );
+          }
+          // Validate beforeSiblingId exists (if provided)
+          if (data.beforeSiblingId && !savedNodes.has(data.beforeSiblingId)) {
+            throw new Error(
+              `FOREIGN KEY constraint failed: before_sibling_id "${data.beforeSiblingId}" does not exist`
+            );
+          }
+          // Save node
+          savedNodes.add(nodeId);
+        }),
+        updateNode: vi.fn().mockImplementation(async (nodeId: string, data: UpdateData) => {
+          // Validate node exists
+          if (!savedNodes.has(nodeId)) {
+            throw new Error(`Cannot update non-existent node: ${nodeId}`);
+          }
+          // Validate parentId exists (if provided)
+          if (data.parentId && !savedNodes.has(data.parentId)) {
+            throw new Error(
+              `FOREIGN KEY constraint failed: parent_id "${data.parentId}" does not exist`
+            );
+          }
+          // Validate beforeSiblingId exists (if provided)
+          if (data.beforeSiblingId && !savedNodes.has(data.beforeSiblingId)) {
+            throw new Error(
+              `FOREIGN KEY constraint failed: before_sibling_id "${data.beforeSiblingId}" does not exist`
+            );
+          }
+        }),
+        deleteNode: vi.fn().mockImplementation(async (nodeId: string) => {
+          savedNodes.delete(nodeId);
+        })
       };
 
       // Reset state
       pendingContentSavePromise = null;
+
+      // Pre-save all nodes to satisfy FOREIGN KEY constraints
+      // This simulates nodes already existing in the database
+      const nodesToPreSave = [
+        'parent1',
+        'child1',
+        'grandchild1',
+        'parent2',
+        'child2',
+        'grandchild2'
+      ];
+      for (const nodeId of nodesToPreSave) {
+        savedNodes.add(nodeId);
+      }
 
       // Initial hierarchy:
       // Parent 1
@@ -185,6 +250,9 @@ describe('Database Persistence Edge Cases', () => {
     });
 
     it('should handle multiple sequential save-update cycles', async () => {
+      // Pre-save the child node that will be updated
+      savedNodes.add('some-child');
+
       // Simulate creating multiple new nodes in quick succession
       const newNodeIds = ['new1', 'new2', 'new3'];
 
@@ -265,6 +333,154 @@ describe('Database Persistence Edge Cases', () => {
       }
 
       expect(mockQueue.length).toBe(2);
+    });
+
+    it('should handle multiple concurrent new node saves with Map-based tracking', async () => {
+      // Create local mock for this test
+      const localSavedNodes = new Set<string>();
+      const localMock = {
+        saveNodeWithParent: vi.fn().mockImplementation(async (nodeId: string, _data: unknown) => {
+          localSavedNodes.add(nodeId);
+        })
+      };
+
+      // Simulate the fixed implementation with Map<nodeId, Promise>
+      const pendingContentSavePromises = new Map<string, Promise<void>>();
+      const saveOrder: string[] = [];
+
+      // Simulate creating 3 new nodes concurrently
+      const node1Promise = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await localMock.saveNodeWithParent('node1', {
+          content: 'Node 1',
+          nodeType: 'text',
+          parentId: 'parent1',
+          originNodeId: null,
+          beforeSiblingId: null
+        });
+        pendingContentSavePromises.delete('node1');
+        saveOrder.push('node1');
+      })();
+      pendingContentSavePromises.set('node1', node1Promise);
+
+      const node2Promise = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await localMock.saveNodeWithParent('node2', {
+          content: 'Node 2',
+          nodeType: 'text',
+          parentId: 'parent2',
+          originNodeId: null,
+          beforeSiblingId: null
+        });
+        pendingContentSavePromises.delete('node2');
+        saveOrder.push('node2');
+      })();
+      pendingContentSavePromises.set('node2', node2Promise);
+
+      const node3Promise = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await localMock.saveNodeWithParent('node3', {
+          content: 'Node 3',
+          nodeType: 'text',
+          parentId: 'parent3',
+          originNodeId: null,
+          beforeSiblingId: null
+        });
+        pendingContentSavePromises.delete('node3');
+        saveOrder.push('node3');
+      })();
+      pendingContentSavePromises.set('node3', node3Promise);
+
+      // Note: In real implementation, structural watcher would wait for parent saves
+      // This test validates that multiple concurrent saves complete independently
+
+      // Wait for all saves to complete
+      await Promise.all([node1Promise, node2Promise, node3Promise]);
+
+      // Verify all saves completed and Map was cleaned up
+      expect(pendingContentSavePromises.size).toBe(0);
+      expect(localMock.saveNodeWithParent).toHaveBeenCalledTimes(3);
+      expect(saveOrder).toHaveLength(3);
+      // Order should be: node3, node2, node1 (based on timeouts)
+      expect(saveOrder).toEqual(['node3', 'node2', 'node1']);
+    });
+
+    it('should wait for relevant parent node saves before updating children', async () => {
+      // Create local mocks for this test
+      const localSavedNodes = new Set<string>();
+      const localMock = {
+        saveNodeWithParent: vi.fn().mockImplementation(async (nodeId: string, _data: unknown) => {
+          localSavedNodes.add(nodeId);
+        }),
+        updateNode: vi.fn().mockImplementation(async (nodeId: string, _data: unknown) => {
+          if (!localSavedNodes.has(nodeId)) {
+            throw new Error(`Cannot update non-existent node: ${nodeId}`);
+          }
+        })
+      };
+
+      const pendingContentSavePromises = new Map<string, Promise<void>>();
+      const operationOrder: string[] = [];
+
+      // Simulate creating a new parent node
+      const newParentId = 'new-parent';
+      const parentSavePromise = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await localMock.saveNodeWithParent(newParentId, {
+          content: 'New Parent',
+          nodeType: 'text',
+          parentId: null,
+          originNodeId: null,
+          beforeSiblingId: null
+        });
+        operationOrder.push('save-parent');
+        pendingContentSavePromises.delete(newParentId);
+      })();
+      pendingContentSavePromises.set(newParentId, parentSavePromise);
+
+      // Structural watcher detects child needs new parent
+      const update = {
+        nodeId: 'child-node',
+        parentId: newParentId,
+        beforeSiblingId: null
+      };
+
+      // Wait for parent save if it's pending
+      const relevantSaves: Promise<void>[] = [];
+      if (update.parentId && pendingContentSavePromises.has(update.parentId)) {
+        relevantSaves.push(pendingContentSavePromises.get(update.parentId)!);
+      }
+
+      if (relevantSaves.length > 0) {
+        await Promise.race([
+          Promise.all(relevantSaves),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout waiting for saves')), 5000)
+          )
+        ]);
+      }
+
+      // Now safe to update child
+      localSavedNodes.add('child-node'); // Pre-save child node
+      await localMock.updateNode(update.nodeId, {
+        parentId: update.parentId,
+        beforeSiblingId: update.beforeSiblingId
+      });
+      operationOrder.push('update-child');
+
+      // Verify correct execution order
+      expect(operationOrder).toEqual(['save-parent', 'update-child']);
+      expect(localMock.saveNodeWithParent).toHaveBeenCalledWith(newParentId, {
+        content: 'New Parent',
+        nodeType: 'text',
+        parentId: null,
+        originNodeId: null,
+        beforeSiblingId: null
+      });
+      expect(localMock.updateNode).toHaveBeenCalledWith('child-node', {
+        parentId: newParentId,
+        beforeSiblingId: null
+      });
     });
   });
 });
