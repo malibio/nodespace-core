@@ -78,6 +78,10 @@ export interface ContentEditableConfig {
 }
 
 export class ContentEditableController {
+  // Constants for Shift+Enter multiline handling
+  private static readonly SECOND_LINE_INDEX = 1; // Index of second line in multiline content after Shift+Enter
+  private static readonly MIN_DIV_COUNT_FOR_MULTILINE = 2; // Minimum DIVs expected after Shift+Enter
+
   // Syntax detection patterns for cursor positioning
   private static readonly HEADER_PATTERN = /^(#{1,6})\s/;
   private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
@@ -1155,22 +1159,75 @@ export class ContentEditableController {
       }
 
       if (event.shiftKey && this.config.allowMultiline) {
-        // Shift+Enter for multiline nodes: insert line break and position cursor correctly
+        // Shift+Enter for multiline nodes
         event.preventDefault();
 
-        // Allow browser to insert the line break via execCommand
-        document.execCommand('insertLineBreak');
+        // Get the raw markdown content
+        const currentContent = this.getMarkdownContent();
+        const cursorPosition = this.getCursorPositionInMarkdown();
 
-        // Set flag to prevent live formatting from interfering with the newline structure
-        this.recentShiftEnter = true;
-        setTimeout(() => {
-          this.recentShiftEnter = false;
-        }, 100);
+        // Check if we're inside inline formatting (bold, italic, code, strikethrough)
+        // by looking for formatting markers around the cursor position
+        const hasInlineFormatting = this.isInsideInlineFormatting(currentContent, cursorPosition);
 
-        // Position cursor after any syntax on the new line
-        setTimeout(() => {
-          this.positionCursorAfterSyntax();
-        }, 0);
+        if (hasInlineFormatting) {
+          // Use markdown-aware splitting to preserve inline formatting across lines
+          const splitResult = splitMarkdownContent(currentContent, cursorPosition);
+
+          // Defensive validation: ensure split result is valid before proceeding
+          if (!splitResult || typeof splitResult.beforeContent !== 'string') {
+            console.error('Invalid split result from splitMarkdownContent', {
+              currentContent,
+              cursorPosition
+            });
+            return; // Gracefully abort Shift+Enter operation
+          }
+
+          // Update content to show both lines with proper formatting
+          const newContent = splitResult.beforeContent + '\n' + splitResult.afterContent;
+
+          // Update content in three stages to maintain dual-representation consistency:
+          // 1. Store markdown (originalContent) - source of truth for raw content
+          // 2. Set text content - clears formatted HTML and prepares for conversion
+          // 3. Apply live formatting - converts \n to <div> structure with syntax highlighting
+          this.originalContent = newContent;
+          this.element.textContent = newContent;
+          this.setLiveFormattedContent(newContent);
+
+          // Position cursor in the second line (after opening markers)
+          requestAnimationFrame(() => {
+            const divs = this.element.querySelectorAll('div');
+            if (divs.length >= ContentEditableController.MIN_DIV_COUNT_FOR_MULTILINE) {
+              this.restoreCursorPosition(
+                splitResult.newNodeCursorPosition,
+                ContentEditableController.SECOND_LINE_INDEX
+              );
+            } else {
+              // Fallback: position linearly if DIV structure doesn't exist
+              this.restoreCursorPosition(
+                splitResult.beforeContent.length + 1 + splitResult.newNodeCursorPosition
+              );
+            }
+          });
+
+          // Notify of content change
+          this.events.contentChanged(newContent);
+        } else {
+          // No inline formatting - use simple line break insertion for block-level syntax
+          // This preserves the behavior from PR #176 for headers, tasks, quotes, etc.
+          document.execCommand('insertLineBreak');
+
+          // Set flag to prevent live formatting from interfering with the newline structure
+          this.recentShiftEnter = true;
+          setTimeout(() => {
+            this.recentShiftEnter = false;
+          }, 100);
+
+          // Position cursor after any syntax on the new line
+          setTimeout(() => {
+            this.positionCursorAfterSyntax();
+          }, 0);
+        }
 
         return;
       }
@@ -1252,6 +1309,64 @@ export class ContentEditableController {
     // Use the same logic as getCurrentColumn to handle complex HTML structures
     const currentPosition = this.getCurrentColumn();
     return currentPosition === 0;
+  }
+
+  /**
+   * Get cursor position in the raw markdown content (including syntax markers)
+   * This is needed for markdown-aware splitting which operates on the full markdown string
+   */
+  private getCursorPositionInMarkdown(): number {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return 0;
+
+    const range = selection.getRangeAt(0);
+
+    // Create a range that encompasses everything before the cursor
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(this.element);
+    preCaretRange.setEnd(range.startContainer, range.startOffset);
+
+    // Get the text content including all markdown syntax
+    const position = preCaretRange.toString().length;
+
+    // Defensive check: verify position doesn't exceed element content
+    // This handles edge cases where Range.toString() might behave unexpectedly
+    const totalContent = this.element.textContent || '';
+    const boundedPosition = Math.min(position, totalContent.length);
+
+    // Ensure position is non-negative
+    return Math.max(0, boundedPosition);
+  }
+
+  /**
+   * Check if cursor is inside inline formatting (bold, italic, code, strikethrough)
+   * This determines whether to use markdown-aware splitting or simple line break
+   */
+  private isInsideInlineFormatting(content: string, position: number): boolean {
+    // Check if we're within inline formatting markers by scanning around the cursor position
+    // Look for **bold**, *italic*, `code`, ~~strikethrough~~, or ~strikethrough~
+
+    // Search backwards and forwards from cursor position for formatting markers
+    const before = content.substring(Math.max(0, position - 10), position);
+    const after = content.substring(position, Math.min(content.length, position + 10));
+    const around = before + after;
+
+    // Check for inline formatting patterns around cursor
+    const inlinePatterns = [
+      /\*\*[^*]*$/, // Opening bold **
+      /^[^*]*\*\*/, // Closing bold **
+      /\*[^*]*$/, // Opening italic *
+      /^[^*]*\*/, // Closing italic *
+      /`[^`]*$/, // Opening code `
+      /^[^`]*`/, // Closing code `
+      /~~[^~]*$/, // Opening double tilde ~~
+      /^[^~]*~~/, // Closing double tilde ~~
+      /~[^~]*$/, // Opening single tilde ~
+      /^[^~]*~/ // Closing single tilde ~
+    ];
+
+    // If any inline pattern matches around the cursor, we're inside inline formatting
+    return inlinePatterns.some((pattern) => pattern.test(around));
   }
 
   public getCurrentColumn(): number {
@@ -1962,10 +2077,74 @@ export class ContentEditableController {
     return preCaretRange.toString().length === 0;
   }
 
-  private restoreCursorPosition(textOffset: number): void {
+  /**
+   * Restore cursor position within contenteditable element
+   *
+   * @param textOffset - Character offset within the target scope
+   * @param lineNumber - Optional: Line index (0-based) for multiline positioning within a specific DIV
+   *
+   * **Contract:**
+   * - If `lineNumber` is undefined: Position is calculated across entire element content
+   * - If `lineNumber` is defined: Position is calculated within the specified DIV line only
+   *
+   * **Examples:**
+   * ```typescript
+   * // Position at character 5 within the second line (lineNumber: 1)
+   * this.restoreCursorPosition(5, 1);
+   *
+   * // Position at character 10 within the entire element (no line number)
+   * this.restoreCursorPosition(10);
+   * ```
+   */
+  private restoreCursorPosition(textOffset: number, lineNumber?: number): void {
     const selection = window.getSelection();
     if (!selection) return;
 
+    // If lineNumber is specified and we're in multiline mode, position within that specific line
+    if (lineNumber !== undefined && this.config.allowMultiline) {
+      const divs = Array.from(this.element.querySelectorAll('div'));
+
+      // Validate lineNumber is within bounds
+      if (lineNumber >= divs.length) {
+        console.warn(
+          `Invalid lineNumber ${lineNumber}: only ${divs.length} DIV(s) exist. Falling back to linear positioning.`
+        );
+        // Fall through to default linear behavior
+      } else {
+        const targetDiv = divs[lineNumber];
+        const walker = document.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT, null);
+
+        let currentOffset = 0;
+        let currentNode;
+
+        while ((currentNode = walker.nextNode())) {
+          const nodeLength = currentNode.textContent?.length || 0;
+
+          if (currentOffset + nodeLength >= textOffset) {
+            const range = document.createRange();
+            const offsetInNode = textOffset - currentOffset;
+            range.setStart(currentNode, Math.min(offsetInNode, nodeLength));
+            range.setEnd(currentNode, Math.min(offsetInNode, nodeLength));
+
+            selection.removeAllRanges();
+            selection.addRange(range);
+            return;
+          }
+
+          currentOffset += nodeLength;
+        }
+
+        // If we didn't find the position, place cursor at end of the div
+        const range = document.createRange();
+        range.selectNodeContents(targetDiv);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+    }
+
+    // Default behavior: linear positioning across entire element
     const walker = document.createTreeWalker(this.element, NodeFilter.SHOW_TEXT, null);
 
     let currentOffset = 0;
