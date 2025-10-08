@@ -187,7 +187,8 @@ export class KeyboardCommandRegistry {
       // Execute the command
       const handled = await command.execute(context);
 
-      if (handled) {
+      // Only log in development mode to reduce production overhead
+      if (handled && import.meta.env.DEV) {
         console.debug(
           `[KeyboardCommandRegistry] Command executed: ${command.id} (${command.description})`
         );
@@ -195,6 +196,7 @@ export class KeyboardCommandRegistry {
 
       return handled;
     } catch (error) {
+      // Always log errors, even in production
       console.error(`[KeyboardCommandRegistry] Error executing command ${command.id}:`, error);
       return false;
     }

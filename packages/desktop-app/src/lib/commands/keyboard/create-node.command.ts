@@ -18,6 +18,13 @@
 import type { KeyboardCommand, KeyboardContext } from '$lib/services/keyboard-command-registry';
 import { splitMarkdownContent } from '$lib/utils/markdown-splitter';
 
+// Constants for timing coordination
+const ENTER_FLAG_RESET_DELAY_MS = 100; // Timeout for recentEnter flag to prevent cursor restoration race conditions
+
+// DOM selectors for dropdown detection
+const SLASH_COMMAND_DROPDOWN_SELECTOR = '[role="listbox"][aria-label="Slash command palette"]';
+const AUTOCOMPLETE_DROPDOWN_SELECTOR = '[role="listbox"][aria-label="Node reference autocomplete"]';
+
 export class CreateNodeCommand implements KeyboardCommand {
   id = 'create-node';
   description = 'Create new node on Enter key';
@@ -30,12 +37,8 @@ export class CreateNodeCommand implements KeyboardCommand {
 
     // Don't execute if slash command dropdown is active
     // Check both state and actual DOM presence
-    const slashDropdownExists = document.querySelector(
-      '[role="listbox"][aria-label="Slash command palette"]'
-    );
-    const autocompleteDropdownExists = document.querySelector(
-      '[role="listbox"][aria-label="Node reference autocomplete"]'
-    );
+    const slashDropdownExists = document.querySelector(SLASH_COMMAND_DROPDOWN_SELECTOR);
+    const autocompleteDropdownExists = document.querySelector(AUTOCOMPLETE_DROPDOWN_SELECTOR);
 
     // Let dropdowns handle Enter if they're active
     if (slashDropdownExists || autocompleteDropdownExists) {
@@ -133,7 +136,7 @@ export class CreateNodeCommand implements KeyboardCommand {
       controller.recentEnter = true;
       setTimeout(() => {
         controller.recentEnter = false;
-      }, 100);
+      }, ENTER_FLAG_RESET_DELAY_MS);
     }
   }
 

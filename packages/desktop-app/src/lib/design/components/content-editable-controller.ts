@@ -20,6 +20,20 @@ import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 
+// Module-level command singletons - created once and reused across all controller instances
+// This prevents unnecessary object allocation and reduces GC pressure
+const KEYBOARD_COMMANDS = {
+  createNode: new CreateNodeCommand(),
+  indent: new IndentNodeCommand(),
+  outdent: new OutdentNodeCommand(),
+  mergeUp: new MergeNodesCommand('up'),
+  navigateUp: new NavigateUpCommand(),
+  navigateDown: new NavigateDownCommand(),
+  formatBold: new FormatTextCommand('bold'),
+  formatItalic: new FormatTextCommand('italic'),
+  formatUnderline: new FormatTextCommand('underline')
+};
+
 export interface ContentEditableEvents {
   contentChanged: (content: string) => void;
   headerLevelChanged: (level: number) => void;
@@ -173,26 +187,27 @@ export class ContentEditableController {
 
     const registry = KeyboardCommandRegistry.getInstance();
 
+    // Register module-level command singletons (prevents duplicate instances)
     // Phase 1: Core commands
-    registry.register({ key: 'Enter' }, new CreateNodeCommand());
+    registry.register({ key: 'Enter' }, KEYBOARD_COMMANDS.createNode);
 
     // Phase 2: Basic keyboard commands
-    registry.register({ key: 'Tab' }, new IndentNodeCommand());
-    registry.register({ key: 'Tab', shift: true }, new OutdentNodeCommand());
-    registry.register({ key: 'Backspace' }, new MergeNodesCommand('up'));
+    registry.register({ key: 'Tab' }, KEYBOARD_COMMANDS.indent);
+    registry.register({ key: 'Tab', shift: true }, KEYBOARD_COMMANDS.outdent);
+    registry.register({ key: 'Backspace' }, KEYBOARD_COMMANDS.mergeUp);
 
     // Phase 3: Advanced commands
     // Navigation commands
-    registry.register({ key: 'ArrowUp' }, new NavigateUpCommand());
-    registry.register({ key: 'ArrowDown' }, new NavigateDownCommand());
+    registry.register({ key: 'ArrowUp' }, KEYBOARD_COMMANDS.navigateUp);
+    registry.register({ key: 'ArrowDown' }, KEYBOARD_COMMANDS.navigateDown);
 
     // Text formatting commands (cross-platform: Cmd on Mac, Ctrl on Windows/Linux)
-    registry.register({ key: 'b', meta: true }, new FormatTextCommand('bold'));
-    registry.register({ key: 'b', ctrl: true }, new FormatTextCommand('bold'));
-    registry.register({ key: 'i', meta: true }, new FormatTextCommand('italic'));
-    registry.register({ key: 'i', ctrl: true }, new FormatTextCommand('italic'));
-    registry.register({ key: 'u', meta: true }, new FormatTextCommand('underline'));
-    registry.register({ key: 'u', ctrl: true }, new FormatTextCommand('underline'));
+    registry.register({ key: 'b', meta: true }, KEYBOARD_COMMANDS.formatBold);
+    registry.register({ key: 'b', ctrl: true }, KEYBOARD_COMMANDS.formatBold);
+    registry.register({ key: 'i', meta: true }, KEYBOARD_COMMANDS.formatItalic);
+    registry.register({ key: 'i', ctrl: true }, KEYBOARD_COMMANDS.formatItalic);
+    registry.register({ key: 'u', meta: true }, KEYBOARD_COMMANDS.formatUnderline);
+    registry.register({ key: 'u', ctrl: true }, KEYBOARD_COMMANDS.formatUnderline);
 
     // Mark as registered
     ContentEditableController.keyboardCommandsRegistered = true;
