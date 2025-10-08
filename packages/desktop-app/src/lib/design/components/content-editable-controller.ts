@@ -87,6 +87,9 @@ export class ContentEditableController {
   private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
   private static readonly QUOTE_PATTERN = /^>\s/;
 
+  // Track if global keyboard commands have been registered (should only happen once)
+  private static keyboardCommandsRegistered = false;
+
   public element: HTMLDivElement;
   private nodeId: string;
   private nodeType: string;
@@ -160,8 +163,14 @@ export class ContentEditableController {
   /**
    * Register keyboard commands with the global registry
    * Commands follow the Command Pattern for extensibility
+   * Only registers once globally (not per controller instance)
    */
   private registerKeyboardCommands(): void {
+    // Skip if already registered (singleton registry should only be populated once)
+    if (ContentEditableController.keyboardCommandsRegistered) {
+      return;
+    }
+
     const registry = KeyboardCommandRegistry.getInstance();
 
     // Phase 1: Core commands
@@ -184,6 +193,9 @@ export class ContentEditableController {
     registry.register({ key: 'i', ctrl: true }, new FormatTextCommand('italic'));
     registry.register({ key: 'u', meta: true }, new FormatTextCommand('underline'));
     registry.register({ key: 'u', ctrl: true }, new FormatTextCommand('underline'));
+
+    // Mark as registered
+    ContentEditableController.keyboardCommandsRegistered = true;
   }
 
   /**
