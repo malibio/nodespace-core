@@ -26,7 +26,7 @@ describe('MergeNodesCommand', () => {
       element: {
         textContent: 'test content'
       } as HTMLDivElement
-    } as ContentEditableControllerExtended;
+    } as unknown as ContentEditableControllerExtended;
   });
 
   describe('direction: up (Backspace)', () => {

@@ -2279,7 +2279,9 @@ export class ContentEditableController {
     const selectedText = range.toString();
 
     // Use getMarkdownContent() to preserve newlines in multiline nodes
-    const textContent = this.config.allowMultiline ? this.getMarkdownContent() : (this.element.textContent || '');
+    const textContent = this.config.allowMultiline
+      ? this.getMarkdownContent()
+      : this.element.textContent || '';
 
     if (selectedText) {
       // Get the actual selection positions using DOM position calculation
@@ -3730,7 +3732,10 @@ export class ContentEditableController {
           // Get all nodes and find cursor position
           const allNodes = Array.from(this.element.childNodes);
           for (let i = 0; i < allNodes.length; i++) {
-            if (allNodes[i] === range.startContainer || allNodes[i].contains(range.startContainer)) {
+            if (
+              allNodes[i] === range.startContainer ||
+              allNodes[i].contains(range.startContainer)
+            ) {
               // Found the node - if it's a DIV, use it, otherwise use the next/previous DIV
               if ((allNodes[i] as Element).tagName === 'DIV') {
                 lineElement = allNodes[i] as Element;
@@ -4089,7 +4094,7 @@ export class ContentEditableController {
    */
   private buildKeyboardContext(
     _event: KeyboardEvent
-  ): Partial<import('$lib/services/keyboardCommandRegistry').KeyboardContext> {
+  ): Partial<import('$lib/services/keyboard-command-registry').KeyboardContext> {
     const selection = window.getSelection();
     const content = this.element.textContent || '';
     const cursorPosition = this.getCurrentColumn();

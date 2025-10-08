@@ -30,9 +30,9 @@ describe('NavigateUpCommand', () => {
       justCreated: false,
       slashCommandDropdownActive: false,
       autocompleteDropdownActive: false,
-      isAtFirstLine: vi.fn(() => true) as vi.Mock<[], boolean>,
-      getCurrentPixelOffset: vi.fn(() => 100) as vi.Mock<[], number>
-    } as ContentEditableControllerExtended;
+      isAtFirstLine: vi.fn(() => true),
+      getCurrentPixelOffset: vi.fn(() => 100)
+    } as unknown as ContentEditableControllerExtended;
   });
 
   describe('canExecute', () => {
@@ -52,6 +52,7 @@ describe('NavigateUpCommand', () => {
       });
 
       // Mock that we're at the first line
+      // @ts-expect-error - vi.fn() creates a mock with mockReturnValue
       mockController.isAtFirstLine.mockReturnValue(true);
 
       expect(command.canExecute(context)).toBe(true);
@@ -70,6 +71,7 @@ describe('NavigateUpCommand', () => {
       mockController.element?.appendChild(div2);
 
       // Mock that we're NOT at first line
+      // @ts-expect-error - vi.fn() creates a mock with mockReturnValue
       mockController.isAtFirstLine.mockReturnValue(false);
 
       expect(command.canExecute(context)).toBe(false);
@@ -166,6 +168,7 @@ describe('NavigateUpCommand', () => {
       });
 
       // Mock different pixel offset
+      // @ts-expect-error - vi.fn() creates a mock with mockReturnValue
       mockController.getCurrentPixelOffset.mockReturnValue(250);
 
       await command.execute(context);
