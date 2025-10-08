@@ -20,7 +20,7 @@ import type {
   EventSubscriptionOptions,
   BatchedEvent,
   BatchingConfig
-} from './eventTypes';
+} from './event-types';
 
 // ============================================================================
 // Event Bus Implementation

@@ -11,8 +11,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { ContentProcessor } from './contentProcessor';
-import { eventBus } from './eventBus';
+import { ContentProcessor } from './content-processor';
+import { eventBus } from './event-bus';
 import type { Node, NodeUIState } from '$lib/types';
 import { createDefaultUIState } from '$lib/types';
 

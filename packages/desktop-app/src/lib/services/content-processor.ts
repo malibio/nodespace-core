@@ -12,12 +12,12 @@
  * - Extensible AST for future AI and collaboration features
  */
 
-import { stripMarkdown, validateMarkdown } from './markdownUtils.js';
-import { eventBus } from './eventBus';
-import type { NodeReferenceService, NodeReference, NodespaceLink } from './nodeReferenceService';
-import { NodeDecoratorFactory } from './baseNodeDecoration';
-import type { DecorationContext } from './baseNodeDecoration';
-import type { ComponentDecoration } from '../types/componentDecoration';
+import { stripMarkdown, validateMarkdown } from './markdown-utils.js';
+import { eventBus } from './event-bus';
+import type { NodeReferenceService, NodeReference, NodespaceLink } from './node-reference-service';
+import { NodeDecoratorFactory } from './base-node-decoration';
+import type { DecorationContext } from './base-node-decoration';
+import type { ComponentDecoration } from './component-decoration';
 
 // ============================================================================
 // Core AST Types for Dual-Representation

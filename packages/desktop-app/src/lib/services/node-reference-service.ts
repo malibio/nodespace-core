@@ -24,13 +24,13 @@
  * - ContentProcessor: Enhanced @ trigger content processing
  */
 
-import { eventBus } from './eventBus';
-import { ContentProcessor } from './contentProcessor';
+import { eventBus } from './event-bus';
+import { ContentProcessor } from './content-processor';
 import type { ReactiveNodeService as NodeManager } from './reactiveNodeService.svelte.ts';
-import type { HierarchyService } from './hierarchyService';
-import type { NodeOperationsService } from './nodeOperationsService';
+import type { HierarchyService } from './hierarchy-service';
+import type { NodeOperationsService } from './node-operations-service';
 import type { Node } from '$lib/types';
-import type { TauriNodeService } from './tauriNodeService';
+import type { TauriNodeService } from './tauri-node-service';
 
 // ============================================================================
 // Core Types and Interfaces

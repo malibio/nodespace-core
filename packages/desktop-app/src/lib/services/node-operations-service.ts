@@ -13,10 +13,10 @@
  * - Type-specific metadata handling via JSON field
  */
 
-import { eventBus } from './eventBus';
-import { ContentProcessor } from './contentProcessor';
+import { eventBus } from './event-bus';
+import { ContentProcessor } from './content-processor';
 import type { ReactiveNodeService as NodeManager } from './reactiveNodeService.svelte.ts';
-import type { HierarchyService } from './hierarchyService';
+import type { HierarchyService } from './hierarchy-service';
 import type { Node } from '$lib/types';
 
 // ============================================================================

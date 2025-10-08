@@ -33,9 +33,9 @@ import {
   createReactiveNodeService,
   ReactiveNodeService as NodeManager,
   type NodeManagerEvents
-} from '../../lib/services/reactiveNodeService.svelte.js';
-import { HierarchyService } from '../../lib/services/hierarchyService';
-import { eventBus } from '../../lib/services/eventBus';
+} from '../../lib/services/reactive-node-service.svelte.js';
+import { HierarchyService } from '../../lib/services/hierarchy-service';
+import { eventBus } from '../../lib/services/event-bus';
 import { createTestNode, createMockNodeManagerEvents, waitForEffects } from '../helpers';
 
 // Test helper interfaces

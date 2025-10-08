@@ -12,13 +12,13 @@
  * - Foundation for advanced interaction patterns
  */
 
-import { eventBus } from './eventBus';
+import { eventBus } from './event-bus';
 import type {
   DecorationClickedEvent,
   DecorationHoverEvent,
   NodeStatusChangedEvent,
   CacheInvalidateEvent
-} from './eventTypes';
+} from './event-types';
 
 // ============================================================================
 // Types and Interfaces

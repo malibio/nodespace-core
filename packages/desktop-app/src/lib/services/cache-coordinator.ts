@@ -13,14 +13,14 @@
  * - Foundation for distributed caching (Phase 2+)
  */
 
-import { eventBus } from './eventBus';
+import { eventBus } from './event-bus';
 import type {
   CacheInvalidateEvent,
   NodeCreatedEvent,
   NodeUpdatedEvent,
   NodeDeletedEvent,
   HierarchyChangedEvent
-} from './eventTypes';
+} from './event-types';
 
 // ============================================================================
 // Types and Interfaces

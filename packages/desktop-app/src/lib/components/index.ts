@@ -33,4 +33,4 @@ export interface NewNodeRequest {
 //   HierarchicalTextNode
 // } from '$lib/services/mockTextService';
 
-export type { MarkdownOptions } from '$lib/services/markdownUtils';
+export type { MarkdownOptions } from '$lib/services/markdown-utils';

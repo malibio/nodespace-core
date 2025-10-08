@@ -18,7 +18,7 @@
  * - Reactive updates for UI synchronization
  */
 
-import { eventBus } from './eventBus';
+import { eventBus } from './event-bus';
 import type { ReactiveNodeService as NodeManager } from './reactiveNodeService.svelte.ts';
 import type { Node } from '$lib/types';
 

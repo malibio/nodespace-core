@@ -37,72 +37,75 @@ This document establishes consistent file naming conventions for the NodeSpace p
 
 ### **TypeScript Service Files**
 
-**Standard**: `camelCase.ts`
+**Standard**: `kebab-case.ts`
 
 ```
 ✅ Correct:
-- contentEditableController.ts
-- cursorPositioning.ts
-- nodeReferenceService.ts
-- mockDatabaseService.ts
-- performanceMonitor.ts
+- content-editable-controller.ts
+- cursor-positioning.ts
+- node-reference-service.ts
+- mock-database-service.ts
+- performance-monitor.ts
 
 ❌ Incorrect:
 - ContentEditableController.ts
+- contentEditableController.ts
 - CursorPositioning.ts
-- NodeReferenceService.ts
 ```
 
-**Rationale**:
-- Consistent with variable and function naming
-- Distinguishes files from class names (which remain PascalCase)
-- Modern TypeScript convention
-- Better IDE autocomplete and search
+**Rationale** (Updated January 2025):
+- **Industry alignment**: Matches 2024-2025 TypeScript best practices
+- **Cross-platform safety**: Avoids case-sensitivity issues on Mac/Windows
+- **Package naming compatibility**: Aligns with npm lowercase requirement
+- **Framework consistency**: Matches SvelteKit and modern framework conventions
+- **Ecosystem standard**: Dominant pattern in modern TypeScript projects
 
 ### **TypeScript Type/Interface Files**
 
-**Standard**: `camelCase.ts` for mixed files, `PascalCase.ts` for type-only files
+**Standard**: `kebab-case.ts` (consistent with all TypeScript files)
 
 ```
 ✅ Correct:
-- types/navigation.ts (mixed exports)
-- types/componentDecoration.ts (mixed exports)
-- types/ApiResponse.ts (type-only file)
-- interfaces/NodeData.ts (interface-only file)
+- types/navigation.ts
+- types/component-decoration.ts
+- types/api-response.ts
+- types/node-data.ts
 
 ❌ Incorrect:
-- types/Navigation.ts (mixed exports)
-- types/ComponentDecoration.ts (mixed exports)
+- types/Navigation.ts
+- types/componentDecoration.ts
+- types/ApiResponse.ts (previously allowed, now deprecated)
 ```
 
 ### **Utility Files**
 
-**Standard**: `camelCase.ts`
+**Standard**: `kebab-case.ts`
 
 ```
 ✅ Correct:
-- utils/navigationUtils.ts
-- utils/markdownUtils.ts
-- helpers/domHelpers.ts
+- utils/navigation-utils.ts
+- utils/markdown-utils.ts
+- helpers/dom-helpers.ts
 
 ❌ Incorrect:
 - utils/NavigationUtils.ts
-- utils/MarkdownUtils.ts
+- utils/navigationUtils.ts
 ```
 
 ### **Test Files**
 
-**Standard**: Match the file being tested + `.test.ts`
+**Standard**: Match the file being tested + `.test.ts` (always kebab-case)
 
 ```
 ✅ Correct:
 - base-node.test.ts (tests base-node.svelte)
-- contentEditableController.test.ts (tests contentEditableController.ts)
-- nodeReferenceService.test.ts (tests nodeReferenceService.ts)
+- content-editable-controller.test.ts (tests content-editable-controller.ts)
+- node-reference-service.test.ts (tests node-reference-service.ts)
 
 ❌ Incorrect:
 - BaseNode.test.ts
 - ContentEditableController.test.ts
+- contentEditableController.test.ts
 ```
 
 ### **Documentation Files**
@@ -138,9 +141,9 @@ src/lib/
 │   └── icons/           # Icon system
 │       ├── icon.svelte
 │       └── ui/
-└── services/            # Business logic (camelCase)
-    ├── nodeManager.ts
-    ├── contentEditableController.ts
+└── services/            # Business logic (kebab-case)
+    ├── node-manager.ts
+    ├── content-editable-controller.ts
     └── index.ts
 ```
 
@@ -161,11 +164,12 @@ import { BaseNode, ThemeProvider } from '$lib/design/components';
 
 ```typescript
 // ✅ Correct
-import { contentEditableController } from '$lib/services/contentEditableController';
-import type { NodeData } from '$lib/types/nodeData';
+import { contentEditableController } from '$lib/services/content-editable-controller';
+import type { NodeData } from '$lib/types/node-data';
 
 // ❌ Incorrect
 import { ContentEditableController } from '$lib/services/ContentEditableController';
+import { contentEditableController } from '$lib/services/contentEditableController'; // Old convention
 ```
 
 ### **Barrel Export Pattern**
@@ -177,8 +181,8 @@ export { default as TextNode } from './text-node.svelte';
 export { default as ThemeProvider } from './theme-provider.svelte';
 
 // For services
-export { nodeManager } from './nodeManager';
-export { contentEditableController } from './contentEditableController';
+export { nodeManager } from './node-manager';
+export { contentEditableController } from './content-editable-controller';
 export type { NodeData, TreeNode } from './types';
 ```
 
@@ -225,13 +229,13 @@ git mv BaseNode.svelte base-node.svelte
   }
 }
 
-// TypeScript service files must use camelCase  
+// TypeScript service files must use kebab-case
 {
   files: ['**/*.{js,ts}'],
   plugins: { unicorn },
   rules: {
     'unicorn/filename-case': ['error', {
-      cases: { camelCase: true },
+      cases: { kebabCase: true },
       ignore: ['index\\.ts$', '\\.d\\.ts$', '\\.test\\.ts$', '\\.spec\\.ts$']
     }]
   }
@@ -255,7 +259,7 @@ git mv BaseNode.svelte base-node.svelte
 $ bun run lint:check
 
 /src/lib/services/WrongName.ts
-  1:1  error  Filename is not in camel case. Rename it to `wrongName.ts`  unicorn/filename-case
+  1:1  error  Filename is not in kebab case. Rename it to `wrong-name.ts`  unicorn/filename-case
 
 /src/lib/components/WrongName.svelte  
   1:1  error  Filename is not in kebab case. Rename it to `wrong-name.svelte`  unicorn/filename-case
@@ -313,9 +317,9 @@ base-node.md                 # Component documentation (if needed)
 ### **Service File Structure**
 
 ```
-nodeManager.ts               # Main service
-nodeManager.test.ts         # Service tests
-nodeManager.types.ts        # Service-specific types (if large)
+node-manager.ts               # Main service
+node-manager.test.ts         # Service tests
+node-manager.types.ts        # Service-specific types (if large)
 ```
 
 ### **Feature Module Structure**
@@ -327,11 +331,11 @@ features/text-editing/
 │   ├── text-toolbar.svelte
 │   └── index.ts
 ├── services/
-│   ├── textEditingService.ts
-│   ├── keyboardHandler.ts
+│   ├── text-editing-service.ts
+│   ├── keyboard-handler.ts
 │   └── index.ts
 └── types/
-    └── textEditing.ts
+    └── text-editing.ts
 ```
 
 ## Benefits of These Conventions
@@ -361,12 +365,11 @@ features/text-editing/
 - ✅ Real-time IDE feedback and commit prevention
 - ✅ Updated documentation with implementation details
 
-### **Phase 3: Legacy Migration (✅ COMPLETED)**
-- ✅ Comprehensive file naming migration executed (January 2025)
-- ✅ Multi-agent execution plan completed successfully
-- ✅ 50+ files migrated with git history preservation
-- ✅ All tests passing, build verification successful
-- ✅ Full codebase compliance achieved
+### **Phase 3: TypeScript Migration to kebab-case (In Progress)**
+- 🔄 Updating TypeScript naming convention from camelCase to kebab-case (Issue #181)
+- 🔄 Aligning with 2024-2025 industry standards
+- 🔄 Migrating ~38 TypeScript files with git history preservation
+- Target: Full kebab-case compliance across all file types
 
 ## Questions and Exceptions
 
