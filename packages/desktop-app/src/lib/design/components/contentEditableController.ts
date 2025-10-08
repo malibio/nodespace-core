@@ -1112,8 +1112,11 @@ export class ContentEditableController {
         // Shift+Enter for multiline nodes: insert newline with markdown-aware splitting
         event.preventDefault();
 
+        // Get the raw markdown content (not the formatted display)
         const currentContent = this.element.textContent || '';
-        const cursorPosition = this.getCurrentColumn();
+
+        // Get cursor position in the raw markdown content
+        const cursorPosition = this.getCursorPositionInMarkdown();
 
         // Use markdown-aware splitting to preserve formatting across lines
         const splitResult = splitMarkdownContent(currentContent, cursorPosition);
@@ -1145,14 +1148,11 @@ export class ContentEditableController {
         // Regular Enter: create new node with smart text splitting
         event.preventDefault();
 
-        // For multiline nodes, preserve line breaks when getting content
-        let currentContent: string;
-        if (this.config.allowMultiline) {
-          currentContent = this.convertHtmlToTextWithNewlines(this.element.innerHTML);
-        } else {
-          currentContent = this.element.textContent || '';
-        }
-        const cursorPosition = this.getCurrentColumn();
+        // Get the raw markdown content (not the formatted display)
+        const currentContent = this.element.textContent || '';
+
+        // Get cursor position in the raw markdown content
+        const cursorPosition = this.getCursorPositionInMarkdown();
 
         // Set flag to prevent cursor restoration during node creation
         this.recentEnter = true;
@@ -1318,6 +1318,25 @@ export class ContentEditableController {
     // Use the same logic as getCurrentColumn to handle complex HTML structures
     const currentPosition = this.getCurrentColumn();
     return currentPosition === 0;
+  }
+
+  /**
+   * Get cursor position in the raw markdown content (including syntax markers)
+   * This is needed for markdown-aware splitting which operates on the full markdown string
+   */
+  private getCursorPositionInMarkdown(): number {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return 0;
+
+    const range = selection.getRangeAt(0);
+
+    // Create a range that encompasses everything before the cursor
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(this.element);
+    preCaretRange.setEnd(range.startContainer, range.startOffset);
+
+    // Get the text content including all markdown syntax
+    return preCaretRange.toString().length;
   }
 
   private getCurrentColumn(): number {
