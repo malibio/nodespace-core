@@ -400,6 +400,12 @@
 
         for (const update of validUpdates) {
           try {
+            // First check if the node itself still exists (could have been deleted via merge/combine)
+            if (!nodeManager.nodes.has(update.nodeId)) {
+              console.debug('[BaseNodeViewer] Skipping update for deleted node:', update.nodeId);
+              continue; // Skip this update - node was deleted
+            }
+
             // Validate both parentId and beforeSiblingId references exist to prevent FOREIGN KEY errors
             let validatedParentId = update.parentId;
             let validatedBeforeSiblingId = update.beforeSiblingId;
