@@ -70,6 +70,9 @@ export interface ContentEditableConfig {
 }
 
 export class ContentEditableController {
+  // Constants
+  private static readonly SECOND_LINE_INDEX = 1; // Index of second line in multiline content after Shift+Enter
+
   private element: HTMLDivElement;
   private nodeId: string;
   private nodeType: string;
@@ -1113,7 +1116,9 @@ export class ContentEditableController {
         event.preventDefault();
 
         // Get the raw markdown content (not the formatted display)
-        const currentContent = this.element.textContent || '';
+        // For multiline content with DIVs, textContent concatenates without newlines
+        // so we need to reconstruct from originalContent or DIV structure
+        const currentContent = this.getMarkdownContent();
 
         // Get cursor position in the raw markdown content
         const cursorPosition = this.getCursorPositionInMarkdown();
@@ -1133,9 +1138,26 @@ export class ContentEditableController {
         this.setLiveFormattedContent(newContent);
 
         // Position cursor in the second line (after opening markers)
-        // Since setLiveFormattedContent converts \n to <div> structure,
-        // we need to position relative to the second div's content
-        this.restoreCursorPosition(splitResult.newNodeCursorPosition, 1);
+        // Use requestAnimationFrame to ensure DOM has updated after setLiveFormattedContent
+        // converts \n to <div> structure before positioning cursor
+        requestAnimationFrame(() => {
+          // Verify DIV structure exists before positioning
+          const divs = this.element.querySelectorAll('div');
+          if (divs.length > ContentEditableController.SECOND_LINE_INDEX) {
+            this.restoreCursorPosition(
+              splitResult.newNodeCursorPosition,
+              ContentEditableController.SECOND_LINE_INDEX
+            );
+          } else {
+            // Fallback: position linearly if DIV structure doesn't exist
+            console.warn(
+              `Expected at least ${ContentEditableController.SECOND_LINE_INDEX + 1} DIVs after Shift+Enter, found ${divs.length}`
+            );
+            this.restoreCursorPosition(
+              splitResult.beforeContent.length + 1 + splitResult.newNodeCursorPosition
+            );
+          }
+        });
 
         // Notify of content change
         this.events.contentChanged(newContent);
@@ -1335,7 +1357,15 @@ export class ContentEditableController {
     preCaretRange.setEnd(range.startContainer, range.startOffset);
 
     // Get the text content including all markdown syntax
-    return preCaretRange.toString().length;
+    const position = preCaretRange.toString().length;
+
+    // Defensive check: verify position doesn't exceed element content
+    // This handles edge cases where Range.toString() might behave unexpectedly
+    const totalContent = this.element.textContent || '';
+    const boundedPosition = Math.min(position, totalContent.length);
+
+    // Ensure position is non-negative
+    return Math.max(0, boundedPosition);
   }
 
   private getCurrentColumn(): number {
@@ -2048,6 +2078,33 @@ export class ContentEditableController {
     return preCaretRange.toString().length === 0;
   }
 
+  /**
+   * Restore cursor position within the element
+   *
+   * @param textOffset - Character offset from the start of the target line/element
+   * @param lineNumber - Optional line index (0-based) for multiline elements
+   *
+   * **Line Number Contract:**
+   * When `lineNumber` is specified and the element is in multiline mode (`allowMultiline: true`),
+   * this method positions the cursor within a specific DIV element. The DIV structure must be
+   * created by `setLiveFormattedContent()`, which converts newlines to DIVs:
+   * - Line 0 = first DIV (divs[0])
+   * - Line 1 = second DIV (divs[1])
+   * - etc.
+   *
+   * **Validation:**
+   * If `lineNumber` is out of bounds (>= number of DIVs), a warning is logged and the method
+   * falls back to linear positioning through all text nodes.
+   *
+   * **Examples:**
+   * ```typescript
+   * // Position at character 5 within the second line (lineNumber: 1)
+   * this.restoreCursorPosition(5, 1);
+   *
+   * // Position at character 10 within the entire element (no line number)
+   * this.restoreCursorPosition(10);
+   * ```
+   */
   private restoreCursorPosition(textOffset: number, lineNumber?: number): void {
     const selection = window.getSelection();
     if (!selection) return;
@@ -2055,7 +2112,14 @@ export class ContentEditableController {
     // If lineNumber is specified and we're in multiline mode, position within that specific line
     if (lineNumber !== undefined && this.config.allowMultiline) {
       const divs = Array.from(this.element.querySelectorAll('div'));
-      if (lineNumber < divs.length) {
+
+      // Validate lineNumber is within bounds
+      if (lineNumber >= divs.length) {
+        console.warn(
+          `Invalid lineNumber ${lineNumber}: only ${divs.length} DIV(s) exist. Falling back to linear positioning.`
+        );
+        // Fall through to default linear behavior
+      } else {
         const targetDiv = divs[lineNumber];
         const walker = document.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT, null);
 
