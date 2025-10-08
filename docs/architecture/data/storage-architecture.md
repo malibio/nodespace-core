@@ -61,10 +61,10 @@ CREATE INDEX idx_mentions_target ON node_mentions(mentions_node_id);
 
 #### Schema-as-Node Pattern
 
-Schemas are stored as nodes with `node_type = "schema"` and `id = type_name`:
+Schemas are stored as nodes with `node_type = "schema"` and `id = type_name`. Schemas include field definitions with protection levels and enum support:
 
 ```sql
--- Example: Task schema definition
+-- Example: Task schema definition with protection levels
 INSERT INTO nodes (
     id,                     -- "task" (schema id = type name)
     node_type,             -- "schema"
@@ -76,11 +76,27 @@ INSERT INTO nodes (
     'Task',
     '{
         "is_core": true,
+        "version": 1,
+        "description": "Task tracking with status and due dates",
         "fields": [
-            {"name": "status", "type": "text", "indexed": true},
-            {"name": "assignee", "type": "person", "indexed": true},
-            {"name": "due_date", "type": "date", "indexed": true},
-            {"name": "description", "type": "text", "indexed": false}
+            {
+                "name": "status",
+                "type": "enum",
+                "protection": "core",
+                "core_values": ["OPEN", "IN_PROGRESS", "DONE"],
+                "user_values": [],
+                "indexed": true,
+                "required": true,
+                "extensible": true,
+                "default": "OPEN"
+            },
+            {
+                "name": "due_date",
+                "type": "date",
+                "protection": "core",
+                "indexed": true,
+                "description": "Date node ID (YYYY-MM-DD format)"
+            }
         ]
     }'
 );
@@ -100,13 +116,22 @@ INSERT INTO nodes (
     '2025-01-03',
     '2025-01-03',
     '{
-        "status": "in_progress",
-        "assignee": "person-uuid-456",
+        "status": "IN_PROGRESS",
         "due_date": "2025-01-10",
-        "description": "Migrate from hybrid to pure JSON architecture"
+        "started_at": "2025-01-03"
     }'
 );
 ```
+
+**Protection Levels:**
+- `core`: Cannot be deleted, type cannot change (UI components depend on these)
+- `user`: User-added fields, fully modifiable/deletable
+- `system`: Auto-managed fields, read-only (future use)
+
+**Enum Support:**
+- `core_values`: Protected enum values (cannot be removed - UI depends on these)
+- `user_values`: User-extensible values (can be added/removed via SchemaService)
+- Validation ensures only allowed values are used
 
 **Schema Lookup Convention:**
 - Schema nodes: `WHERE id = <type_name> AND node_type = 'schema'`
