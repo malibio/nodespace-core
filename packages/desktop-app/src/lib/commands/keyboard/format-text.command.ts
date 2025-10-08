@@ -74,7 +74,7 @@ export class FormatTextCommand implements KeyboardCommand {
     context.event.preventDefault();
 
     // Access the controller's toggleFormatting method
-    const controller = context.controller as any;
+    const controller = context.controller;
     if (controller.toggleFormatting && controller.isEditing) {
       controller.toggleFormatting(this.marker);
       return true;

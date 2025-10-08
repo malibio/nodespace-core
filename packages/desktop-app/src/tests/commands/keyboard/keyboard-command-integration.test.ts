@@ -18,11 +18,11 @@ import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
 import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
 
 describe('Keyboard Command Integration', () => {
   let registry: KeyboardCommandRegistry;
-  let mockController: Partial<ContentEditableController>;
+  let mockController: Partial<ContentEditableControllerExtended>;
   let mockEvents: {
     createNewNode: ReturnType<typeof vi.fn>;
     indentNode: ReturnType<typeof vi.fn>;
@@ -48,7 +48,7 @@ describe('Keyboard Command Integration', () => {
 
     // Create mock controller
     mockController = {
-      events: mockEvents as any,
+      events: mockEvents,
       element: document.createElement('div'),
       getCurrentColumn: vi.fn(() => 5),
       isEditing: true,
@@ -59,7 +59,7 @@ describe('Keyboard Command Integration', () => {
       isAtLastLine: vi.fn(() => true),
       getCurrentPixelOffset: vi.fn(() => 100),
       toggleFormatting: vi.fn()
-    } as any;
+    };
 
     // Add text content to element
     mockController.element.textContent = 'test content';
@@ -99,7 +99,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.createNewNode).toHaveBeenCalled();
@@ -116,7 +116,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(false);
       expect(mockEvents.createNewNode).not.toHaveBeenCalled();
@@ -135,7 +135,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.indentNode).toHaveBeenCalledWith({
@@ -154,7 +154,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.outdentNode).toHaveBeenCalledWith({
@@ -166,8 +166,8 @@ describe('Keyboard Command Integration', () => {
   describe('Backspace Key Integration', () => {
     it('should execute MergeNodesCommand for non-empty node at start', async () => {
       // Mock controller at start position
-      (mockController.getCurrentColumn as any).mockReturnValue(0);
-      (mockController.element as any).textContent = 'test content';
+      mockController.getCurrentColumn.mockReturnValue(0);
+      mockController.element.textContent = 'test content';
 
       const event = new KeyboardEvent('keydown', { key: 'Backspace' });
       const context = {
@@ -179,7 +179,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.combineWithPrevious).toHaveBeenCalledWith({
@@ -190,8 +190,8 @@ describe('Keyboard Command Integration', () => {
 
     it('should execute MergeNodesCommand and delete empty node', async () => {
       // Mock controller at start position with empty content
-      (mockController.getCurrentColumn as any).mockReturnValue(0);
-      (mockController.element as any).textContent = '   '; // Whitespace only
+      mockController.getCurrentColumn.mockReturnValue(0);
+      mockController.element.textContent = '   '; // Whitespace only
 
       const event = new KeyboardEvent('keydown', { key: 'Backspace' });
       const context = {
@@ -203,7 +203,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.deleteNode).toHaveBeenCalledWith({
@@ -214,7 +214,7 @@ describe('Keyboard Command Integration', () => {
 
     it('should not execute MergeNodesCommand when not at start', async () => {
       // Mock controller NOT at start position
-      (mockController.getCurrentColumn as any).mockReturnValue(5);
+      mockController.getCurrentColumn.mockReturnValue(5);
 
       const event = new KeyboardEvent('keydown', { key: 'Backspace' });
       const context = {
@@ -226,7 +226,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(false);
       expect(mockEvents.combineWithPrevious).not.toHaveBeenCalled();
@@ -246,7 +246,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(false);
     });
@@ -283,7 +283,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.navigateArrow).toHaveBeenCalledWith({
@@ -304,7 +304,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.navigateArrow).toHaveBeenCalledWith({
@@ -315,7 +315,7 @@ describe('Keyboard Command Integration', () => {
     });
 
     it('should not navigate when dropdown is active', async () => {
-      (mockController as any).slashCommandDropdownActive = true;
+      mockController.slashCommandDropdownActive = true;
 
       const event = new KeyboardEvent('keydown', { key: 'ArrowUp' });
       const context = {
@@ -327,7 +327,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(false);
       expect(mockEvents.navigateArrow).not.toHaveBeenCalled();
@@ -346,7 +346,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockController.toggleFormatting).toHaveBeenCalledWith('**');
@@ -363,7 +363,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockController.toggleFormatting).toHaveBeenCalledWith('**');
@@ -380,7 +380,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockController.toggleFormatting).toHaveBeenCalledWith('*');
@@ -397,14 +397,14 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockController.toggleFormatting).toHaveBeenCalledWith('__');
     });
 
     it('should not execute FormatTextCommand when not editing', async () => {
-      (mockController as any).isEditing = false;
+      mockController.isEditing = false;
 
       const event = new KeyboardEvent('keydown', { key: 'b', metaKey: true });
       const context = {
@@ -416,7 +416,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(false);
       expect(mockController.toggleFormatting).not.toHaveBeenCalled();
@@ -437,7 +437,7 @@ describe('Keyboard Command Integration', () => {
         metadata: {}
       };
 
-      const handled = await registry.execute(event, mockController as any, context);
+      const handled = await registry.execute(event, mockController, context);
 
       expect(handled).toBe(true);
       expect(mockEvents.createNewNode).toHaveBeenCalledWith(

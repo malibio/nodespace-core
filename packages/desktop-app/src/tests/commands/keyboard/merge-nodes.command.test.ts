@@ -7,10 +7,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
 import type { KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
 
 describe('MergeNodesCommand', () => {
-  let mockController: Partial<ContentEditableController>;
+  let mockController: Partial<ContentEditableControllerExtended>;
   let deleteNodeSpy: ReturnType<typeof vi.fn>;
   let combineWithPreviousSpy: ReturnType<typeof vi.fn>;
 
@@ -22,11 +22,11 @@ describe('MergeNodesCommand', () => {
       events: {
         deleteNode: deleteNodeSpy,
         combineWithPrevious: combineWithPreviousSpy
-      } as any,
+      },
       element: {
         textContent: 'test content'
-      } as any
-    } as Partial<ContentEditableController>;
+      }
+    } as unknown as ContentEditableControllerExtended;
   });
 
   describe('direction: up (Backspace)', () => {
@@ -94,7 +94,7 @@ describe('MergeNodesCommand', () => {
     describe('execute - empty node', () => {
       it('should delete empty node', async () => {
         // Mock empty content
-        (mockController.element as any).textContent = '   '; // Whitespace only
+        mockController.element.textContent = '   '; // Whitespace only
 
         const context = createContext({
           key: 'Backspace',
@@ -115,7 +115,7 @@ describe('MergeNodesCommand', () => {
     describe('execute - non-empty node', () => {
       it('should combine with previous node', async () => {
         // Mock non-empty content
-        (mockController.element as any).textContent = 'test content';
+        mockController.element.textContent = 'test content';
 
         const preventDefaultSpy = vi.fn();
         const context = createContext({
@@ -193,11 +193,11 @@ describe('MergeNodesCommand', () => {
     } as unknown as KeyboardEvent;
 
     // Mock getCurrentColumn method
-    (mockController as any).getCurrentColumn = vi.fn(() => options.cursorPosition);
+    mockController.getCurrentColumn = vi.fn(() => options.cursorPosition);
 
     return {
       event,
-      controller: mockController as ContentEditableController,
+      controller: mockController as ContentEditableControllerExtended,
       nodeId: 'test-node',
       nodeType: 'text',
       content: '',

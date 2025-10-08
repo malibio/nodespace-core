@@ -28,7 +28,7 @@ export class NavigateDownCommand implements KeyboardCommand {
     }
 
     // Don't execute if node was just created (layout not settled)
-    const controller = context.controller as any;
+    const controller = context.controller;
     if (controller.justCreated) {
       return false;
     }
@@ -85,7 +85,7 @@ export class NavigateDownCommand implements KeyboardCommand {
   private isAtLastLine(context: KeyboardContext): boolean {
     if (!context.allowMultiline) return true;
 
-    const controller = context.controller as any;
+    const controller = context.controller;
     return controller.isAtLastLine ? controller.isAtLastLine() : true;
   }
 
@@ -94,7 +94,7 @@ export class NavigateDownCommand implements KeyboardCommand {
    * This allows proper horizontal positioning across nodes with different font sizes
    */
   private getCurrentPixelOffset(context: KeyboardContext): number {
-    const controller = context.controller as any;
+    const controller = context.controller;
     return controller.getCurrentPixelOffset ? controller.getCurrentPixelOffset() : 0;
   }
 }

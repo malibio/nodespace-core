@@ -11,11 +11,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import type { KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
 
 describe('NavigateUpCommand', () => {
   let command: NavigateUpCommand;
-  let mockController: Partial<ContentEditableController>;
+  let mockController: Partial<ContentEditableControllerExtended>;
   let navigateArrowSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -25,14 +25,14 @@ describe('NavigateUpCommand', () => {
     mockController = {
       events: {
         navigateArrow: navigateArrowSpy
-      } as any,
+      },
       element: document.createElement('div'),
       justCreated: false,
       slashCommandDropdownActive: false,
       autocompleteDropdownActive: false,
       isAtFirstLine: vi.fn(() => true),
       getCurrentPixelOffset: vi.fn(() => 100)
-    } as Partial<ContentEditableController>;
+    } as unknown as ContentEditableControllerExtended;
   });
 
   describe('canExecute', () => {
@@ -52,7 +52,7 @@ describe('NavigateUpCommand', () => {
       });
 
       // Mock that we're at the first line
-      (mockController.isAtFirstLine as any).mockReturnValue(true);
+      mockController.isAtFirstLine.mockReturnValue(true);
 
       expect(command.canExecute(context)).toBe(true);
     });
@@ -70,7 +70,7 @@ describe('NavigateUpCommand', () => {
       mockController.element?.appendChild(div2);
 
       // Mock that we're NOT at first line
-      (mockController.isAtFirstLine as any).mockReturnValue(false);
+      mockController.isAtFirstLine.mockReturnValue(false);
 
       expect(command.canExecute(context)).toBe(false);
     });
@@ -102,7 +102,7 @@ describe('NavigateUpCommand', () => {
         allowMultiline: false
       });
 
-      (mockController as any).justCreated = true;
+      mockController.justCreated = true;
 
       expect(command.canExecute(context)).toBe(false);
     });
@@ -113,7 +113,7 @@ describe('NavigateUpCommand', () => {
         allowMultiline: false
       });
 
-      (mockController as any).slashCommandDropdownActive = true;
+      mockController.slashCommandDropdownActive = true;
 
       expect(command.canExecute(context)).toBe(false);
     });
@@ -124,7 +124,7 @@ describe('NavigateUpCommand', () => {
         allowMultiline: false
       });
 
-      (mockController as any).autocompleteDropdownActive = true;
+      mockController.autocompleteDropdownActive = true;
 
       expect(command.canExecute(context)).toBe(false);
     });
@@ -166,7 +166,7 @@ describe('NavigateUpCommand', () => {
       });
 
       // Mock different pixel offset
-      (mockController.getCurrentPixelOffset as any).mockReturnValue(250);
+      mockController.getCurrentPixelOffset.mockReturnValue(250);
 
       await command.execute(context);
 
@@ -206,7 +206,7 @@ describe('NavigateUpCommand', () => {
 
     return {
       event,
-      controller: mockController as ContentEditableController,
+      controller: mockController as ContentEditableControllerExtended,
       nodeId: 'test-node',
       nodeType: 'text',
       content: '',

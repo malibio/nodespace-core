@@ -11,11 +11,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { CreateNodeCommand } from '$lib/commands/keyboard/create-node.command';
 import type { KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
 
 describe('CreateNodeCommand', () => {
   let command: CreateNodeCommand;
-  let mockController: Partial<ContentEditableController>;
+  let mockController: Partial<ContentEditableControllerExtended>;
   let createNewNodeSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -25,12 +25,12 @@ describe('CreateNodeCommand', () => {
     mockController = {
       events: {
         createNewNode: createNewNodeSpy
-      } as any,
+      },
       element: {
         textContent: 'test content',
         innerHTML: 'test content'
-      } as any
-    } as Partial<ContentEditableController>;
+      }
+    } as unknown as ContentEditableControllerExtended;
   });
 
   describe('canExecute', () => {
@@ -283,11 +283,11 @@ describe('CreateNodeCommand', () => {
     } as unknown as KeyboardEvent;
 
     // Add getCurrentColumn mock to controller
-    (mockController as any).getCurrentColumn = vi.fn(() => options.cursorPosition || 0);
+    mockController.getCurrentColumn = vi.fn(() => options.cursorPosition || 0);
 
     return {
       event,
-      controller: mockController as ContentEditableController,
+      controller: mockController as ContentEditableControllerExtended,
       nodeId: 'test-node',
       nodeType: 'text',
       content: options.content || '',

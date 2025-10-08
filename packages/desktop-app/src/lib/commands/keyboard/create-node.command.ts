@@ -102,9 +102,9 @@ export class CreateNodeCommand implements KeyboardCommand {
     if (context.allowMultiline) {
       // Access the controller's convertHtmlToTextWithNewlines method
       // We need to access the element's innerHTML
-      const element = (context.controller as any).element;
+      const element = context.controller.element;
       if (element) {
-        return (context.controller as any).convertHtmlToTextWithNewlines(element.innerHTML);
+        return context.controller.convertHtmlToTextWithNewlines(element.innerHTML);
       }
     }
     return context.content;
@@ -116,7 +116,7 @@ export class CreateNodeCommand implements KeyboardCommand {
    */
   private getCursorPosition(context: KeyboardContext): number {
     // Access controller's getCurrentColumn method for precise position
-    const getCurrentColumn = (context.controller as any).getCurrentColumn;
+    const getCurrentColumn = context.controller.getCurrentColumn;
     if (getCurrentColumn) {
       return getCurrentColumn.call(context.controller);
     }
@@ -128,7 +128,7 @@ export class CreateNodeCommand implements KeyboardCommand {
    * This is necessary for timing coordination during node creation
    */
   private setRecentEnterFlag(context: KeyboardContext): void {
-    const controller = context.controller as any;
+    const controller = context.controller;
     if (controller) {
       controller.recentEnter = true;
       setTimeout(() => {
@@ -142,7 +142,7 @@ export class CreateNodeCommand implements KeyboardCommand {
    * Reflects the split in the DOM before event processing
    */
   private updateElementContent(context: KeyboardContext, newContent: string): void {
-    const controller = context.controller as any;
+    const controller = context.controller;
     if (controller && controller.element) {
       controller.originalContent = newContent;
       controller.element.textContent = newContent;

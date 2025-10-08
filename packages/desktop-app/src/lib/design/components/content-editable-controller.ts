@@ -83,14 +83,14 @@ export class ContentEditableController {
   private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
   private static readonly QUOTE_PATTERN = /^>\s/;
 
-  private element: HTMLDivElement;
+  public element: HTMLDivElement;
   private nodeId: string;
   private nodeType: string;
   private config: ContentEditableConfig;
-  private isEditing: boolean = false;
+  public isEditing: boolean = false;
   private isInitialized: boolean = false;
-  private events: ContentEditableEvents;
-  private originalContent: string = ''; // Store original markdown content
+  public events: ContentEditableEvents;
+  public originalContent: string = ''; // Store original markdown content
   private isUpdatingFromInput: boolean = false; // Flag to prevent reactive loops
   private currentHeaderLevel: number = 0; // Track header level for CSS updates
 
@@ -102,18 +102,18 @@ export class ContentEditableController {
   private recentShiftEnter: boolean = false;
 
   // Track recent Enter to avoid interfering with node creation
-  private recentEnter: boolean = false;
+  public recentEnter: boolean = false;
 
   // Track if this node was just created to allow layout to settle
-  private justCreated: boolean = false;
+  public justCreated: boolean = false;
 
   // Track if we're being focused via arrow navigation (to prevent cursor jumping)
   private focusedViaArrowNavigation: boolean = false;
 
   // Track if slash command dropdown is currently active
-  private slashCommandDropdownActive: boolean = false;
+  public slashCommandDropdownActive: boolean = false;
   // Track if autocomplete dropdown is currently active
-  private autocompleteDropdownActive: boolean = false;
+  public autocompleteDropdownActive: boolean = false;
   // Prevent pattern detection loops after conversion
   private skipPatternDetection: boolean = false;
 
@@ -780,7 +780,7 @@ export class ContentEditableController {
    * Convert HTML structure created by Shift+Enter to text with newlines
    * Browser creates <div> elements for newlines in contenteditable
    */
-  private convertHtmlToTextWithNewlines(html: string): string {
+  public convertHtmlToTextWithNewlines(html: string): string {
     // Create a temporary element to parse the HTML
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
@@ -1254,7 +1254,7 @@ export class ContentEditableController {
     return currentPosition === 0;
   }
 
-  private getCurrentColumn(): number {
+  public getCurrentColumn(): number {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return 0;
 
@@ -1628,7 +1628,7 @@ export class ContentEditableController {
    * Get current cursor position as pixel offset from viewport.
    * This allows proper horizontal positioning across nodes with different font sizes.
    */
-  private getCurrentPixelOffset(): number {
+  public getCurrentPixelOffset(): number {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return 0;
 
@@ -1787,7 +1787,7 @@ export class ContentEditableController {
     return -1; // Unable to determine
   }
 
-  private isAtFirstLine(): boolean {
+  public isAtFirstLine(): boolean {
     if (!this.config.allowMultiline) return true;
 
     const selection = window.getSelection();
@@ -1862,7 +1862,7 @@ export class ContentEditableController {
     return true;
   }
 
-  private isAtLastLine(): boolean {
+  public isAtLastLine(): boolean {
     if (!this.config.allowMultiline) return true;
 
     const selection = window.getSelection();
@@ -2071,7 +2071,7 @@ export class ContentEditableController {
    *
    * Supports: Bold (**,__), Italic (*,_), Sequential nesting, Mixed scenarios
    */
-  private toggleFormatting(marker: string): void {
+  public toggleFormatting(marker: string): void {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
 

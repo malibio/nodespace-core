@@ -246,7 +246,7 @@ describe('KeyboardCommandRegistry', () => {
 
   describe('Context Building', () => {
     it('should build context with event and controller', async () => {
-      let capturedContext: KeyboardContext | null = null;
+      let capturedContext: KeyboardContext | null = null as KeyboardContext | null;
 
       const mockCommand: KeyboardCommand = {
         id: 'test-context',
@@ -282,7 +282,7 @@ describe('KeyboardCommandRegistry', () => {
     });
 
     it('should provide default values for missing context', async () => {
-      let capturedContext: KeyboardContext | null = null;
+      let capturedContext: KeyboardContext | null = null as KeyboardContext | null;
 
       const mockCommand: KeyboardCommand = {
         id: 'test-defaults',

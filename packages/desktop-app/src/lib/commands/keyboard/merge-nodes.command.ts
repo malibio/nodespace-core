@@ -139,7 +139,7 @@ export class MergeNodesCommand implements KeyboardCommand {
     }
 
     const range = selection.getRangeAt(0);
-    const controller = context.controller as any;
+    const controller = context.controller;
     const element = controller?.element;
 
     if (!element) {
@@ -170,7 +170,7 @@ export class MergeNodesCommand implements KeyboardCommand {
    * Get current content from context
    */
   private getCurrentContent(context: KeyboardContext): string {
-    const controller = context.controller as any;
+    const controller = context.controller;
     const element = controller?.element;
 
     if (element) {
@@ -185,7 +185,7 @@ export class MergeNodesCommand implements KeyboardCommand {
    * Uses controller's getCurrentColumn method for accuracy
    */
   private getCursorPosition(context: KeyboardContext): number {
-    const controller = context.controller as any;
+    const controller = context.controller;
     const getCurrentColumn = controller?.getCurrentColumn;
 
     if (getCurrentColumn) {

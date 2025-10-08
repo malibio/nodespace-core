@@ -7,11 +7,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IndentNodeCommand } from '$lib/commands/keyboard/indent-node.command';
 import type { KeyboardContext } from '$lib/services/keyboardCommandRegistry';
-import type { ContentEditableController } from '$lib/design/components/contentEditableController';
+import type { ContentEditableControllerExtended } from '$lib/services/keyboardCommandRegistry';
 
 describe('IndentNodeCommand', () => {
   let command: IndentNodeCommand;
-  let mockController: Partial<ContentEditableController>;
+  let mockController: Partial<ContentEditableControllerExtended>;
   let indentNodeSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -21,8 +21,8 @@ describe('IndentNodeCommand', () => {
     mockController = {
       events: {
         indentNode: indentNodeSpy
-      } as any
-    } as Partial<ContentEditableController>;
+      }
+    } as unknown as ContentEditableControllerExtended;
   });
 
   describe('canExecute', () => {
@@ -90,7 +90,7 @@ describe('IndentNodeCommand', () => {
 
     return {
       event,
-      controller: mockController as ContentEditableController,
+      controller: mockController as ContentEditableControllerExtended,
       nodeId: 'test-node',
       nodeType: 'text',
       content: '',

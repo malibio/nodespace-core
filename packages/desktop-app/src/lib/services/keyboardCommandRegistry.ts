@@ -8,6 +8,35 @@
 import type { ContentEditableController } from '$lib/design/components/contentEditableController';
 
 /**
+ * Extended controller interface for keyboard commands
+ * Provides access to methods and properties needed by commands
+ * All properties are optional to support partial mocking in tests
+ */
+export type ContentEditableControllerExtended = ContentEditableController & {
+  element?: HTMLDivElement;
+  justCreated?: boolean;
+  isAtFirstLine?(): boolean;
+  isAtLastLine?(): boolean;
+  getCurrentPixelOffset?(): number;
+  getCurrentColumn?(): number;
+  convertHtmlToTextWithNewlines?(html: string): string;
+  recentEnter?: boolean;
+  originalContent?: string;
+  toggleFormatting?(marker: string): void;
+  isEditing?: boolean;
+  slashCommandDropdownActive?: boolean;
+  autocompleteDropdownActive?: boolean;
+  events?: {
+    createNewNode?(data: unknown): void;
+    indentNode?(data: unknown): void;
+    outdentNode?(data: unknown): void;
+    combineWithPrevious?(data: unknown): void;
+    deleteNode?(data: unknown): void;
+    navigateArrow?(data: unknown): void;
+  };
+};
+
+/**
  * Context provided to keyboard commands during execution
  * Contains all information needed to execute keyboard operations
  */
@@ -16,7 +45,7 @@ export interface KeyboardContext {
   event: KeyboardEvent;
 
   /** Reference to the ContentEditableController */
-  controller: ContentEditableController;
+  controller: ContentEditableControllerExtended;
 
   /** Current node ID */
   nodeId: string;
