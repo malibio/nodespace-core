@@ -14,43 +14,43 @@ import type { Node } from '$lib/types';
  * Used to track where changes originated for conflict resolution and debugging
  */
 export type UpdateSource =
-	| { type: 'viewer'; viewerId: string; userId?: string }
-	| { type: 'database'; reason: string }
-	| { type: 'mcp-server'; serverId?: string; agentId?: string }
-	| { type: 'external'; source: string; description?: string };
+  | { type: 'viewer'; viewerId: string; userId?: string }
+  | { type: 'database'; reason: string }
+  | { type: 'mcp-server'; serverId?: string; agentId?: string }
+  | { type: 'external'; source: string; description?: string };
 
 /**
  * Complete node update with metadata for tracking and conflict resolution
  */
 export interface NodeUpdate {
-	nodeId: string;
-	changes: Partial<Node>;
-	source: UpdateSource;
-	timestamp: number;
-	version?: number; // For optimistic concurrency control
-	previousVersion?: number; // Previous version for conflict detection
+  nodeId: string;
+  changes: Partial<Node>;
+  source: UpdateSource;
+  timestamp: number;
+  version?: number; // For optimistic concurrency control
+  previousVersion?: number; // Previous version for conflict detection
 }
 
 /**
  * Detected conflict between two concurrent updates
  */
 export interface Conflict {
-	nodeId: string;
-	localUpdate: NodeUpdate;
-	remoteUpdate: NodeUpdate;
-	conflictType: 'concurrent-edit' | 'version-mismatch' | 'deleted-node';
-	detectedAt: number;
+  nodeId: string;
+  localUpdate: NodeUpdate;
+  remoteUpdate: NodeUpdate;
+  conflictType: 'concurrent-edit' | 'version-mismatch' | 'deleted-node';
+  detectedAt: number;
 }
 
 /**
  * Result of conflict resolution
  */
 export interface ConflictResolution {
-	nodeId: string;
-	resolvedNode: Node;
-	strategy: 'last-write-wins' | 'field-merge' | 'manual' | 'operational-transform';
-	discardedUpdate?: NodeUpdate; // Update that was overwritten
-	mergedFields?: string[]; // Fields that were merged (for field-level resolution)
+  nodeId: string;
+  resolvedNode: Node;
+  strategy: 'last-write-wins' | 'field-merge' | 'manual' | 'operational-transform';
+  discardedUpdate?: NodeUpdate; // Update that was overwritten
+  mergedFields?: string[]; // Fields that were merged (for field-level resolution)
 }
 
 /**
@@ -58,16 +58,16 @@ export interface ConflictResolution {
  * Allows upgrading from Last-Write-Wins to Field-Level or OT without rewriting core logic
  */
 export interface ConflictResolver {
-	/**
-	 * Resolve a conflict between two updates
-	 * @returns The resolved node state
-	 */
-	resolve(conflict: Conflict): ConflictResolution;
+  /**
+   * Resolve a conflict between two updates
+   * @returns The resolved node state
+   */
+  resolve(conflict: Conflict): ConflictResolution;
 
-	/**
-	 * Get the name of this resolution strategy
-	 */
-	getStrategyName(): string;
+  /**
+   * Get the name of this resolution strategy
+   */
+  getStrategyName(): string;
 }
 
 /**
@@ -84,24 +84,24 @@ export type Unsubscribe = () => void;
  * Performance metrics for SharedNodeStore
  */
 export interface StoreMetrics {
-	updateCount: number;
-	avgUpdateTime: number;
-	maxUpdateTime: number;
-	subscriptionCount: number;
-	conflictCount: number;
-	rollbackCount: number;
+  updateCount: number;
+  avgUpdateTime: number;
+  maxUpdateTime: number;
+  subscriptionCount: number;
+  conflictCount: number;
+  rollbackCount: number;
 }
 
 /**
  * Options for updateNode operations
  */
 export interface UpdateOptions {
-	/** Skip conflict detection (use for trusted sources like database) */
-	skipConflictDetection?: boolean;
-	/** Skip persistence (for temporary UI-only updates) */
-	skipPersistence?: boolean;
-	/** Force update even if version mismatch (dangerous) */
-	force?: boolean;
-	/** Notify subscribers even if no actual changes */
-	forceNotify?: boolean;
+  /** Skip conflict detection (use for trusted sources like database) */
+  skipConflictDetection?: boolean;
+  /** Skip persistence (for temporary UI-only updates) */
+  skipPersistence?: boolean;
+  /** Force update even if version mismatch (dangerous) */
+  force?: boolean;
+  /** Notify subscribers even if no actual changes */
+  forceNotify?: boolean;
 }

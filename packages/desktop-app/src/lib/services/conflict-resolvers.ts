@@ -9,12 +9,7 @@
  * Design: Strategy pattern allows easy upgrade without rewriting core logic
  */
 
-import type {
-	Conflict,
-	ConflictResolution,
-	ConflictResolver,
-	NodeUpdate
-} from '$lib/types/update-protocol';
+import type { Conflict, ConflictResolution, ConflictResolver } from '$lib/types/update-protocol';
 import type { Node } from '$lib/types';
 
 /**
@@ -31,32 +26,32 @@ import type { Node } from '$lib/types';
  * - Not ideal for high-frequency concurrent editing
  */
 export class LastWriteWinsResolver implements ConflictResolver {
-	resolve(conflict: Conflict): ConflictResolution {
-		const { localUpdate, remoteUpdate } = conflict;
+  resolve(conflict: Conflict): ConflictResolution {
+    const { localUpdate, remoteUpdate } = conflict;
 
-		// Simple timestamp comparison
-		const localWins = localUpdate.timestamp >= remoteUpdate.timestamp;
-		const winner = localWins ? localUpdate : remoteUpdate;
-		const loser = localWins ? remoteUpdate : localUpdate;
+    // Simple timestamp comparison
+    const localWins = localUpdate.timestamp >= remoteUpdate.timestamp;
+    const winner = localWins ? localUpdate : remoteUpdate;
+    const loser = localWins ? remoteUpdate : localUpdate;
 
-		// Build resolved node by applying winning update
-		// Note: We need to merge changes with existing node state
-		const resolvedNode: Node = {
-			...(winner.changes as Node), // Winner's changes become the resolved state
-			modifiedAt: new Date().toISOString()
-		};
+    // Build resolved node by applying winning update
+    // Note: We need to merge changes with existing node state
+    const resolvedNode: Node = {
+      ...(winner.changes as Node), // Winner's changes become the resolved state
+      modifiedAt: new Date().toISOString()
+    };
 
-		return {
-			nodeId: conflict.nodeId,
-			resolvedNode,
-			strategy: 'last-write-wins',
-			discardedUpdate: loser
-		};
-	}
+    return {
+      nodeId: conflict.nodeId,
+      resolvedNode,
+      strategy: 'last-write-wins',
+      discardedUpdate: loser
+    };
+  }
 
-	getStrategyName(): string {
-		return 'Last-Write-Wins';
-	}
+  getStrategyName(): string {
+    return 'Last-Write-Wins';
+  }
 }
 
 /**
@@ -74,61 +69,61 @@ export class LastWriteWinsResolver implements ConflictResolver {
  *   (content conflict needs resolution)
  */
 export class FieldLevelMergeResolver implements ConflictResolver {
-	resolve(conflict: Conflict): ConflictResolution {
-		const { localUpdate, remoteUpdate, nodeId } = conflict;
+  resolve(conflict: Conflict): ConflictResolution {
+    const { localUpdate, remoteUpdate, nodeId } = conflict;
 
-		// Get all unique fields from both updates
-		const allFields = new Set([
-			...Object.keys(localUpdate.changes),
-			...Object.keys(remoteUpdate.changes)
-		]);
+    // Get all unique fields from both updates
+    const allFields = new Set([
+      ...Object.keys(localUpdate.changes),
+      ...Object.keys(remoteUpdate.changes)
+    ]);
 
-		const mergedNode: Partial<Node> = {};
-		const mergedFields: string[] = [];
-		let hasConflicts = false;
+    const mergedNode: Partial<Node> = {};
+    const mergedFields: string[] = [];
+    let hasConflicts = false;
 
-		for (const field of allFields) {
-			const localValue = (localUpdate.changes as Record<string, unknown>)[field];
-			const remoteValue = (remoteUpdate.changes as Record<string, unknown>)[field];
+    for (const field of allFields) {
+      const localValue = (localUpdate.changes as Record<string, unknown>)[field];
+      const remoteValue = (remoteUpdate.changes as Record<string, unknown>)[field];
 
-			// Both updates modified this field - conflict
-			if (localValue !== undefined && remoteValue !== undefined) {
-				if (JSON.stringify(localValue) === JSON.stringify(remoteValue)) {
-					// Same change - no conflict
-					(mergedNode as Record<string, unknown>)[field] = localValue;
-					mergedFields.push(field);
-				} else {
-					// Different changes - true conflict, use Last-Write-Wins as tiebreaker
-					hasConflicts = true;
-					const winner = localUpdate.timestamp >= remoteUpdate.timestamp ? localValue : remoteValue;
-					(mergedNode as Record<string, unknown>)[field] = winner;
-				}
-			} else if (localValue !== undefined) {
-				// Only local modified this field
-				(mergedNode as Record<string, unknown>)[field] = localValue;
-				mergedFields.push(field);
-			} else if (remoteValue !== undefined) {
-				// Only remote modified this field
-				(mergedNode as Record<string, unknown>)[field] = remoteValue;
-				mergedFields.push(field);
-			}
-		}
+      // Both updates modified this field - conflict
+      if (localValue !== undefined && remoteValue !== undefined) {
+        if (JSON.stringify(localValue) === JSON.stringify(remoteValue)) {
+          // Same change - no conflict
+          (mergedNode as Record<string, unknown>)[field] = localValue;
+          mergedFields.push(field);
+        } else {
+          // Different changes - true conflict, use Last-Write-Wins as tiebreaker
+          hasConflicts = true;
+          const winner = localUpdate.timestamp >= remoteUpdate.timestamp ? localValue : remoteValue;
+          (mergedNode as Record<string, unknown>)[field] = winner;
+        }
+      } else if (localValue !== undefined) {
+        // Only local modified this field
+        (mergedNode as Record<string, unknown>)[field] = localValue;
+        mergedFields.push(field);
+      } else if (remoteValue !== undefined) {
+        // Only remote modified this field
+        (mergedNode as Record<string, unknown>)[field] = remoteValue;
+        mergedFields.push(field);
+      }
+    }
 
-		return {
-			nodeId,
-			resolvedNode: {
-				...mergedNode,
-				modifiedAt: new Date().toISOString()
-			} as Node,
-			strategy: hasConflicts ? 'last-write-wins' : 'field-merge',
-			mergedFields,
-			discardedUpdate: hasConflicts ? undefined : undefined // Track which update had conflicts
-		};
-	}
+    return {
+      nodeId,
+      resolvedNode: {
+        ...mergedNode,
+        modifiedAt: new Date().toISOString()
+      } as Node,
+      strategy: hasConflicts ? 'last-write-wins' : 'field-merge',
+      mergedFields,
+      discardedUpdate: hasConflicts ? undefined : undefined // Track which update had conflicts
+    };
+  }
 
-	getStrategyName(): string {
-		return 'Field-Level Merge';
-	}
+  getStrategyName(): string {
+    return 'Field-Level Merge';
+  }
 }
 
 /**
@@ -146,25 +141,25 @@ export class FieldLevelMergeResolver implements ConflictResolver {
  *   Transformed: Apply Delete then adjust Insert → "elloWorld"
  */
 export class OperationalTransformResolver implements ConflictResolver {
-	resolve(conflict: Conflict): ConflictResolution {
-		// Placeholder for future OT implementation
-		// For now, fallback to Last-Write-Wins
-		console.warn(
-			'[OperationalTransformResolver] OT not yet implemented, falling back to Last-Write-Wins'
-		);
+  resolve(conflict: Conflict): ConflictResolution {
+    // Placeholder for future OT implementation
+    // For now, fallback to Last-Write-Wins
+    console.warn(
+      '[OperationalTransformResolver] OT not yet implemented, falling back to Last-Write-Wins'
+    );
 
-		const fallback = new LastWriteWinsResolver();
-		const resolution = fallback.resolve(conflict);
+    const fallback = new LastWriteWinsResolver();
+    const resolution = fallback.resolve(conflict);
 
-		return {
-			...resolution,
-			strategy: 'operational-transform' // Mark as OT even though we fell back
-		};
-	}
+    return {
+      ...resolution,
+      strategy: 'operational-transform' // Mark as OT even though we fell back
+    };
+  }
 
-	getStrategyName(): string {
-		return 'Operational Transform (Fallback to LWW)';
-	}
+  getStrategyName(): string {
+    return 'Operational Transform (Fallback to LWW)';
+  }
 }
 
 /**
@@ -176,72 +171,69 @@ export class OperationalTransformResolver implements ConflictResolver {
  * - Ideal for critical edits where automatic resolution is risky
  */
 export class ManualConflictResolver implements ConflictResolver {
-	private pendingConflicts = new Map<string, Conflict>();
+  private pendingConflicts = new Map<string, Conflict>();
 
-	resolve(conflict: Conflict): ConflictResolution {
-		// Store conflict for UI presentation
-		this.pendingConflicts.set(conflict.nodeId, conflict);
+  resolve(conflict: Conflict): ConflictResolution {
+    // Store conflict for UI presentation
+    this.pendingConflicts.set(conflict.nodeId, conflict);
 
-		// For now, fallback to Last-Write-Wins and notify user
-		// Future: Emit event for UI to show conflict resolution dialog
-		console.warn(
-			'[ManualConflictResolver] Manual resolution required for node:',
-			conflict.nodeId
-		);
+    // For now, fallback to Last-Write-Wins and notify user
+    // Future: Emit event for UI to show conflict resolution dialog
+    console.warn('[ManualConflictResolver] Manual resolution required for node:', conflict.nodeId);
 
-		const fallback = new LastWriteWinsResolver();
-		const resolution = fallback.resolve(conflict);
+    const fallback = new LastWriteWinsResolver();
+    const resolution = fallback.resolve(conflict);
 
-		return {
-			...resolution,
-			strategy: 'manual' // Mark as requiring manual resolution
-		};
-	}
+    return {
+      ...resolution,
+      strategy: 'manual' // Mark as requiring manual resolution
+    };
+  }
 
-	getStrategyName(): string {
-		return 'Manual Resolution (Pending)';
-	}
+  getStrategyName(): string {
+    return 'Manual Resolution (Pending)';
+  }
 
-	/**
-	 * Get conflicts pending manual resolution
-	 */
-	getPendingConflicts(): Conflict[] {
-		return Array.from(this.pendingConflicts.values());
-	}
+  /**
+   * Get conflicts pending manual resolution
+   */
+  getPendingConflicts(): Conflict[] {
+    return Array.from(this.pendingConflicts.values());
+  }
 
-	/**
-	 * Clear resolved conflict
-	 */
-	clearConflict(nodeId: string): void {
-		this.pendingConflicts.delete(nodeId);
-	}
+  /**
+   * Clear resolved conflict
+   */
+  clearConflict(nodeId: string): void {
+    this.pendingConflicts.delete(nodeId);
+  }
 }
 
 /**
  * Helper: Create default conflict resolver (Last-Write-Wins)
  */
 export function createDefaultResolver(): ConflictResolver {
-	return new LastWriteWinsResolver();
+  return new LastWriteWinsResolver();
 }
 
 /**
  * Helper: Create resolver by strategy name
  */
 export function createResolver(strategy: string): ConflictResolver {
-	switch (strategy.toLowerCase()) {
-		case 'last-write-wins':
-		case 'lww':
-			return new LastWriteWinsResolver();
-		case 'field-level':
-		case 'field-merge':
-			return new FieldLevelMergeResolver();
-		case 'operational-transform':
-		case 'ot':
-			return new OperationalTransformResolver();
-		case 'manual':
-			return new ManualConflictResolver();
-		default:
-			console.warn(`Unknown conflict resolution strategy: ${strategy}, using Last-Write-Wins`);
-			return new LastWriteWinsResolver();
-	}
+  switch (strategy.toLowerCase()) {
+    case 'last-write-wins':
+    case 'lww':
+      return new LastWriteWinsResolver();
+    case 'field-level':
+    case 'field-merge':
+      return new FieldLevelMergeResolver();
+    case 'operational-transform':
+    case 'ot':
+      return new OperationalTransformResolver();
+    case 'manual':
+      return new ManualConflictResolver();
+    default:
+      console.warn(`Unknown conflict resolution strategy: ${strategy}, using Last-Write-Wins`);
+      return new LastWriteWinsResolver();
+  }
 }
