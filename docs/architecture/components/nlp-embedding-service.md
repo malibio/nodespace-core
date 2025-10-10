@@ -210,6 +210,274 @@ match service.generate_embedding("text").await {
 - `lru`: LRU cache with automatic eviction
 - `tokio`: Async runtime
 
+---
+
+# Topic Embedding Service
+
+The `TopicEmbeddingService` provides adaptive chunking and embedding generation for topic nodes, built on top of the NLP engine.
+
+## Features
+
+- **Adaptive Chunking**: Automatically adjusts embedding strategy based on content size
+- **Turso Native Vector Search**: Uses DiskANN algorithm for fast approximate nearest neighbor search
+- **Debounced Re-embedding**: Batches rapid content changes to avoid excessive embedding operations
+- **Metadata Tracking**: Stores embedding type, generation time, and token counts
+
+## Architecture
+
+### Chunking Strategies
+
+The service uses three strategies based on estimated token count:
+
+| Token Range | Strategy | Implementation |
+|------------|----------|----------------|
+| < 512 | **Complete Topic** | Single embedding for entire content |
+| 512-2048 | **Summary + Sections** | Summary embedding + top-level section embeddings |
+| > 2048 | **Hierarchical** | Summary embedding + recursive section embeddings |
+
+### Token Estimation
+
+Conservative approach to prevent underestimation:
+
+```rust
+fn estimate_tokens(content: &str) -> usize {
+    // 1 token ≈ 3.5 chars + 20% safety margin
+    ((content.len() as f32 / 3.5) * 1.2).ceil() as usize
+}
+```
+
+**Why conservative?**
+- Better to overestimate than truncate important content
+- Handles non-English and technical text more safely
+- Prevents choosing wrong chunking strategy
+
+## Usage
+
+### Basic Setup
+
+```rust
+use nodespace_core::services::TopicEmbeddingService;
+use nodespace_core::db::DatabaseService;
+use std::sync::Arc;
+
+// Initialize database and NLP engine
+let db = Arc::new(DatabaseService::new(db_path).await?);
+
+// Create embedding service with defaults
+let service = TopicEmbeddingService::new_with_defaults(db)?;
+```
+
+### Generate Embeddings
+
+```rust
+// Embed a single topic
+service.embed_topic("topic-node-id").await?;
+
+// The service automatically:
+// 1. Fetches topic and children from database
+// 2. Estimates total tokens
+// 3. Chooses appropriate chunking strategy
+// 4. Generates embeddings
+// 5. Stores in database with metadata
+```
+
+### Semantic Search
+
+```rust
+// Fast approximate search (uses DiskANN index)
+let results = service.search_topics(
+    "machine learning algorithms",
+    0.7,  // similarity threshold (lower = more similar)
+    20    // max results
+).await?;
+
+// Exact search (slower but more accurate)
+let exact_results = service.exact_search_topics(
+    "machine learning algorithms",
+    0.7,
+    20
+).await?;
+```
+
+### Content Change Handling
+
+```rust
+// Debounced re-embedding (waits 5 seconds of inactivity)
+service.schedule_update_topic_embedding("topic-id").await;
+
+// Immediate re-embedding (no debouncing)
+service.update_topic_embedding("topic-id").await?;
+```
+
+## Database Schema
+
+### Vector Storage
+
+```sql
+CREATE TABLE nodes (
+    id TEXT PRIMARY KEY,
+    -- ... other fields ...
+    embedding_vector F32_BLOB(384),  -- Native Turso vector type
+    properties JSON
+);
+
+-- Vector index for fast ANN search
+CREATE INDEX idx_nodes_embedding_vector
+ON nodes(libsql_vector_idx(embedding_vector));
+```
+
+### Embedding Metadata
+
+Stored in `properties.embedding_metadata`:
+
+```json
+{
+  "embedding_metadata": {
+    "type": "complete_topic" | "topic_summary" | "topic_section",
+    "parent_topic": "topic-id",
+    "generated_at": "2025-10-10T12:00:00Z",
+    "token_count": 345,
+    "depth": 0
+  }
+}
+```
+
+## Vector Search
+
+### Turso Native Functions
+
+```sql
+-- Fast approximate search (uses DiskANN index)
+SELECT * FROM vector_top_k(
+    'idx_nodes_embedding_vector',
+    vector(?),  -- query embedding blob
+    20          -- limit
+) vt
+JOIN nodes n ON n.rowid = vt.rowid
+WHERE n.node_type = 'topic';
+
+-- Exact cosine distance search
+SELECT *,
+    vector_distance_cosine(embedding_vector, vector(?)) as distance
+FROM nodes
+WHERE node_type = 'topic'
+  AND embedding_vector IS NOT NULL
+  AND distance < 0.7
+ORDER BY distance ASC
+LIMIT 20;
+```
+
+## Performance
+
+### Targets
+
+- **Embedding Generation**: < 3 seconds (CPU), < 1 second (GPU)
+- **Vector Search**: < 100ms for 10k+ nodes (with DiskANN index)
+- **Cache Hit**: < 5ms (NLP engine cache)
+
+### Optimization Tips
+
+1. **Use approximate search** for interactive queries (faster)
+2. **Use exact search** for critical operations (more accurate)
+3. **Batch operations** when embedding multiple topics
+4. **Debounce content changes** to avoid excessive re-embedding
+
+## Tauri Commands
+
+Frontend integration via Tauri commands:
+
+```typescript
+// Generate embedding
+await invoke('generate_topic_embedding', { topicId: 'id' });
+
+// Search topics
+const results = await invoke('search_topics', {
+    params: {
+        query: 'machine learning',
+        threshold: 0.7,
+        limit: 20
+    }
+});
+
+// Batch operations
+const result = await invoke('batch_generate_embeddings', {
+    topicIds: ['id1', 'id2', 'id3']
+});
+
+console.log(`Success: ${result.successCount}`);
+console.log(`Errors:`, result.failedEmbeddings);
+```
+
+## Testing
+
+### Unit Tests
+
+Run without NLP model:
+
+```bash
+cargo test --lib
+```
+
+### Integration Tests
+
+Requires NLP model files:
+
+```bash
+cargo test --lib -- --ignored
+```
+
+### Performance Tests
+
+Creates 10k+ nodes:
+
+```bash
+cargo test --lib test_vector_search_performance -- --ignored --nocapture
+```
+
+## Troubleshooting
+
+### Model Not Found Error
+
+```
+ModelNotFound("Model file not found: ~/.nodespace/models/BAAI-bge-small-en-v1.5/model.onnx")
+```
+
+**Solution**: Download model files (see "Model Bundling" section above)
+
+### Slow Embedding Generation
+
+**Checklist**:
+1. Check if GPU acceleration is active: `service.device_info()`
+2. Verify cache is enabled and warm
+3. Check content size (> 2048 tokens will be slower)
+
+### Vector Search Returns No Results
+
+**Checklist**:
+1. Verify embeddings exist: `SELECT COUNT(*) FROM nodes WHERE embedding_vector IS NOT NULL`
+2. Check threshold value (lower = more strict, higher = more lenient)
+3. Verify vector index exists: `PRAGMA index_list('nodes')`
+
+## Migration Guide
+
+### From In-Memory Vector Search
+
+If migrating from an in-memory vector search implementation:
+
+1. **Remove in-memory logic** - Turso handles vector search natively
+2. **Update queries** - Use `vector_top_k()` instead of in-memory distance calculations
+3. **Add vector index** - Create `libsql_vector_idx` index for performance
+4. **Test performance** - Should be faster with DiskANN algorithm
+
+### Changing Embedding Model
+
+If upgrading to a different embedding model:
+
+1. **Update `EMBEDDING_DIMENSION` constant** in `embedding_service.rs`
+2. **Migrate database schema**: `F32_BLOB(384)` → `F32_BLOB(new_dimension)`
+3. **Re-generate all embeddings** with new model
+4. **Update documentation** with new model details
+
 ## License
 
 MIT
@@ -219,3 +487,5 @@ MIT
 - [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)
 - [Candle ML Framework](https://github.com/huggingface/candle)
 - [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard)
+- [Turso Vector Search](https://turso.tech/vector)
+- [Issue #183: Implementation Details](https://github.com/malibio/nodespace-core/issues/183)
