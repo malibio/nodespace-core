@@ -235,19 +235,36 @@ pub async fn batch_generate_embeddings(
     topic_ids: Vec<String>,
 ) -> Result<BatchEmbeddingResult, CommandError> {
     let mut success_count = 0;
-    let mut failed_ids = Vec::new();
+    let mut failed_embeddings = Vec::new();
 
     for topic_id in topic_ids {
         match state.service.embed_topic(&topic_id).await {
             Ok(()) => success_count += 1,
-            Err(_) => failed_ids.push(topic_id),
+            Err(e) => {
+                tracing::error!("Failed to embed topic {}: {}", topic_id, e);
+                failed_embeddings.push(BatchEmbeddingError {
+                    topic_id: topic_id.clone(),
+                    error: e.to_string(),
+                });
+            }
         }
     }
 
     Ok(BatchEmbeddingResult {
         success_count,
-        failed_ids,
+        failed_embeddings,
     })
+}
+
+/// Error details for a failed batch embedding operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEmbeddingError {
+    /// ID of the topic that failed to embed
+    pub topic_id: String,
+
+    /// Error message describing the failure
+    pub error: String,
 }
 
 /// Result of batch embedding operation
@@ -257,8 +274,8 @@ pub struct BatchEmbeddingResult {
     /// Number of successfully embedded topics
     pub success_count: usize,
 
-    /// IDs of topics that failed to embed
-    pub failed_ids: Vec<String>,
+    /// Details of topics that failed to embed with error messages
+    pub failed_embeddings: Vec<BatchEmbeddingError>,
 }
 
 #[cfg(test)]

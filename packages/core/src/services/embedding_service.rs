@@ -34,6 +34,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
 
+/// Embedding vector dimension for BAAI/bge-small-en-v1.5 model
+pub const EMBEDDING_DIMENSION: usize = 384;
+
 /// Topic embedding service with adaptive chunking
 pub struct TopicEmbeddingService {
     /// NLP engine for generating embeddings
@@ -441,9 +444,21 @@ impl TopicEmbeddingService {
 
     // Private helper methods
 
-    /// Estimate token count from text (rough approximation: 1 token ≈ 4 characters)
+    /// Estimate token count from text
+    ///
+    /// Uses a conservative heuristic: 1 token ≈ 3.5 characters with 20% safety margin.
+    /// This ensures we don't underestimate tokens for chunking decisions.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // "hello world" = 11 chars / 3.5 * 1.2 = 3.77 → 4 tokens
+    /// // This is slightly conservative (actual is likely 2-3 tokens)
+    /// ```
     fn estimate_tokens(&self, content: &str) -> usize {
-        (content.len() / 4).max(1)
+        // Conservative estimate: 3.5 chars/token + 20% margin
+        // Better to overestimate than underestimate for chunking
+        ((content.len() as f32 / 3.5) * 1.2).ceil() as usize
     }
 
     /// Estimate total tokens for a topic (including all children)

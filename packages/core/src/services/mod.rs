@@ -14,6 +14,6 @@ pub mod embedding_service;
 pub mod error;
 pub mod node_service;
 
-pub use embedding_service::TopicEmbeddingService;
+pub use embedding_service::{TopicEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
 pub use node_service::NodeService;
