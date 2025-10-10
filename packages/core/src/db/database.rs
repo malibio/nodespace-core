@@ -172,7 +172,7 @@ impl DatabaseService {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 properties JSON NOT NULL DEFAULT '{}',
-                embedding_vector BLOB,
+                embedding_vector F32_BLOB(384),
                 -- Parent deletion cascades to children (tree structure)
                 FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
                 -- Origin deletion cascades to mirror/template instances (instances depend on origin)
@@ -340,6 +340,20 @@ impl DatabaseService {
         .map_err(|e| {
             DatabaseError::sql_execution(format!(
                 "Failed to create index 'idx_nodes_created': {}",
+                e
+            ))
+        })?;
+
+        // Vector index on embedding_vector (semantic search with DiskANN)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_embedding_vector
+             ON nodes(libsql_vector_idx(embedding_vector))",
+            (),
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::sql_execution(format!(
+                "Failed to create vector index 'idx_nodes_embedding_vector': {}",
                 e
             ))
         })?;
