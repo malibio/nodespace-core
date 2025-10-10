@@ -60,9 +60,11 @@ export interface ConflictResolution {
 export interface ConflictResolver {
   /**
    * Resolve a conflict between two updates
+   * @param conflict - The detected conflict
+   * @param existingNode - The current state of the node before resolution
    * @returns The resolved node state
    */
-  resolve(conflict: Conflict): ConflictResolution;
+  resolve(conflict: Conflict, existingNode: Node): ConflictResolution;
 
   /**
    * Get the name of this resolution strategy

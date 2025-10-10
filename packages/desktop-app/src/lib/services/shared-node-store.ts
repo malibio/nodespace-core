@@ -97,6 +97,7 @@ export class SharedNodeStore {
 
   // Conflict resolution
   private conflictResolver: ConflictResolver = createDefaultResolver();
+  private conflictWindowMs = 5000; // 5 seconds default for conflict detection
 
   // Pending operations (optimistic updates)
   private pendingUpdates = new Map<string, NodeUpdate[]>();
@@ -458,10 +459,9 @@ export class SharedNodeStore {
     }
 
     // Check for concurrent edits (same field modified within time window)
-    const CONFLICT_WINDOW_MS = 5000; // 5 seconds
     for (const pendingUpdate of pending) {
       const timeDiff = Math.abs(incomingUpdate.timestamp - pendingUpdate.timestamp);
-      if (timeDiff < CONFLICT_WINDOW_MS) {
+      if (timeDiff < this.conflictWindowMs) {
         // Check if same fields were modified
         const incomingFields = new Set(Object.keys(incomingUpdate.changes));
         const pendingFields = new Set(Object.keys(pendingUpdate.changes));
@@ -488,8 +488,17 @@ export class SharedNodeStore {
   private handleConflict(conflict: Conflict): void {
     this.metrics.conflictCount++;
 
+    // Get existing node for type-safe resolution
+    const existingNode = this.nodes.get(conflict.nodeId);
+    if (!existingNode) {
+      console.warn(
+        `[SharedNodeStore] Cannot resolve conflict for non-existent node: ${conflict.nodeId}`
+      );
+      return;
+    }
+
     // Resolve using configured strategy
-    const resolution = this.conflictResolver.resolve(conflict);
+    const resolution = this.conflictResolver.resolve(conflict, existingNode);
 
     // Apply resolved state
     this.nodes.set(conflict.nodeId, resolution.resolvedNode);
@@ -522,6 +531,14 @@ export class SharedNodeStore {
    */
   getConflictResolver(): ConflictResolver {
     return this.conflictResolver;
+  }
+
+  /**
+   * Set conflict detection window (in milliseconds)
+   * Updates within this time window are considered potentially concurrent
+   */
+  setConflictWindow(ms: number): void {
+    this.conflictWindowMs = ms;
   }
 
   // ========================================================================

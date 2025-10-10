@@ -26,7 +26,7 @@ import type { Node } from '$lib/types';
  * - Not ideal for high-frequency concurrent editing
  */
 export class LastWriteWinsResolver implements ConflictResolver {
-  resolve(conflict: Conflict): ConflictResolution {
+  resolve(conflict: Conflict, existingNode: Node): ConflictResolution {
     const { localUpdate, remoteUpdate } = conflict;
 
     // Simple timestamp comparison
@@ -34,10 +34,11 @@ export class LastWriteWinsResolver implements ConflictResolver {
     const winner = localWins ? localUpdate : remoteUpdate;
     const loser = localWins ? remoteUpdate : localUpdate;
 
-    // Build resolved node by applying winning update
-    // Note: We need to merge changes with existing node state
+    // Build resolved node by merging winner's changes with existing node
+    // This is type-safe and preserves all required fields
     const resolvedNode: Node = {
-      ...(winner.changes as Node), // Winner's changes become the resolved state
+      ...existingNode,
+      ...winner.changes,
       modifiedAt: new Date().toISOString()
     };
 
@@ -69,7 +70,7 @@ export class LastWriteWinsResolver implements ConflictResolver {
  *   (content conflict needs resolution)
  */
 export class FieldLevelMergeResolver implements ConflictResolver {
-  resolve(conflict: Conflict): ConflictResolution {
+  resolve(conflict: Conflict, existingNode: Node): ConflictResolution {
     const { localUpdate, remoteUpdate, nodeId } = conflict;
 
     // Get all unique fields from both updates
@@ -112,9 +113,10 @@ export class FieldLevelMergeResolver implements ConflictResolver {
     return {
       nodeId,
       resolvedNode: {
+        ...existingNode,
         ...mergedNode,
         modifiedAt: new Date().toISOString()
-      } as Node,
+      },
       strategy: hasConflicts ? 'last-write-wins' : 'field-merge',
       mergedFields,
       discardedUpdate: hasConflicts ? undefined : undefined // Track which update had conflicts
@@ -141,7 +143,7 @@ export class FieldLevelMergeResolver implements ConflictResolver {
  *   Transformed: Apply Delete then adjust Insert → "elloWorld"
  */
 export class OperationalTransformResolver implements ConflictResolver {
-  resolve(conflict: Conflict): ConflictResolution {
+  resolve(conflict: Conflict, existingNode: Node): ConflictResolution {
     // Placeholder for future OT implementation
     // For now, fallback to Last-Write-Wins
     console.warn(
@@ -149,7 +151,7 @@ export class OperationalTransformResolver implements ConflictResolver {
     );
 
     const fallback = new LastWriteWinsResolver();
-    const resolution = fallback.resolve(conflict);
+    const resolution = fallback.resolve(conflict, existingNode);
 
     return {
       ...resolution,
@@ -173,7 +175,7 @@ export class OperationalTransformResolver implements ConflictResolver {
 export class ManualConflictResolver implements ConflictResolver {
   private pendingConflicts = new Map<string, Conflict>();
 
-  resolve(conflict: Conflict): ConflictResolution {
+  resolve(conflict: Conflict, existingNode: Node): ConflictResolution {
     // Store conflict for UI presentation
     this.pendingConflicts.set(conflict.nodeId, conflict);
 
@@ -182,7 +184,7 @@ export class ManualConflictResolver implements ConflictResolver {
     console.warn('[ManualConflictResolver] Manual resolution required for node:', conflict.nodeId);
 
     const fallback = new LastWriteWinsResolver();
-    const resolution = fallback.resolve(conflict);
+    const resolution = fallback.resolve(conflict, existingNode);
 
     return {
       ...resolution,
