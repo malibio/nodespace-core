@@ -373,6 +373,62 @@ export class SharedNodeStore {
   }
 
   // ========================================================================
+  // Phase 3: External Update Handling (MCP-Ready)
+  // ========================================================================
+
+  /**
+   * Handle updates from external sources (MCP server, database sync, etc.)
+   *
+   * This method provides the integration point for future MCP server (#112).
+   * It routes external updates through the same conflict detection and
+   * synchronization pipeline as local edits.
+   *
+   * @param source - Source type: 'mcp-server', 'database', or 'external'
+   * @param update - The node update to apply
+   *
+   * @example
+   * // Future: When MCP server from #112 is ready
+   * mcpServer.on('node:updated', (mcpUpdate) => {
+   *   sharedStore.handleExternalUpdate('mcp-server', mcpUpdate);
+   * });
+   *
+   * @example
+   * // Current: Simulated MCP update for testing
+   * const mcpUpdate = {
+   *   nodeId: 'test-node',
+   *   changes: { content: 'Updated by AI agent' },
+   *   source: { type: 'mcp-server' as const, serverId: 'test-server' },
+   *   timestamp: Date.now()
+   * };
+   * sharedStore.handleExternalUpdate('mcp-server', mcpUpdate);
+   */
+  handleExternalUpdate(
+    sourceType: 'mcp-server' | 'database' | 'external',
+    update: NodeUpdate
+  ): void {
+    // Validate the node exists
+    if (!this.nodes.has(update.nodeId)) {
+      console.warn(
+        `[SharedNodeStore] External update for non-existent node: ${update.nodeId} from ${sourceType}`
+      );
+      return;
+    }
+
+    // Apply the update through standard pipeline
+    // This ensures:
+    // - Conflict detection happens
+    // - All viewers are notified
+    // - Metrics are tracked
+    // - Events are emitted
+    this.updateNode(update.nodeId, update.changes, update.source, {
+      // External updates from database should skip persistence to avoid loops
+      skipPersistence: sourceType === 'database',
+      // MCP server updates should go through conflict detection
+      skipConflictDetection: false
+    });
+  }
+
+  // ========================================================================
   // Conflict Detection and Resolution
   // ========================================================================
 
