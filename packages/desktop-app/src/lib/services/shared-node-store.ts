@@ -23,6 +23,7 @@
  */
 
 import { eventBus } from './event-bus';
+import { tauriNodeService } from './tauri-node-service';
 import type { Node } from '$lib/types';
 import type {
   NodeUpdate,
@@ -34,7 +35,40 @@ import type {
   StoreMetrics,
   UpdateOptions
 } from '$lib/types/update-protocol';
+import type { ConflictResolvedEvent, UpdateRolledBackEvent } from './event-types';
 import { createDefaultResolver } from './conflict-resolvers';
+
+// ============================================================================
+// Database Write Coordination (Phase 2.4)
+// ============================================================================
+
+// Database write queue for coordinated persistence
+const pendingDatabaseWrites = new Map<string, Promise<void>>();
+
+/**
+ * Queue a database write operation to prevent concurrent writes to same node
+ * This ensures database consistency and prevents race conditions
+ */
+async function queueDatabaseWrite(nodeId: string, operation: () => Promise<void>): Promise<void> {
+  // Wait for any pending writes to this node
+  const pending = pendingDatabaseWrites.get(nodeId);
+  if (pending) {
+    await pending;
+  }
+
+  // Execute and track this write
+  const writePromise = operation();
+  pendingDatabaseWrites.set(nodeId, writePromise);
+
+  try {
+    await writePromise;
+  } finally {
+    // Clean up if this was the last write
+    if (pendingDatabaseWrites.get(nodeId) === writePromise) {
+      pendingDatabaseWrites.delete(nodeId);
+    }
+  }
+}
 
 /**
  * Subscription metadata for debugging and cleanup
@@ -225,6 +259,25 @@ export class SharedNodeStore {
 
       // Update metrics
       this.metrics.updateCount++;
+
+      // Phase 2.4: Persist to database (unless skipped)
+      if (!options.skipPersistence && source.type !== 'database') {
+        // Queue database write to prevent concurrent writes
+        queueDatabaseWrite(nodeId, async () => {
+          try {
+            await tauriNodeService.updateNode(nodeId, updatedNode);
+            // Mark update as persisted
+            this.markUpdatePersisted(nodeId, update);
+          } catch (dbError) {
+            console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, dbError);
+            // Rollback the optimistic update
+            this.rollbackUpdate(nodeId, update);
+          }
+        }).catch((err) => {
+          // Catch any queueing errors
+          console.error(`[SharedNodeStore] Failed to queue database write:`, err);
+        });
+      }
     } catch (error) {
       console.error(`[SharedNodeStore] Error updating node ${nodeId}:`, error);
       throw error;
@@ -250,16 +303,30 @@ export class SharedNodeStore {
   /**
    * Set a node (create or replace)
    */
-  setNode(node: Node, source: UpdateSource): void {
+  setNode(node: Node, source: UpdateSource, skipPersistence = false): void {
     this.nodes.set(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
     this.notifySubscribers(node.id, node, source);
+
+    // Phase 2.4: Persist to database
+    if (!skipPersistence && source.type !== 'database') {
+      queueDatabaseWrite(node.id, async () => {
+        try {
+          // Use updateNode for existing nodes (SharedNodeStore manages existence)
+          await tauriNodeService.updateNode(node.id, node);
+        } catch (dbError) {
+          console.error(`[SharedNodeStore] Database write failed for node ${node.id}:`, dbError);
+        }
+      }).catch((err) => {
+        console.error(`[SharedNodeStore] Failed to queue database write:`, err);
+      });
+    }
   }
 
   /**
    * Delete a node
    */
-  deleteNode(nodeId: string, source: UpdateSource): void {
+  deleteNode(nodeId: string, source: UpdateSource, skipPersistence = false): void {
     const node = this.nodes.get(nodeId);
     if (node) {
       this.nodes.delete(nodeId);
@@ -276,6 +343,22 @@ export class SharedNodeStore {
         nodeId,
         parentId: node.parentId || undefined
       } as never);
+
+      // Phase 2.4: Persist deletion to database
+      if (!skipPersistence && source.type !== 'database') {
+        queueDatabaseWrite(nodeId, async () => {
+          try {
+            await tauriNodeService.deleteNode(nodeId);
+          } catch (dbError) {
+            console.error(
+              `[SharedNodeStore] Database deletion failed for node ${nodeId}:`,
+              dbError
+            );
+          }
+        }).catch((err) => {
+          console.error(`[SharedNodeStore] Failed to queue database write:`, err);
+        });
+      }
     }
   }
 
@@ -357,15 +440,15 @@ export class SharedNodeStore {
     this.versions.set(conflict.nodeId, this.getNextVersion(conflict.nodeId));
 
     // Notify about conflict resolution
-    // TODO: Add 'node:conflict-resolved' to event-types.ts
-    // eventBus.emit({
-    //   type: 'node:conflict-resolved',
-    //   namespace: 'coordination',
-    //   source: 'shared-node-store',
-    //   nodeId: conflict.nodeId,
-    //   strategy: resolution.strategy,
-    //   discardedUpdate: resolution.discardedUpdate
-    // });
+    eventBus.emit<ConflictResolvedEvent>({
+      type: 'node:conflict-resolved',
+      namespace: 'lifecycle',
+      source: 'shared-node-store',
+      nodeId: conflict.nodeId,
+      conflictType: conflict.conflictType,
+      strategy: resolution.strategy,
+      discardedUpdate: resolution.discardedUpdate
+    });
 
     // Notify subscribers
     this.notifySubscribers(conflict.nodeId, resolution.resolvedNode, conflict.remoteUpdate.source);
@@ -416,14 +499,15 @@ export class SharedNodeStore {
       this.notifySubscribers(nodeId, currentNode, updateToRollback.source);
     }
 
-    // TODO: Add 'node:update-rolled-back' to event-types.ts
-    // eventBus.emit({
-    //   type: 'node:update-rolled-back',
-    //   namespace: 'coordination',
-    //   source: 'shared-node-store',
-    //   nodeId,
-    //   reason: 'update-failed'
-    // });
+    // Emit rollback event
+    eventBus.emit<UpdateRolledBackEvent>({
+      type: 'node:update-rolled-back',
+      namespace: 'lifecycle',
+      source: 'shared-node-store',
+      nodeId,
+      reason: 'Database write failed',
+      failedUpdate: updateToRollback
+    });
   }
 
   /**
