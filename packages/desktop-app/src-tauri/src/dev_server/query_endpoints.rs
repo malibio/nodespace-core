@@ -77,6 +77,8 @@ async fn query_nodes_simple(
 
     // Convert "null" string or empty string to actual None
     // This allows querying for root nodes (parentId = null)
+    // The string "null" from the query parameter is converted to SQL NULL
+    // so we can query for nodes where parent_id IS NULL
     let parent_id = match params.parent_id.as_deref() {
         Some("null") | Some("") => None,
         Some(id) => Some(id.to_string()),
@@ -119,12 +121,12 @@ async fn get_nodes_by_origin_id(
 ) -> Result<Json<Vec<Node>>, HttpError> {
     tracing::debug!("Get nodes by origin: {}", origin_id);
 
-    // Note: NodeFilter doesn't have origin_id field yet
-    // For now, return empty array as placeholder
-    // This endpoint will be properly implemented when origin_id is added to NodeFilter
-    tracing::warn!("get_nodes_by_origin_id not yet implemented - origin_id field missing from NodeFilter");
-
-    Ok(Json(Vec::new()))
+    // NodeFilter doesn't have origin_id field yet
+    // Return explicit error to indicate unimplemented functionality
+    Err(HttpError::new(
+        "Origin ID queries not yet implemented - NodeFilter missing origin_id field",
+        "NOT_IMPLEMENTED",
+    ))
 }
 
 /// Create router with all Phase 2 query endpoints
@@ -134,6 +136,9 @@ async fn get_nodes_by_origin_id(
 pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/nodes/query", get(query_nodes_simple))
-        .route("/api/nodes/by-origin/:origin_id", get(get_nodes_by_origin_id))
+        .route(
+            "/api/nodes/by-origin/:origin_id",
+            get(get_nodes_by_origin_id),
+        )
         .with_state(state)
 }

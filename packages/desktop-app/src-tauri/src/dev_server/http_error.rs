@@ -58,9 +58,11 @@ impl HttpError {
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
+        // TODO: Consider refactoring to enum-based error codes when types grow beyond 10
         let status = match self.code.as_str() {
             "NODE_NOT_FOUND" | "RESOURCE_NOT_FOUND" => StatusCode::NOT_FOUND,
             "INVALID_INPUT" | "INVALID_NODE_TYPE" | "VALIDATION_ERROR" => StatusCode::BAD_REQUEST,
+            "NOT_IMPLEMENTED" => StatusCode::NOT_IMPLEMENTED,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
