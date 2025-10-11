@@ -33,6 +33,25 @@ use serde::Deserialize;
 
 use super::http_error::HttpError;
 
+/// Validate node ID format
+///
+/// Node IDs can be:
+/// - UUIDs (e.g., "550e8400-e29b-41d4-a716-446655440000")
+/// - Date strings for DateNodes (e.g., "2025-01-15")
+fn is_valid_node_id(id: &str) -> bool {
+    // Try parsing as UUID
+    if uuid::Uuid::parse_str(id).is_ok() {
+        return true;
+    }
+
+    // Try parsing as date (YYYY-MM-DD format for DateNodes)
+    if chrono::NaiveDate::parse_from_str(id, "%Y-%m-%d").is_ok() {
+        return true;
+    }
+
+    false
+}
+
 /// Query parameters for simple node queries
 ///
 /// Supports querying by parent_id and/or container_id.
@@ -75,6 +94,32 @@ async fn query_nodes_simple(
 ) -> Result<Json<Vec<Node>>, HttpError> {
     tracing::debug!("Query nodes: {:?}", params);
 
+    // Validate parent_id format if provided
+    if let Some(ref id) = params.parent_id {
+        if id != "null" && !id.is_empty() && !is_valid_node_id(id) {
+            return Err(HttpError::new(
+                format!(
+                    "Invalid parent_id format '{}'. Must be a valid UUID or date (YYYY-MM-DD)",
+                    id
+                ),
+                "INVALID_INPUT",
+            ));
+        }
+    }
+
+    // Validate container_id format if provided
+    if let Some(ref id) = params.container_id {
+        if !is_valid_node_id(id) {
+            return Err(HttpError::new(
+                format!(
+                    "Invalid container_id format '{}'. Must be a valid UUID or date (YYYY-MM-DD)",
+                    id
+                ),
+                "INVALID_INPUT",
+            ));
+        }
+    }
+
     // Convert "null" string to actual None for querying root nodes
     // The string "null" from the query parameter is converted to SQL NULL
     // so we can query for nodes where parent_id IS NULL
@@ -98,14 +143,33 @@ async fn query_nodes_simple(
         ..Default::default()
     };
 
-    // Execute query
+    // Execute query with timing
+    let start = std::time::Instant::now();
     let nodes = state
         .node_service
-        .query_nodes(filter)
+        .query_nodes(filter.clone())
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_QUERY_ERROR"))?;
+    let elapsed = start.elapsed();
 
-    tracing::debug!("Found {} nodes", nodes.len());
+    tracing::debug!(
+        "Found {} nodes in {:?} (parent_id={:?}, container_id={:?})",
+        nodes.len(),
+        elapsed,
+        filter.parent_id,
+        filter.container_node_id
+    );
+
+    // Warn if query is slow (>100ms)
+    if elapsed.as_millis() > 100 {
+        tracing::warn!(
+            "Slow query detected: found {} nodes in {:?} (parent_id={:?}, container_id={:?})",
+            nodes.len(),
+            elapsed,
+            filter.parent_id,
+            filter.container_node_id
+        );
+    }
 
     Ok(Json(nodes))
 }

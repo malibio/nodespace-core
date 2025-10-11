@@ -42,7 +42,29 @@ describe.sequential('Section 6: Node Ordering Tests', () => {
   });
 
   /**
-   * Helper: Get children of a parent node sorted by visual order
+   * Get children of a parent node sorted by visual order (linked list traversal)
+   *
+   * NodeSpace uses a beforeSiblingId linked list for node ordering:
+   * - Each node points to the node that comes BEFORE it visually
+   * - The first node has beforeSiblingId = null (or points outside the sibling set)
+   * - Visual order: A -> B -> C means B.beforeSiblingId = A.id, C.beforeSiblingId = B.id
+   *
+   * Algorithm:
+   * 1. Find first child (beforeSiblingId is null or not in children set)
+   * 2. Traverse: find next child where child.beforeSiblingId === current.id
+   * 3. Guard against circular references with visited set
+   * 4. Append orphaned nodes (broken links) at end
+   *
+   * @param parentId - Parent node ID (null for root nodes)
+   * @returns Children sorted in visual order
+   *
+   * @example
+   * // Visual order: node1 -> node2 -> node3
+   * // node1.beforeSiblingId = null
+   * // node2.beforeSiblingId = node1.id
+   * // node3.beforeSiblingId = node2.id
+   * const ordered = await getChildrenInOrder(parentId);
+   * // Returns: [node1, node2, node3]
    */
   async function getChildrenInOrder(parentId: string | null): Promise<Node[]> {
     const children = await backend.getChildren(parentId || '');
