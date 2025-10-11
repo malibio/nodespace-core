@@ -720,95 +720,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.updateNode(previousNodeId, { content: combinedContent }, viewerSource);
     _uiState[previousNodeId] = { ..._uiState[previousNodeId], autoFocus: false };
 
-    // Handle child promotion: children shift up while maintaining outline structure
-    // Get all children of the node being deleted
-    const currentChildren = sharedNodeStore.getNodesForParent(currentNodeId);
-
-    if (currentChildren.length > 0) {
-      // Find the nearest ancestor node above the deleted node at the SAME depth,
-      // walking up until we reach a node that is one or more levels higher
-      // (because there are no other nodes at the same level)
-      const deletedNodeDepth = _uiState[currentNodeId]?.depth ?? 0;
-      let newParentForChildren = previousNodeId;
-      let searchNode: string | null = previousNodeId;
-
-      while (searchNode) {
-        const searchDepth = _uiState[searchNode]?.depth ?? 0;
-        if (searchDepth === deletedNodeDepth) {
-          // Found a node at the same level as the deleted node
-          newParentForChildren = searchNode;
-          break;
-        }
-        if (searchDepth < deletedNodeDepth) {
-          // Reached a node at a higher level (shallower), stop here
-          newParentForChildren = searchNode;
-          break;
-        }
-        // Keep walking up the tree
-        const searchNodeData = sharedNodeStore.getNode(searchNode);
-        searchNode = searchNodeData?.parentId ?? null;
-      }
-
-      // Find existing children of the new parent to append after them
-      const existingChildren = sharedNodeStore
-        .getNodesForParent(newParentForChildren)
-        .filter((n) => !currentChildren.find((c) => c.id === n.id))
-        .map((n) => n.id);
-
-      let lastSiblingId: string | null = null;
-      if (existingChildren.length > 0) {
-        // Get sorted children to find the last one
-        const sortedChildren = sortChildrenByBeforeSiblingId(
-          existingChildren,
-          newParentForChildren
-        );
-        lastSiblingId = sortedChildren[sortedChildren.length - 1];
-      }
-
-      // Find the first child in the deleted node's children (the one with beforeSiblingId pointing outside or null)
-      const sortedDeletedChildren = sortChildrenByBeforeSiblingId(
-        currentChildren.map((c) => c.id),
-        currentNodeId
-      );
-      const firstChildId = sortedDeletedChildren[0];
-
-      // Process each child
-      for (const child of currentChildren) {
-        // Only update the first child's beforeSiblingId to append after existing children
-        // All other children keep their existing beforeSiblingId to maintain their chain
-        const updates: Partial<Node> = {
-          parentId: newParentForChildren
-        };
-
-        if (child.id === firstChildId) {
-          updates.beforeSiblingId = lastSiblingId;
-        }
-
-        sharedNodeStore.updateNode(child.id, updates, viewerSource);
-
-        // Note: Database persistence is handled by UI layer's $effect watchers
-        // in base-node-viewer.svelte, which detects structural changes and persists them
-
-        // Update depth: children maintain their relative position in the outline
-        // Calculate target depth based on new parent
-        const currentChildDepth = _uiState[child.id]?.depth ?? 0;
-        const targetDepth = newParentForChildren
-          ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
-          : 0;
-
-        // Preserve depth: never increase, only maintain or decrease
-        // This ensures nodes shift UP in the outline, not down
-        const newDepth = Math.min(currentChildDepth, targetDepth);
-
-        _uiState[child.id] = {
-          ..._uiState[child.id],
-          depth: newDepth
-        };
-
-        // Recursively update descendant depths
-        updateDescendantDepths(child.id);
-      }
-    }
+    // Handle child promotion using shared depth-aware logic
+    promoteChildren(currentNodeId, previousNodeId);
 
     // Remove node from sibling chain BEFORE deletion to prevent orphans
     removeFromSiblingChain(currentNodeId);
@@ -1090,6 +1003,87 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return true;
   }
 
+  /**
+   * Promotes children of a node to a new parent using depth-aware selection.
+   * Shared logic used by both combineNodes and deleteNode.
+   *
+   * @param nodeId - The node whose children will be promoted
+   * @param previousNodeId - The previous sibling to use for depth-aware parent selection
+   */
+  function promoteChildren(nodeId: string, previousNodeId: string): void {
+    const children = sharedNodeStore.getNodesForParent(nodeId);
+    if (children.length === 0) return;
+
+    // Find the nearest ancestor node at the SAME depth as the deleted node
+    const deletedNodeDepth = _uiState[nodeId]?.depth ?? 0;
+    let newParentForChildren = previousNodeId;
+    let searchNode: string | null = previousNodeId;
+
+    while (searchNode) {
+      const searchDepth = _uiState[searchNode]?.depth ?? 0;
+      if (searchDepth === deletedNodeDepth) {
+        newParentForChildren = searchNode;
+        break;
+      }
+      if (searchDepth < deletedNodeDepth) {
+        newParentForChildren = searchNode;
+        break;
+      }
+      const searchNodeData = sharedNodeStore.getNode(searchNode);
+      searchNode = searchNodeData?.parentId ?? null;
+    }
+
+    // Find existing children of the new parent to append after them
+    const existingChildren = sharedNodeStore
+      .getNodesForParent(newParentForChildren)
+      .filter((n) => !children.find((c) => c.id === n.id))
+      .map((n) => n.id);
+
+    let lastSiblingId: string | null = null;
+    if (existingChildren.length > 0) {
+      const sortedChildren = sortChildrenByBeforeSiblingId(existingChildren, newParentForChildren);
+      lastSiblingId = sortedChildren[sortedChildren.length - 1];
+    }
+
+    const sortedDeletedChildren = sortChildrenByBeforeSiblingId(
+      children.map((c) => c.id),
+      nodeId
+    );
+    const firstChildId = sortedDeletedChildren[0];
+
+    // Process each child
+    for (const child of children) {
+      const updates: Partial<Node> = {
+        parentId: newParentForChildren
+      };
+
+      if (child.id === firstChildId) {
+        updates.beforeSiblingId = lastSiblingId;
+      }
+
+      sharedNodeStore.updateNode(child.id, updates, viewerSource);
+
+      // Update depth
+      const currentChildDepth = _uiState[child.id]?.depth ?? 0;
+      const targetDepth = newParentForChildren
+        ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
+        : 0;
+      const newDepth = Math.min(currentChildDepth, targetDepth);
+
+      _uiState[child.id] = {
+        ..._uiState[child.id],
+        depth: newDepth
+      };
+
+      updateDescendantDepths(child.id);
+    }
+  }
+
+  /**
+   * Internal helper to delete a node from storage.
+   * IMPORTANT: This does NOT handle child promotion - callers must handle that first.
+   * For user-facing deletion, use combineNodes() which handles children properly.
+   */
   function deleteNode(nodeId: string): void {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return;
@@ -1099,13 +1093,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Remove node from sibling chain BEFORE deletion to prevent orphans
     removeFromSiblingChain(nodeId);
 
-    // Promote children
-    const children = sharedNodeStore.getNodesForParent(nodeId);
-
-    for (const child of children) {
-      sharedNodeStore.updateNode(child.id, { parentId: node.parentId }, viewerSource);
-    }
-
     sharedNodeStore.deleteNode(nodeId, viewerSource);
     delete _uiState[nodeId];
 
@@ -1114,7 +1101,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds.splice(rootIndex, 1);
     }
 
-    // Invalidate sorted children cache for parent (node removed, children promoted)
+    // Invalidate sorted children cache for parent
     invalidateSortedChildrenCache(node.parentId);
     // Also invalidate cache for the deleted node itself (in case it's still referenced)
     invalidateSortedChildrenCache(nodeId);
@@ -1136,7 +1123,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       namespace: 'lifecycle',
       source: serviceName,
       changeType: 'delete',
-      affectedNodes: [nodeId, ...children.map((c) => c.id)]
+      affectedNodes: [nodeId]
     });
 
     eventBus.emit<import('./event-types').CacheInvalidateEvent>({
