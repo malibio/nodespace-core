@@ -28,7 +28,7 @@
  * ```
  */
 
-import { HttpAdapter } from '$lib/services/backend-adapter';
+import { HttpAdapter, type BackendAdapter } from '$lib/services/backend-adapter';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -108,6 +108,48 @@ export async function initializeTestDatabase(
   const initializedPath = await adapter.initializeDatabase(dbPath);
   console.log(`[Test] Initialized test database: ${initializedPath}`);
   return initializedPath;
+}
+
+/**
+ * Clean database by deleting all nodes
+ *
+ * This function queries all root nodes and deletes them recursively,
+ * effectively clearing the database for the next test.
+ *
+ * @param backend - Backend adapter to use for operations
+ *
+ * @example
+ * beforeEach(async () => {
+ *   await cleanDatabase(backend);
+ * });
+ */
+export async function cleanDatabase(backend: BackendAdapter): Promise<void> {
+  try {
+    // Query all root nodes (parentId = null)
+    const rootNodes = await backend.queryNodes({ parentId: null });
+
+    // Delete each root node (cascade delete will handle children)
+    // Handle errors individually so one failure doesn't stop cleanup
+    let successCount = 0;
+
+    for (const node of rootNodes) {
+      try {
+        await backend.deleteNode(node.id);
+        successCount++;
+      } catch {
+        // Ignore deletion errors - node might already be deleted by cascade
+      }
+    }
+
+    if (successCount > 0) {
+      console.log(
+        `[Test] Cleaned database: deleted ${successCount}/${rootNodes.length} root nodes`
+      );
+    }
+  } catch (error) {
+    console.warn(`[Test] Warning: Failed to clean database: ${error}`);
+    // Don't throw - cleanup failures shouldn't fail tests
+  }
 }
 
 /**
