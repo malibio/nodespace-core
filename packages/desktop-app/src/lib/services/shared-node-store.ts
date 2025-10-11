@@ -119,6 +119,9 @@ export class SharedNodeStore {
   // Version tracking for optimistic concurrency
   private versions = new Map<string, number>();
 
+  // Test error tracking (only populated in test environment)
+  private testErrors: Error[] = [];
+
   private constructor() {
     // Private constructor for singleton
   }
@@ -287,13 +290,26 @@ export class SharedNodeStore {
               // Mark update as persisted
               this.markUpdatePersisted(nodeId, update);
             } catch (dbError) {
-              console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, dbError);
+              const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+              console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, error);
+
+              // Track error in test environment for test verification
+              if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+                this.testErrors.push(error);
+              }
+
               // Rollback the optimistic update
               this.rollbackUpdate(nodeId, update);
             }
           }).catch((err) => {
             // Catch any queueing errors
-            console.error(`[SharedNodeStore] Failed to queue database write:`, err);
+            const error = err instanceof Error ? err : new Error(String(err));
+            console.error(`[SharedNodeStore] Failed to queue database write:`, error);
+
+            // Track error in test environment for test verification
+            if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+              this.testErrors.push(error);
+            }
           });
         }
       }
@@ -350,18 +366,21 @@ export class SharedNodeStore {
               this.persistedNodeIds.add(node.id); // Track as persisted
             }
           } catch (dbError) {
-            // Only log database errors in non-test environments
-            // Tests run without Tauri and database writes are expected to fail
-            if (typeof process === 'undefined' || process.env.NODE_ENV !== 'test') {
-              console.error(
-                `[SharedNodeStore] Database write failed for node ${node.id}:`,
-                dbError
-              );
+            const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+            console.error(`[SharedNodeStore] Database write failed for node ${node.id}:`, error);
+
+            // Track error in test environment for test verification
+            if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+              this.testErrors.push(error);
             }
           }
         }).catch((err) => {
-          if (typeof process === 'undefined' || process.env.NODE_ENV !== 'test') {
-            console.error(`[SharedNodeStore] Failed to queue database write:`, err);
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.error(`[SharedNodeStore] Failed to queue database write:`, error);
+
+          // Track error in test environment for test verification
+          if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+            this.testErrors.push(error);
           }
         });
       }
@@ -396,16 +415,21 @@ export class SharedNodeStore {
           try {
             await tauriNodeService.deleteNode(nodeId);
           } catch (dbError) {
-            if (typeof process === 'undefined' || process.env.NODE_ENV !== 'test') {
-              console.error(
-                `[SharedNodeStore] Database deletion failed for node ${nodeId}:`,
-                dbError
-              );
+            const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+            console.error(`[SharedNodeStore] Database deletion failed for node ${nodeId}:`, error);
+
+            // Track error in test environment for test verification
+            if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+              this.testErrors.push(error);
             }
           }
         }).catch((err) => {
-          if (typeof process === 'undefined' || process.env.NODE_ENV !== 'test') {
-            console.error(`[SharedNodeStore] Failed to queue database write:`, err);
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.error(`[SharedNodeStore] Failed to queue database write:`, error);
+
+          // Track error in test environment for test verification
+          if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+            this.testErrors.push(error);
           }
         });
       }
@@ -806,6 +830,34 @@ export class SharedNodeStore {
    */
   getVersion(nodeId: string): number {
     return this.versions.get(nodeId) || 0;
+  }
+
+  // ========================================================================
+  // Test Utilities
+  // ========================================================================
+
+  /**
+   * Check if there are pending database writes
+   * Used by tests to wait for all writes to complete
+   */
+  hasPendingWrites(): boolean {
+    return pendingDatabaseWrites.size > 0;
+  }
+
+  /**
+   * Get test errors (only populated in test environment)
+   * Used by tests to verify database operations succeeded
+   */
+  getTestErrors(): Error[] {
+    return [...this.testErrors];
+  }
+
+  /**
+   * Clear test errors
+   * Should be called at the start of each test for isolation
+   */
+  clearTestErrors(): void {
+    this.testErrors = [];
   }
 }
 
