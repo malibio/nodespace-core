@@ -10,6 +10,11 @@
  * 3. Database persistence (via adapter.getNode())
  * 4. Event emissions (captured in beforeEach)
  * 5. No console errors
+ *
+ * Database Strategy: Per-test isolation (not per-suite)
+ * We create a new database for each test (in beforeEach) rather than sharing one
+ * database per suite. This trades minor performance cost (~50ms per test) for
+ * stronger isolation guarantees against test interference.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
@@ -471,8 +476,8 @@ describe('Backspace Operations', () => {
     expect(combined?.content).not.toContain('[ ]');
   });
 
-  it('should handle backspace at beginning of first node gracefully (no-op)', async () => {
-    // Setup: Create single root-level node (no previous node to merge with)
+  it('should no-op when combineNodes called with non-existent previous node (defensive check)', async () => {
+    // Setup: Create single root-level node
     const firstNode = await createAndFetchNode(adapter, {
       id: 'first-node',
       nodeType: 'text',
@@ -487,11 +492,12 @@ describe('Backspace Operations', () => {
 
     service.initializeNodes([firstNode]);
 
-    // Act: Try to backspace at beginning with non-existent previous node
-    // combineNodes requires a previousNodeId, but will no-op if it doesn't exist
+    // Act: Call combineNodes with non-existent previousNodeId
+    // This tests defensive programming - UI should prevent this, but service handles it gracefully
+    // Real-world scenario: User presses backspace on first node (UI should block the call)
     service.combineNodes('first-node', 'non-existent-previous-node');
 
-    // Verify: Node unchanged (operation was no-op)
+    // Verify: Operation was no-op (defensive null check succeeded)
     const unchanged = service.findNode('first-node');
     expect(unchanged?.content).toBe('First Node');
     expect(unchanged?.parentId).toBe(null);
@@ -505,7 +511,7 @@ describe('Backspace Operations', () => {
     const dbNode = await adapter.getNode('first-node');
     expect(dbNode?.content).toBe('First Node');
 
-    // Verify: No deletion event emitted
+    // Verify: No deletion event emitted (no nodes were combined)
     expect(deletedNodes).toHaveLength(0);
   });
 });

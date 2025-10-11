@@ -10,6 +10,11 @@
  * 3. Database persistence (via adapter.getNode())
  * 4. Event emissions (captured in beforeEach)
  * 5. No console errors
+ *
+ * Database Strategy: Per-test isolation (not per-suite)
+ * We create a new database for each test (in beforeEach) rather than sharing one
+ * database per suite. This trades minor performance cost (~50ms per test) for
+ * stronger isolation guarantees against test interference.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
