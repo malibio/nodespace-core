@@ -75,12 +75,18 @@ async fn query_nodes_simple(
 ) -> Result<Json<Vec<Node>>, HttpError> {
     tracing::debug!("Query nodes: {:?}", params);
 
-    // Convert "null" string or empty string to actual None
-    // This allows querying for root nodes (parentId = null)
+    // Convert "null" string to actual None for querying root nodes
     // The string "null" from the query parameter is converted to SQL NULL
     // so we can query for nodes where parent_id IS NULL
+    // Empty string is rejected to prevent ambiguous queries
     let parent_id = match params.parent_id.as_deref() {
-        Some("null") | Some("") => None,
+        Some("null") => None,
+        Some("") => {
+            return Err(HttpError::new(
+                "parent_id cannot be empty string. Use 'null' for root nodes or omit parameter for no filter",
+                "INVALID_INPUT",
+            ))
+        }
         Some(id) => Some(id.to_string()),
         None => None,
     };
