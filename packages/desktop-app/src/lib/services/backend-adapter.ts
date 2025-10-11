@@ -162,7 +162,7 @@ export interface BackendAdapter {
   /**
    * Search topics by semantic similarity
    * @param params - Search parameters (query, threshold, limit, exact)
-   * @returns Array of matching topic nodes
+   * @returns Array of matching topic nodes sorted by similarity score (highest first)
    * @throws {NodeOperationError} If search operation fails
    */
   searchTopics(params: SearchTopicsParams): Promise<Node[]>;
@@ -177,14 +177,14 @@ export interface BackendAdapter {
   /**
    * Batch generate embeddings for multiple topics
    * @param topicIds - Array of topic IDs to embed
-   * @returns Result with success count and failures
+   * @returns Result object containing success count and array of failed embeddings with error details
    * @throws {NodeOperationError} If batch operation fails completely
    */
   batchGenerateEmbeddings(topicIds: string[]): Promise<BatchEmbeddingResult>;
 
   /**
    * Get count of stale topics needing re-embedding
-   * @returns Number of stale topics
+   * @returns Number of topics that have been modified but not yet re-embedded
    * @throws {NodeOperationError} If count retrieval fails
    */
   getStaleTopicCount(): Promise<number>;
@@ -199,14 +199,14 @@ export interface BackendAdapter {
   /**
    * Smart trigger: Idle timeout (30s of no activity)
    * @param topicId - ID of the topic to check
-   * @returns True if re-embedding was triggered
+   * @returns True if re-embedding was triggered, false if topic was not stale
    * @throws {NodeOperationError} If trigger operation fails
    */
   onTopicIdle(topicId: string): Promise<boolean>;
 
   /**
    * Manually sync all stale topics
-   * @returns Number of topics re-embedded
+   * @returns Number of topics successfully re-embedded during the sync operation
    * @throws {NodeOperationError} If sync operation fails
    */
   syncEmbeddings(): Promise<number>;
@@ -519,30 +519,60 @@ export class HttpAdapter implements BackendAdapter {
 
   // === Phase 3: Embedding Operations ===
 
-  async generateTopicEmbedding(topicId: string): Promise<void> {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+  /**
+   * Fetch with automatic timeout and error handling
+   *
+   * @param url - The URL to fetch
+   * @param options - Fetch options (method, headers, body, etc.)
+   * @param operationName - Name of the operation (for error messages)
+   * @param contextId - Context identifier for error tracking
+   * @returns Response object
+   * @throws {NodeOperationError} If request times out or fails
+   * @private
+   */
+  private async fetchWithTimeout(
+    url: string,
+    options: RequestInit,
+    operationName: string,
+    contextId: string = ''
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
-      const response = await globalThis.fetch(`${this.baseUrl}/api/embeddings/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ topicId }),
+    try {
+      const response = await globalThis.fetch(url, {
+        ...options,
         signal: controller.signal
       });
-
-      clearTimeout(timeoutId);
-      await this.handleResponse<void>(response);
+      return response;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         throw new NodeOperationError(
-          'Embedding generation timeout - operation took too long',
-          topicId,
-          'generateTopicEmbedding'
+          `${operationName} timeout - operation took too long`,
+          contextId,
+          operationName
         );
       }
+      throw error; // Re-throw for caller to handle
+    } finally {
+      clearTimeout(timeoutId); // Always cleanup
+    }
+  }
+
+  async generateTopicEmbedding(topicId: string): Promise<void> {
+    try {
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings/generate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topicId })
+        },
+        'Embedding generation',
+        topicId
+      );
+      await this.handleResponse<void>(response);
+    } catch (error) {
       const err = toError(error);
       throw new NodeOperationError(err.message, topicId, 'generateTopicEmbedding');
     }
@@ -550,28 +580,18 @@ export class HttpAdapter implements BackendAdapter {
 
   async searchTopics(params: SearchTopicsParams): Promise<Node[]> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      const response = await globalThis.fetch(`${this.baseUrl}/api/embeddings/search`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings/search`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(params)
         },
-        body: JSON.stringify(params),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+        'Search',
+        params.query
+      );
       return await this.handleResponse<Node[]>(response);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new NodeOperationError(
-          'Search timeout - operation took too long',
-          params.query,
-          'searchTopics'
-        );
-      }
       const err = toError(error);
       throw new NodeOperationError(err.message, params.query, 'searchTopics');
     }
@@ -579,27 +599,16 @@ export class HttpAdapter implements BackendAdapter {
 
   async updateTopicEmbedding(topicId: string): Promise<void> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      const response = await globalThis.fetch(
+      const response = await this.fetchWithTimeout(
         `${this.baseUrl}/api/embeddings/${encodeURIComponent(topicId)}`,
         {
-          method: 'PATCH',
-          signal: controller.signal
-        }
+          method: 'PATCH'
+        },
+        'Embedding update',
+        topicId
       );
-
-      clearTimeout(timeoutId);
       await this.handleResponse<void>(response);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new NodeOperationError(
-          'Embedding update timeout - operation took too long',
-          topicId,
-          'updateTopicEmbedding'
-        );
-      }
       const err = toError(error);
       throw new NodeOperationError(err.message, topicId, 'updateTopicEmbedding');
     }
@@ -607,28 +616,18 @@ export class HttpAdapter implements BackendAdapter {
 
   async batchGenerateEmbeddings(topicIds: string[]): Promise<BatchEmbeddingResult> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      const response = await globalThis.fetch(`${this.baseUrl}/api/embeddings/batch`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings/batch`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topicIds })
         },
-        body: JSON.stringify({ topicIds }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+        'Batch embedding',
+        'batch'
+      );
       return await this.handleResponse<BatchEmbeddingResult>(response);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new NodeOperationError(
-          'Batch embedding timeout - operation took too long',
-          'batch',
-          'batchGenerateEmbeddings'
-        );
-      }
       const err = toError(error);
       throw new NodeOperationError(err.message, 'batch', 'batchGenerateEmbeddings');
     }
@@ -646,28 +645,18 @@ export class HttpAdapter implements BackendAdapter {
 
   async onTopicClosed(topicId: string): Promise<void> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      const response = await globalThis.fetch(`${this.baseUrl}/api/embeddings/on-topic-closed`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings/on-topic-closed`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topicId })
         },
-        body: JSON.stringify({ topicId }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+        'Topic closed trigger',
+        topicId
+      );
       await this.handleResponse<void>(response);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new NodeOperationError(
-          'Topic closed trigger timeout - operation took too long',
-          topicId,
-          'onTopicClosed'
-        );
-      }
       const err = toError(error);
       throw new NodeOperationError(err.message, topicId, 'onTopicClosed');
     }
@@ -675,28 +664,18 @@ export class HttpAdapter implements BackendAdapter {
 
   async onTopicIdle(topicId: string): Promise<boolean> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      const response = await globalThis.fetch(`${this.baseUrl}/api/embeddings/on-topic-idle`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings/on-topic-idle`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topicId })
         },
-        body: JSON.stringify({ topicId }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+        'Topic idle trigger',
+        topicId
+      );
       return await this.handleResponse<boolean>(response);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new NodeOperationError(
-          'Topic idle trigger timeout - operation took too long',
-          topicId,
-          'onTopicIdle'
-        );
-      }
       const err = toError(error);
       throw new NodeOperationError(err.message, topicId, 'onTopicIdle');
     }
@@ -704,24 +683,16 @@ export class HttpAdapter implements BackendAdapter {
 
   async syncEmbeddings(): Promise<number> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      const response = await globalThis.fetch(`${this.baseUrl}/api/embeddings/sync`, {
-        method: 'POST',
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings/sync`,
+        {
+          method: 'POST'
+        },
+        'Embeddings sync',
+        'sync'
+      );
       return await this.handleResponse<number>(response);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new NodeOperationError(
-          'Embeddings sync timeout - operation took too long',
-          'sync',
-          'syncEmbeddings'
-        );
-      }
       const err = toError(error);
       throw new NodeOperationError(err.message, 'sync', 'syncEmbeddings');
     }

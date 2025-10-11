@@ -61,7 +61,9 @@ export default [
         process: 'readonly',
         Performance: 'readonly',
         AbortController: 'readonly',
-        AbortSignal: 'readonly'
+        AbortSignal: 'readonly',
+        RequestInit: 'readonly',
+        Response: 'readonly'
       }
     },
     plugins: {
@@ -186,7 +188,9 @@ export default [
         process: 'readonly',
         Performance: 'readonly',
         AbortController: 'readonly',
-        AbortSignal: 'readonly'
+        AbortSignal: 'readonly',
+        RequestInit: 'readonly',
+        Response: 'readonly'
       }
     },
     plugins: {
