@@ -67,7 +67,7 @@ describe.sequential('Section 6: Node Ordering Tests', () => {
    * // Returns: [node1, node2, node3]
    */
   async function getChildrenInOrder(parentId: string | null): Promise<Node[]> {
-    // Use queryNodes() from Phase 2 instead of getChildren()
+    // Use Phase 2 queryNodes() method
     const children = await backend.queryNodes({ parentId });
 
     // Sort by beforeSiblingId linked list
@@ -333,8 +333,7 @@ describe.sequential('Section 6: Node Ordering Tests', () => {
       const headerId = await backend.createNode(headerData);
 
       // Create new node BEFORE header (simulating Enter at beginning of header)
-      // Note: Empty nodes are not persisted by backend validation,
-      // so we create a node with actual content
+      // Note: Backend rejects empty nodes, so use actual content
       const newNodeData = TestNodeBuilder.text('New text before header')
         .withBeforeSibling(null) // First in list
         .build();

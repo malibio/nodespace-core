@@ -97,6 +97,7 @@ export interface BackendAdapter {
 
   /**
    * Query nodes by parent and/or container (Phase 2)
+   * @since Phase 2
    * @param params - Query parameters
    * @returns Array of matching nodes
    */
@@ -303,22 +304,34 @@ export class HttpAdapter implements BackendAdapter {
     }
   }
 
+  /**
+   * Build query URL with proper parameter encoding
+   * @param params - Query parameters
+   * @returns Formatted URL string
+   * @private
+   */
+  private buildQueryUrl(params: QueryNodesParams): string {
+    const url = new URL(`${this.baseUrl}/api/nodes/query`);
+
+    // Handle parentId parameter
+    if (params.parentId !== undefined) {
+      // Backend expects "null" string for SQL NULL queries (root nodes)
+      // See query_endpoints.rs:127-137 for backend parsing logic
+      url.searchParams.set('parent_id', params.parentId === null ? 'null' : params.parentId);
+    }
+
+    // Handle containerId parameter
+    if (params.containerId !== undefined) {
+      url.searchParams.set('container_id', params.containerId);
+    }
+
+    return url.toString();
+  }
+
   async queryNodes(params: QueryNodesParams): Promise<Node[]> {
     try {
-      const url = new URL(`${this.baseUrl}/api/nodes/query`);
-
-      // Handle parentId parameter
-      if (params.parentId !== undefined) {
-        // Convert null to "null" string for backend
-        url.searchParams.set('parent_id', params.parentId === null ? 'null' : params.parentId);
-      }
-
-      // Handle containerId parameter
-      if (params.containerId !== undefined) {
-        url.searchParams.set('container_id', params.containerId);
-      }
-
-      const response = await globalThis.fetch(url.toString());
+      const url = this.buildQueryUrl(params);
+      const response = await globalThis.fetch(url);
       return await this.handleResponse<Node[]>(response);
     } catch (error) {
       const err = toError(error);
