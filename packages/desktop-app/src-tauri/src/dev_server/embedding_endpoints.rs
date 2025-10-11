@@ -32,6 +32,15 @@
 //! 2. Replace placeholder handlers with actual service calls
 //! 3. Initialize TopicEmbeddingService in dev-server binary
 //! 4. Update tests to use the real service
+//!
+//! # Security (Production Considerations)
+//!
+//! **IMPORTANT**: These are dev-only endpoints. If adapted for production:
+//! - Add authentication/authorization middleware
+//! - Implement rate limiting (especially for batch operations and search)
+//! - Add request size limits to prevent resource exhaustion
+//! - Enable audit logging for all embedding operations
+//! - Add monitoring and alerting for abnormal usage patterns
 
 use axum::{
     extract::{Path, State},
@@ -80,6 +89,15 @@ async fn generate_topic_embedding(
     State(_state): State<AppState>,
     Json(payload): Json<GenerateEmbeddingRequest>,
 ) -> Result<StatusCode, HttpError> {
+    // Validate topic_id is not empty
+    if payload.topic_id.is_empty() {
+        return Err(HttpError::with_details(
+            "Topic ID cannot be empty",
+            "INVALID_INPUT",
+            "topic_id must be a non-empty string",
+        ));
+    }
+
     // TODO: Replace with actual service call
     // state.embedding_service.embed_topic(&payload.topic_id).await
     //     .map_err(|e| HttpError::from_anyhow(e.into(), "EMBEDDING_GENERATION_FAILED"))?;
@@ -188,6 +206,15 @@ async fn update_topic_embedding(
     State(_state): State<AppState>,
     Path(topic_id): Path<String>,
 ) -> Result<StatusCode, HttpError> {
+    // Validate topic_id is not empty
+    if topic_id.is_empty() {
+        return Err(HttpError::with_details(
+            "Topic ID cannot be empty",
+            "INVALID_INPUT",
+            "topic_id must be a non-empty string",
+        ));
+    }
+
     // TODO: Replace with actual service call
     // state.embedding_service.embed_topic(&topic_id).await
     //     .map_err(|e| HttpError::from_anyhow(e.into(), "EMBEDDING_UPDATE_FAILED"))?;
@@ -235,6 +262,15 @@ async fn batch_generate_embeddings(
     State(_state): State<AppState>,
     Json(payload): Json<BatchGenerateRequest>,
 ) -> Result<Json<BatchEmbeddingResult>, HttpError> {
+    // Validate topic_ids array is not empty
+    if payload.topic_ids.is_empty() {
+        return Err(HttpError::with_details(
+            "Topic IDs array cannot be empty",
+            "INVALID_INPUT",
+            "Must provide at least one topic ID",
+        ));
+    }
+
     // TODO: Replace with actual service call
     // let mut success_count = 0;
     // let mut failed_embeddings = Vec::new();
@@ -330,6 +366,15 @@ async fn on_topic_closed(
     State(_state): State<AppState>,
     Json(payload): Json<TopicIdRequest>,
 ) -> Result<StatusCode, HttpError> {
+    // Validate topic_id is not empty
+    if payload.topic_id.is_empty() {
+        return Err(HttpError::with_details(
+            "Topic ID cannot be empty",
+            "INVALID_INPUT",
+            "topic_id must be a non-empty string",
+        ));
+    }
+
     // TODO: Replace with actual service call
     // state.embedding_service.on_topic_closed(&payload.topic_id).await
     //     .map_err(|e| HttpError::from_anyhow(e.into(), "TOPIC_CLOSE_FAILED"))?;
@@ -375,6 +420,15 @@ async fn on_topic_idle(
     State(_state): State<AppState>,
     Json(payload): Json<TopicIdRequest>,
 ) -> Result<Json<bool>, HttpError> {
+    // Validate topic_id is not empty
+    if payload.topic_id.is_empty() {
+        return Err(HttpError::with_details(
+            "Topic ID cannot be empty",
+            "INVALID_INPUT",
+            "topic_id must be a non-empty string",
+        ));
+    }
+
     // TODO: Replace with actual service call
     // let was_embedded = state.embedding_service.on_idle_timeout(&payload.topic_id).await
     //     .map_err(|e| HttpError::from_anyhow(e.into(), "IDLE_TIMEOUT_FAILED"))?;
@@ -504,7 +558,7 @@ async fn create_container_node(
         modified_at: now,
         properties: input.properties,
         embedding_vector: None,
-        mentions: Vec::new(),     // Will be populated when this node mentions others
+        mentions: Vec::new(), // Will be populated when this node mentions others
         mentioned_by: Vec::new(), // Will be computed from node_mentions table
     };
 
@@ -523,7 +577,7 @@ async fn create_container_node(
             .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
     }
 
-    tracing::debug!("✅ Created container node: {}", node_id);
+    tracing::debug!("Created container node: {}", node_id);
 
     Ok(Json(node_id))
 }
@@ -560,7 +614,7 @@ async fn create_node_mention(
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
 
     tracing::debug!(
-        "✅ Created mention: {} -> {}",
+        "Created mention: {} -> {}",
         payload.mentioning_node_id,
         payload.mentioned_node_id
     );
