@@ -52,6 +52,9 @@
   // Track last saved content to detect actual changes
   const lastSavedContent = new Map<string, string>();
 
+  // Cancellation flag to prevent database writes after component unmounts
+  let isDestroyed = false;
+
   // Time to wait for setRawMarkdown() to complete and create DIV structure
   const DOM_STRUCTURE_SETTLE_DELAY_MS = 20;
 
@@ -87,6 +90,58 @@
    */
   async function waitForNodeSavesIfPending(nodeIds: string[]): Promise<Set<string>> {
     return await sharedNodeStore.waitForNodeSaves(nodeIds, CONTENT_SAVE_TIMEOUT_MS);
+  }
+
+  /**
+   * Build error event for persistence failures
+   * Extracted for clarity and reusability
+   */
+  function buildPersistenceErrorEvent(
+    failedNodeIds: Set<string>,
+    failedUpdates: Array<{
+      nodeId: string;
+      parentId: string | null;
+      beforeSiblingId: string | null;
+    }>
+  ) {
+    // Determine failure reason based on what failed
+    let failureReason: 'timeout' | 'foreign-key-constraint' | 'database-locked' | 'unknown' =
+      'unknown';
+    if (failedNodeIds.size > 0) {
+      failureReason = 'timeout'; // Nodes that failed to save due to timeout
+    } else if (failedUpdates.length > 0) {
+      // Check error messages to determine specific reason
+      failureReason = 'foreign-key-constraint'; // Most common for structural updates
+    }
+
+    // Build detailed operation list
+    const affectedOperations = [
+      // Failed saves (new nodes that timed out)
+      ...Array.from(failedNodeIds).map((nodeId) => ({
+        nodeId,
+        operation: 'create' as const,
+        error: 'Save operation timed out'
+      })),
+      // Failed updates (structural changes that failed)
+      ...failedUpdates.map((update) => ({
+        nodeId: update.nodeId,
+        operation: 'update' as const,
+        error: 'Structural update failed (possible FOREIGN KEY constraint)'
+      }))
+    ];
+
+    const totalFailed = failedNodeIds.size + failedUpdates.length;
+
+    return {
+      type: 'error:persistence-failed',
+      namespace: 'error',
+      source: 'base-node-viewer',
+      message: `Failed to persist ${totalFailed} node(s). Changes have been reverted.`,
+      failedNodeIds: Array.from(failedNodeIds),
+      failureReason,
+      canRetry: failureReason === 'timeout', // Timeouts might succeed on retry
+      affectedOperations
+    };
   }
 
   // ============================================================================
@@ -127,7 +182,14 @@
           // Save immediately without debounce - structural updates may need to reference this node
           // First ensure ancestors are persisted, then save this node
           const savePromise = (async () => {
+            // Check if component was destroyed before starting save
+            if (isDestroyed) return;
+
             await ensureAncestorsPersisted(node.id);
+
+            // Check again after async operation
+            if (isDestroyed) return;
+
             await sharedNodeStore.saveNodeImmediately(
               node.id,
               node.content,
@@ -149,14 +211,17 @@
           pendingContentSavePromises.set(node.id, savePromise);
         } else {
           // Existing node - use SharedNodeStore's debounced save
-          sharedNodeStore.updateNodeContentDebounced(
-            node.id,
-            node.content,
-            node.nodeType,
-            false, // not placeholder
-            VIEWER_SOURCE
-          );
-          lastSavedContent.set(node.id, node.content);
+          // Note: debounced save will check isDestroyed in its callback
+          if (!isDestroyed) {
+            sharedNodeStore.updateNodeContentDebounced(
+              node.id,
+              node.content,
+              node.nodeType,
+              false, // not placeholder
+              VIEWER_SOURCE
+            );
+            lastSavedContent.set(node.id, node.content);
+          }
         }
       }
     }
@@ -435,46 +500,7 @@
 
           // Emit event for error notification (UI can show toast/banner)
           import('$lib/services/event-bus').then(({ eventBus }) => {
-            // Determine failure reason based on what failed
-            let failureReason:
-              | 'timeout'
-              | 'foreign-key-constraint'
-              | 'database-locked'
-              | 'unknown' = 'unknown';
-            if (failedNodeIds.size > 0) {
-              failureReason = 'timeout'; // Nodes that failed to save due to timeout
-            } else if (result.failed.length > 0) {
-              // Check error messages to determine specific reason
-              failureReason = 'foreign-key-constraint'; // Most common for structural updates
-            }
-
-            // Build detailed operation list
-            const affectedOperations = [
-              // Failed saves (new nodes that timed out)
-              ...Array.from(failedNodeIds).map((nodeId) => ({
-                nodeId,
-                operation: 'create' as const,
-                error: 'Save operation timed out'
-              })),
-              // Failed updates (structural changes that failed)
-              ...result.failed.map((update) => ({
-                nodeId: update.nodeId,
-                operation: 'update' as const,
-                error: 'Structural update failed (possible FOREIGN KEY constraint)'
-              }))
-            ];
-
-            // Type assertion needed because of dynamic import context
-            const event = {
-              type: 'error:persistence-failed',
-              namespace: 'error',
-              source: 'base-node-viewer',
-              message: `Failed to persist ${allFailedNodeIds.size} node(s). Changes have been reverted.`,
-              failedNodeIds: Array.from(allFailedNodeIds),
-              failureReason,
-              canRetry: failureReason === 'timeout', // Timeouts might succeed on retry
-              affectedOperations
-            };
+            const event = buildPersistenceErrorEvent(failedNodeIds, result.failed);
             eventBus.emit(event as never);
           });
         }
@@ -1302,6 +1328,9 @@
 
   // Clean up pending timeouts on component unmount to prevent memory leaks
   onDestroy(() => {
+    // Set cancellation flag to prevent stale writes
+    isDestroyed = true;
+
     // Clear all pending debounce timeouts
     for (const timeout of saveTimeouts.values()) {
       clearTimeout(timeout);

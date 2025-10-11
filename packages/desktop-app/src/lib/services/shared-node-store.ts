@@ -603,6 +603,17 @@ export class SharedNodeStore {
   }
 
   /**
+   * Check if a node has a pending save operation
+   * Provides single source of truth for pending save status
+   *
+   * @param nodeId - Node ID to check
+   * @returns True if save is pending
+   */
+  hasPendingSave(nodeId: string): boolean {
+    return this.pendingContentSaves.has(nodeId);
+  }
+
+  /**
    * Wait for pending node saves to complete with timeout
    * Replaces BaseNodeViewer's waitForNodeSavesIfPending() logic
    *
@@ -612,15 +623,21 @@ export class SharedNodeStore {
    */
   async waitForNodeSaves(nodeIds: string[], timeoutMs = 5000): Promise<Set<string>> {
     const failedNodeIds = new Set<string>();
-    const relevantSaves = nodeIds
-      .map((id) => this.pendingContentSaves.get(id))
-      .filter((p): p is Promise<void> => p !== undefined);
+    const nodeSavePromises = new Map<string, Promise<void>>();
 
-    if (relevantSaves.length === 0) return failedNodeIds;
+    // Collect relevant pending saves
+    for (const nodeId of nodeIds) {
+      const savePromise = this.pendingContentSaves.get(nodeId);
+      if (savePromise) {
+        nodeSavePromises.set(nodeId, savePromise);
+      }
+    }
+
+    if (nodeSavePromises.size === 0) return failedNodeIds;
 
     try {
       await Promise.race([
-        Promise.all(relevantSaves),
+        Promise.all(nodeSavePromises.values()),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Timeout waiting for saves')), timeoutMs)
         )
@@ -631,10 +648,18 @@ export class SharedNodeStore {
       // Grace period to allow in-flight saves to complete
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Verify which nodes actually exist after grace period
-      for (const nodeId of nodeIds) {
-        if (this.pendingContentSaves.has(nodeId) && !this.persistedNodeIds.has(nodeId)) {
-          console.error('[SharedNodeStore] Node save failed:', nodeId);
+      // After grace period, check each promise individually to see if it actually failed
+      for (const [nodeId, savePromise] of nodeSavePromises) {
+        try {
+          // Try to await the promise - if it resolved during grace period, it succeeds
+          await Promise.race([
+            savePromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Grace timeout')), 0))
+          ]);
+          // Promise resolved - node saved successfully
+        } catch {
+          // Promise rejected or still pending after grace period - mark as failed
+          console.error('[SharedNodeStore] Node save failed or timed out:', nodeId);
           failedNodeIds.add(nodeId);
         }
       }
