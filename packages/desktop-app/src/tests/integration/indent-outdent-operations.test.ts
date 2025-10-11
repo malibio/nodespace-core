@@ -12,15 +12,15 @@
  * 5. No console errors
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestDatabase,
   cleanupTestDatabase,
   initializeTestDatabase
 } from '../utils/test-database';
+import { createAndFetchNode, checkServerHealth } from '../utils/test-node-helpers';
 import { HttpAdapter } from '$lib/services/backend-adapter';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
-import type { Node } from '$lib/types';
 
 describe('Indent/Outdent Operations', () => {
   let dbPath: string;
@@ -28,19 +28,15 @@ describe('Indent/Outdent Operations', () => {
   let service: ReturnType<typeof createReactiveNodeService>;
   let hierarchyChangeCount: number;
 
-  /**
-   * Helper: Create node via adapter and return the Node object
-   */
-  async function createAndFetchNode(
-    nodeData: Omit<Node, 'createdAt' | 'modifiedAt'>
-  ): Promise<Node> {
-    await adapter.createNode(nodeData);
-    const node = await adapter.getNode(nodeData.id);
-    if (!node) throw new Error(`Failed to create node ${nodeData.id}`);
-    return node;
-  }
+  beforeAll(async () => {
+    // Verify HTTP dev server is running before running any tests
+    const healthCheckAdapter = new HttpAdapter('http://localhost:3001');
+    await checkServerHealth(healthCheckAdapter);
+  });
 
   beforeEach(async () => {
+    // Note: We create a new database per test (not per suite) for better isolation,
+    // trading minor performance cost for stronger guarantees against test interference.
     dbPath = createTestDatabase('indent-outdent-operations');
     await initializeTestDatabase(dbPath);
     adapter = new HttpAdapter('http://localhost:3001');
@@ -61,7 +57,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should indent node to become child of previous sibling', async () => {
     // Setup: Create two sibling nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -73,7 +69,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -111,7 +107,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should not allow indent on first node', async () => {
     // Setup: Create single node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -138,7 +134,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should recalculate descendant depths when indenting', async () => {
     // Setup: Create parent with child, then sibling
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -150,7 +146,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -162,7 +158,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child = await createAndFetchNode({
+    const child = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child of Second',
@@ -190,7 +186,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should outdent node to parent level', async () => {
     // Setup: Create parent with child
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -202,7 +198,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child = await createAndFetchNode({
+    const child = await createAndFetchNode(adapter, {
       id: 'child',
       nodeType: 'text',
       content: 'Child',
@@ -237,7 +233,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should not allow outdent on root node', async () => {
     // Setup: Create root node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'root',
       nodeType: 'text',
       content: 'Root',
@@ -264,7 +260,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should transfer siblings below when outdenting', async () => {
     // Setup: Create parent with multiple children
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -276,7 +272,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child1 = await createAndFetchNode({
+    const child1 = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child 1',
@@ -288,7 +284,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child2 = await createAndFetchNode({
+    const child2 = await createAndFetchNode(adapter, {
       id: 'child-2',
       nodeType: 'text',
       content: 'Child 2',
@@ -300,7 +296,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child3 = await createAndFetchNode({
+    const child3 = await createAndFetchNode(adapter, {
       id: 'child-3',
       nodeType: 'text',
       content: 'Child 3',
@@ -332,7 +328,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should position outdented node after its old parent', async () => {
     // Setup: Create parent with child
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -344,7 +340,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child = await createAndFetchNode({
+    const child = await createAndFetchNode(adapter, {
       id: 'child',
       nodeType: 'text',
       content: 'Child',
@@ -372,7 +368,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should update sibling chain when indenting', async () => {
     // Setup: Create three siblings
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -384,7 +380,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -396,7 +392,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Third',
@@ -425,7 +421,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should handle indenting node that has children', async () => {
     // Setup: Create parent with children, then sibling with children
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -437,7 +433,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -449,7 +445,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child = await createAndFetchNode({
+    const child = await createAndFetchNode(adapter, {
       id: 'child-of-2',
       nodeType: 'text',
       content: 'Child',
@@ -483,7 +479,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should append indented node to existing children', async () => {
     // Setup: Create node with existing child, then sibling
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -495,7 +491,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const existingChild = await createAndFetchNode({
+    const existingChild = await createAndFetchNode(adapter, {
       id: 'existing-child',
       nodeType: 'text',
       content: 'Existing Child',
@@ -507,7 +503,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -537,7 +533,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should handle multiple consecutive indents', async () => {
     // Setup: Create chain of nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Level 0',
@@ -549,7 +545,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Level 1',
@@ -561,7 +557,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Level 2',
@@ -596,7 +592,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should handle multiple consecutive outdents', async () => {
     // Setup: Create nested hierarchy
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Level 0',
@@ -608,7 +604,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Level 1',
@@ -620,7 +616,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Level 2',
@@ -649,7 +645,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should maintain sibling chain integrity when outdenting first child', async () => {
     // Setup: Create parent with multiple children
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -661,7 +657,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child1 = await createAndFetchNode({
+    const child1 = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child 1',
@@ -673,7 +669,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const child2 = await createAndFetchNode({
+    const child2 = await createAndFetchNode(adapter, {
       id: 'child-2',
       nodeType: 'text',
       content: 'Child 2',
@@ -702,7 +698,7 @@ describe('Indent/Outdent Operations', () => {
 
   it('should emit hierarchy changed events for indent/outdent', async () => {
     // Setup: Create nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -714,7 +710,7 @@ describe('Indent/Outdent Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',

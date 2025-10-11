@@ -13,15 +13,15 @@
  * 5. No console errors
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestDatabase,
   cleanupTestDatabase,
   initializeTestDatabase
 } from '../utils/test-database';
+import { createAndFetchNode, checkServerHealth } from '../utils/test-node-helpers';
 import { HttpAdapter } from '$lib/services/backend-adapter';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
-import type { Node } from '$lib/types';
 
 describe('Shift+Enter Key Operations', () => {
   let dbPath: string;
@@ -29,19 +29,15 @@ describe('Shift+Enter Key Operations', () => {
   let service: ReturnType<typeof createReactiveNodeService>;
   let hierarchyChangeCount: number;
 
-  /**
-   * Helper: Create node via adapter and return the Node object
-   */
-  async function createAndFetchNode(
-    nodeData: Omit<Node, 'createdAt' | 'modifiedAt'>
-  ): Promise<Node> {
-    await adapter.createNode(nodeData);
-    const node = await adapter.getNode(nodeData.id);
-    if (!node) throw new Error(`Failed to create node ${nodeData.id}`);
-    return node;
-  }
+  beforeAll(async () => {
+    // Verify HTTP dev server is running before running any tests
+    const healthCheckAdapter = new HttpAdapter('http://localhost:3001');
+    await checkServerHealth(healthCheckAdapter);
+  });
 
   beforeEach(async () => {
+    // Note: We create a new database per test (not per suite) for better isolation,
+    // trading minor performance cost for stronger guarantees against test interference.
     dbPath = createTestDatabase('shift-enter-operations');
     await initializeTestDatabase(dbPath);
     adapter = new HttpAdapter('http://localhost:3001');
@@ -62,7 +58,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should insert single newline in node content', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First line',
@@ -91,7 +87,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should insert multiple newlines in sequence', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Line 1',
@@ -118,7 +114,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should preserve inline formatting across newlines', async () => {
     // Setup: Create node with markdown formatting
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: '**Bold text**',
@@ -145,7 +141,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should preserve header formatting when adding newlines', async () => {
     // Setup: Create node with header
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: '## Header',
@@ -170,7 +166,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should handle newline at beginning of content', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Content',
@@ -195,7 +191,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should handle newline at end of content', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Content',
@@ -219,7 +215,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should preserve list item formatting with newlines', async () => {
     // Setup: Create list item node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: '- List item',
@@ -245,7 +241,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should preserve task checkbox formatting with newlines', async () => {
     // Setup: Create task node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: '[ ] Task item',
@@ -271,7 +267,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should handle mixed content with multiple formatting types', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: '## Title',
@@ -311,7 +307,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should not create new nodes when content contains newlines', async () => {
     // Setup: Create two nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Node 1',
@@ -323,7 +319,7 @@ describe('Shift+Enter Key Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Node 2',
@@ -355,7 +351,7 @@ describe('Shift+Enter Key Operations', () => {
 
   it('should handle empty lines between content', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Paragraph 1',

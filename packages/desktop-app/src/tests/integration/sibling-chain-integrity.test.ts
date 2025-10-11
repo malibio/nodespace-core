@@ -12,15 +12,15 @@
  * 5. No console errors
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestDatabase,
   cleanupTestDatabase,
   initializeTestDatabase
 } from '../utils/test-database';
+import { createAndFetchNode, checkServerHealth } from '../utils/test-node-helpers';
 import { HttpAdapter } from '$lib/services/backend-adapter';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
-import type { Node } from '$lib/types';
 
 describe('Sibling Chain Integrity', () => {
   let dbPath: string;
@@ -28,19 +28,15 @@ describe('Sibling Chain Integrity', () => {
   let service: ReturnType<typeof createReactiveNodeService>;
   let hierarchyChangeCount: number;
 
-  /**
-   * Helper: Create node via adapter and return the Node object
-   */
-  async function createAndFetchNode(
-    nodeData: Omit<Node, 'createdAt' | 'modifiedAt'>
-  ): Promise<Node> {
-    await adapter.createNode(nodeData);
-    const node = await adapter.getNode(nodeData.id);
-    if (!node) throw new Error(`Failed to create node ${nodeData.id}`);
-    return node;
-  }
+  beforeAll(async () => {
+    // Verify HTTP dev server is running before running any tests
+    const healthCheckAdapter = new HttpAdapter('http://localhost:3001');
+    await checkServerHealth(healthCheckAdapter);
+  });
 
   beforeEach(async () => {
+    // Note: We create a new database per test (not per suite) for better isolation,
+    // trading minor performance cost for stronger guarantees against test interference.
     dbPath = createTestDatabase('sibling-chain-integrity');
     await initializeTestDatabase(dbPath);
     adapter = new HttpAdapter('http://localhost:3001');
@@ -148,7 +144,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should maintain valid chain after creating multiple nodes', async () => {
     // Setup: Create initial node
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -182,7 +178,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should repair chain when node is deleted', async () => {
     // Setup: Create three nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -194,7 +190,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -206,7 +202,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Third',
@@ -236,7 +232,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should maintain chain integrity during indent operation', async () => {
     // Setup: Create three siblings
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -248,7 +244,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -260,7 +256,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Third',
@@ -294,7 +290,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should maintain chain integrity during outdent operation', async () => {
     // Setup: Create parent with children
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -306,7 +302,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const child1 = await createAndFetchNode({
+    const child1 = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child 1',
@@ -318,7 +314,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const child2 = await createAndFetchNode({
+    const child2 = await createAndFetchNode(adapter, {
       id: 'child-2',
       nodeType: 'text',
       content: 'Child 2',
@@ -350,7 +346,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should maintain chain when combining nodes', async () => {
     // Setup: Create three nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -362,7 +358,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -374,7 +370,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Third',
@@ -403,7 +399,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should validate chain has no circular references', async () => {
     // Setup: Create valid chain
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -415,7 +411,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -427,7 +423,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Third',
@@ -470,7 +466,7 @@ describe('Sibling Chain Integrity', () => {
 
   it('should maintain chain integrity with complex operations sequence', async () => {
     // Setup: Create initial nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Node 1',
@@ -482,7 +478,7 @@ describe('Sibling Chain Integrity', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Node 2',

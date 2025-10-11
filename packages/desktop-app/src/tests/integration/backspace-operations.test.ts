@@ -12,15 +12,15 @@
  * 5. No console errors
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestDatabase,
   cleanupTestDatabase,
   initializeTestDatabase
 } from '../utils/test-database';
+import { createAndFetchNode, checkServerHealth } from '../utils/test-node-helpers';
 import { HttpAdapter } from '$lib/services/backend-adapter';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
-import type { Node } from '$lib/types';
 
 describe('Backspace Operations', () => {
   let dbPath: string;
@@ -30,19 +30,15 @@ describe('Backspace Operations', () => {
   let hierarchyChangeCount: number;
   let focusRequests: Array<{ nodeId: string; position?: number }> = [];
 
-  /**
-   * Helper: Create node via adapter and return the Node object
-   */
-  async function createAndFetchNode(
-    nodeData: Omit<Node, 'createdAt' | 'modifiedAt'>
-  ): Promise<Node> {
-    await adapter.createNode(nodeData);
-    const node = await adapter.getNode(nodeData.id);
-    if (!node) throw new Error(`Failed to create node ${nodeData.id}`);
-    return node;
-  }
+  beforeAll(async () => {
+    // Verify HTTP dev server is running before running any tests
+    const healthCheckAdapter = new HttpAdapter('http://localhost:3001');
+    await checkServerHealth(healthCheckAdapter);
+  });
 
   beforeEach(async () => {
+    // Note: We create a new database per test (not per suite) for better isolation,
+    // trading minor performance cost for stronger guarantees against test interference.
     dbPath = createTestDatabase('backspace-operations');
     await initializeTestDatabase(dbPath);
     adapter = new HttpAdapter('http://localhost:3001');
@@ -65,7 +61,7 @@ describe('Backspace Operations', () => {
 
   it('should combine two text nodes and preserve content', async () => {
     // Setup: Create two nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -77,7 +73,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -117,7 +113,7 @@ describe('Backspace Operations', () => {
 
   it('should position cursor at junction point when combining', async () => {
     // Setup: Create two nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First line',
@@ -129,7 +125,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second line',
@@ -154,7 +150,7 @@ describe('Backspace Operations', () => {
 
   it('should strip formatting from current node when combining', async () => {
     // Setup: Create two nodes, one with header
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Plain text',
@@ -166,7 +162,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: '## Header text',
@@ -191,7 +187,7 @@ describe('Backspace Operations', () => {
 
   it('should promote children when combining nodes with children', async () => {
     // Setup: Create parent node with child, plus previous sibling
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -203,7 +199,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -215,7 +211,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const child = await createAndFetchNode({
+    const child = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child',
@@ -243,7 +239,7 @@ describe('Backspace Operations', () => {
 
   it('should repair sibling chain after combining', async () => {
     // Setup: Create three nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -255,7 +251,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -267,7 +263,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node3 = await createAndFetchNode({
+    const node3 = await createAndFetchNode(adapter, {
       id: 'node-3',
       nodeType: 'text',
       content: 'Third',
@@ -295,7 +291,7 @@ describe('Backspace Operations', () => {
 
   it('should handle combining nodes with nested children', async () => {
     // Setup: Create hierarchy with nested children
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Parent 1',
@@ -307,7 +303,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Parent 2',
@@ -319,7 +315,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const child1 = await createAndFetchNode({
+    const child1 = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child 1',
@@ -331,7 +327,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const grandchild = await createAndFetchNode({
+    const grandchild = await createAndFetchNode(adapter, {
       id: 'grandchild-1',
       nodeType: 'text',
       content: 'Grandchild',
@@ -359,7 +355,7 @@ describe('Backspace Operations', () => {
 
   it('should emit correct events when combining', async () => {
     // Setup: Create two nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -371,7 +367,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -398,7 +394,7 @@ describe('Backspace Operations', () => {
 
   it('should handle combining when previous node is at different depth', async () => {
     // Setup: Create parent and child at different depths
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -410,7 +406,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const child = await createAndFetchNode({
+    const child = await createAndFetchNode(adapter, {
       id: 'child',
       nodeType: 'text',
       content: 'Child',
@@ -440,7 +436,7 @@ describe('Backspace Operations', () => {
 
   it('should strip task checkbox formatting when combining', async () => {
     // Setup: Create two nodes, one is a task
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'Normal text',
@@ -452,7 +448,7 @@ describe('Backspace Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: '[ ] Task item',
@@ -473,5 +469,43 @@ describe('Backspace Operations', () => {
     const combined = service.findNode('node-1');
     expect(combined?.content).toBe('Normal textTask item');
     expect(combined?.content).not.toContain('[ ]');
+  });
+
+  it('should handle backspace at beginning of first node gracefully (no-op)', async () => {
+    // Setup: Create single root-level node (no previous node to merge with)
+    const firstNode = await createAndFetchNode(adapter, {
+      id: 'first-node',
+      nodeType: 'text',
+      content: 'First Node',
+      parentId: null,
+      containerNodeId: null,
+      beforeSiblingId: null,
+      properties: {},
+      embeddingVector: null,
+      mentions: []
+    });
+
+    service.initializeNodes([firstNode]);
+
+    // Act: Try to backspace at beginning with non-existent previous node
+    // combineNodes requires a previousNodeId, but will no-op if it doesn't exist
+    service.combineNodes('first-node', 'non-existent-previous-node');
+
+    // Verify: Node unchanged (operation was no-op)
+    const unchanged = service.findNode('first-node');
+    expect(unchanged?.content).toBe('First Node');
+    expect(unchanged?.parentId).toBe(null);
+
+    // Verify: Still in visual order
+    const visible = service.visibleNodes;
+    expect(visible).toHaveLength(1);
+    expect(visible[0].id).toBe('first-node');
+
+    // Verify: Database unchanged
+    const dbNode = await adapter.getNode('first-node');
+    expect(dbNode?.content).toBe('First Node');
+
+    // Verify: No deletion event emitted
+    expect(deletedNodes).toHaveLength(0);
   });
 });

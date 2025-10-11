@@ -12,15 +12,15 @@
  * 5. No console errors
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestDatabase,
   cleanupTestDatabase,
   initializeTestDatabase
 } from '../utils/test-database';
+import { createAndFetchNode, checkServerHealth } from '../utils/test-node-helpers';
 import { HttpAdapter } from '$lib/services/backend-adapter';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
-import type { Node } from '$lib/types';
 
 describe('Enter Key Operations', () => {
   let dbPath: string;
@@ -30,19 +30,15 @@ describe('Enter Key Operations', () => {
   let deletedNodes: string[] = [];
   let hierarchyChangeCount: number;
 
-  /**
-   * Helper: Create node via adapter and return the Node object
-   */
-  async function createAndFetchNode(
-    nodeData: Omit<Node, 'createdAt' | 'modifiedAt'>
-  ): Promise<Node> {
-    await adapter.createNode(nodeData);
-    const node = await adapter.getNode(nodeData.id);
-    if (!node) throw new Error(`Failed to create node ${nodeData.id}`);
-    return node;
-  }
+  beforeAll(async () => {
+    // Verify HTTP dev server is running before running any tests
+    const healthCheckAdapter = new HttpAdapter('http://localhost:3001');
+    await checkServerHealth(healthCheckAdapter);
+  });
 
   beforeEach(async () => {
+    // Note: We create a new database per test (not per suite) for better isolation,
+    // trading minor performance cost for stronger guarantees against test interference.
     dbPath = createTestDatabase('enter-key-operations');
     await initializeTestDatabase(dbPath);
     adapter = new HttpAdapter('http://localhost:3001');
@@ -65,7 +61,7 @@ describe('Enter Key Operations', () => {
 
   it('should create new node after current (basic enter)', async () => {
     // Setup: Create first node via backend
-    const firstNode = await createAndFetchNode({
+    const firstNode = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -106,7 +102,7 @@ describe('Enter Key Operations', () => {
 
   it('should preserve header formatting when creating node with empty content', async () => {
     // Setup: Create node with header
-    const headerNode = await createAndFetchNode({
+    const headerNode = await createAndFetchNode(adapter, {
       id: 'header-node',
       nodeType: 'text',
       content: '## Header Text',
@@ -134,7 +130,7 @@ describe('Enter Key Operations', () => {
 
   it('should use insertAtBeginning flag to insert node before current', async () => {
     // Setup: Create two nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -146,7 +142,7 @@ describe('Enter Key Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -178,7 +174,7 @@ describe('Enter Key Operations', () => {
 
   it('should transfer children when node is expanded', async () => {
     // Setup: Create parent with children
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -190,7 +186,7 @@ describe('Enter Key Operations', () => {
       mentions: []
     });
 
-    const child1 = await createAndFetchNode({
+    const child1 = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child 1',
@@ -202,7 +198,7 @@ describe('Enter Key Operations', () => {
       mentions: []
     });
 
-    const child2 = await createAndFetchNode({
+    const child2 = await createAndFetchNode(adapter, {
       id: 'child-2',
       nodeType: 'text',
       content: 'Child 2',
@@ -232,7 +228,7 @@ describe('Enter Key Operations', () => {
 
   it('should not transfer children when insertAtBeginning is true', async () => {
     // Setup: Create parent with children
-    const parent = await createAndFetchNode({
+    const parent = await createAndFetchNode(adapter, {
       id: 'parent',
       nodeType: 'text',
       content: 'Parent',
@@ -244,7 +240,7 @@ describe('Enter Key Operations', () => {
       mentions: []
     });
 
-    const child1 = await createAndFetchNode({
+    const child1 = await createAndFetchNode(adapter, {
       id: 'child-1',
       nodeType: 'text',
       content: 'Child 1',
@@ -271,7 +267,7 @@ describe('Enter Key Operations', () => {
 
   it('should update sibling chain when creating between nodes', async () => {
     // Setup: Create three nodes
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -283,7 +279,7 @@ describe('Enter Key Operations', () => {
       mentions: []
     });
 
-    const node2 = await createAndFetchNode({
+    const node2 = await createAndFetchNode(adapter, {
       id: 'node-2',
       nodeType: 'text',
       content: 'Second',
@@ -314,7 +310,7 @@ describe('Enter Key Operations', () => {
 
   it('should set containerNodeId correctly for root and nested nodes', async () => {
     // Setup: Create root node
-    const root = await createAndFetchNode({
+    const root = await createAndFetchNode(adapter, {
       id: 'root',
       nodeType: 'text',
       content: 'Root',
@@ -342,7 +338,7 @@ describe('Enter Key Operations', () => {
 
   it('should handle originalNodeContent parameter for header preservation', async () => {
     // Setup: Create node with header
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: '### Modified Header',
@@ -376,7 +372,7 @@ describe('Enter Key Operations', () => {
 
   it('should handle focusNewNode parameter', async () => {
     // Setup: Create node
-    const node = await createAndFetchNode({
+    const node = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
@@ -404,7 +400,7 @@ describe('Enter Key Operations', () => {
 
   it('should create multiple nodes in sequence maintaining order', async () => {
     // Setup: Create initial node
-    const node1 = await createAndFetchNode({
+    const node1 = await createAndFetchNode(adapter, {
       id: 'node-1',
       nodeType: 'text',
       content: 'First',
