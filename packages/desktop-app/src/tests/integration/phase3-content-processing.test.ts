@@ -50,8 +50,14 @@ describe.sequential('Section 9: Content Processing & Advanced Operations', () =>
       };
 
       try {
+        // Measure container node creation performance
+        const startTime = performance.now();
         const containerId = await backend.createContainerNode(containerInput);
+        const duration = performance.now() - startTime;
+
         expect(containerId).toBeTruthy();
+        console.log(`Container node creation: ${duration.toFixed(2)}ms`);
+        expect(duration).toBeLessThan(100); // Baseline: < 100ms
 
         // Verify container node was created correctly
         const container = await backend.getNode(containerId);
@@ -114,8 +120,13 @@ describe.sequential('Section 9: Content Processing & Advanced Operations', () =>
         expect(container).toBeTruthy();
         expect(container?.content).toBe('Meeting Notes');
 
-        // Create explicit mention relationship
+        // Measure mention creation performance
+        const startTime = performance.now();
         await backend.createNodeMention(dailyNoteId, containerId);
+        const duration = performance.now() - startTime;
+
+        console.log(`Mention creation: ${duration.toFixed(2)}ms`);
+        expect(duration).toBeLessThan(50); // Baseline: < 50ms
       } catch (error) {
         // If container endpoint is not implemented, skip this test
         // Expected: 405 Method Not Allowed or similar until endpoint is active

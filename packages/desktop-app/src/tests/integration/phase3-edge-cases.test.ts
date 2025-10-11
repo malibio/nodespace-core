@@ -78,7 +78,7 @@ describe.sequential('Section 10: Edge Cases & Error Handling', () => {
       } catch (error) {
         expect(error).toBeTruthy();
       }
-    }, 10000);
+    }, 5000); // Shorter timeout for input validation (fails fast)
 
     it('should reject empty arrays in batch operations', async () => {
       // Test with empty array
@@ -92,7 +92,7 @@ describe.sequential('Section 10: Edge Cases & Error Handling', () => {
         // May throw error or return empty result - both are acceptable
         expect(error).toBeTruthy();
       }
-    }, 10000);
+    }, 5000); // Shorter timeout for input validation (fails fast)
 
     it('should handle malformed search parameters', async () => {
       // Test with empty query string
@@ -131,7 +131,7 @@ describe.sequential('Section 10: Edge Cases & Error Handling', () => {
         // Should handle zero limit gracefully
         expect(error).toBeTruthy();
       }
-    }, 10000);
+    }, 5000); // Shorter timeout for input validation (fails fast)
 
     it('should validate container node input', async () => {
       try {
