@@ -236,6 +236,7 @@ export async function cleanupAllTestDatabases(): Promise<void> {
  * database persistence completes before checking results.
  *
  * @param maxWaitMs - Maximum time to wait in milliseconds (default: 5000)
+ * @param pollInterval - How often to check for completion in milliseconds (default: 50)
  * @returns Promise that resolves when all writes complete or timeout
  * @throws Error if timeout is reached with pending writes
  *
@@ -246,8 +247,10 @@ export async function cleanupAllTestDatabases(): Promise<void> {
  * const dbNode = await adapter.getNode(nodeId);
  * expect(dbNode).toBeDefined();
  */
-export async function waitForDatabaseWrites(maxWaitMs: number = 5000): Promise<void> {
-  const pollInterval = 50; // Poll every 50ms
+export async function waitForDatabaseWrites(
+  maxWaitMs: number = 5000,
+  pollInterval: number = 50
+): Promise<void> {
   const startTime = Date.now();
 
   while (sharedNodeStore.hasPendingWrites()) {
@@ -262,6 +265,13 @@ export async function waitForDatabaseWrites(maxWaitMs: number = 5000): Promise<v
 
     // Wait before next check
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+
+  // Defensive check: Verify loop exited correctly
+  if (sharedNodeStore.hasPendingWrites()) {
+    throw new Error(
+      '[Test] Internal error: waitForDatabaseWrites loop exited but writes still pending'
+    );
   }
 
   // All writes completed successfully

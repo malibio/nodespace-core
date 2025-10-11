@@ -42,7 +42,16 @@ import { createDefaultResolver } from './conflict-resolvers';
 // Database Write Coordination (Phase 2.4)
 // ============================================================================
 
-// Database write queue for coordinated persistence
+/**
+ * Module-level write queue for coordinated database persistence
+ *
+ * Prevents concurrent writes to the same node by ensuring writes are
+ * executed sequentially per node. The Map key is the node ID, and the
+ * value is the Promise representing the pending write operation.
+ *
+ * This coordination mechanism ensures database consistency and prevents
+ * race conditions across all SharedNodeStore instances.
+ */
 const pendingDatabaseWrites = new Map<string, Promise<void>>();
 
 /**
@@ -119,7 +128,7 @@ export class SharedNodeStore {
   // Version tracking for optimistic concurrency
   private versions = new Map<string, number>();
 
-  // Test error tracking (only populated in test environment)
+  // Test error tracking (populated only in NODE_ENV='test', cleared between tests)
   private testErrors: Error[] = [];
 
   private constructor() {
