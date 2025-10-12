@@ -5,6 +5,7 @@
 import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 import { PersistenceCoordinator } from '$lib/services/persistence-coordinator.svelte';
+import { sharedNodeStore } from '$lib/services/shared-node-store';
 
 // Ensure global object is available for legacy test compatibility
 // In Vitest/Node.js environment, global should already be available, but provide fallback
@@ -144,10 +145,14 @@ if (typeof window !== 'undefined') {
   delete (window as unknown as Record<string, unknown>).__TAURI__;
 }
 
-// PersistenceCoordinator cleanup for each test
+// PersistenceCoordinator and SharedNodeStore cleanup for each test
 // NOTE: Coordinator runs in test mode (errors caught gracefully)
 // TODO (#248): Future work - Replace test mode with proper vi.mock() of tauriNodeService
 beforeEach(() => {
+  // Reset SharedNodeStore to clear all nodes between tests
+  sharedNodeStore.__resetForTesting();
+
+  // Reset PersistenceCoordinator
   const coordinator = PersistenceCoordinator.getInstance();
   coordinator.resetTestState();
 });
