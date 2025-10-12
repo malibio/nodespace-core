@@ -265,18 +265,24 @@ impl NodeBehavior for TextNodeBehavior {
         "text"
     }
 
-    fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Allow empty content for placeholder nodes created by Enter key operations.
-        // Users press Enter to create a new node, then fill in content afterward.
-        // This is a valid UX pattern and should not be restricted.
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        // Backend validates data integrity: empty nodes are rejected.
+        // Frontend manages placeholder UX: empty nodes stay in memory until content added.
         //
-        // Security consideration: Empty nodes are intentional user actions,
-        // not data corruption. The application layer ensures nodes are only
-        // created through user interactions (Enter key, explicit creation, etc.),
-        // not through arbitrary external input.
+        // Architecture:
+        // - Frontend: Creates placeholder nodes in _nodes Map when user presses Enter
+        // - Frontend: Only sends nodes to backend AFTER user adds content
+        // - Backend: Enforces data integrity by rejecting empty content
         //
-        // Previously required non-empty content, but this blocked the Enter key
-        // workflow where users create nodes first, then type content.
+        // This separation ensures:
+        // 1. Good UX: Users can create nodes via Enter key
+        // 2. Data integrity: Database only contains meaningful content
+        // 3. Clear contract: Frontend handles placeholders, backend validates data
+        if node.content.trim().is_empty() {
+            return Err(NodeValidationError::MissingField(
+                "Text nodes must have content".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -667,10 +673,15 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Now valid: empty content (placeholder nodes allowed)
-        let mut placeholder_node = valid_node.clone();
-        placeholder_node.content = "   ".to_string();
-        assert!(behavior.validate(&placeholder_node).is_ok());
+        // Invalid: empty content (backend rejects empty nodes)
+        let mut empty_node = valid_node.clone();
+        empty_node.content = "".to_string();
+        assert!(behavior.validate(&empty_node).is_err());
+
+        // Invalid: whitespace-only content
+        let mut whitespace_node = valid_node.clone();
+        whitespace_node.content = "   ".to_string();
+        assert!(behavior.validate(&whitespace_node).is_err());
     }
 
     #[test]
