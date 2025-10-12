@@ -289,11 +289,11 @@ export class SharedNodeStore {
 
       // Phase 2.4: Persist to database (unless skipped)
       // IMPORTANT: For viewer-sourced updates:
-      // - Structural changes (parentId, beforeSiblingId) persist immediately
+      // - Structural changes (parentId, beforeSiblingId, containerNodeId) persist immediately
       // - Content changes skip persistence - BaseNodeViewer handles with debouncing
       // This ensures hierarchy operations work while avoiding duplicate writes on content edits
       if (!options.skipPersistence && source.type !== 'database') {
-        const isStructuralChange = 'parentId' in changes || 'beforeSiblingId' in changes;
+        const isStructuralChange = 'parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes;
         const shouldPersist = source.type !== 'viewer' || isStructuralChange;
 
         if (shouldPersist) {
@@ -361,7 +361,7 @@ export class SharedNodeStore {
    * Set a node (create or replace)
    */
   setNode(node: Node, source: UpdateSource, skipPersistence = false): void {
-    const isNewNode = !this.nodes.has(node.id);
+    const isNewNode = !this.persistedNodeIds.has(node.id);
     this.nodes.set(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
     this.notifySubscribers(node.id, node, source);
