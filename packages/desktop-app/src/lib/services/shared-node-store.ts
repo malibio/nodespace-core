@@ -252,12 +252,15 @@ export class SharedNodeStore {
         if (!isEmptyTextNode) {
           // Delegate to PersistenceCoordinator for coordinated persistence
           // Use debounced mode for content changes (typing), immediate for structural changes
-          const isStructuralChange = 'parentId' in changes || 'beforeSiblingId' in changes;
-          const dependencies: string[] = [];
+          const isStructuralChange =
+            'parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes;
+          const dependencies: Array<string | (() => Promise<void>)> = [];
 
-          // For structural changes, wait for parent to be persisted first (FOREIGN KEY)
+          // For structural changes, ensure ENTIRE ancestor chain is persisted (FOREIGN KEY)
           if (isStructuralChange && updatedNode.parentId) {
-            dependencies.push(updatedNode.parentId);
+            dependencies.push(async () => {
+              await this.ensureAncestorChainPersisted(updatedNode.parentId!);
+            });
           }
 
           PersistenceCoordinator.getInstance().persist(
@@ -339,9 +342,13 @@ export class SharedNodeStore {
 
       if (!isEmptyTextNode) {
         // Delegate to PersistenceCoordinator
-        const dependencies: string[] = [];
+        const dependencies: Array<string | (() => Promise<void>)> = [];
+
+        // Ensure ENTIRE ancestor chain is persisted (FOREIGN KEY)
         if (node.parentId) {
-          dependencies.push(node.parentId);
+          dependencies.push(async () => {
+            await this.ensureAncestorChainPersisted(node.parentId!);
+          });
         }
 
         PersistenceCoordinator.getInstance().persist(
@@ -489,6 +496,33 @@ export class SharedNodeStore {
    */
   async waitForNodeSaves(nodeIds: string[], timeoutMs = 5000): Promise<Set<string>> {
     return PersistenceCoordinator.getInstance().waitForPersistence(nodeIds, timeoutMs);
+  }
+
+  /**
+   * Ensure entire ancestor chain is persisted before persisting a child node
+   * Recursively walks up the parent chain and waits for each ancestor to be persisted
+   *
+   * This prevents FOREIGN KEY constraint violations when creating deeply nested
+   * placeholder nodes (e.g., Grandparent → Parent → Child where all are placeholders)
+   *
+   * @param nodeId - Starting node ID to walk ancestors from
+   */
+  private async ensureAncestorChainPersisted(nodeId: string): Promise<void> {
+    const node = this.nodes.get(nodeId);
+    if (!node) {
+      // Node doesn't exist in store, nothing to persist
+      return;
+    }
+
+    // If node has a parent, recursively ensure parent chain is persisted first
+    if (node.parentId) {
+      await this.ensureAncestorChainPersisted(node.parentId);
+    }
+
+    // Wait for this node to be persisted (if it has a pending operation)
+    if (this.hasPendingSave(nodeId)) {
+      await this.waitForNodeSaves([nodeId]);
+    }
   }
 
   /**

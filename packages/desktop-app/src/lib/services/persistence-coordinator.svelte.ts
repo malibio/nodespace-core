@@ -52,9 +52,6 @@ export interface PersistenceOptions {
 
   /** Dependencies that must complete before this operation */
   dependencies?: PersistenceDependency[];
-
-  /** Operation priority (higher numbers execute first within same dependency level) */
-  priority?: number;
 }
 
 /**
@@ -139,7 +136,7 @@ export class PersistenceCoordinator {
 
   // Configuration
   private defaultDebounceMs = 500;
-  private maxConcurrentOperations = 10;
+  private statusCleanupDelayMs = 5 * 60 * 1000; // 5 minutes
 
   private constructor() {
     // Private constructor for singleton
@@ -207,6 +204,33 @@ export class PersistenceCoordinator {
    *     ]
    *   }
    * );
+   *
+   * @example
+   * // Error handling - recommended pattern
+   * const handle = persistenceCoordinator.persist(
+   *   nodeId,
+   *   () => tauriNodeService.updateNode(nodeId, node),
+   *   { mode: 'immediate', dependencies: [parentId] }
+   * );
+   *
+   * try {
+   *   await handle.promise;
+   *   console.log('Persistence succeeded');
+   * } catch (error) {
+   *   // Error can be from:
+   *   // 1. The operation itself (database error, network error, etc.)
+   *   // 2. A dependency failure (parent failed to persist)
+   *   // 3. Operation was cancelled (new operation for same node)
+   *   console.error('Persistence failed:', error);
+   * }
+   *
+   * **Error Recovery Behavior:**
+   * - If a dependency fails, dependent operations will also fail immediately
+   * - Failed operations reject their promise with the error from the dependency or operation
+   * - The coordinator automatically cleans up failed operations
+   * - Status is set to 'failed' and can be checked via getStatus(nodeId)
+   * - Use try/catch on handle.promise to handle errors gracefully
+   * - Operations can be retried by calling persist() again with the same nodeId
    */
   persist(
     nodeId: string,
@@ -311,7 +335,10 @@ export class PersistenceCoordinator {
         )
       ]);
     } catch (error) {
-      console.error('[PersistenceCoordinator] Timeout waiting for persistence:', error);
+      console.error('[PersistenceCoordinator] Timeout waiting for persistence:', {
+        error,
+        nodeIds
+      });
 
       // Grace period
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -369,11 +396,11 @@ export class PersistenceCoordinator {
       this.cancelPending(nodeId);
     }
 
-    // Clear state
+    // Clear state (use .clear() to preserve Svelte 5 reactivity)
     this.operations.clear();
     this.completedOperations.clear();
-    this.persistenceStatus = new Map();
-    this.persistedNodes = new Set();
+    this.persistenceStatus.clear(); // Changed from reassignment to preserve reactive proxy
+    this.persistedNodes.clear(); // Changed from reassignment to preserve reactive proxy
     this.mockPersistence.clear();
 
     // Reset metrics
@@ -392,7 +419,21 @@ export class PersistenceCoordinator {
   // ========================================================================
 
   /**
-   * Enable test mode (skips actual database calls)
+   * Enable test mode (gracefully handles database errors for testing)
+   *
+   * In test mode:
+   * - Operations execute normally (allows test callbacks to run)
+   * - Database errors are caught and ignored (no database initialization required)
+   * - Mock persistence tracking is enabled (via mockPersistence Map)
+   * - All persistence is marked as successful for testing purposes
+   *
+   * TEMPORARY IMPLEMENTATION:
+   * Currently catches ALL errors in test mode, which may mask real issues.
+   *
+   * TODO: Refactor to proper mocking strategy:
+   * 1. Mock tauriNodeService using vi.mock() in all tests
+   * 2. Remove error catching - let mocked service return immediately
+   * 3. Remove test mode entirely once proper mocks are in place
    */
   enableTestMode(): void {
     this.testMode = true;
@@ -464,11 +505,25 @@ export class PersistenceCoordinator {
       // Resolve dependencies first
       await this.resolveDependencies(op.dependencies);
 
-      // In test mode, skip actual operation execution
+      // Execute operation
       if (this.testMode) {
+        // In test mode, execute operation but catch and ignore database initialization errors
+        // This allows test operations (like setting flags) to run while gracefully
+        // handling database initialization errors from real services
+        try {
+          await op.operation();
+        } catch (error) {
+          // Only ignore DatabaseInitializationError - re-throw all other errors
+          // This allows error-handling tests to work correctly
+          const errorName = error instanceof Error ? error.constructor.name : '';
+          if (errorName !== 'DatabaseInitializationError') {
+            throw error;
+          }
+          // Database initialization errors are silently ignored in test mode
+          // TODO: Proper solution is to mock tauriNodeService in all tests
+        }
         this.mockPersistence.set(op.nodeId, true);
       } else {
-        // Execute the operation (production mode only)
         await op.operation();
       }
 
@@ -486,9 +541,12 @@ export class PersistenceCoordinator {
       // Resolve promise
       op.resolve();
 
-      // Clean up
+      // Clean up operation tracking
       this.operations.delete(op.nodeId);
       this.metrics.pendingOperations--;
+
+      // Schedule cleanup of completed status to prevent memory leaks
+      this.scheduleStatusCleanup(op.nodeId);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
 
@@ -504,8 +562,11 @@ export class PersistenceCoordinator {
       // Reject promise
       op.reject(err);
 
-      // Log error
-      console.error(`[PersistenceCoordinator] Operation failed for node ${op.nodeId}:`, err);
+      // Log error (consistent structured logging)
+      console.error('[PersistenceCoordinator] Operation failed:', {
+        nodeId: op.nodeId,
+        error: err
+      });
 
       // Clean up
       this.operations.delete(op.nodeId);
@@ -568,6 +629,26 @@ export class PersistenceCoordinator {
     } else {
       this.metrics.failedOperations++;
     }
+  }
+
+  /**
+   * Schedule cleanup of completed status to prevent unbounded memory growth
+   *
+   * After a node completes persistence, we keep its status for a short time
+   * to allow UI components to react to the completion. After the cleanup delay,
+   * we remove the status to prevent memory leaks in long-running sessions.
+   *
+   * Note: We keep persistedNodes Set intact - it's needed for existence checks.
+   */
+  private scheduleStatusCleanup(nodeId: string): void {
+    setTimeout(() => {
+      // Only clean up if status is still 'completed' (not failed or re-pending)
+      if (this.persistenceStatus.get(nodeId) === 'completed') {
+        this.persistenceStatus.delete(nodeId);
+        this.completedOperations.delete(nodeId);
+        // Keep persistedNodes - it's used for isPersisted() checks
+      }
+    }, this.statusCleanupDelayMs);
   }
 }
 
