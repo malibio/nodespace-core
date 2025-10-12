@@ -374,9 +374,21 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       beforeSiblingId = afterNodeId;
     }
 
-    // Determine containerNodeId - tracks which root document this node belongs to
-    // Rule: containerNodeId = null only for root nodes themselves
-    //       All other nodes should have containerNodeId pointing to their root document
+    /**
+     * Determine containerNodeId - tracks which root document this node belongs to
+     *
+     * Rules:
+     * - containerNodeId = null only for root nodes themselves
+     * - All other nodes should have containerNodeId pointing to their root document
+     *
+     * Logic:
+     * - If node has explicit parent → inherit containerNodeId from parent (or use parent's ID if parent has none)
+     * - If afterNode is a root (containerNodeId = null) → use afterNode's ID as container
+     * - Otherwise → inherit afterNode's containerNodeId
+     *
+     * This ensures proper FOREIGN KEY relationships and allows database queries
+     * to efficiently find all nodes belonging to a specific root document.
+     */
     let rootId: string | null;
     if (newParentId) {
       // Node has explicit parent - inherit containerNodeId from parent
@@ -442,16 +454,24 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       const children = sharedNodeStore.getNodesForParent(afterNodeId);
 
       if (children.length > 0) {
-        // Transfer children to new node
-        // IMPORTANT: Update both parentId AND containerNodeId
-        // Rule: containerNodeId = parentId for direct children of root nodes
-        for (const child of children) {
-          sharedNodeStore.updateNode(
-            child.id,
-            { parentId: nodeId, containerNodeId: newNode.containerNodeId || nodeId },
-            viewerSource
-          );
-        }
+        // CRITICAL: Wait for newNode to be persisted before transferring children
+        // This prevents FOREIGN KEY constraint violations when children reference the new parent
+        // Use Promise to defer execution until after current synchronous stack completes
+        Promise.resolve().then(async () => {
+          // Wait for newNode to be persisted to database
+          await sharedNodeStore.waitForNodeSaves([nodeId]);
+
+          // Now safe to transfer children - newNode exists in database
+          // IMPORTANT: Update both parentId AND containerNodeId
+          // Rule: containerNodeId = parentId for direct children of root nodes
+          for (const child of children) {
+            sharedNodeStore.updateNode(
+              child.id,
+              { parentId: nodeId, containerNodeId: newNode.containerNodeId || nodeId },
+              viewerSource
+            );
+          }
+        });
       }
     }
 

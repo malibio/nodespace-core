@@ -46,6 +46,11 @@ describe('Shift+Enter Key Operations', () => {
     await checkServerHealth(healthCheckAdapter);
   });
 
+  afterAll(() => {
+    // Reset to default test mode state to prevent test ordering dependencies
+    PersistenceCoordinator.getInstance().enableTestMode();
+  });
+
   beforeEach(async () => {
     // Note: We create a new database per test (not per suite) for better isolation,
     // trading minor performance cost for stronger guarantees against test interference.

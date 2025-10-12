@@ -269,12 +269,15 @@ export class SharedNodeStore {
             });
           }
 
-          // Ensure containerNodeId is persisted (FOREIGN KEY constraint)
-          // Backend validates that containerNodeId must reference an existing node
-          // Only add dependency if:
-          // 1. containerNodeId is set
-          // 2. It's different from parentId (avoid duplicate)
-          // 3. It's NOT already persisted to database
+          /**
+           * Ensure containerNodeId is persisted (FOREIGN KEY constraint)
+           *
+           * Backend validates that containerNodeId must reference an existing node.
+           * Add dependency when:
+           * - containerNodeId is set
+           * - Different from parentId (avoids duplicate dependency)
+           * - NOT already persisted to database
+           */
           if (
             updatedNode.containerNodeId &&
             updatedNode.containerNodeId !== updatedNode.parentId &&
@@ -283,11 +286,14 @@ export class SharedNodeStore {
             dependencies.push(updatedNode.containerNodeId);
           }
 
-          // Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
-          // Backend validates that beforeSiblingId must reference an existing node
-          // Only add dependency if:
-          // 1. beforeSiblingId is set
-          // 2. It's NOT already persisted to database
+          /**
+           * Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
+           *
+           * Backend validates that beforeSiblingId must reference an existing node.
+           * Add dependency when:
+           * - beforeSiblingId is set
+           * - NOT already persisted to database
+           */
           if (
             updatedNode.beforeSiblingId &&
             !this.persistedNodeIds.has(updatedNode.beforeSiblingId)
@@ -371,6 +377,12 @@ export class SharedNodeStore {
     // IMPORTANT: For NEW nodes from viewer, persist immediately (including empty ones!)
     // For UPDATES from viewer, skip persistence - BaseNodeViewer handles with debouncing
     // This ensures createNode() persistence works while avoiding duplicate writes on updates
+    //
+    // NOTE: Empty nodes MUST be persisted to satisfy FOREIGN KEY constraints.
+    // When a node becomes a parent/container, it must exist in the database for children
+    // to reference it via parentId/containerNodeId. The old logic created a chicken-and-egg
+    // problem where parent nodes couldn't be persisted until they had content, but children
+    // couldn't be persisted without persisted parents. Backend accepts empty content.
     if (!skipPersistence && source.type !== 'database') {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
@@ -385,12 +397,15 @@ export class SharedNodeStore {
           });
         }
 
-        // Ensure containerNodeId is persisted (FOREIGN KEY constraint)
-        // Backend validates that containerNodeId must reference an existing node
-        // Only add dependency if:
-        // 1. containerNodeId is set
-        // 2. It's different from parentId (avoid duplicate)
-        // 3. It's NOT already persisted to database
+        /**
+         * Ensure containerNodeId is persisted (FOREIGN KEY constraint)
+         *
+         * Backend validates that containerNodeId must reference an existing node.
+         * Add dependency when:
+         * - containerNodeId is set
+         * - Different from parentId (avoids duplicate dependency)
+         * - NOT already persisted to database
+         */
         if (
           node.containerNodeId &&
           node.containerNodeId !== node.parentId &&
@@ -399,11 +414,14 @@ export class SharedNodeStore {
           dependencies.push(node.containerNodeId);
         }
 
-        // Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
-        // Backend validates that beforeSiblingId must reference an existing node
-        // Only add dependency if:
-        // 1. beforeSiblingId is set
-        // 2. It's NOT already persisted to database
+        /**
+         * Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
+         *
+         * Backend validates that beforeSiblingId must reference an existing node.
+         * Add dependency when:
+         * - beforeSiblingId is set
+         * - NOT already persisted to database
+         */
         if (node.beforeSiblingId && !this.persistedNodeIds.has(node.beforeSiblingId)) {
           dependencies.push(node.beforeSiblingId);
         }
