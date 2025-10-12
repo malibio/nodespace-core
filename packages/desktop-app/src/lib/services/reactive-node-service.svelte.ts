@@ -741,7 +741,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Wait for sibling chain repairs to complete before deletion
     if (nodesToWaitFor.length > 0) {
-      await sharedNodeStore.waitForNodeSaves(nodesToWaitFor);
+      const persistedNodes = await sharedNodeStore.waitForNodeSaves(nodesToWaitFor);
+
+      // Defensive check: ensure all expected nodes were persisted
+      if (persistedNodes.size !== nodesToWaitFor.length) {
+        const failedNodes = nodesToWaitFor.filter((id) => !persistedNodes.has(id));
+        console.error('[combineNodes] Some nodes failed to persist before deletion:', {
+          expected: nodesToWaitFor,
+          persisted: Array.from(persistedNodes),
+          failed: failedNodes
+        });
+        // Continue with deletion despite timeout - PersistenceCoordinator has already logged errors
+        // and the operation should complete to avoid leaving UI in inconsistent state
+      }
     }
 
     sharedNodeStore.deleteNode(currentNodeId, viewerSource);
@@ -1069,7 +1081,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     );
     const firstChildId = sortedDeletedChildren[0];
 
-    // Process each child
+    // Process each child individually
+    // Note: We could optimize this with a batch update API, but typical nodes have <10 children
+    // and PersistenceCoordinator already handles batching at a lower level
     for (const child of children) {
       const updates: Partial<Node> = {
         parentId: newParentForChildren
@@ -1098,9 +1112,22 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   /**
-   * Internal helper to delete a node from storage.
-   * IMPORTANT: This does NOT handle child promotion - callers must handle that first.
-   * For user-facing deletion, use combineNodes() which handles children properly.
+   * Deletes a node from storage with sibling chain repair.
+   *
+   * **IMPORTANT**: This function does NOT handle child promotion. Children will remain
+   * orphaned with their parentId pointing to the deleted node. Use this only when:
+   * 1. The node has no children, OR
+   * 2. You have already handled child promotion explicitly
+   *
+   * **For user-facing deletion**: Use `combineNodes()` instead, which properly handles
+   * child promotion using depth-aware logic to maintain outline structure.
+   *
+   * **Use cases for direct deleteNode()**:
+   * - Testing sibling chain repair logic in isolation
+   * - Backend operations where child handling is managed separately
+   * - Cleanup operations where orphaned children are intentional
+   *
+   * @param nodeId - The ID of the node to delete
    */
   function deleteNode(nodeId: string): void {
     const node = sharedNodeStore.getNode(nodeId);
