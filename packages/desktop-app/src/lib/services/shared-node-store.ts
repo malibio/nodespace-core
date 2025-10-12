@@ -269,6 +269,11 @@ export class SharedNodeStore {
             });
           }
 
+          // Add any additional dependencies from options
+          if (options.persistenceDependencies) {
+            dependencies.push(...options.persistenceDependencies);
+          }
+
           PersistenceCoordinator.getInstance().persist(
             nodeId,
             async () => {
