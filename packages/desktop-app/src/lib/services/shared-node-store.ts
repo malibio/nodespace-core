@@ -348,11 +348,7 @@ export class SharedNodeStore {
     if (!skipPersistence && source.type !== 'database') {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
-      // Skip persisting empty text nodes - they exist in UI but not in database
-      // until user adds content (backend validation requires non-empty content)
-      const isEmptyTextNode = node.nodeType === 'text' && node.content.trim() === '';
-
-      if (shouldPersist && !isEmptyTextNode) {
+      if (shouldPersist) {
         // Delegate to PersistenceCoordinator
         const dependencies: Array<string | (() => Promise<void>)> = [];
 
