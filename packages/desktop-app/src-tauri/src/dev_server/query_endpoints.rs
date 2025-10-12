@@ -145,8 +145,8 @@ async fn query_nodes_simple(
 
     // Execute query with timing
     let start = std::time::Instant::now();
-    let nodes = state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    let nodes = node_service
         .query_nodes(filter.clone())
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_QUERY_ERROR"))?;

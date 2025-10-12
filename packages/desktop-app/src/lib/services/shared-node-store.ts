@@ -288,7 +288,10 @@ export class SharedNodeStore {
       this.metrics.updateCount++;
 
       // Phase 2.4: Persist to database (unless skipped)
-      if (!options.skipPersistence && source.type !== 'database') {
+      // IMPORTANT: Skip viewer-sourced updates - BaseNodeViewer handles persistence with debouncing
+      // Only persist updates from other sources (e.g., MCP server in the future)
+      // TODO: Refactor BaseNodeViewer to use SharedNodeStore for all persistence (#TBD)
+      if (!options.skipPersistence && source.type !== 'database' && source.type !== 'viewer') {
         // Skip persisting empty text nodes - they exist in UI but not in database
         const isEmptyTextNode =
           updatedNode.nodeType === 'text' && updatedNode.content.trim() === '';
@@ -368,7 +371,10 @@ export class SharedNodeStore {
     }
 
     // Phase 2.4: Persist to database
-    if (!skipPersistence && source.type !== 'database') {
+    // IMPORTANT: Skip viewer-sourced updates - BaseNodeViewer handles persistence with debouncing
+    // Only persist updates from other sources (e.g., MCP server in the future)
+    // TODO: Refactor BaseNodeViewer to use SharedNodeStore for all persistence (#TBD)
+    if (!skipPersistence && source.type !== 'database' && source.type !== 'viewer') {
       // Skip persisting empty text nodes - they exist in UI but not in database
       // until user adds content (backend validation requires non-empty content)
       const isEmptyTextNode = node.nodeType === 'text' && node.content.trim() === '';
@@ -1237,6 +1243,28 @@ export class SharedNodeStore {
    */
   clearTestErrors(): void {
     this.testErrors = [];
+  }
+
+  /**
+   * Reset store state (for testing only)
+   * @internal
+   */
+  __resetForTesting(): void {
+    this.nodes.clear();
+    this.persistedNodeIds.clear();
+    this.subscriptions.clear();
+    this.wildcardSubscriptions.clear();
+    this.pendingUpdates.clear();
+    this.versions.clear();
+    this.testErrors = [];
+    this.metrics = {
+      updateCount: 0,
+      avgUpdateTime: 0,
+      maxUpdateTime: 0,
+      subscriptionCount: 0,
+      conflictCount: 0,
+      rollbackCount: 0
+    };
   }
 }
 

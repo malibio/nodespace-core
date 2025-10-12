@@ -22,6 +22,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::commands::nodes::CreateNodeInput;
 use crate::dev_server::{AppState, HttpError};
@@ -88,7 +89,7 @@ async fn health_check() -> Json<HealthStatus> {
 /// The actual database initialization happens when the dev-server binary starts.
 /// Tests should ensure the dev-server is running before calling this endpoint.
 async fn init_database(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<InitDbQuery>,
 ) -> Result<Json<InitDbResponse>, HttpError> {
     use std::path::PathBuf;
@@ -120,13 +121,26 @@ async fn init_database(
         .ok_or_else(|| HttpError::new("Invalid database path", "PATH_ERROR"))?
         .to_string();
 
-    // Actually initialize the database using the existing DatabaseService
-    use nodespace_core::DatabaseService;
-    let _ = DatabaseService::new(db_path.clone())
+    // Create new DatabaseService and NodeService for this database
+    use nodespace_core::{DatabaseService, NodeService};
+    let new_db = DatabaseService::new(db_path.clone())
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "DATABASE_INIT_ERROR"))?;
 
-    tracing::info!("📦 Database initialized at: {}", db_path_str);
+    let new_node_service = NodeService::new(new_db.clone())
+        .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_INIT_ERROR"))?;
+
+    // Replace the services in AppState using RwLock
+    {
+        let mut db_lock = state.db.write().unwrap();
+        *db_lock = Arc::new(new_db);
+    }
+    {
+        let mut ns_lock = state.node_service.write().unwrap();
+        *ns_lock = Arc::new(new_node_service);
+    }
+
+    tracing::info!("🔄 Database SWAPPED to: {}", db_path_str);
 
     Ok(Json(InitDbResponse {
         db_path: db_path_str,
@@ -192,11 +206,15 @@ async fn create_node(
         mentioned_by: Vec::new(),
     };
 
-    state
-        .node_service
+    // Access node_service through RwLock
+    let node_service = state.node_service.read().unwrap().clone();
+    node_service
         .create_node(full_node)
         .await
-        .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
+        .map_err(|e| {
+            tracing::error!("❌ Node creation failed for {}: {:?}", node.id, e);
+            HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR")
+        })?;
 
     tracing::debug!("✅ Created node: {}", node.id);
 
@@ -218,8 +236,8 @@ async fn get_node(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Option<Node>>, HttpError> {
-    let node = state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    let node = node_service
         .get_node(&id)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
@@ -249,8 +267,8 @@ async fn update_node(
     Path(id): Path<String>,
     Json(update): Json<NodeUpdate>,
 ) -> Result<StatusCode, HttpError> {
-    state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    node_service
         .update_node(&id, update)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
@@ -275,8 +293,8 @@ async fn delete_node(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, HttpError> {
-    state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    node_service
         .delete_node(&id)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
@@ -301,8 +319,8 @@ async fn get_children(
     State(state): State<AppState>,
     Path(parent_id): Path<String>,
 ) -> Result<Json<Vec<Node>>, HttpError> {
-    let children = state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    let children = node_service
         .get_children(&parent_id)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;

@@ -33,7 +33,7 @@ use axum::{
     http::{header, Method},
     Router,
 };
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
 use nodespace_core::{DatabaseService, NodeService};
@@ -54,10 +54,15 @@ mod http_error;
 pub use http_error::HttpError;
 
 /// Application state shared across all endpoints
+///
+/// Uses RwLock to allow dynamic database switching for test isolation.
+/// Each test can call /api/database/init with a unique database path,
+/// and the init endpoint will replace the NodeService with a new instance
+/// connected to the test database.
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<DatabaseService>,
-    pub node_service: Arc<NodeService>,
+    pub db: Arc<RwLock<Arc<DatabaseService>>>,
+    pub node_service: Arc<RwLock<Arc<NodeService>>>,
 }
 
 /// Create the main application router with all endpoint modules
@@ -137,8 +142,8 @@ fn cors_layer() -> CorsLayer {
 ///
 /// Returns error if server fails to bind or start.
 pub async fn start_server(
-    db: Arc<DatabaseService>,
-    node_service: Arc<NodeService>,
+    db: Arc<RwLock<Arc<DatabaseService>>>,
+    node_service: Arc<RwLock<Arc<NodeService>>>,
     port: u16,
 ) -> anyhow::Result<()> {
     let state = AppState { db, node_service };

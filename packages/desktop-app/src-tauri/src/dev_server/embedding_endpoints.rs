@@ -562,16 +562,15 @@ async fn create_container_node(
         mentioned_by: Vec::new(), // Will be computed from node_mentions table
     };
 
-    state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    node_service
         .create_node(container_node)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
 
     // If mentioned_by is provided, create mention relationship
     if let Some(mentioning_node_id) = input.mentioned_by {
-        state
-            .node_service
+        node_service
             .create_mention(&mentioning_node_id, &node_id)
             .await
             .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
@@ -607,8 +606,8 @@ async fn create_node_mention(
     State(state): State<AppState>,
     Json(payload): Json<CreateMentionRequest>,
 ) -> Result<StatusCode, HttpError> {
-    state
-        .node_service
+    let node_service = state.node_service.read().unwrap().clone();
+    node_service
         .create_mention(&payload.mentioning_node_id, &payload.mentioned_node_id)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
