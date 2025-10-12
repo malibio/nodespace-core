@@ -351,6 +351,39 @@ beforeEach(() => {
 });
 ```
 
+**CRITICAL: Vitest Setup File Pattern**
+
+When registering singletons for tests (plugin registries, service containers), **always use setup files** (`setupFiles` in vitest.config.ts), **never global setup** (`globalSetup`).
+
+**Why?** Vitest creates separate module graphs for:
+- Global Setup: Node.js context
+- Test Files & Components: Happy-DOM browser context
+
+This causes module duplication even with `globalThis` singleton patterns.
+
+**Correct Pattern:**
+```typescript
+// ✅ src/tests/setup.ts (setupFiles - runs in Happy-DOM context)
+import { pluginRegistry } from '$lib/plugins/index';
+import { registerCorePlugins } from '$lib/plugins/core-plugins';
+
+if (!pluginRegistry.hasPlugin('text')) {
+  registerCorePlugins(pluginRegistry);
+}
+```
+
+**Wrong Pattern:**
+```typescript
+// ❌ src/tests/global-setup.ts (globalSetup - runs in Node context)
+// This creates a SEPARATE registry instance that tests can't access
+export default async function setup() {
+  const { pluginRegistry } = await import('$lib/plugins/index');
+  registerCorePlugins(pluginRegistry); // Wrong context!
+}
+```
+
+**See Also:** [Vitest Module Duplication Lesson Learned](./lessons/vitest-module-duplication-fix.md) for detailed explanation and troubleshooting.
+
 ### 10. Mock Service Patterns
 Create realistic but controlled test environments:
 
