@@ -4,6 +4,28 @@
 **Issue:** Slash command integration tests failing due to plugin registry module duplication
 **Status:** RESOLVED
 
+## Table of Contents
+
+- [Problem Statement](#problem-statement)
+  - [Root Cause](#root-cause)
+  - [Evidence](#evidence)
+- [Why GlobalThis Singleton Pattern Failed](#why-globalthis-singleton-pattern-failed)
+- [Solution: Use Setup Files Instead of Global Setup](#solution-use-setup-files-instead-of-global-setup)
+  - [Implementation](#implementation)
+  - [Configuration](#configuration)
+- [When to Use Each Setup Type](#when-to-use-each-setup-type)
+  - [Global Setup (Node Context)](#global-setup-node-context)
+  - [Setup Files (Test Context)](#setup-files-test-context)
+- [Results](#results)
+- [Architectural Implications](#architectural-implications)
+  - [Current Architecture (Acceptable)](#current-architecture-acceptable)
+  - [Recommended Future Architecture](#recommended-future-architecture)
+- [Testing Strategy Guidelines](#testing-strategy-guidelines)
+- [Related Issues](#related-issues)
+- [Key Takeaways](#key-takeaways)
+- [Files Modified](#files-modified)
+- [Test Results](#test-results)
+
 ## Problem Statement
 
 Integration tests were failing with "No commands available" in the slash command dropdown, even though 6 plugins were registered during global test setup. This gave false confidence that tests were passing while production code had regression bugs.

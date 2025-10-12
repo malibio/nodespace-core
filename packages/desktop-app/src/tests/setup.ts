@@ -43,10 +43,17 @@ import { pluginRegistry } from '$lib/plugins/index';
 import { registerCorePlugins } from '$lib/plugins/core-plugins';
 
 // Register core plugins once at module load time
-// The hasPlugin check prevents double registration if this file is loaded multiple times
-if (!pluginRegistry.hasPlugin('text')) {
-  registerCorePlugins(pluginRegistry);
-  console.log('✅ Core plugins registered in test setup (browser context)');
+// Idempotent guard: safe to call multiple times
+try {
+  if (!pluginRegistry.hasPlugin('text')) {
+    registerCorePlugins(pluginRegistry);
+    console.log('✅ Core plugins registered in test setup (browser context)');
+  } else {
+    console.debug('Core plugins already registered, skipping');
+  }
+} catch (error) {
+  console.error('Failed to register core plugins in test setup:', error);
+  throw error; // Fail fast - tests can't run without plugins
 }
 
 // Mock MutationObserver for testing

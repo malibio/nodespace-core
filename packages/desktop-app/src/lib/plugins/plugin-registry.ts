@@ -308,21 +308,18 @@ export class PluginRegistry {
   }
 }
 
-// Create the global registry instance using globalThis to ensure true singleton
-// NOTE: In test environments, ensure plugins are registered in setup.ts (not global-setup.ts)
-// to avoid module duplication between Node and Happy-DOM contexts.
-const globalKey = '__nodespace_plugin_registry__';
-type GlobalWithRegistry = typeof globalThis & { [key: string]: PluginRegistry | undefined };
-
-if (!(globalThis as GlobalWithRegistry)[globalKey]) {
-  (globalThis as GlobalWithRegistry)[globalKey] = new PluginRegistry({
-    onRegister: (plugin) => {
-      console.debug(`Plugin registered: ${plugin.name} (${plugin.id})`);
-    },
-    onUnregister: (pluginId) => {
-      console.debug(`Plugin unregistered: ${pluginId}`);
-    }
-  });
-}
-
-export const pluginRegistry = (globalThis as GlobalWithRegistry)[globalKey]!;
+// Create the global registry instance as a simple module-level export
+// This creates a singleton within each module context (Node vs Happy-DOM in tests)
+//
+// IMPORTANT for testing: In Vitest, register plugins in setup.ts (not global-setup.ts)
+// to avoid module duplication between Node and Happy-DOM contexts. Each context gets
+// its own module graph, so setup.ts ensures plugins are registered in the same context
+// as the components that use them.
+export const pluginRegistry = new PluginRegistry({
+  onRegister: (plugin) => {
+    console.debug(`Plugin registered: ${plugin.name} (${plugin.id})`);
+  },
+  onUnregister: (pluginId) => {
+    console.debug(`Plugin unregistered: ${pluginId}`);
+  }
+});
