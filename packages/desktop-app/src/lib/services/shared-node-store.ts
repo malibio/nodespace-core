@@ -361,8 +361,15 @@ export class SharedNodeStore {
 
         // Ensure containerNodeId is persisted (FOREIGN KEY constraint)
         // Backend validates that containerNodeId must reference an existing node
-        // Only add dependency if containerNodeId is different from parentId (avoid duplicate)
-        if (node.containerNodeId && node.containerNodeId !== node.parentId) {
+        // Only add dependency if:
+        // 1. containerNodeId is set
+        // 2. It's different from parentId (avoid duplicate)
+        // 3. It's NOT already persisted to database
+        if (
+          node.containerNodeId &&
+          node.containerNodeId !== node.parentId &&
+          !this.persistedNodeIds.has(node.containerNodeId)
+        ) {
           dependencies.push(node.containerNodeId);
         }
 
