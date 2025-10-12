@@ -265,12 +265,9 @@ impl NodeBehavior for TextNodeBehavior {
         "text"
     }
 
-    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        if node.content.trim().is_empty() {
-            return Err(NodeValidationError::MissingField(
-                "Text nodes must have non-empty content".to_string(),
-            ));
-        }
+    fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
+        // Allow empty content for placeholder nodes (user will fill in later)
+        // Previously required non-empty content, but this breaks UX for Enter key operations
         Ok(())
     }
 
@@ -661,10 +658,10 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Invalid: empty content
-        let mut invalid_node = valid_node.clone();
-        invalid_node.content = "   ".to_string();
-        assert!(behavior.validate(&invalid_node).is_err());
+        // Now valid: empty content (placeholder nodes allowed)
+        let mut placeholder_node = valid_node.clone();
+        placeholder_node.content = "   ".to_string();
+        assert!(behavior.validate(&placeholder_node).is_ok());
     }
 
     #[test]

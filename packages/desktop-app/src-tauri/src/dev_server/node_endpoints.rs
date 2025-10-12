@@ -267,15 +267,22 @@ async fn update_node(
     Path(id): Path<String>,
     Json(update): Json<NodeUpdate>,
 ) -> Result<StatusCode, HttpError> {
+    tracing::info!("📝 UPDATE request for node: {} with update: {:?}", id, update);
     let node_service = state.node_service.read().unwrap().clone();
-    node_service
+    let result = node_service
         .update_node(&id, update)
-        .await
-        .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))?;
+        .await;
 
-    tracing::debug!("✅ Updated node: {}", id);
-
-    Ok(StatusCode::OK)
+    match result {
+        Ok(_) => {
+            tracing::info!("✅ Updated node: {}", id);
+            Ok(StatusCode::OK)
+        }
+        Err(e) => {
+            tracing::error!("❌ Node update failed for {}: {:?}", id, e);
+            Err(HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))
+        }
+    }
 }
 
 /// Delete a node by ID
