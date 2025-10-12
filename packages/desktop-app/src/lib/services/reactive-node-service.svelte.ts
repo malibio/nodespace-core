@@ -862,8 +862,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     if (!prevSibling) return false;
 
     // Step 1: Remove node from current sibling chain BEFORE changing parent
-    // This returns the ID of the next sibling (if any) that was updated
-    const updatedSiblingId = removeFromSiblingChain(nodeId);
+    // This updates the next sibling (if any) to splice out this node
+    removeFromSiblingChain(nodeId);
 
     // Find the last child of the new parent to insert after
     const existingChildren = sharedNodeStore.getNodesForParent(prevSiblingId).map((n) => n.id);
@@ -881,10 +881,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Step 2: Build dependency list for persistence sequencing
     const persistenceDependencies: string[] = [];
 
-    // If we updated a sibling in step 1, ensure it persists first
-    if (updatedSiblingId) {
-      persistenceDependencies.push(updatedSiblingId);
-    }
+    // DO NOT add updatedSiblingId as a dependency - it creates circular dependencies
+    // when consecutive indent/outdent operations update each other as siblings.
+    // The sibling chain update from removeFromSiblingChain is independent and can
+    // happen in parallel with the main update without violating database constraints.
+    // SharedNodeStore's automatic dependency system (lines 297-302) ensures that
+    // beforeSiblingId references are persisted before being used as foreign keys.
 
     // Ensure the new parent (prevSibling) is persisted before making this node its child
     persistenceDependencies.push(prevSiblingId);
@@ -963,7 +965,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const siblingsBelow = nodeIndex >= 0 ? sortedSiblings.slice(nodeIndex + 1) : [];
 
     // Step 1: Remove node from current sibling chain BEFORE changing parent
-    const updatedSiblingId = removeFromSiblingChain(nodeId);
+    // This updates the next sibling (if any) to splice out this node
+    removeFromSiblingChain(nodeId);
 
     const newParentId = parent.parentId || null;
     const uiState = _uiState[nodeId];
@@ -995,9 +998,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Step 2: Build dependencies for main node update
     const mainNodeDeps: string[] = [];
-    if (updatedSiblingId) {
-      mainNodeDeps.push(updatedSiblingId);
-    }
+
+    // DO NOT add updatedSiblingId as a dependency - it creates circular dependencies
+    // when consecutive indent/outdent operations update each other as siblings.
+    // The sibling chain update from removeFromSiblingChain is independent and can
+    // happen in parallel with the main update without violating database constraints.
+    // SharedNodeStore's automatic dependency system (lines 297-302) ensures that
+    // beforeSiblingId references are persisted before being used as foreign keys.
+
     mainNodeDeps.push(oldParentId);
     if (positionBeforeSibling && positionBeforeSibling !== oldParentId) {
       mainNodeDeps.push(positionBeforeSibling);
