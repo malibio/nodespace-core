@@ -1184,7 +1184,7 @@
 
   // Handle combining current node with previous node (Backspace at start of node)
   // CLEAN DELEGATION: All logic handled by NodeManager
-  function handleCombineWithPrevious(
+  async function handleCombineWithPrevious(
     event: CustomEvent<{ nodeId: string; currentContent: string }>
   ) {
     try {
@@ -1211,7 +1211,7 @@
       }
 
       // Always use combineNodes (handles both empty and non-empty nodes with proper child promotion)
-      nodeManager.combineNodes(nodeId, previousNode.id);
+      await nodeManager.combineNodes(nodeId, previousNode.id);
 
       // For empty nodes, we need to manually request focus since combineNodes doesn't know
       // the node was empty
@@ -1224,7 +1224,7 @@
   }
 
   // Handle deleting empty node (Backspace at start of empty node)
-  function handleDeleteNode(event: CustomEvent<{ nodeId: string }>) {
+  async function handleDeleteNode(event: CustomEvent<{ nodeId: string }>) {
     try {
       const { nodeId } = event.detail;
 
@@ -1248,7 +1248,7 @@
       }
 
       // Use combineNodes even for empty nodes (handles child promotion properly)
-      nodeManager.combineNodes(nodeId, previousNode.id);
+      await nodeManager.combineNodes(nodeId, previousNode.id);
       requestNodeFocus(previousNode.id, previousNode.content.length);
     } catch (error) {
       console.error('Error during node deletion:', error);

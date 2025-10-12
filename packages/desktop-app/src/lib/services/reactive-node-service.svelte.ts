@@ -707,7 +707,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     });
   }
 
-  function combineNodes(currentNodeId: string, previousNodeId: string): void {
+  async function combineNodes(currentNodeId: string, previousNodeId: string): Promise<void> {
     const currentNode = sharedNodeStore.getNode(currentNodeId);
     const previousNode = sharedNodeStore.getNode(previousNodeId);
 
@@ -723,8 +723,26 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Handle child promotion using shared depth-aware logic
     promoteChildren(currentNodeId, previousNodeId);
 
+    // CRITICAL: Identify nodes that will be affected by sibling chain repair BEFORE making changes
+    // This prevents "database is locked" errors and FOREIGN KEY violations
+    const nodesToWaitFor = [];
+    const siblings = sharedNodeStore.getNodesForParent(currentNode.parentId);
+    const nextSibling = siblings.find((n) => n.beforeSiblingId === currentNodeId);
+    if (nextSibling) {
+      nodesToWaitFor.push(nextSibling.id);
+    }
+    const children = sharedNodeStore.getNodesForParent(currentNodeId);
+    if (children.length > 0) {
+      nodesToWaitFor.push(...children.map((c) => c.id));
+    }
+
     // Remove node from sibling chain BEFORE deletion to prevent orphans
     removeFromSiblingChain(currentNodeId);
+
+    // Wait for sibling chain repairs to complete before deletion
+    if (nodesToWaitFor.length > 0) {
+      await sharedNodeStore.waitForNodeSaves(nodesToWaitFor);
+    }
 
     sharedNodeStore.deleteNode(currentNodeId, viewerSource);
     delete _uiState[currentNodeId];
