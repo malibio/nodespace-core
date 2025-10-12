@@ -23,6 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ContentProcessor } from './content-processor';
 import { eventBus } from './event-bus';
 import { sharedNodeStore } from './shared-node-store';
+import { PersistenceCoordinator } from './persistence-coordinator.svelte';
 import type { Node, NodeUIState } from '$lib/types';
 import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
@@ -841,7 +842,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return null;
   }
 
-  function indentNode(nodeId: string): boolean {
+  async function indentNode(nodeId: string): Promise<boolean> {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return false;
 
@@ -944,10 +945,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       affectedReferences: []
     });
 
+    // Wait for all persistence operations to complete
+    await PersistenceCoordinator.getInstance().waitForPersistence([nodeId], 10000);
+
     return true;
   }
 
-  function outdentNode(nodeId: string): boolean {
+  async function outdentNode(nodeId: string): Promise<boolean> {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node || !node.parentId) return false;
 
@@ -1015,6 +1019,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         persistenceDependencies: mainNodeDeps
       }
     );
+
+    // CRITICAL: Wait for main node to persist before continuing
+    await PersistenceCoordinator.getInstance().waitForPersistence([nodeId], 10000);
 
     _uiState[nodeId] = { ...uiState, depth: newDepth };
 
@@ -1117,6 +1124,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       changeType: 'outdent',
       affectedNodes: [nodeId]
     });
+
+    // Wait for all persistence operations to complete (main node + all transferred siblings)
+    const nodesToWaitFor = [nodeId, ...siblingsBelow];
+    await PersistenceCoordinator.getInstance().waitForPersistence(nodesToWaitFor, 10000);
 
     return true;
   }
