@@ -359,6 +359,13 @@ export class SharedNodeStore {
           });
         }
 
+        // Ensure containerNodeId is persisted (FOREIGN KEY constraint)
+        // Backend validates that containerNodeId must reference an existing node
+        // Only add dependency if containerNodeId is different from parentId (avoid duplicate)
+        if (node.containerNodeId && node.containerNodeId !== node.parentId) {
+          dependencies.push(node.containerNodeId);
+        }
+
         PersistenceCoordinator.getInstance().persist(
           node.id,
           async () => {
