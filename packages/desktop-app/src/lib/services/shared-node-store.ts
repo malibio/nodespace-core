@@ -293,37 +293,38 @@ export class SharedNodeStore {
       // - Content changes skip persistence - BaseNodeViewer handles with debouncing
       // This ensures hierarchy operations work while avoiding duplicate writes on content edits
       if (!options.skipPersistence && source.type !== 'database') {
-        const isStructuralChange = 'parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes;
+        const isStructuralChange =
+          'parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes;
         const shouldPersist = source.type !== 'viewer' || isStructuralChange;
 
         if (shouldPersist) {
           // Queue database write to prevent concurrent writes
           queueDatabaseWrite(nodeId, async () => {
-              try {
-                // Check if node has been persisted - use in-memory tracking to avoid database query
-                const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
-                if (isPersistedToDatabase) {
-                  await tauriNodeService.updateNode(nodeId, updatedNode);
-                } else {
-                  // Node doesn't exist yet (was a placeholder or new node)
-                  await tauriNodeService.createNode(updatedNode);
-                  this.persistedNodeIds.add(nodeId); // Track as persisted
-                }
-                // Mark update as persisted
-                this.markUpdatePersisted(nodeId, update);
-              } catch (dbError) {
-                const error = dbError instanceof Error ? dbError : new Error(String(dbError));
-                console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, error);
-
-                // Track error in test environment for test verification
-                if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-                  this.testErrors.push(error);
-                }
-
-                // Rollback the optimistic update
-                this.rollbackUpdate(nodeId, update);
+            try {
+              // Check if node has been persisted - use in-memory tracking to avoid database query
+              const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
+              if (isPersistedToDatabase) {
+                await tauriNodeService.updateNode(nodeId, updatedNode);
+              } else {
+                // Node doesn't exist yet (was a placeholder or new node)
+                await tauriNodeService.createNode(updatedNode);
+                this.persistedNodeIds.add(nodeId); // Track as persisted
               }
-            }).catch((err) => {
+              // Mark update as persisted
+              this.markUpdatePersisted(nodeId, update);
+            } catch (dbError) {
+              const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+              console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, error);
+
+              // Track error in test environment for test verification
+              if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+                this.testErrors.push(error);
+              }
+
+              // Rollback the optimistic update
+              this.rollbackUpdate(nodeId, update);
+            }
+          }).catch((err) => {
             // Catch any queueing errors
             const error = err instanceof Error ? err : new Error(String(err));
             console.error(`[SharedNodeStore] Failed to queue database write:`, error);
@@ -379,34 +380,34 @@ export class SharedNodeStore {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
       if (shouldPersist) {
-          queueDatabaseWrite(node.id, async () => {
-            try {
-              // Check if node has been persisted - use in-memory tracking to avoid database query
-              const isPersistedToDatabase = this.persistedNodeIds.has(node.id);
-              if (isPersistedToDatabase) {
-                await tauriNodeService.updateNode(node.id, node);
-              } else {
-                await tauriNodeService.createNode(node);
-                this.persistedNodeIds.add(node.id); // Track as persisted
-              }
-            } catch (dbError) {
-              const error = dbError instanceof Error ? dbError : new Error(String(dbError));
-              console.error(`[SharedNodeStore] Database write failed for node ${node.id}:`, error);
-
-              // Track error in test environment for test verification
-              if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-                this.testErrors.push(error);
-              }
+        queueDatabaseWrite(node.id, async () => {
+          try {
+            // Check if node has been persisted - use in-memory tracking to avoid database query
+            const isPersistedToDatabase = this.persistedNodeIds.has(node.id);
+            if (isPersistedToDatabase) {
+              await tauriNodeService.updateNode(node.id, node);
+            } else {
+              await tauriNodeService.createNode(node);
+              this.persistedNodeIds.add(node.id); // Track as persisted
             }
-          }).catch((err) => {
-            const error = err instanceof Error ? err : new Error(String(err));
-            console.error(`[SharedNodeStore] Failed to queue database write:`, error);
+          } catch (dbError) {
+            const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+            console.error(`[SharedNodeStore] Database write failed for node ${node.id}:`, error);
 
             // Track error in test environment for test verification
             if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
               this.testErrors.push(error);
             }
-          });
+          }
+        }).catch((err) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.error(`[SharedNodeStore] Failed to queue database write:`, error);
+
+          // Track error in test environment for test verification
+          if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+            this.testErrors.push(error);
+          }
+        });
       }
     }
   }

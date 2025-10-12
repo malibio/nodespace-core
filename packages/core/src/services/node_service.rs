@@ -178,9 +178,7 @@ impl NodeService {
             .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
         // Convert "root" container_node_id to None (null in database)
-        let container_node_id_value = node.container_node_id
-            .as_deref()
-            .filter(|id| *id != "root");
+        let container_node_id_value = node.container_node_id.as_deref().filter(|id| *id != "root");
 
         conn.execute(
             "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector)

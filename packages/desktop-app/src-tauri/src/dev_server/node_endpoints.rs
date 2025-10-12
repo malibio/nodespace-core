@@ -208,13 +208,10 @@ async fn create_node(
 
     // Access node_service through RwLock
     let node_service = state.node_service.read().unwrap().clone();
-    node_service
-        .create_node(full_node)
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ Node creation failed for {}: {:?}", node.id, e);
-            HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR")
-        })?;
+    node_service.create_node(full_node).await.map_err(|e| {
+        tracing::error!("❌ Node creation failed for {}: {:?}", node.id, e);
+        HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR")
+    })?;
 
     tracing::debug!("✅ Created node: {}", node.id);
 
@@ -267,11 +264,13 @@ async fn update_node(
     Path(id): Path<String>,
     Json(update): Json<NodeUpdate>,
 ) -> Result<StatusCode, HttpError> {
-    tracing::info!("📝 UPDATE request for node: {} with update: {:?}", id, update);
+    tracing::info!(
+        "📝 UPDATE request for node: {} with update: {:?}",
+        id,
+        update
+    );
     let node_service = state.node_service.read().unwrap().clone();
-    let result = node_service
-        .update_node(&id, update)
-        .await;
+    let result = node_service.update_node(&id, update).await;
 
     match result {
         Ok(_) => {
