@@ -58,6 +58,9 @@ describe('Enter Key Operations', () => {
     deletedNodes = [];
     hierarchyChangeCount = 0;
 
+    // Reset shared node store to clear persistedNodeIds from previous tests
+    sharedNodeStore.__resetForTesting();
+
     service = createReactiveNodeService({
       focusRequested: vi.fn(),
       hierarchyChanged: () => hierarchyChangeCount++,

@@ -269,6 +269,32 @@ export class SharedNodeStore {
             });
           }
 
+          // Ensure containerNodeId is persisted (FOREIGN KEY constraint)
+          // Backend validates that containerNodeId must reference an existing node
+          // Only add dependency if:
+          // 1. containerNodeId is set
+          // 2. It's different from parentId (avoid duplicate)
+          // 3. It's NOT already persisted to database
+          if (
+            updatedNode.containerNodeId &&
+            updatedNode.containerNodeId !== updatedNode.parentId &&
+            !this.persistedNodeIds.has(updatedNode.containerNodeId)
+          ) {
+            dependencies.push(updatedNode.containerNodeId);
+          }
+
+          // Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
+          // Backend validates that beforeSiblingId must reference an existing node
+          // Only add dependency if:
+          // 1. beforeSiblingId is set
+          // 2. It's NOT already persisted to database
+          if (
+            updatedNode.beforeSiblingId &&
+            !this.persistedNodeIds.has(updatedNode.beforeSiblingId)
+          ) {
+            dependencies.push(updatedNode.beforeSiblingId);
+          }
+
           PersistenceCoordinator.getInstance().persist(
             nodeId,
             async () => {
@@ -371,6 +397,15 @@ export class SharedNodeStore {
           !this.persistedNodeIds.has(node.containerNodeId)
         ) {
           dependencies.push(node.containerNodeId);
+        }
+
+        // Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
+        // Backend validates that beforeSiblingId must reference an existing node
+        // Only add dependency if:
+        // 1. beforeSiblingId is set
+        // 2. It's NOT already persisted to database
+        if (node.beforeSiblingId && !this.persistedNodeIds.has(node.beforeSiblingId)) {
+          dependencies.push(node.beforeSiblingId);
         }
 
         PersistenceCoordinator.getInstance().persist(
