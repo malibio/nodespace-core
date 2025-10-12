@@ -53,6 +53,14 @@ mod http_error;
 // Re-export HttpError for use by endpoint modules
 pub use http_error::HttpError;
 
+/// Type alias for services that can be dynamically swapped during tests
+///
+/// The Arc<RwLock<Arc<T>>> pattern enables:
+/// - Thread-safe shared ownership (outer Arc)
+/// - Safe service replacement via write lock (RwLock)
+/// - Multiple readers or single writer semantics (inner Arc)
+type SharedService<T> = Arc<RwLock<Arc<T>>>;
+
 /// Application state shared across all endpoints
 ///
 /// Uses RwLock to allow dynamic database switching for test isolation.
@@ -61,8 +69,8 @@ pub use http_error::HttpError;
 /// connected to the test database.
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<RwLock<Arc<DatabaseService>>>,
-    pub node_service: Arc<RwLock<Arc<NodeService>>>,
+    pub db: SharedService<DatabaseService>,
+    pub node_service: SharedService<NodeService>,
 }
 
 /// Create the main application router with all endpoint modules
@@ -142,8 +150,8 @@ fn cors_layer() -> CorsLayer {
 ///
 /// Returns error if server fails to bind or start.
 pub async fn start_server(
-    db: Arc<RwLock<Arc<DatabaseService>>>,
-    node_service: Arc<RwLock<Arc<NodeService>>>,
+    db: SharedService<DatabaseService>,
+    node_service: SharedService<NodeService>,
     port: u16,
 ) -> anyhow::Result<()> {
     let state = AppState { db, node_service };
