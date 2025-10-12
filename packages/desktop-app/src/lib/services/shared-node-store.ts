@@ -231,12 +231,22 @@ export class SharedNodeStore {
 
       // Emit event - cast to bypass type checking for now
       // TODO: Update event-types.ts to support source tracking
+      // Determine updateType based on what changed
+      let updateType: 'content' | 'structure' | 'metadata' = 'content';
+      if ('parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes) {
+        updateType = 'structure';
+      } else if ('mentions' in changes && Object.keys(changes).length === 1) {
+        // If ONLY mentions changed, treat as metadata update (not content)
+        // This prevents content reprocessing from overwriting manually-set mentions
+        updateType = 'metadata';
+      }
+
       eventBus.emit({
         type: 'node:updated',
         namespace: 'lifecycle',
         source: source.type,
         nodeId,
-        updateType: 'content',
+        updateType,
         newValue: changes
       } as never);
 

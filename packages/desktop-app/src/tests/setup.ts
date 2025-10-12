@@ -35,7 +35,19 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Plugin registry initialization moved to globalSetup.ts
+// CRITICAL: Plugin registry initialization MUST happen in setup.ts, not global-setup.ts
+// This ensures plugins are registered in the same module context (Happy-DOM browser env)
+// as the Svelte components that will use them. Global setup runs in Node context,
+// which creates a separate module graph and duplicate registry instances.
+import { pluginRegistry } from '$lib/plugins/index';
+import { registerCorePlugins } from '$lib/plugins/core-plugins';
+
+// Register core plugins once at module load time
+// The hasPlugin check prevents double registration if this file is loaded multiple times
+if (!pluginRegistry.hasPlugin('text')) {
+  registerCorePlugins(pluginRegistry);
+  console.log('✅ Core plugins registered in test setup (browser context)');
+}
 
 // Mock MutationObserver for testing
 interface MockMutationRecord {

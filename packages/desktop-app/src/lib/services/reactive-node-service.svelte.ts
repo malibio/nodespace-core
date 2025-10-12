@@ -624,9 +624,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return;
 
-    // Mentions are computed fields - skip persistence (they're derived from content)
+    // Mentions are computed fields - skip persistence and conflict detection
+    // (they're derived from content and can be updated freely without conflicts)
     sharedNodeStore.updateNode(nodeId, { mentions: [...mentions] }, viewerSource, {
-      skipPersistence: true
+      skipPersistence: true,
+      skipConflictDetection: true
     });
 
     _updateTrigger++;
