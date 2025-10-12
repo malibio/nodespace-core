@@ -121,32 +121,44 @@ async fn init_database(
         .ok_or_else(|| HttpError::new("Invalid database path", "PATH_ERROR"))?
         .to_string();
 
-    // CRITICAL: Allow time for any pending operations from previous test to complete
-    // Issue #255: Without this delay, operations queued before database swap will fail
-    // when they execute after the swap, reading from the wrong database path
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Create temporary DatabaseService to initialize schema (Issue #255 - Option A)
-    // This ensures the database file and schema exist before updating the path
-    use nodespace_core::{DatabaseService, NodeService};
-    let temp_db = DatabaseService::new(db_path.clone())
-        .await
-        .map_err(|e| HttpError::from_anyhow(e.into(), "DATABASE_INIT_ERROR"))?;
-
-    // Schema is now initialized. Update the path in AppState (atomic swap)
-    {
-        let mut path = state.db_path.write().map_err(|e| {
+    // STEP 1: Drain connections from OLD database before swap (Issue #255)
+    // This ensures no stale connections remain after the swap
+    // Clone the Arc BEFORE awaiting to avoid holding RwLock across await boundary
+    let old_db = {
+        let lock = state.db.read().map_err(|e| {
             HttpError::new(
-                format!("Failed to acquire database path write lock: {}", e),
+                format!("Failed to acquire database read lock: {}", e),
                 "LOCK_ERROR",
             )
         })?;
-        *path = db_path_str.clone();
-    }
+        Arc::clone(&*lock)
+    };
 
-    // Recreate NodeService with new database
-    let new_node_service = NodeService::new(temp_db.clone())
+    old_db
+        .drain_and_checkpoint()
+        .await
+        .map_err(|e| HttpError::from_anyhow(e.into(), "DRAIN_ERROR"))?;
+
+    // STEP 2: Create NEW database service with schema initialized
+    use nodespace_core::{DatabaseService, NodeService};
+    let new_db = DatabaseService::new(db_path.clone())
+        .await
+        .map_err(|e| HttpError::from_anyhow(e.into(), "DATABASE_INIT_ERROR"))?;
+
+    // STEP 3: Create NEW node service
+    let new_node_service = NodeService::new(new_db.clone())
         .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_INIT_ERROR"))?;
+
+    // STEP 4: Atomic swap of both services
+    {
+        let mut db_lock = state.db.write().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire database write lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        *db_lock = Arc::new(new_db);
+    }
 
     {
         let mut ns_lock = state.node_service.write().map_err(|e| {
@@ -158,7 +170,7 @@ async fn init_database(
         *ns_lock = Arc::new(new_node_service);
     }
 
-    tracing::info!("🔄 Database PATH updated to: {}", db_path_str);
+    tracing::info!("🔄 Database SWAPPED to: {}", db_path_str);
 
     Ok(Json(InitDbResponse {
         db_path: db_path_str,
@@ -224,8 +236,16 @@ async fn create_node(
         mentioned_by: Vec::new(),
     };
 
-    // Create fresh NodeService for this request (Issue #255 - Option A)
-    let node_service = create_node_service(&state).await?;
+    // Use shared NodeService (Issue #255 - proper fix with connection draining)
+    let node_service = {
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire node service read lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        Arc::clone(&*lock)
+    };
 
     node_service.create_node(full_node).await.map_err(|e| {
         tracing::error!("❌ Node creation failed for {}: {:?}", node.id, e);
@@ -235,34 +255,6 @@ async fn create_node(
     tracing::debug!("✅ Created node: {}", node.id);
 
     Ok(Json(node.id))
-}
-
-/// Helper function to create a fresh NodeService for each request
-///
-/// This implements Option A for Issue #255: per-request database connections
-/// to avoid race conditions with database initialization.
-pub(crate) async fn create_node_service(
-    state: &AppState,
-) -> Result<nodespace_core::NodeService, HttpError> {
-    use nodespace_core::DatabaseService;
-    use std::path::PathBuf;
-
-    let db_path = {
-        let lock = state.db_path.read().map_err(|e| {
-            HttpError::new(
-                format!("Failed to acquire database path read lock: {}", e),
-                "LOCK_ERROR",
-            )
-        })?;
-        lock.clone()
-    };
-
-    let db = DatabaseService::new(PathBuf::from(db_path))
-        .await
-        .map_err(|e| HttpError::from_anyhow(e.into(), "DATABASE_ERROR"))?;
-
-    nodespace_core::NodeService::new(db)
-        .map_err(|e| HttpError::from_anyhow(e.into(), "NODE_SERVICE_ERROR"))
 }
 
 /// Get a node by ID
@@ -280,7 +272,15 @@ async fn get_node(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Option<Node>>, HttpError> {
-    let node_service = create_node_service(&state).await?;
+    let node_service = {
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire node service read lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        Arc::clone(&*lock)
+    };
     let node = node_service
         .get_node(&id)
         .await
@@ -316,7 +316,15 @@ async fn update_node(
         id,
         update
     );
-    let node_service = create_node_service(&state).await?;
+    let node_service = {
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire node service read lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        Arc::clone(&*lock)
+    };
     let result = node_service.update_node(&id, update).await;
 
     match result {
@@ -346,7 +354,15 @@ async fn delete_node(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, HttpError> {
-    let node_service = create_node_service(&state).await?;
+    let node_service = {
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire node service read lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        Arc::clone(&*lock)
+    };
     let result = node_service
         .delete_node(&id)
         .await
@@ -376,7 +392,15 @@ async fn get_children(
     State(state): State<AppState>,
     Path(parent_id): Path<String>,
 ) -> Result<Json<Vec<Node>>, HttpError> {
-    let node_service = create_node_service(&state).await?;
+    let node_service = {
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire node service read lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        Arc::clone(&*lock)
+    };
     let children = node_service
         .get_children(&parent_id)
         .await
