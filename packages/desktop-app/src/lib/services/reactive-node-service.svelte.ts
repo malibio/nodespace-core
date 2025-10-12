@@ -741,7 +741,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     });
   }
 
-  async function combineNodes(currentNodeId: string, previousNodeId: string): Promise<void> {
+  function combineNodes(currentNodeId: string, previousNodeId: string): void {
     const currentNode = sharedNodeStore.getNode(currentNodeId);
     const previousNode = sharedNodeStore.getNode(previousNodeId);
 
@@ -764,40 +764,25 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Handle child promotion using shared depth-aware logic
     promoteChildren(currentNodeId, previousNodeId);
 
-    // CRITICAL: Identify nodes that will be affected by operations BEFORE deletion
+    // CRITICAL: Collect dependencies that must persist before deletion
     // This prevents "database is locked" errors and FOREIGN KEY violations
-    const nodesToWaitFor = [previousNodeId]; // Include previous node for content update
+    // PersistenceCoordinator will ensure these operations complete before deletion
+    const deletionDependencies = [previousNodeId]; // Content update must persist first
     const siblings = sharedNodeStore.getNodesForParent(currentNode.parentId);
     const nextSibling = siblings.find((n) => n.beforeSiblingId === currentNodeId);
     if (nextSibling) {
-      nodesToWaitFor.push(nextSibling.id);
+      deletionDependencies.push(nextSibling.id); // Sibling chain repair must complete
     }
     const children = sharedNodeStore.getNodesForParent(currentNodeId);
     if (children.length > 0) {
-      nodesToWaitFor.push(...children.map((c) => c.id));
+      deletionDependencies.push(...children.map((c) => c.id)); // Child promotions must complete
     }
 
     // Remove node from sibling chain BEFORE deletion to prevent orphans
     removeFromSiblingChain(currentNodeId);
 
-    // Wait for all updates to persist before deletion
-    if (nodesToWaitFor.length > 0) {
-      const persistedNodes = await sharedNodeStore.waitForNodeSaves(nodesToWaitFor);
-
-      // Defensive check: ensure all expected nodes were persisted
-      if (persistedNodes.size !== nodesToWaitFor.length) {
-        const failedNodes = nodesToWaitFor.filter((id) => !persistedNodes.has(id));
-        console.error('[combineNodes] Some nodes failed to persist before deletion:', {
-          expected: nodesToWaitFor,
-          persisted: Array.from(persistedNodes),
-          failed: failedNodes
-        });
-        // Continue with deletion despite timeout - PersistenceCoordinator has already logged errors
-        // and the operation should complete to avoid leaving UI in inconsistent state
-      }
-    }
-
-    sharedNodeStore.deleteNode(currentNodeId, viewerSource);
+    // Delete with dependencies - PersistenceCoordinator ensures correct order
+    sharedNodeStore.deleteNode(currentNodeId, viewerSource, false, deletionDependencies);
     delete _uiState[currentNodeId];
 
     const rootIndex = _rootNodeIds.indexOf(currentNodeId);
