@@ -266,8 +266,17 @@ impl NodeBehavior for TextNodeBehavior {
     }
 
     fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Allow empty content for placeholder nodes (user will fill in later)
-        // Previously required non-empty content, but this breaks UX for Enter key operations
+        // Allow empty content for placeholder nodes created by Enter key operations.
+        // Users press Enter to create a new node, then fill in content afterward.
+        // This is a valid UX pattern and should not be restricted.
+        //
+        // Security consideration: Empty nodes are intentional user actions,
+        // not data corruption. The application layer ensures nodes are only
+        // created through user interactions (Enter key, explicit creation, etc.),
+        // not through arbitrary external input.
+        //
+        // Previously required non-empty content, but this blocked the Enter key
+        // workflow where users create nodes first, then type content.
         Ok(())
     }
 

@@ -30,6 +30,7 @@ use axum::{
 };
 use nodespace_core::{Node, NodeFilter};
 use serde::Deserialize;
+use std::sync::Arc;
 
 use super::http_error::HttpError;
 
@@ -145,7 +146,15 @@ async fn query_nodes_simple(
 
     // Execute query with timing
     let start = std::time::Instant::now();
-    let node_service = state.node_service.read().unwrap().clone();
+    let node_service = {
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(
+                format!("Failed to acquire node service read lock: {}", e),
+                "LOCK_ERROR",
+            )
+        })?;
+        Arc::clone(&*lock)
+    };
     let nodes = node_service
         .query_nodes(filter.clone())
         .await
