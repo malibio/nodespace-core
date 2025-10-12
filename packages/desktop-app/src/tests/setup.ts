@@ -145,6 +145,8 @@ if (typeof window !== 'undefined') {
 }
 
 // PersistenceCoordinator cleanup for each test
+// NOTE: Coordinator runs in test mode (errors caught gracefully)
+// TODO (#248): Future work - Replace test mode with proper vi.mock() of tauriNodeService
 beforeEach(() => {
   const coordinator = PersistenceCoordinator.getInstance();
   coordinator.resetTestState();
