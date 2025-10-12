@@ -288,42 +288,42 @@ export class SharedNodeStore {
       this.metrics.updateCount++;
 
       // Phase 2.4: Persist to database (unless skipped)
-      // IMPORTANT: Skip viewer-sourced updates - BaseNodeViewer handles persistence with debouncing
-      // Only persist updates from other sources (e.g., MCP server in the future)
-      // TODO: Refactor BaseNodeViewer to use SharedNodeStore for all persistence (#TBD)
-      if (!options.skipPersistence && source.type !== 'database' && source.type !== 'viewer') {
-        // Skip persisting empty text nodes - they exist in UI but not in database
-        const isEmptyTextNode =
-          updatedNode.nodeType === 'text' && updatedNode.content.trim() === '';
+      // IMPORTANT: For viewer-sourced updates:
+      // - Structural changes (parentId, beforeSiblingId) persist immediately
+      // - Content changes skip persistence - BaseNodeViewer handles with debouncing
+      // This ensures hierarchy operations work while avoiding duplicate writes on content edits
+      if (!options.skipPersistence && source.type !== 'database') {
+        const isStructuralChange = 'parentId' in changes || 'beforeSiblingId' in changes;
+        const shouldPersist = source.type !== 'viewer' || isStructuralChange;
 
-        if (!isEmptyTextNode) {
+        if (shouldPersist) {
           // Queue database write to prevent concurrent writes
           queueDatabaseWrite(nodeId, async () => {
-            try {
-              // Check if node has been persisted - use in-memory tracking to avoid database query
-              const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
-              if (isPersistedToDatabase) {
-                await tauriNodeService.updateNode(nodeId, updatedNode);
-              } else {
-                // Node doesn't exist yet (was a placeholder or new node)
-                await tauriNodeService.createNode(updatedNode);
-                this.persistedNodeIds.add(nodeId); // Track as persisted
-              }
-              // Mark update as persisted
-              this.markUpdatePersisted(nodeId, update);
-            } catch (dbError) {
-              const error = dbError instanceof Error ? dbError : new Error(String(dbError));
-              console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, error);
+              try {
+                // Check if node has been persisted - use in-memory tracking to avoid database query
+                const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
+                if (isPersistedToDatabase) {
+                  await tauriNodeService.updateNode(nodeId, updatedNode);
+                } else {
+                  // Node doesn't exist yet (was a placeholder or new node)
+                  await tauriNodeService.createNode(updatedNode);
+                  this.persistedNodeIds.add(nodeId); // Track as persisted
+                }
+                // Mark update as persisted
+                this.markUpdatePersisted(nodeId, update);
+              } catch (dbError) {
+                const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+                console.error(`[SharedNodeStore] Database write failed for node ${nodeId}:`, error);
 
-              // Track error in test environment for test verification
-              if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-                this.testErrors.push(error);
-              }
+                // Track error in test environment for test verification
+                if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+                  this.testErrors.push(error);
+                }
 
-              // Rollback the optimistic update
-              this.rollbackUpdate(nodeId, update);
-            }
-          }).catch((err) => {
+                // Rollback the optimistic update
+                this.rollbackUpdate(nodeId, update);
+              }
+            }).catch((err) => {
             // Catch any queueing errors
             const error = err instanceof Error ? err : new Error(String(err));
             console.error(`[SharedNodeStore] Failed to queue database write:`, error);
@@ -361,6 +361,7 @@ export class SharedNodeStore {
    * Set a node (create or replace)
    */
   setNode(node: Node, source: UpdateSource, skipPersistence = false): void {
+    const isNewNode = !this.nodes.has(node.id);
     this.nodes.set(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
     this.notifySubscribers(node.id, node, source);
@@ -371,43 +372,41 @@ export class SharedNodeStore {
     }
 
     // Phase 2.4: Persist to database
-    // IMPORTANT: Skip viewer-sourced updates - BaseNodeViewer handles persistence with debouncing
-    // Only persist updates from other sources (e.g., MCP server in the future)
-    // TODO: Refactor BaseNodeViewer to use SharedNodeStore for all persistence (#TBD)
-    if (!skipPersistence && source.type !== 'database' && source.type !== 'viewer') {
-      // Skip persisting empty text nodes - they exist in UI but not in database
-      // until user adds content (backend validation requires non-empty content)
-      const isEmptyTextNode = node.nodeType === 'text' && node.content.trim() === '';
+    // IMPORTANT: For NEW nodes from viewer, persist immediately (including empty ones!)
+    // For UPDATES from viewer, skip persistence - BaseNodeViewer handles with debouncing
+    // This ensures createNode() persistence works while avoiding duplicate writes on updates
+    if (!skipPersistence && source.type !== 'database') {
+      const shouldPersist = source.type !== 'viewer' || isNewNode;
 
-      if (!isEmptyTextNode) {
-        queueDatabaseWrite(node.id, async () => {
-          try {
-            // Check if node has been persisted - use in-memory tracking to avoid database query
-            const isPersistedToDatabase = this.persistedNodeIds.has(node.id);
-            if (isPersistedToDatabase) {
-              await tauriNodeService.updateNode(node.id, node);
-            } else {
-              await tauriNodeService.createNode(node);
-              this.persistedNodeIds.add(node.id); // Track as persisted
+      if (shouldPersist) {
+          queueDatabaseWrite(node.id, async () => {
+            try {
+              // Check if node has been persisted - use in-memory tracking to avoid database query
+              const isPersistedToDatabase = this.persistedNodeIds.has(node.id);
+              if (isPersistedToDatabase) {
+                await tauriNodeService.updateNode(node.id, node);
+              } else {
+                await tauriNodeService.createNode(node);
+                this.persistedNodeIds.add(node.id); // Track as persisted
+              }
+            } catch (dbError) {
+              const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+              console.error(`[SharedNodeStore] Database write failed for node ${node.id}:`, error);
+
+              // Track error in test environment for test verification
+              if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+                this.testErrors.push(error);
+              }
             }
-          } catch (dbError) {
-            const error = dbError instanceof Error ? dbError : new Error(String(dbError));
-            console.error(`[SharedNodeStore] Database write failed for node ${node.id}:`, error);
+          }).catch((err) => {
+            const error = err instanceof Error ? err : new Error(String(err));
+            console.error(`[SharedNodeStore] Failed to queue database write:`, error);
 
             // Track error in test environment for test verification
             if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
               this.testErrors.push(error);
             }
-          }
-        }).catch((err) => {
-          const error = err instanceof Error ? err : new Error(String(err));
-          console.error(`[SharedNodeStore] Failed to queue database write:`, error);
-
-          // Track error in test environment for test verification
-          if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-            this.testErrors.push(error);
-          }
-        });
+          });
       }
     }
   }
