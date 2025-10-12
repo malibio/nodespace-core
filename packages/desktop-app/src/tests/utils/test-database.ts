@@ -116,13 +116,9 @@ export async function initializeTestDatabase(
   //
   // NOTE: We do NOT call tauriNodeService.initializeDatabase(dbPath) because that would
   // make a second HTTP request to the same endpoint, causing the database to be swapped
-  // twice. Instead, we directly update the singleton's internal state since we've already
-  // initialized the dev server above.
-
-  // @ts-expect-error - Accessing private fields for test setup
-  tauriNodeService.dbPath = dbPath;
-  // @ts-expect-error - Accessing private fields for test setup
-  tauriNodeService.initialized = true;
+  // twice. Instead, we use the test-only API to update the singleton's internal state
+  // since we've already initialized the dev server above.
+  tauriNodeService.__testOnly_setInitializedPath(dbPath);
 
   console.log(`[Test] Initialized test database: ${initializedPath}`);
   return initializedPath;

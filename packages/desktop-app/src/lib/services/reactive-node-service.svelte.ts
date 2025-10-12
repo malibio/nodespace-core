@@ -816,6 +816,32 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   /**
+   * PERSISTENCE DEPENDENCY PATTERN: Sibling Chain Updates
+   *
+   * CRITICAL ARCHITECTURAL DECISION for indent/outdent operations:
+   *
+   * DO NOT add the updatedSiblingId returned from removeFromSiblingChain() as a
+   * persistence dependency in indent/outdent operations.
+   *
+   * Rationale:
+   * 1. Consecutive indent/outdent operations can update each other as siblings,
+   *    creating circular dependency chains (e.g., node-2 waits for node-3,
+   *    node-3 waits for node-2, resulting in deadlock)
+   * 2. Sibling chain updates from removeFromSiblingChain are independent operations
+   *    that can execute in parallel with the main update without violating database
+   *    constraints
+   * 3. SharedNodeStore's automatic dependency system (lines 297-302) ensures that
+   *    beforeSiblingId references wait for node persistence (handles FOREIGN KEY
+   *    constraints automatically)
+   * 4. Removing this dependency eliminates circular deadlocks without sacrificing
+   *    database integrity guarantees
+   *
+   * @see SharedNodeStore lines 297-302 for automatic dependency injection
+   * @see indentNode() for implementation example
+   * @see outdentNode() for implementation example
+   */
+
+  /**
    * Removes a node from its current sibling chain by updating the next sibling's beforeSiblingId.
    * This prevents orphaned nodes when a node is moved (indent/outdent) or deleted.
    *
@@ -862,8 +888,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     if (!prevSibling) return false;
 
     // Step 1: Remove node from current sibling chain BEFORE changing parent
-    // This updates the next sibling (if any) to splice out this node
-    removeFromSiblingChain(nodeId);
+    // This operation updates the next sibling (if any) to maintain chain integrity
+    // Return value not needed here - the sibling update happens automatically
+    void removeFromSiblingChain(nodeId);
 
     // Find the last child of the new parent to insert after
     const existingChildren = sharedNodeStore.getNodesForParent(prevSiblingId).map((n) => n.id);
@@ -879,14 +906,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const prevSiblingUIState = _uiState[prevSiblingId];
 
     // Step 2: Build dependency list for persistence sequencing
+    // (See "PERSISTENCE DEPENDENCY PATTERN" documentation above for why we don't
+    // add updatedSiblingId from removeFromSiblingChain as a dependency)
     const persistenceDependencies: string[] = [];
 
-    // DO NOT add updatedSiblingId as a dependency - it creates circular dependencies
-    // when consecutive indent/outdent operations update each other as siblings.
-    // The sibling chain update from removeFromSiblingChain is independent and can
-    // happen in parallel with the main update without violating database constraints.
-    // SharedNodeStore's automatic dependency system (lines 297-302) ensures that
-    // beforeSiblingId references are persisted before being used as foreign keys.
+    // Defensive validation: Ensure parent exists before adding dependency
+    if (!prevSiblingId) {
+      console.error('[indentNode] Invalid state: prevSiblingId is null/undefined');
+      return false; // Early return to prevent corruption
+    }
 
     // Ensure the new parent (prevSibling) is persisted before making this node its child
     persistenceDependencies.push(prevSiblingId);
@@ -964,10 +992,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const nodeIndex = sortedSiblings.indexOf(nodeId);
     const siblingsBelow = nodeIndex >= 0 ? sortedSiblings.slice(nodeIndex + 1) : [];
 
-    // Step 1: Remove node from current sibling chain BEFORE changing parent
-    // This updates the next sibling (if any) to splice out this node
-    removeFromSiblingChain(nodeId);
+    // Step 1: Prepare for parent change
+    // Remove node from current sibling chain to maintain chain integrity
+    // Return value not needed here - the sibling update happens automatically
+    void removeFromSiblingChain(nodeId);
 
+    // Step 2: Calculate new position in parent hierarchy
     const newParentId = parent.parentId || null;
     const uiState = _uiState[nodeId];
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
@@ -996,22 +1026,23 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
     }
 
-    // Step 2: Build dependencies for main node update
+    // Step 3: Build persistence dependencies
+    // (See "PERSISTENCE DEPENDENCY PATTERN" documentation above for why we don't
+    // add updatedSiblingId from removeFromSiblingChain as a dependency)
     const mainNodeDeps: string[] = [];
 
-    // DO NOT add updatedSiblingId as a dependency - it creates circular dependencies
-    // when consecutive indent/outdent operations update each other as siblings.
-    // The sibling chain update from removeFromSiblingChain is independent and can
-    // happen in parallel with the main update without violating database constraints.
-    // SharedNodeStore's automatic dependency system (lines 297-302) ensures that
-    // beforeSiblingId references are persisted before being used as foreign keys.
+    // Defensive validation: Ensure old parent exists before adding dependency
+    if (!oldParentId) {
+      console.error('[outdentNode] Invalid state: oldParentId is null/undefined');
+      return false; // Early return to prevent corruption
+    }
 
     mainNodeDeps.push(oldParentId);
     if (positionBeforeSibling && positionBeforeSibling !== oldParentId) {
       mainNodeDeps.push(positionBeforeSibling);
     }
 
-    // Step 3: Update the main node
+    // Step 4: Execute main node update
     sharedNodeStore.updateNode(
       nodeId,
       {
@@ -1026,7 +1057,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     _uiState[nodeId] = { ...uiState, depth: newDepth };
 
-    // Step 4: Insert the outdented node into the new parent's sibling chain
+    // Step 5: Repair sibling chain in new parent
     // Find any sibling in the new parent that currently points to positionBeforeSibling
     // and update it to point to the outdented node instead
     if (positionBeforeSibling !== null) {
@@ -1043,7 +1074,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
     }
 
-    // Step 5: Transfer siblings below the outdented node as its children
+    // Step 6: Transfer affected siblings as children
     // Need to rebuild their before_sibling_id chain to be valid in new parent context
     if (siblingsBelow.length > 0) {
       // Find existing children of the outdented node to append after them
