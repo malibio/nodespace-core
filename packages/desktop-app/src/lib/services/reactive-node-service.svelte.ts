@@ -374,15 +374,23 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       beforeSiblingId = afterNodeId;
     }
 
-    // Determine origin_node_id - inherit from parent or use 'root' if no parent
-    let rootId: string;
+    // Determine containerNodeId - tracks which root document this node belongs to
+    // Rule: containerNodeId = null only for root nodes themselves
+    //       All other nodes should have containerNodeId pointing to their root document
+    let rootId: string | null;
     if (newParentId) {
+      // Node has explicit parent - inherit containerNodeId from parent
       const parent = sharedNodeStore.getNode(newParentId);
-      // Inherit origin_node_id from parent, or use parent's id if parent has no origin_node_id
       rootId = parent?.containerNodeId || newParentId;
     } else {
-      // No parent means this node is at root level
-      rootId = 'root';
+      // No explicit parent - check if afterNode is a root node or belongs to a root
+      if (afterNode.containerNodeId === null) {
+        // afterNode IS a root document, so new node belongs to that root
+        rootId = afterNodeId;
+      } else {
+        // afterNode belongs to a root, inherit that root
+        rootId = afterNode.containerNodeId;
+      }
     }
 
     // Create Node with unified type system
@@ -435,8 +443,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
       if (children.length > 0) {
         // Transfer children to new node
+        // IMPORTANT: Update both parentId AND containerNodeId
+        // Rule: containerNodeId = parentId for direct children of root nodes
         for (const child of children) {
-          sharedNodeStore.updateNode(child.id, { parentId: nodeId }, viewerSource);
+          sharedNodeStore.updateNode(
+            child.id,
+            { parentId: nodeId, containerNodeId: newNode.containerNodeId || nodeId },
+            viewerSource
+          );
         }
       }
     }
