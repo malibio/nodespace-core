@@ -464,12 +464,12 @@ export class PersistenceCoordinator {
       // Resolve dependencies first
       await this.resolveDependencies(op.dependencies);
 
-      // Execute the operation (always execute user callback)
-      await op.operation();
-
-      // In test mode, just track that we "persisted"
+      // In test mode, skip actual operation execution
       if (this.testMode) {
         this.mockPersistence.set(op.nodeId, true);
+      } else {
+        // Execute the operation (production mode only)
+        await op.operation();
       }
 
       // Mark as completed
