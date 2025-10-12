@@ -393,6 +393,186 @@ expect(mockCoordinator.persist).toHaveBeenCalledWith('b', ...);
 - Remove manual promise tracking
 - Update tests
 
+## Critical Usage Patterns (Issue #246 Lessons Learned)
+
+### ⚠️ Anti-Pattern: Manual Awaits Bypass Coordinator
+
+**DO NOT** manually await `waitForNodeSaves()` in operation implementations. This bypasses the PersistenceCoordinator's dependency management.
+
+```typescript
+// ❌ WRONG - Manual await bypasses coordinator
+async function deleteNode(nodeId: string): Promise<void> {
+  const nodesToWaitFor = [nextSibling?.id].filter(Boolean);
+  removeFromSiblingChain(nodeId);
+  await sharedNodeStore.waitForNodeSaves(nodesToWaitFor);  // ❌ Manual coordination!
+  sharedNodeStore.deleteNode(nodeId, source);
+}
+```
+
+**Why this causes problems**:
+- Operations run in parallel instead of being sequenced
+- Multiple concurrent HTTP requests hit backend
+- Backend can't handle concurrent writes → HTTP 500 errors
+- Defeats the purpose of having a PersistenceCoordinator
+- Requires manual error handling and timeout logic
+- Makes code unnecessarily async
+
+### ✅ Correct Pattern: Declarative Dependencies
+
+**DO** pass dependencies explicitly via options and let PersistenceCoordinator handle all sequencing.
+
+```typescript
+// ✅ CORRECT - Declarative dependencies
+function deleteNode(nodeId: string): void {
+  // 1. Identify what must complete first
+  const dependencies: string[] = [];
+  const nextSibling = siblings.find(n => n.beforeSiblingId === nodeId);
+  if (nextSibling) {
+    dependencies.push(nextSibling.id);
+  }
+
+  // 2. Queue preparatory operations
+  removeFromSiblingChain(nodeId);  // Auto-persists via SharedNodeStore
+
+  // 3. Queue main operation WITH dependencies
+  sharedNodeStore.deleteNode(nodeId, source, false, dependencies);
+
+  // PersistenceCoordinator automatically:
+  // - Waits for nextSibling update to complete
+  // - Then executes the deletion
+  // - Handles any errors or timeouts
+  // - Updates reactive status
+}
+```
+
+**Why this is correct**:
+- ✅ Dependencies explicit and declarative
+- ✅ Coordinator queues and sequences everything
+- ✅ Backend receives requests one at a time
+- ✅ No race conditions or HTTP 500 errors
+- ✅ Operations remain synchronous
+- ✅ No manual error handling needed
+- ✅ Clean, readable code
+
+### 🚩 Red Flags Indicating Coordinator Bypass
+
+Watch for these patterns - they indicate improper usage:
+
+1. **`async function` on operations** - Operations should be synchronous
+2. **`await waitForNodeSaves()`** - Should use dependencies instead
+3. **`await persist()`** - persist() should not be awaited
+4. **Try-catch around waits** - Manual error handling not needed
+5. **Promise return types** - Operations should return void or boolean
+
+### 📋 Proper Usage Checklist
+
+When implementing sibling chain operations:
+
+- [ ] Operation is **synchronous** (not async)
+- [ ] Returns **void** or **boolean** (not Promise)
+- [ ] Identifies dependencies **before** making changes
+- [ ] Passes dependencies via **persistenceDependencies** option
+- [ ] **No manual awaits** anywhere in the function
+- [ ] **No try-catch** for coordination errors
+- [ ] SharedNodeStore methods called **without await**
+- [ ] Dependencies are **node IDs** or **lambda functions**
+
+### 🎯 Real-World Examples
+
+**All four sibling chain operations** follow this pattern:
+
+**combineNodes()** (lines 710-818 in reactive-node-service.svelte.ts):
+```typescript
+function combineNodes(currentNodeId, previousNodeId): void {
+  const dependencies = [nextSibling?.id, ...children].filter(Boolean);
+  removeFromSiblingChain(currentNodeId);
+  sharedNodeStore.deleteNode(currentNodeId, source, false, dependencies);
+}
+```
+
+**indentNode()** (lines 835-974):
+```typescript
+function indentNode(nodeId): boolean {
+  const dependencies = [nextSibling?.id].filter(Boolean);
+  removeFromSiblingChain(nodeId);
+  sharedNodeStore.updateNode(nodeId, updates, source, { persistenceDependencies: dependencies });
+  return true;
+}
+```
+
+**outdentNode()** (lines 943-1166):
+```typescript
+function outdentNode(nodeId): boolean {
+  const dependencies = [nextSibling?.id].filter(Boolean);
+  removeFromSiblingChain(nodeId);
+  sharedNodeStore.updateNode(nodeId, updates, source, { persistenceDependencies: dependencies });
+  // Transfer siblings with their own dependencies
+  return true;
+}
+```
+
+**deleteNode()** (lines 1194-1294):
+```typescript
+function deleteNode(nodeId): void {
+  const dependencies = [nextSibling?.id].filter(Boolean);
+  removeFromSiblingChain(nodeId);
+  sharedNodeStore.deleteNode(nodeId, source, false, dependencies);
+}
+```
+
+### 🔄 How Coordinator Sequences Operations
+
+**Internal flow** (from Issue #246 investigation):
+
+```
+User calls: indentNode('node-3')
+  ↓
+1. Identify dependencies: [nextSibling.id = 'node-4']
+  ↓
+2. Call removeFromSiblingChain('node-3')
+   → Queues: UPDATE node-4 SET beforeSiblingId = 'node-2'
+   → Status: node-4 = 'pending'
+  ↓
+3. Call updateNode('node-3', ..., { persistenceDependencies: ['node-4'] })
+   → Queues: UPDATE node-3 SET parentId = 'node-2'
+   → Dependency: Waits for node-4
+   → Status: node-3 = 'blocked'
+  ↓
+4. Coordinator processes queue:
+   → Execute node-4 update (no dependencies)
+   → Mark node-4 = 'completed'
+   → Unblock node-3
+   → Execute node-3 update
+   → Mark node-3 = 'completed'
+  ↓
+Result: Operations execute in correct order, FOREIGN KEY constraints satisfied
+```
+
+### 📊 Performance Impact
+
+**Before (manual awaits)**:
+- ~130 lines of coordination code
+- Manual timeout handling
+- Explicit try-catch blocks
+- Async operations throughout
+
+**After (declarative dependencies)**:
+- ~75 lines of pure business logic
+- No timeout handling needed
+- No try-catch blocks
+- Synchronous operations
+
+**Code reduction**: 55 lines (~42% reduction)
+**Complexity reduction**: Significant (removed all async/await logic)
+
+### 🔗 References
+
+- **Issue #246**: Sibling chain integrity fixes
+- **PR #250**: Code review and refactoring
+- **Commit 2695cc5**: "Remove manual awaits, use PersistenceCoordinator dependencies properly"
+- **Implementation**: `packages/desktop-app/src/lib/services/reactive-node-service.svelte.ts`
+- **Pattern Documentation**: Lines 22-43 in reactive-node-service.svelte.ts
+
 ## Related Documentation
 
 - [Dependency-Based Persistence](./dependency-based-persistence.md) - Detailed API design
