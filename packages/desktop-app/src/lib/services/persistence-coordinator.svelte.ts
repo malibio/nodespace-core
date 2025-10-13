@@ -23,6 +23,21 @@
  */
 
 // ============================================================================
+// Error Types
+// ============================================================================
+
+/**
+ * Error thrown when an operation is cancelled
+ * This is an expected control-flow error, not a failure
+ */
+export class OperationCancelledError extends Error {
+  constructor(nodeId: string, reason = 'Operation cancelled') {
+    super(`${reason}: ${nodeId}`);
+    this.name = 'OperationCancelledError';
+  }
+}
+
+// ============================================================================
 // Types and Interfaces
 // ============================================================================
 
@@ -393,12 +408,12 @@ export class PersistenceCoordinator {
         clearTimeout(op.timer);
       }
 
-      // Mark as failed
+      // Mark as failed with cancellation error
       op.status = 'failed';
-      op.error = new Error('Cancelled');
+      op.error = new OperationCancelledError(nodeId);
       this.persistenceStatus.set(nodeId, 'failed');
 
-      // Reject promise
+      // Reject promise with cancellation error
       op.reject(op.error);
 
       // Clean up
@@ -416,12 +431,28 @@ export class PersistenceCoordinator {
 
   /**
    * Reset all state (for testing)
+   *
+   * Cancels all pending operations and waits for their cancellation
+   * promises to be handled, preventing unhandled promise rejections.
    */
-  reset(): void {
-    // Cancel all pending operations
-    for (const [nodeId] of this.operations) {
+  async reset(): Promise<void> {
+    // Cancel all pending operations and capture their promises
+    const cancellationPromises: Promise<void>[] = [];
+    for (const [nodeId, op] of this.operations) {
+      // Capture the promise before cancelling
+      cancellationPromises.push(
+        op.promise.catch((err) => {
+          // Silently ignore cancellation errors, log others
+          if (!(err instanceof OperationCancelledError)) {
+            console.warn('[PersistenceCoordinator] Unexpected error during reset:', err);
+          }
+        })
+      );
       this.cancelPending(nodeId);
     }
+
+    // Wait for all cancellations to be processed
+    await Promise.allSettled(cancellationPromises);
 
     // Clear state (use .clear() to preserve Svelte 5 reactivity)
     this.operations.clear();
