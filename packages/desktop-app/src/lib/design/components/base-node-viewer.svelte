@@ -60,9 +60,6 @@
   // Start as true to prevent watcher from firing before loadChildrenForParent() completes
   let isLoadingInitialNodes = true;
 
-  // Time to wait for setRawMarkdown() to complete and create DIV structure
-  const DOM_STRUCTURE_SETTLE_DELAY_MS = 20;
-
   // Set view context and load children when parentId changes
   $effect(() => {
     nodeManager.setViewParentId(parentId);
@@ -546,28 +543,41 @@
 
       // Check if we have any nodes at all
       if (allNodes.length === 0) {
-        // No nodes - create placeholder
-        const placeholderId = globalThis.crypto.randomUUID();
-        nodeManager.initializeNodes(
-          [
-            {
-              id: placeholderId,
-              nodeType: 'text',
-              content: '',
-              parentId: parentId,
-              containerNodeId: parentId,
-              beforeSiblingId: null,
-              createdAt: new Date().toISOString(),
-              modifiedAt: new Date().toISOString(),
-              properties: {}
-            }
-          ],
-          {
+        // Check if placeholder already exists (reuse for multi-tab support)
+        const existingNodes = sharedNodeStore.getNodesForParent(parentId);
+
+        if (existingNodes.length === 0) {
+          // No placeholder exists - create one
+          const placeholderId = globalThis.crypto.randomUUID();
+          const placeholder: Node = {
+            id: placeholderId,
+            nodeType: 'text',
+            content: '',
+            parentId: parentId,
+            containerNodeId: parentId,
+            beforeSiblingId: null,
+            createdAt: new Date().toISOString(),
+            modifiedAt: new Date().toISOString(),
+            properties: {},
+            mentions: []
+          };
+
+          // Initialize with placeholder
+          // initializeNodes() will auto-detect this is a placeholder and use viewer source
+          nodeManager.initializeNodes([placeholder], {
             expanded: true,
             autoFocus: true,
             inheritHeaderLevel: 0
-          }
-        );
+          });
+        } else {
+          // Placeholder exists - initialize UI with existing placeholder
+          // initializeNodes() will auto-detect placeholders and use viewer source
+          nodeManager.initializeNodes(existingNodes, {
+            expanded: true,
+            autoFocus: true,
+            inheritHeaderLevel: 0
+          });
+        }
       } else {
         // Track initial content of ALL loaded nodes BEFORE initializing
         // This prevents the content watcher from thinking these are new nodes
@@ -1152,9 +1162,10 @@
 
       targetElement.focus();
 
-      // Wait for DOM to update after focus (transition to editing mode creates DIV structure)
-      // Increased delay to ensure setRawMarkdown() completes and DIVs are created
-      setTimeout(() => {
+      // Wait for DOM to update after focus
+      // With DIVs in both display and editing modes, structure is already ready
+      // Use requestAnimationFrame for minimal delay (next paint frame)
+      requestAnimationFrame(() => {
         // Check if multiline or single-line
         const divElements = targetElement.querySelectorAll(':scope > div');
         const isMultiline = divElements.length > 0;
@@ -1174,7 +1185,7 @@
 
         // Show caret after positioning is complete
         targetElement.style.caretColor = '';
-      }, DOM_STRUCTURE_SETTLE_DELAY_MS);
+      });
     }, 0);
 
     return true;
@@ -1282,6 +1293,14 @@
   // Track focused node for autoFocus after node type changes
   let focusedNodeId = $state<string | null>(null);
 
+  // Calculate minimum depth for relative positioning
+  // Children of a container node should start at depth 0 in the viewer
+  const minDepth = $derived(() => {
+    const nodes = nodeManager.visibleNodes;
+    if (nodes.length === 0) return 0;
+    return Math.min(...nodes.map((n) => n.depth || 0));
+  });
+
   // Clear focusedNodeId after a delay to prevent permanent focus
   $effect(() => {
     if (focusedNodeId) {
@@ -1378,10 +1397,11 @@
   <!-- Scrollable Node Content Area (children structure) -->
   <div class="node-content-area">
     {#each nodeManager.visibleNodes as node (node.id)}
+      {@const relativeDepth = (node.depth || 0) - minDepth()}
       <div
         class="node-container"
         data-has-children={node.children?.length > 0}
-        style="margin-left: {(node.depth || 0) * 2.5}rem"
+        style="margin-left: {relativeDepth * 2.5}rem"
       >
         <div class="node-content-wrapper">
           <!-- Chevron for parent nodes using design system approach -->

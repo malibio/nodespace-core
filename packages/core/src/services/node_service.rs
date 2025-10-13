@@ -158,10 +158,50 @@ impl NodeService {
         self.behaviors.validate_node(&node)?;
 
         // Validate parent exists if parent_id is set
+        // Auto-create date nodes if they don't exist
         if let Some(ref parent_id) = node.parent_id {
             let parent_exists = self.node_exists(parent_id).await?;
             if !parent_exists {
-                return Err(NodeServiceError::invalid_parent(parent_id));
+                // Check if this is a date node (format: YYYY-MM-DD)
+                if parent_id.len() == 10 && parent_id.chars().filter(|c| *c == '-').count() == 2 {
+                    // Auto-create the date node
+                    let date_node = Node {
+                        id: parent_id.clone(),
+                        node_type: "date".to_string(),
+                        content: String::new(),
+                        parent_id: None,
+                        container_node_id: None,
+                        before_sibling_id: None,
+                        properties: serde_json::Value::Object(serde_json::Map::new()),
+                        mentions: vec![],
+                        mentioned_by: vec![],
+                        created_at: chrono::Utc::now(),
+                        modified_at: chrono::Utc::now(),
+                        embedding_vector: None,
+                    };
+
+                    // Insert date node directly (skip validation to avoid recursion)
+                    let conn = self.db.connect_with_timeout().await?;
+                    let properties_json = "{}";
+                    conn.execute(
+                        "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            date_node.id.as_str(),
+                            date_node.node_type.as_str(),
+                            date_node.content.as_str(),
+                            date_node.parent_id.as_deref(),
+                            date_node.container_node_id.as_deref(),
+                            date_node.before_sibling_id.as_deref(),
+                            properties_json,
+                            date_node.embedding_vector.as_deref(),
+                        ),
+                    )
+                    .await
+                    .map_err(|e| NodeServiceError::query_failed(format!("Failed to auto-create date node: {}", e)))?;
+                } else {
+                    return Err(NodeServiceError::invalid_parent(parent_id));
+                }
             }
         }
 
@@ -578,12 +618,12 @@ impl NodeService {
     /// # let db = DatabaseService::new(PathBuf::from("./test.db")).await?;
     /// # let service = NodeService::new(db)?;
     /// // Fetch all nodes for a date page
-    /// let nodes = service.get_nodes_by_origin_id("2025-10-05").await?;
+    /// let nodes = service.get_nodes_by_container_id("2025-10-05").await?;
     /// println!("Found {} nodes in this document", nodes.len());
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_nodes_by_origin_id(
+    pub async fn get_nodes_by_container_id(
         &self,
         container_node_id: &str,
     ) -> Result<Vec<Node>, NodeServiceError> {
@@ -2042,6 +2082,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_auto_create_date_node_parent() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create a text node with a date node parent that doesn't exist yet
+        let text_node = Node::new_with_id(
+            "test-node-1".to_string(),
+            "text".to_string(),
+            "Hello from a date".to_string(),
+            Some("2025-10-13".to_string()), // Date node parent that doesn't exist
+            json!({}),
+        );
+
+        // Should succeed - date node should be auto-created
+        let id = service.create_node(text_node).await.unwrap();
+        assert_eq!(id, "test-node-1");
+
+        // Verify the text node was created
+        let retrieved_text = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(retrieved_text.node_type, "text");
+        assert_eq!(retrieved_text.content, "Hello from a date");
+        assert_eq!(retrieved_text.parent_id, Some("2025-10-13".to_string()));
+
+        // Verify the date node was auto-created
+        let retrieved_date = service.get_node("2025-10-13").await.unwrap().unwrap();
+        assert_eq!(retrieved_date.node_type, "date");
+        assert_eq!(retrieved_date.id, "2025-10-13");
+        assert_eq!(retrieved_date.parent_id, None);
+        assert_eq!(retrieved_date.content, ""); // Date nodes have empty content
+    }
+
+    #[tokio::test]
     async fn test_update_node() {
         let (service, _temp) = create_test_service().await;
 
@@ -2321,10 +2392,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_nodes_by_origin_id() {
+    async fn test_get_nodes_by_container_id() {
         let (service, _temp) = create_test_service().await;
 
-        // Create a date node (acts as origin)
+        // Create a date node (acts as container)
         let date_node = Node::new_with_id(
             "2025-10-05".to_string(),
             "date".to_string(),
@@ -2381,7 +2452,10 @@ mod tests {
         service.create_node(other_child).await.unwrap();
 
         // Bulk fetch should return only the 3 children with container_node_id = "2025-10-05"
-        let nodes = service.get_nodes_by_origin_id("2025-10-05").await.unwrap();
+        let nodes = service
+            .get_nodes_by_container_id("2025-10-05")
+            .await
+            .unwrap();
 
         assert_eq!(nodes.len(), 3, "Should return exactly 3 nodes");
         assert!(

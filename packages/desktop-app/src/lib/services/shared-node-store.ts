@@ -255,12 +255,33 @@ export class SharedNodeStore {
       // Phase 2.4: Persist to database (unless skipped)
       // IMPORTANT: For viewer-sourced updates:
       // - Structural changes (parentId, beforeSiblingId, containerNodeId) persist immediately
-      // - Content changes skip persistence - BaseNodeViewer handles with debouncing
-      // This ensures hierarchy operations work while avoiding duplicate writes on content edits
+      // - Content changes persist in debounced mode
+      // This ensures hierarchy operations work while debouncing rapid typing
       if (!options.skipPersistence && source.type !== 'database') {
+        // CRITICAL: Check if beforeSiblingId references an unpersisted placeholder
+        // Placeholders use skipPersistence, so there's no operation to wait for
+        // Remove beforeSiblingId from changes to avoid FOREIGN KEY constraint violation
+        if ('beforeSiblingId' in changes && changes.beforeSiblingId) {
+          const isPersisted = this.persistedNodeIds.has(changes.beforeSiblingId);
+          if (!isPersisted) {
+            // Check if there's a pending operation for this node (would mean it's being persisted)
+            const coordinator = PersistenceCoordinator.getInstance();
+            const hasPendingOp = coordinator.isPending(changes.beforeSiblingId);
+
+            if (!hasPendingOp) {
+              // No pending operation means this is a placeholder that won't be persisted yet
+              // Remove beforeSiblingId to avoid FOREIGN KEY error
+              // It will be set later when the placeholder gets content and is persisted
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              delete (changes as any).beforeSiblingId;
+            }
+          }
+        }
+
         const isStructuralChange =
           'parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes;
-        const shouldPersist = source.type !== 'viewer' || isStructuralChange;
+        const isContentChange = 'content' in changes;
+        const shouldPersist = source.type !== 'viewer' || isStructuralChange || isContentChange;
 
         // Skip persisting empty text nodes - they exist in UI but not in database
         const isEmptyTextNode =
@@ -302,6 +323,8 @@ export class SharedNodeStore {
            * Add dependency when:
            * - beforeSiblingId is set
            * - NOT already persisted to database
+           *
+           * NOTE: Placeholder check is done earlier (line 263-274) to avoid FOREIGN KEY violations
            */
           if (
             updatedNode.beforeSiblingId &&
@@ -322,12 +345,48 @@ export class SharedNodeStore {
               try {
                 // Check if node has been persisted - use in-memory tracking to avoid database query
                 const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
+                console.log(
+                  `[SharedNodeStore] Persisting node ${nodeId}: ${isPersistedToDatabase ? 'UPDATE' : 'CREATE'}`
+                );
+
                 if (isPersistedToDatabase) {
-                  await tauriNodeService.updateNode(nodeId, updatedNode);
+                  // IMPORTANT: For UPDATE, only send the changes (Partial<Node>), not the full node
+                  // The backend expects NodeUpdate which is a partial update of specific fields
+                  // Convert nullable fields properly (undefined = don't update, null = set to null)
+                  const updatePayload: Partial<Node> = {};
+                  for (const [key, value] of Object.entries(changes)) {
+                    // @ts-expect-error - Dynamic key access is safe here for partial update
+                    updatePayload[key] = value;
+                  }
+
+                  try {
+                    await tauriNodeService.updateNode(nodeId, updatePayload);
+                  } catch (updateError) {
+                    // If UPDATE fails because node doesn't exist (NodeNotFound), try CREATE instead
+                    // This handles cases where persistedNodeIds is out of sync (page reload, database reset)
+                    if (
+                      updateError instanceof Error &&
+                      updateError.message.includes('NodeNotFound')
+                    ) {
+                      console.warn(
+                        `[SharedNodeStore] Node ${nodeId} not found in database, creating instead of updating`
+                      );
+                      await tauriNodeService.createNode(updatedNode);
+                      this.persistedNodeIds.add(nodeId); // Now it's persisted
+                    } else {
+                      // Re-throw other errors
+                      throw updateError;
+                    }
+                  }
                 } else {
                   // Node doesn't exist yet (was a placeholder or new node)
                   await tauriNodeService.createNode(updatedNode);
                   this.persistedNodeIds.add(nodeId); // Track as persisted
+
+                  // CRITICAL: After persisting a placeholder that now has content,
+                  // update any nodes that reference this node in their beforeSiblingId
+                  // (these updates were skipped earlier to avoid FOREIGN KEY violations)
+                  this.updateDeferredSiblingReferences(nodeId);
                 }
                 // Mark update as persisted
                 this.markUpdatePersisted(nodeId, update);
@@ -398,17 +457,20 @@ export class SharedNodeStore {
       this.persistedNodeIds.add(node.id);
     }
 
+    // Check if node is a placeholder (empty content text node from viewer)
+    const isPlaceholder =
+      node.nodeType === 'text' &&
+      node.content.trim() === '' &&
+      source.type === 'viewer' &&
+      isNewNode;
+
     // Phase 2.4: Persist to database
     // IMPORTANT: For NEW nodes from viewer, persist immediately (including empty ones!)
     // For UPDATES from viewer, skip persistence - BaseNodeViewer handles with debouncing
     // This ensures createNode() persistence works while avoiding duplicate writes on updates
     //
-    // NOTE: Empty nodes MUST be persisted to satisfy FOREIGN KEY constraints.
-    // When a node becomes a parent/container, it must exist in the database for children
-    // to reference it via parentId/containerNodeId. The old logic created a chicken-and-egg
-    // problem where parent nodes couldn't be persisted until they had content, but children
-    // couldn't be persisted without persisted parents. Backend accepts empty content.
-    if (!skipPersistence && source.type !== 'database') {
+    // EXCEPTION: Placeholders (empty text nodes) should NOT persist until user adds content
+    if (!skipPersistence && !isPlaceholder && source.type !== 'database') {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
       if (shouldPersist) {
@@ -589,14 +651,14 @@ export class SharedNodeStore {
 
   /**
    * Load child nodes from database for a parent
-   * Replaces BaseNodeViewer's direct databaseService.getNodesByOriginId() call
+   * Replaces BaseNodeViewer's direct databaseService.getNodesByContainerId() call
    *
    * @param parentId - The parent/container node ID
    * @returns Array of child nodes loaded from database
    */
   async loadChildrenForParent(parentId: string): Promise<Node[]> {
     try {
-      const nodes = await tauriNodeService.getNodesByOriginId(parentId);
+      const nodes = await tauriNodeService.getNodesByContainerId(parentId);
 
       // Add nodes to store with database source (skips persistence)
       const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
@@ -610,6 +672,15 @@ export class SharedNodeStore {
       console.error(`[SharedNodeStore] Failed to load children for parent ${parentId}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Check if a node has been persisted to the database
+   * @param nodeId - Node ID to check
+   * @returns True if node exists in database, false if only in memory
+   */
+  isNodePersisted(nodeId: string): boolean {
+    return this.persistedNodeIds.has(nodeId);
   }
 
   /**
@@ -656,9 +727,90 @@ export class SharedNodeStore {
       await this.ensureAncestorChainPersisted(node.parentId);
     }
 
-    // Wait for this node to be persisted (if it has a pending operation)
-    if (this.hasPendingSave(nodeId)) {
+    // Check if node needs to be persisted
+    if (!this.persistedNodeIds.has(nodeId)) {
+      // Node was never persisted (e.g., placeholder node created with skipPersistence)
+      // Force persist it now before any child operations that reference it
+      console.log(`[SharedNodeStore] Force-persisting unpersisted node: ${nodeId}`);
+
+      // Trigger persistence via PersistenceCoordinator
+      const handle = PersistenceCoordinator.getInstance().persist(
+        nodeId,
+        async () => {
+          await tauriNodeService.createNode(node);
+        },
+        { mode: 'immediate' } // Use immediate mode for structural operations
+      );
+
+      try {
+        await handle.promise;
+        // Mark as persisted on success
+        this.persistedNodeIds.add(nodeId);
+        console.log(`[SharedNodeStore] Successfully persisted node: ${nodeId}`);
+      } catch (error) {
+        console.error(`[SharedNodeStore] Failed to persist node ${nodeId}:`, error);
+        throw error;
+      }
+    } else if (this.hasPendingSave(nodeId)) {
+      // Node has a pending save operation, wait for it
       await this.waitForNodeSaves([nodeId]);
+    }
+  }
+
+  /**
+   * Update deferred sibling references after a placeholder is persisted
+   *
+   * ARCHITECTURAL DECISION:
+   * Placeholders use skipPersistence to avoid backend validation errors (empty content).
+   * When they're later persisted (user adds content), we must manually update any
+   * sibling nodes that reference them in beforeSiblingId. These updates were deferred
+   * earlier to avoid FOREIGN KEY constraint violations.
+   *
+   * This is simpler than conditional persistence and avoids circular dependencies.
+   * Alternative approaches (conditional persistence, polling) add complexity without
+   * significant benefit. This manual reconciliation is a proven pattern.
+   *
+   * @param newlyPersistedNodeId - ID of the node that was just persisted
+   */
+  private updateDeferredSiblingReferences(newlyPersistedNodeId: string): void {
+    // Find all nodes in memory that have this node as their beforeSiblingId
+    // but haven't persisted that reference yet (due to FOREIGN KEY constraints)
+    const nodesToUpdate: string[] = [];
+    for (const [id, node] of this.nodes.entries()) {
+      if (node.beforeSiblingId === newlyPersistedNodeId && this.persistedNodeIds.has(id)) {
+        // This persisted node references the newly-persisted node
+        nodesToUpdate.push(id);
+      }
+    }
+
+    if (nodesToUpdate.length === 0) {
+      return; // No deferred updates needed
+    }
+
+    console.log(
+      `[SharedNodeStore] Reconciling ${nodesToUpdate.length} deferred sibling references to ${newlyPersistedNodeId}`
+    );
+
+    // Update each node's beforeSiblingId through normal updateNode flow
+    // Use 'external' source to trigger persistence while avoiding viewer-specific logic
+    const reconciliationSource: UpdateSource = {
+      type: 'external',
+      source: 'SharedNodeStore',
+      description: 'deferred-sibling-reference-reconciliation'
+    };
+
+    for (const nodeId of nodesToUpdate) {
+      // Trigger update through SharedNodeStore (not direct database call)
+      // This respects the architecture: SharedNodeStore → PersistenceCoordinator → Database
+      this.updateNode(
+        nodeId,
+        { beforeSiblingId: newlyPersistedNodeId },
+        reconciliationSource,
+        { skipConflictDetection: true } // Skip conflict detection for reconciliation
+      );
+      console.log(
+        `[SharedNodeStore] Queued deferred beforeSiblingId update: ${nodeId} -> ${newlyPersistedNodeId}`
+      );
     }
   }
 
