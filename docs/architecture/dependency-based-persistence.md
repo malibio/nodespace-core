@@ -580,6 +580,43 @@ try {
 }
 ```
 
+### Operation Cancellation
+
+When operations are superseded (e.g., rapid typing triggers multiple debounced saves), the system cancels pending operations using a custom error type:
+
+```typescript
+import { OperationCancelledError } from './persistence-coordinator.svelte';
+
+// Capture persistence handle
+const handle = updateNode(nodeId, changes, source, {
+  persistenceMode: 'debounce'
+});
+
+// Handle cancellation separately from real errors
+handle.promise.catch((err) => {
+  if (err instanceof OperationCancelledError) {
+    // Operation was superseded by a newer operation - this is expected
+    console.debug('Operation cancelled:', err.message);
+    return;
+  }
+  // Real error - handle appropriately
+  console.error('Persistence failed:', err);
+  showErrorToUser(err);
+});
+```
+
+**Why OperationCancelledError?**
+
+- **Distinguishes control flow from failures**: Cancellation is expected behavior, not an error
+- **Type-safe error handling**: `instanceof` checks allow filtering cancellations from real errors
+- **Prevents unhandled rejections**: Tests and production code can catch cancellations explicitly
+- **Maintains promise semantics**: Operations still reject (maintaining API contract) but with explicit intent
+
+**When operations are cancelled:**
+- Newer operation supersedes pending debounced operation
+- Test cleanup calls `reset()` to cancel all pending operations
+- Node is deleted while its persistence is pending
+
 ## Timeout Handling
 
 Dependencies can timeout:
