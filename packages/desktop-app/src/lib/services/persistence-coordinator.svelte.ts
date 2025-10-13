@@ -142,6 +142,9 @@ export class PersistenceCoordinator {
   private testMode = false;
   private mockPersistence = new Map<string, boolean>();
 
+  // Reset guard to prevent concurrent resets
+  private isResetting = false;
+
   // Metrics
   private metrics: PersistenceMetrics = {
     totalOperations: 0,
@@ -436,41 +439,54 @@ export class PersistenceCoordinator {
    * promises to be handled, preventing unhandled promise rejections.
    */
   async reset(): Promise<void> {
-    // Cancel all pending operations and capture their promises
-    const cancellationPromises: Promise<void>[] = [];
-    for (const [nodeId, op] of this.operations) {
-      // Capture the promise before cancelling
-      cancellationPromises.push(
-        op.promise.catch((err) => {
-          // Silently ignore cancellation errors, log others
-          if (!(err instanceof OperationCancelledError)) {
-            console.warn('[PersistenceCoordinator] Unexpected error during reset:', err);
-          }
-        })
-      );
-      this.cancelPending(nodeId);
+    // Guard against concurrent resets
+    if (this.isResetting) {
+      console.warn('[PersistenceCoordinator] Reset already in progress, skipping');
+      return;
     }
 
-    // Wait for all cancellations to be processed
-    await Promise.allSettled(cancellationPromises);
+    this.isResetting = true;
+    try {
+      // Cancel all pending operations and capture their promises
+      // We iterate and capture promises before cancelling because
+      // cancelPending() deletes entries from the operations Map
+      const cancellationPromises: Promise<void>[] = [];
+      for (const [nodeId, op] of this.operations) {
+        // Capture the promise before cancelling
+        cancellationPromises.push(
+          op.promise.catch((err) => {
+            // Silently ignore cancellation errors, log others
+            if (!(err instanceof OperationCancelledError)) {
+              console.warn('[PersistenceCoordinator] Unexpected error during reset:', err);
+            }
+          })
+        );
+        this.cancelPending(nodeId);
+      }
 
-    // Clear state (use .clear() to preserve Svelte 5 reactivity)
-    this.operations.clear();
-    this.completedOperations.clear();
-    this.waitingQueue.clear(); // Clear blocked operations
-    this.persistenceStatus.clear(); // Changed from reassignment to preserve reactive proxy
-    this.persistedNodes.clear(); // Changed from reassignment to preserve reactive proxy
-    this.mockPersistence.clear();
+      // Wait for all cancellations to be processed
+      await Promise.allSettled(cancellationPromises);
 
-    // Reset metrics
-    this.metrics = {
-      totalOperations: 0,
-      completedOperations: 0,
-      failedOperations: 0,
-      averageExecutionTime: 0,
-      maxExecutionTime: 0,
-      pendingOperations: 0
-    };
+      // Clear state (use .clear() to preserve Svelte 5 reactivity)
+      this.operations.clear();
+      this.completedOperations.clear();
+      this.waitingQueue.clear(); // Clear blocked operations
+      this.persistenceStatus.clear(); // Changed from reassignment to preserve reactive proxy
+      this.persistedNodes.clear(); // Changed from reassignment to preserve reactive proxy
+      this.mockPersistence.clear();
+
+      // Reset metrics
+      this.metrics = {
+        totalOperations: 0,
+        completedOperations: 0,
+        failedOperations: 0,
+        averageExecutionTime: 0,
+        maxExecutionTime: 0,
+        pendingOperations: 0
+      };
+    } finally {
+      this.isResetting = false;
+    }
   }
 
   // ========================================================================
