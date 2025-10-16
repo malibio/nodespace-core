@@ -1547,8 +1547,7 @@
               <TextNodeViewer
                 nodeId={node.id}
                 nodeType={node.nodeType}
-                autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
-                  !pendingCursorPositions.has(node.id)}
+                autoFocus={node.autoFocus || node.id === focusedNodeId}
                 content={node.content}
                 inheritHeaderLevel={node.inheritHeaderLevel || 0}
                 children={node.children}
@@ -1611,8 +1610,7 @@
                 <NodeComponent
                   nodeId={node.id}
                   nodeType={node.nodeType}
-                  autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
-                    !pendingCursorPositions.has(node.id)}
+                  autoFocus={node.autoFocus || node.id === focusedNodeId}
                   content={node.content}
                   headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
@@ -1708,8 +1706,7 @@
                 <BaseNode
                   nodeId={node.id}
                   nodeType={node.nodeType}
-                  autoFocus={(node.autoFocus || node.id === focusedNodeId) &&
-                    !pendingCursorPositions.has(node.id)}
+                  autoFocus={node.autoFocus || node.id === focusedNodeId}
                   content={node.content}
                   headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}

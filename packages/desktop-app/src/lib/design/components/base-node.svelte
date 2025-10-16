@@ -582,6 +582,9 @@
       setTimeout(() => {
         if (controller) {
           controller.focus();
+          // Position cursor at beginning of first line, skipping syntax
+          // Uses CursorPositioningService for consistent, maintainable behavior
+          controller.positionCursorAtLineBeginning(0, true);
         }
       }, 10);
     }

@@ -23,6 +23,7 @@ import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
 import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
+import { CursorPositioningService } from '$lib/services/cursor-positioning-service';
 
 // Module-level command singletons - created once and reused
 const KEYBOARD_COMMANDS = {
@@ -96,6 +97,9 @@ export interface TextareaControllerConfig {
 }
 
 export class TextareaController {
+  // Cursor positioning service
+  private cursorService = CursorPositioningService.getInstance();
+
   // Syntax detection patterns
   private static readonly HEADER_PATTERN = /^(#{1,6})\s/;
   private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
@@ -225,17 +229,13 @@ export class TextareaController {
         this.justCreated = false;
       }, 50);
 
-      this.focus();
-
-      // Position cursor after header syntax for new header nodes
-      if (this.currentHeaderLevel > 0) {
-        const headerPrefix = '#'.repeat(this.currentHeaderLevel) + ' ';
-        if (content.startsWith(headerPrefix)) {
-          setTimeout(() => {
-            this.setCursorPosition(headerPrefix.length);
-          }, 0);
-        }
-      }
+      // Use cursor positioning service for consistent behavior
+      // Focuses and positions cursor at beginning of first line, skipping syntax
+      this.cursorService.setCursorAtBeginningOfLine(this.element, 0, {
+        focus: true,
+        delay: 0,
+        skipSyntax: true
+      });
     }
 
     this.isInitialized = true;
@@ -292,6 +292,21 @@ export class TextareaController {
   }
 
   /**
+   * Position cursor at the beginning of a line using cursor positioning service
+   * Public API for external consumers (e.g., base-node.svelte autoFocus handling)
+   *
+   * @param lineNumber 0-based line number (defaults to 0)
+   * @param skipSyntax Whether to skip syntax markers (defaults to true)
+   */
+  public positionCursorAtLineBeginning(lineNumber: number = 0, skipSyntax: boolean = true): void {
+    this.cursorService.setCursorAtBeginningOfLine(this.element, lineNumber, {
+      focus: false, // Caller should handle focus separately
+      delay: 0,
+      skipSyntax
+    });
+  }
+
+  /**
    * Get current content (markdown)
    */
   public getMarkdownContent(): string {
@@ -339,8 +354,9 @@ export class TextareaController {
 
   /**
    * Set cursor position using native textarea API
+   * Made public to allow external cursor positioning (e.g., for newly created nodes)
    */
-  private setCursorPosition(position: number): void {
+  public setCursorPosition(position: number): void {
     this.element.selectionStart = position;
     this.element.selectionEnd = position;
   }

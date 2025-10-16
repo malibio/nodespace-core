@@ -329,9 +329,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       return '';
     }
 
-    clearAllAutoFocus();
-
     const nodeId = uuidv4();
+
+    // Clear autoFocus only for the afterNode (the currently focused node)
+    // This prevents losing focus on the new node we're about to create
+    if (_uiState[afterNodeId]?.autoFocus) {
+      _uiState[afterNodeId] = { ..._uiState[afterNodeId], autoFocus: false };
+    }
     const afterUIState = _uiState[afterNodeId] || createDefaultUIState(afterNodeId);
     let newDepth: number;
     let newParentId: string | null;
@@ -439,6 +443,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const skipPersistence = isPlaceholder;
     sharedNodeStore.setNode(newNode, viewerSource, skipPersistence);
     _uiState[nodeId] = newUIState;
+
+    // CRITICAL: Trigger reactivity immediately after setting UI state
+    // This ensures _visibleNodes recomputes with the new autoFocus value
+    _updateTrigger++;
 
     // Update sibling linked list
     if (insertAtBeginning) {
