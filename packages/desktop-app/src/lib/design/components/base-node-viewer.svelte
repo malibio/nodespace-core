@@ -1151,48 +1151,124 @@
 
     // Pixel-based positioning - works correctly with proportional fonts
     setTimeout(() => {
-      const targetElement = document.getElementById(`contenteditable-${targetNodeId}`);
-      if (!targetElement) return;
+      // Try textarea first (new approach), fallback to contenteditable
+      let targetElement = document.getElementById(`textarea-${targetNodeId}`) as HTMLTextAreaElement;
+      const isTextarea = !!targetElement;
 
-      // Prepare the controller for arrow navigation to prevent content update
-      const controller = (
-        targetElement as unknown as {
-          _contentEditableController?: { prepareForArrowNavigation?: () => void };
-        }
-      )._contentEditableController;
-      if (controller && typeof controller.prepareForArrowNavigation === 'function') {
-        controller.prepareForArrowNavigation();
+      if (!targetElement) {
+        targetElement = document.getElementById(`contenteditable-${targetNodeId}`) as HTMLTextAreaElement;
       }
 
-      // Hide caret during navigation to prevent visible cursor bounce
-      targetElement.style.caretColor = 'transparent';
+      // If no textarea/contenteditable found, node might be in view mode
+      // Find the view div and trigger edit mode without default focus
+      if (!targetElement) {
+        const viewElement = document.getElementById(`view-${targetNodeId}`);
+        if (viewElement) {
+          // Mark node as being entered via arrow navigation
+          // This tells BaseNode to suppress the default focus behavior
+          viewElement.dataset.arrowNavigation = 'true';
 
-      targetElement.focus();
+          // Click the view element to switch to edit mode
+          viewElement.click();
 
-      // Wait for DOM to update after focus
-      // With DIVs in both display and editing modes, structure is already ready
-      // Use requestAnimationFrame for minimal delay (next paint frame)
-      requestAnimationFrame(() => {
-        // Check if multiline or single-line
-        const divElements = targetElement.querySelectorAll(':scope > div');
-        const isMultiline = divElements.length > 0;
+          // Wait for textarea to appear after switching to edit mode
+          setTimeout(() => {
+            const newTextarea = document.getElementById(`textarea-${targetNodeId}`) as HTMLTextAreaElement;
+            if (newTextarea) {
+              // Hide caret during navigation to prevent visible cursor bounce
+              newTextarea.style.caretColor = 'transparent';
 
-        if (isMultiline) {
-          // For multiline: position cursor at pixelOffset within the first/last line
-          const lineElement =
-            direction === 'up'
-              ? divElements[divElements.length - 1] // Last line when entering from bottom
-              : divElements[0]; // First line when entering from top
+              const controller = (
+                newTextarea as unknown as {
+                  _textareaController?: { enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void };
+                }
+              )._textareaController;
 
-          setCursorAtPixelOffset(targetElement, lineElement, pixelOffset);
-        } else {
-          // For single-line: position cursor at pixelOffset within the single line
-          setCursorAtPixelOffset(targetElement, targetElement, pixelOffset);
+              if (controller && typeof controller.enterFromArrowNavigation === 'function') {
+                // Focus the textarea first
+                newTextarea.focus();
+                // Use the controller's method to position cursor
+                requestAnimationFrame(() => {
+                  controller.enterFromArrowNavigation(direction, pixelOffset);
+                  // Show caret after positioning is complete
+                  requestAnimationFrame(() => {
+                    newTextarea.style.caretColor = '';
+                  });
+                });
+              } else {
+                // Fallback: just focus
+                newTextarea.focus();
+                newTextarea.style.caretColor = '';
+              }
+
+              // Clean up the flag
+              if (viewElement.dataset.arrowNavigation) {
+                delete viewElement.dataset.arrowNavigation;
+              }
+            }
+          }, 50);
+        }
+        return;
+      }
+
+      if (isTextarea) {
+        // Handle textarea with TextareaController
+        const controller = (
+          targetElement as unknown as {
+            _textareaController?: { enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void };
+          }
+        )._textareaController;
+
+        targetElement.focus();
+
+        if (controller && typeof controller.enterFromArrowNavigation === 'function') {
+          // Use the controller's method to position cursor
+          requestAnimationFrame(() => {
+            controller.enterFromArrowNavigation(direction, pixelOffset);
+          });
+        }
+      } else {
+        // Handle contenteditable (legacy)
+        // Prepare the controller for arrow navigation to prevent content update
+        const controller = (
+          targetElement as unknown as {
+            _contentEditableController?: { prepareForArrowNavigation?: () => void };
+          }
+        )._contentEditableController;
+        if (controller && typeof controller.prepareForArrowNavigation === 'function') {
+          controller.prepareForArrowNavigation();
         }
 
-        // Show caret after positioning is complete
-        targetElement.style.caretColor = '';
-      });
+        // Hide caret during navigation to prevent visible cursor bounce
+        targetElement.style.caretColor = 'transparent';
+
+        targetElement.focus();
+
+        // Wait for DOM to update after focus
+        // With DIVs in both display and editing modes, structure is already ready
+        // Use requestAnimationFrame for minimal delay (next paint frame)
+        requestAnimationFrame(() => {
+          // Check if multiline or single-line
+          const divElements = targetElement.querySelectorAll(':scope > div');
+          const isMultiline = divElements.length > 0;
+
+          if (isMultiline) {
+            // For multiline: position cursor at pixelOffset within the first/last line
+            const lineElement =
+              direction === 'up'
+                ? divElements[divElements.length - 1] // Last line when entering from bottom
+                : divElements[0]; // First line when entering from top
+
+            setCursorAtPixelOffset(targetElement, lineElement, pixelOffset);
+          } else {
+            // For single-line: position cursor at pixelOffset within the single line
+            setCursorAtPixelOffset(targetElement, targetElement, pixelOffset);
+          }
+
+          // Show caret after positioning is complete
+          targetElement.style.caretColor = '';
+        });
+      }
     }, 0);
 
     return true;
@@ -1336,7 +1412,7 @@
   onMount(async () => {
     async function preloadComponents() {
       // Pre-load all known types
-      const knownTypes = ['text', 'date', 'task', 'ai-chat'];
+      const knownTypes = ['text', 'header', 'date', 'task', 'ai-chat'];
 
       for (const nodeType of knownTypes) {
         // Load viewers
@@ -1373,6 +1449,34 @@
     }
 
     await preloadComponents();
+  });
+
+  // Reactively load components when node types change
+  $effect(() => {
+    const visibleNodes = nodeManager.visibleNodes;
+
+    // Collect all unique node types
+    const nodeTypes = new Set(visibleNodes.map((node) => node.nodeType));
+
+    // Load components for any new node types
+    for (const nodeType of nodeTypes) {
+      if (!(nodeType in loadedNodes)) {
+        // Load asynchronously
+        (async () => {
+          try {
+            const customNode = await pluginRegistry.getNodeComponent(nodeType);
+            if (customNode) {
+              loadedNodes[nodeType] = customNode;
+            } else {
+              loadedNodes[nodeType] = BaseNode;
+            }
+          } catch (error) {
+            console.error(`💥 Error loading node component for ${nodeType}:`, error);
+            loadedNodes[nodeType] = BaseNode;
+          }
+        })();
+      }
+    }
   });
 
   // Clean up pending timeouts on component unmount to prevent memory leaks
@@ -1478,35 +1582,17 @@
                   e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
                 ) => {
                   const newNodeType = e.detail.nodeType;
-                  const cleanedContent = e.detail.cleanedContent;
-                  const targetNode = nodeManager.nodes.get(node.id);
-                  if (targetNode) {
-                    // Update both the node manager and local state
-                    targetNode.nodeType = newNodeType;
 
-                    // If cleanedContent is provided, update the node content too
-                    if (cleanedContent !== undefined) {
-                      // Use requestAnimationFrame to ensure the update happens after component mounting
-                      requestAnimationFrame(() => {
-                        // Use proper node manager method to trigger reactivity
-                        nodeManager.updateNodeContent(node.id, cleanedContent);
-                      });
-                    }
+                  // Use nodeManager.updateNodeType for proper reactivity
+                  // This triggers SharedNodeStore updates and Svelte reactivity
+                  requestAnimationFrame(() => {
+                    // Update the node type through the proper API
+                    // This will trigger _updateTrigger and re-compute visibleNodes
+                    nodeManager.updateNodeType(node.id, newNodeType);
 
-                    // Clean up task-specific properties when converting to text
-                    if (newNodeType === 'text' && targetNode.properties.taskState) {
-                      const { taskState, ...cleanProperties } = targetNode.properties;
-                      void taskState; // Intentionally unused - extracted to remove from properties
-                      targetNode.properties = { ...cleanProperties, _forceUpdate: Date.now() };
-                    } else {
-                      targetNode.properties = {
-                        ...targetNode.properties,
-                        _forceUpdate: Date.now()
-                      };
-                    }
-                    nodeManager.updateNodeContent(targetNode.id, targetNode.content);
-                  }
-                  focusedNodeId = node.id;
+                    // Set focus after state updates
+                    focusedNodeId = node.id;
+                  });
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
@@ -1547,40 +1633,34 @@
                     e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
                   ) => {
                     const nodeType = e.detail.nodeType;
-                    const cleanedContent = e.detail.cleanedContent;
                     const targetNode = nodeManager.nodes.get(node.id);
                     if (targetNode) {
-                      // Update the node type
-                      targetNode.nodeType = nodeType;
+                      // Wrap mutations in requestAnimationFrame to avoid Svelte 5 state_unsafe_mutation error
+                      requestAnimationFrame(() => {
+                        // Update the node type only - don't touch the content during conversion
+                        targetNode.nodeType = nodeType;
 
-                      // If cleanedContent is provided, update the node content too
-                      if (cleanedContent !== undefined) {
-                        // Use requestAnimationFrame to ensure the update happens after component mounting
-                        requestAnimationFrame(() => {
-                          // Use proper node manager method to trigger reactivity
-                          nodeManager.updateNodeContent(node.id, cleanedContent);
-                        });
-                      }
+                        // Don't update content here - it stays as the user typed it
+                        // cleanedContent will be applied when saving to database on blur
 
-                      // CRITICAL: Clean up type-specific properties when changing node types
-                      if (nodeType === 'text' && targetNode.properties.taskState) {
-                        // When converting from task to text, remove task-specific properties
-                        const { taskState, ...cleanProperties } = targetNode.properties;
-                        void taskState; // Intentionally unused - extracted to remove from properties
-                        targetNode.properties = { ...cleanProperties, _forceUpdate: Date.now() };
-                      } else {
-                        // For other conversions, just force update
-                        targetNode.properties = {
-                          ...targetNode.properties,
-                          _forceUpdate: Date.now()
-                        };
-                      }
+                        // CRITICAL: Clean up type-specific properties when changing node types
+                        if (nodeType === 'text' && targetNode.properties.taskState) {
+                          // When converting from task to text, remove task-specific properties
+                          const { taskState, ...cleanProperties } = targetNode.properties;
+                          void taskState; // Intentionally unused - extracted to remove from properties
+                          targetNode.properties = { ...cleanProperties, _forceUpdate: Date.now() };
+                        } else {
+                          // For other conversions, just force update
+                          targetNode.properties = {
+                            ...targetNode.properties,
+                            _forceUpdate: Date.now()
+                          };
+                        }
 
-                      // Use the working sync mechanism from taskStateChanged
-                      nodeManager.updateNodeContent(targetNode.id, targetNode.content);
+                        // Set autoFocus to restore focus after nodeType change
+                        focusedNodeId = node.id;
+                      });
                     }
-                    // Set autoFocus to restore focus after nodeType change
-                    focusedNodeId = node.id;
                   }}
                   on:slashCommandSelected={(
                     e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
