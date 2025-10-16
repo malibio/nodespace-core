@@ -24,7 +24,7 @@
 -->
 
 <script lang="ts">
-  import { createEventDispatcher, onDestroy } from 'svelte';
+  import { createEventDispatcher, onDestroy, untrack } from 'svelte';
   // import { type NodeType } from '$lib/design/icons'; // Unused but preserved for future use
 
   import {
@@ -52,8 +52,7 @@
     content = $bindable(''),
     children = [],
     editableConfig = {},
-    metadata = {},
-    isEditing = $bindable(false)
+    metadata = {}
   }: {
     nodeId: string;
     nodeType?: string;
@@ -62,8 +61,11 @@
     children?: string[];
     editableConfig?: TextareaControllerConfig;
     metadata?: Record<string, unknown>;
-    isEditing?: boolean;
   } = $props();
+
+  // isEditing is now derived from FocusManager (single source of truth)
+  // This replaces the old bindable prop approach
+  let isEditing = $derived(focusManager.editingNodeId === nodeId);
 
   // Get services from context
   // In test environment, enable mock service to allow autocomplete testing
@@ -412,12 +414,16 @@
     contentChanged: (content: string) => dispatch('contentChanged', { content }),
     headerLevelChanged: (level: number) => dispatch('headerLevelChanged', { level }),
     focus: () => {
-      isEditing = true;
+      // Use FocusManager as single source of truth
+      focusManager.setEditingNode(nodeId);
       dispatch('focus');
     },
     blur: () => {
-      // Switch to view mode on blur
-      isEditing = false;
+      // Use FocusManager as single source of truth
+      // Wrap in untrack to avoid state_unsafe_mutation error
+      untrack(() => {
+        focusManager.clearEditing();
+      });
 
       // Hide autocomplete modal when losing focus
       setTimeout(() => {
@@ -506,12 +512,9 @@
     }
   };
 
-  // Set isEditing based on autoFocus (must happen before controller initialization)
-  $effect(() => {
-    if (autoFocus && !isEditing) {
-      isEditing = true;
-    }
-  });
+  // REMOVED: Manual sync $effect no longer needed
+  // isEditing is now $derived from FocusManager automatically
+  // This ensures perfect sync without manual coordination
 
   // Initialize controller when element is available (Svelte 5 $effect)
   // Note: Must explicitly access textareaElement to track dependency
@@ -576,9 +579,15 @@
     }
   });
 
-  // Focus programmatically when autoFocus changes
+  // Track if autoFocus has been processed to prevent re-focusing after blur
+  let autoFocusProcessed = $state(false);
+
+  // Focus programmatically when autoFocus changes (only once)
   $effect(() => {
-    if (controller && autoFocus) {
+    if (controller && autoFocus && !autoFocusProcessed) {
+      // Mark as processed immediately to prevent re-triggering
+      autoFocusProcessed = true;
+
       // Check if there's a pending cursor position from FocusManager
       const pendingPosition = focusManager.pendingCursorPosition;
 
@@ -713,7 +722,8 @@
       id="view-{nodeId}"
       tabindex="0"
       onclick={(e) => {
-        isEditing = true;
+        // Use FocusManager instead of directly setting isEditing
+        focusManager.setEditingNode(nodeId);
         // Don't focus if this is arrow navigation (will be positioned externally)
         const target = e.currentTarget as HTMLElement;
         if (!target.dataset.arrowNavigation) {
@@ -722,7 +732,8 @@
       }}
       onkeydown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
-          isEditing = true;
+          // Use FocusManager instead of directly setting isEditing
+          focusManager.setEditingNode(nodeId);
           setTimeout(() => controller?.focus(), 0);
         }
       }}

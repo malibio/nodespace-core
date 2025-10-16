@@ -656,61 +656,84 @@
 
   // Focus handling function with proper cursor positioning using tree walker
   function requestNodeFocus(nodeId: string, position: number) {
-    // Find the target node
-    const node = nodeManager.findNode(nodeId);
-    if (!node) {
-      console.error(`Node ${nodeId} not found for focus request`);
-      return;
-    }
+    // Use FocusManager as single source of truth for focus management
+    // This replaces the old DOM-based focus approach
+    focusManager.setEditingNode(nodeId, position);
 
-    // Use DOM API to focus the node directly with cursor positioning
+    // Force textarea update to ensure merged content is visible immediately
+    // Especially important for Safari which doesn't always reactive-update properly
     setTimeout(() => {
-      const nodeElement = document.querySelector(
-        `[data-node-id="${nodeId}"] [contenteditable]`
-      ) as HTMLElement;
-      if (nodeElement) {
-        nodeElement.focus();
-
-        // Set cursor position using tree walker (same approach as controller)
-        if (position >= 0) {
-          const selection = window.getSelection();
-          if (!selection) return;
-
-          // Use tree walker to find the correct text node and offset
-          const walker = document.createTreeWalker(nodeElement, NodeFilter.SHOW_TEXT, null);
-
-          let currentOffset = 0;
-          let currentNode;
-
-          while ((currentNode = walker.nextNode())) {
-            const nodeLength = currentNode.textContent?.length || 0;
-
-            if (currentOffset + nodeLength >= position) {
-              const range = document.createRange();
-              const offsetInNode = position - currentOffset;
-              range.setStart(currentNode, Math.min(offsetInNode, nodeLength));
-              range.setEnd(currentNode, Math.min(offsetInNode, nodeLength));
-
-              selection.removeAllRanges();
-              selection.addRange(range);
-              return;
-            }
-
-            currentOffset += nodeLength;
-          }
-
-          // If we didn't find the position, position at the end
-          const range = document.createRange();
-          range.selectNodeContents(nodeElement);
-          range.collapse(false);
-          selection.removeAllRanges();
-          selection.addRange(range);
+      const node = nodeManager.nodes.get(nodeId);
+      if (node) {
+        const textarea = document.querySelector(
+          `textarea[id="textarea-${nodeId}"]`
+        ) as HTMLTextAreaElement;
+        if (textarea && textarea.value !== node.content) {
+          textarea.value = node.content;
+          textarea.selectionStart = position;
+          textarea.selectionEnd = position;
         }
-      } else {
-        console.error(`Could not find contenteditable element for node ${nodeId}`);
       }
     }, 10);
   }
+
+  // OLD IMPLEMENTATION - REPLACED BY FOCUSMANAGER
+  // function requestNodeFocus(nodeId: string, position: number) {
+  //   // Find the target node
+  //   const node = nodeManager.findNode(nodeId);
+  //   if (!node) {
+  //     console.error(`Node ${nodeId} not found for focus request`);
+  //     return;
+  //   }
+  //
+  //   // Use DOM API to focus the node directly with cursor positioning
+  //   setTimeout(() => {
+  //     const nodeElement = document.querySelector(
+  //       `[data-node-id="${nodeId}"] [contenteditable]`
+  //     ) as HTMLElement;
+  //     if (nodeElement) {
+  //       nodeElement.focus();
+  //
+  //       // Set cursor position using tree walker (same approach as controller)
+  //       if (position >= 0) {
+  //         const selection = window.getSelection();
+  //         if (!selection) return;
+  //
+  //         // Use tree walker to find the correct text node and offset
+  //         const walker = document.createTreeWalker(nodeElement, NodeFilter.SHOW_TEXT, null);
+  //
+  //         let currentOffset = 0;
+  //         let currentNode;
+  //
+  //         while ((currentNode = walker.nextNode())) {
+  //           const nodeLength = currentNode.textContent?.length || 0;
+  //
+  //           if (currentOffset + nodeLength >= position) {
+  //             const range = document.createRange();
+  //             const offsetInNode = position - currentOffset;
+  //             range.setStart(currentNode, Math.min(offsetInNode, nodeLength));
+  //             range.setEnd(currentNode, Math.min(offsetInNode, nodeLength));
+  //
+  //             selection.removeAllRanges();
+  //             selection.addRange(range);
+  //             return;
+  //           }
+  //
+  //           currentOffset += nodeLength;
+  //         }
+  //
+  //         // If we didn't find the position, position at the end
+  //         const range = document.createRange();
+  //         range.selectNodeContents(nodeElement);
+  //         range.collapse(false);
+  //         selection.removeAllRanges();
+  //         selection.addRange(range);
+  //       }
+  //     } else {
+  //       console.error(`Could not find contenteditable element for node ${nodeId}`);
+  //     }
+  //   }, 10);
+  // }
 
   /**
    * Add appropriate formatting syntax to content based on node type
@@ -1288,7 +1311,7 @@
     event: CustomEvent<{ nodeId: string; currentContent: string }>
   ) {
     try {
-      const { nodeId, currentContent } = event.detail;
+      const { nodeId } = event.detail;
 
       // Validate node exists before combining
       if (!nodeManager.nodes.has(nodeId)) {
@@ -1310,14 +1333,21 @@
         return;
       }
 
+      // Store the original content length before merge (this is where cursor should be positioned)
+      const cursorPositionAfterMerge = previousNode.content.length;
+
       // Always use combineNodes (handles both empty and non-empty nodes with proper child promotion)
       nodeManager.combineNodes(nodeId, previousNode.id);
 
-      // For empty nodes, we need to manually request focus since combineNodes doesn't know
-      // the node was empty
-      if (currentContent.trim() === '') {
-        requestNodeFocus(previousNode.id, previousNode.content.length);
-      }
+      // Always request focus at the merge point (end of original previous node content)
+      // Use setTimeout to ensure DOM has updated after the merge operation
+      // This ensures:
+      // 1. Cursor is positioned at the merge point (not at beginning)
+      // 2. Textarea updates to show merged content immediately (via forced update)
+      // 3. Consistent behavior for both empty and non-empty node merges
+      setTimeout(() => {
+        requestNodeFocus(previousNode.id, cursorPositionAfterMerge);
+      }, 0);
     } catch (error) {
       console.error('Error during node combination:', error);
     }
