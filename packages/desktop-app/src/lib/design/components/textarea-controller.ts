@@ -219,7 +219,6 @@ export class TextareaController {
     // Initialize header level tracking
     this.currentHeaderLevel = ContentProcessor.getInstance().parseHeaderLevel(content);
 
-
     if (autoFocus) {
       this.justCreated = true;
       setTimeout(() => {

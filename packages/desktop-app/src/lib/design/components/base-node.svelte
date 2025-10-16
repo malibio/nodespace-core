@@ -636,11 +636,7 @@
 
   // Compute CSS classes
   const containerClasses = $derived(
-    [
-      'node',
-      `node--${nodeType}`,
-      children.length > 0 && 'node--has-children'
-    ]
+    ['node', `node--${nodeType}`, children.length > 0 && 'node--has-children']
       .filter(Boolean)
       .join(' ')
   );

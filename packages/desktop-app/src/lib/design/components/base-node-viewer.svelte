@@ -1152,11 +1152,15 @@
     // Pixel-based positioning - works correctly with proportional fonts
     setTimeout(() => {
       // Try textarea first (new approach), fallback to contenteditable
-      let targetElement = document.getElementById(`textarea-${targetNodeId}`) as HTMLTextAreaElement;
+      let targetElement = document.getElementById(
+        `textarea-${targetNodeId}`
+      ) as HTMLTextAreaElement;
       const isTextarea = !!targetElement;
 
       if (!targetElement) {
-        targetElement = document.getElementById(`contenteditable-${targetNodeId}`) as HTMLTextAreaElement;
+        targetElement = document.getElementById(
+          `contenteditable-${targetNodeId}`
+        ) as HTMLTextAreaElement;
       }
 
       // If no textarea/contenteditable found, node might be in view mode
@@ -1173,14 +1177,18 @@
 
           // Wait for textarea to appear after switching to edit mode
           setTimeout(() => {
-            const newTextarea = document.getElementById(`textarea-${targetNodeId}`) as HTMLTextAreaElement;
+            const newTextarea = document.getElementById(
+              `textarea-${targetNodeId}`
+            ) as HTMLTextAreaElement;
             if (newTextarea) {
               // Hide caret during navigation to prevent visible cursor bounce
               newTextarea.style.caretColor = 'transparent';
 
               const controller = (
                 newTextarea as unknown as {
-                  _textareaController?: { enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void };
+                  _textareaController?: {
+                    enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void;
+                  };
                 }
               )._textareaController;
 
@@ -1215,7 +1223,9 @@
         // Handle textarea with TextareaController
         const controller = (
           targetElement as unknown as {
-            _textareaController?: { enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void };
+            _textareaController?: {
+              enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void;
+            };
           }
         )._textareaController;
 
