@@ -14,6 +14,7 @@
   import TextNodeViewer from '$lib/components/viewers/text-node-viewer.svelte';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store';
+  import { PersistenceCoordinator } from '$lib/services/persistence-coordinator.svelte';
   import type { Node } from '$lib/types';
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
@@ -46,9 +47,6 @@
 
   // Map to store cursor positions during node type changes
   const pendingCursorPositions = new Map<string, number>();
-
-  // Simple debounce map - one timeout per node
-  const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Track last saved content to detect actual changes
   const lastSavedContent = new Map<string, string>();
@@ -1489,16 +1487,13 @@
     }
   });
 
-  // Clean up pending timeouts on component unmount to prevent memory leaks
+  // Clean up on component unmount and flush pending saves
   onDestroy(() => {
+    // Flush pending debounced saves to prevent data loss
+    PersistenceCoordinator.getInstance().flushPending();
+
     // Set cancellation flag to prevent stale writes
     isDestroyed = true;
-
-    // Clear all pending debounce timeouts
-    for (const timeout of saveTimeouts.values()) {
-      clearTimeout(timeout);
-    }
-    saveTimeouts.clear();
 
     // Clear pending promise tracking to prevent memory leaks
     pendingContentSavePromises.clear();
