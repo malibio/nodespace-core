@@ -15,6 +15,7 @@
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store';
   import { PersistenceCoordinator } from '$lib/services/persistence-coordinator.svelte';
+  import { focusManager } from '$lib/services/focus-manager.svelte';
   import type { Node } from '$lib/types';
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
@@ -44,9 +45,6 @@
     type: 'viewer',
     viewerId: parentId || 'root'
   };
-
-  // Map to store cursor positions during node type changes
-  const pendingCursorPositions = new Map<string, number>();
 
   // Track last saved content to detect actual changes
   const lastSavedContent = new Map<string, string>();
@@ -816,9 +814,9 @@
       return;
     }
 
-    // Set cursor position for new node if provided (e.g., after splitting inline formatted text)
+    // Set cursor position using FocusManager (single source of truth)
     if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
-      pendingCursorPositions.set(newNodeId, newNodeCursorPosition);
+      focusManager.setEditingNode(newNodeId, newNodeCursorPosition);
     }
 
     // Handle focus direction based on focusOriginalNode parameter
@@ -1381,39 +1379,12 @@
   // Proper Svelte 5 reactivity: use object instead of Map for reactive tracking
   let loadedNodes = $state<Record<string, unknown>>({});
 
-  // Track focused node for autoFocus after node type changes
-  let focusedNodeId = $state<string | null>(null);
-
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
   const minDepth = $derived(() => {
     const nodes = nodeManager.visibleNodes;
     if (nodes.length === 0) return 0;
     return Math.min(...nodes.map((n) => n.depth || 0));
-  });
-
-  // Clear focusedNodeId after a delay to prevent permanent focus
-  $effect(() => {
-    if (focusedNodeId) {
-      // Check if there's a pending cursor position for this node
-      const pendingPosition = pendingCursorPositions.get(focusedNodeId);
-      if (pendingPosition !== undefined) {
-        // Use requestNodeFocus to position cursor precisely
-        // This bypasses autoFocus to avoid conflicts
-        requestNodeFocus(focusedNodeId, pendingPosition);
-        // Clear the pending position
-        pendingCursorPositions.delete(focusedNodeId);
-        // Clear focusedNodeId immediately since we've handled the focus
-        focusedNodeId = null;
-        return;
-      }
-
-      const timeoutId = setTimeout(() => {
-        focusedNodeId = null;
-      }, 100); // Clear after 100ms to allow autoFocus to trigger
-
-      return () => clearTimeout(timeoutId);
-    }
   });
 
   // Pre-load components when component mounts
@@ -1547,7 +1518,7 @@
               <TextNodeViewer
                 nodeId={node.id}
                 nodeType={node.nodeType}
-                autoFocus={node.autoFocus || node.id === focusedNodeId}
+                autoFocus={node.autoFocus}
                 content={node.content}
                 inheritHeaderLevel={node.inheritHeaderLevel || 0}
                 children={node.children}
@@ -1564,11 +1535,6 @@
                 on:slashCommandSelected={(
                   e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
                 ) => {
-                  // Store cursor position before node type change
-                  if (e.detail.cursorPosition !== null && e.detail.cursorPosition !== undefined) {
-                    pendingCursorPositions.set(node.id, e.detail.cursorPosition);
-                  }
-
                   if (node.isPlaceholder) {
                     // For placeholder nodes, just update the nodeType locally
                     if ('updatePlaceholderNodeType' in nodeManager) {
@@ -1579,8 +1545,8 @@
                     nodeManager.updateNodeType(node.id, e.detail.nodeType);
                   }
 
-                  // Set autoFocus to restore focus after nodeType change
-                  focusedNodeId = node.id;
+                  // Set editing state with cursor position using FocusManager
+                  focusManager.setEditingNode(node.id, e.detail.cursorPosition);
                 }}
                 on:nodeTypeChanged={(
                   e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
@@ -1594,8 +1560,8 @@
                     // This will trigger _updateTrigger and re-compute visibleNodes
                     nodeManager.updateNodeType(node.id, newNodeType);
 
-                    // Set focus after state updates
-                    focusedNodeId = node.id;
+                    // Focus is now set by updateNodeType via FocusManager
+                    // No need to set focusedNodeId here
                   });
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
@@ -1610,7 +1576,7 @@
                 <NodeComponent
                   nodeId={node.id}
                   nodeType={node.nodeType}
-                  autoFocus={node.autoFocus || node.id === focusedNodeId}
+                  autoFocus={node.autoFocus}
                   content={node.content}
                   headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
@@ -1624,13 +1590,11 @@
                     const content = e.detail.content;
                     // Update node content (placeholder flag is handled automatically)
                     nodeManager.updateNodeContent(node.id, content);
-                    // Set autoFocus to restore focus after nodeType change
-                    focusedNodeId = node.id;
+                    // Focus management handled by FocusManager (single source of truth)
                   }}
                   on:headerLevelChanged={() => {
                     // Header level change is handled automatically through content updates
-                    // Just restore focus after the change
-                    focusedNodeId = node.id;
+                    // Focus management handled by FocusManager (single source of truth)
                   }}
                   on:nodeTypeChanged={(
                     e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
@@ -1660,19 +1624,14 @@
                           };
                         }
 
-                        // Set autoFocus to restore focus after nodeType change
-                        focusedNodeId = node.id;
+                        // Focus management handled by FocusManager (single source of truth)
+                        focusManager.setEditingNode(node.id);
                       });
                     }
                   }}
                   on:slashCommandSelected={(
                     e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
                   ) => {
-                    // Store cursor position before node type change
-                    if (e.detail.cursorPosition !== null && e.detail.cursorPosition !== undefined) {
-                      pendingCursorPositions.set(node.id, e.detail.cursorPosition);
-                    }
-
                     if (node.isPlaceholder) {
                       // For placeholder nodes, just update the nodeType locally
                       if ('updatePlaceholderNodeType' in nodeManager) {
@@ -1683,8 +1642,8 @@
                       nodeManager.updateNodeType(node.id, e.detail.nodeType);
                     }
 
-                    // Set autoFocus to restore focus after nodeType change
-                    focusedNodeId = node.id;
+                    // Set editing state with cursor position using FocusManager
+                    focusManager.setEditingNode(node.id, e.detail.cursorPosition);
                   }}
                   on:iconClick={handleIconClick}
                   on:taskStateChanged={(e) => {
@@ -1706,7 +1665,7 @@
                 <BaseNode
                   nodeId={node.id}
                   nodeType={node.nodeType}
-                  autoFocus={node.autoFocus || node.id === focusedNodeId}
+                  autoFocus={node.autoFocus}
                   content={node.content}
                   headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
@@ -1725,11 +1684,6 @@
                   on:slashCommandSelected={(
                     e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
                   ) => {
-                    // Store cursor position before node type change
-                    if (e.detail.cursorPosition !== null && e.detail.cursorPosition !== undefined) {
-                      pendingCursorPositions.set(node.id, e.detail.cursorPosition);
-                    }
-
                     if (node.isPlaceholder) {
                       // For placeholder nodes, just update the nodeType locally
                       if ('updatePlaceholderNodeType' in nodeManager) {
@@ -1740,8 +1694,8 @@
                       nodeManager.updateNodeType(node.id, e.detail.nodeType);
                     }
 
-                    // Set autoFocus to restore focus after nodeType change
-                    focusedNodeId = node.id;
+                    // Set editing state with cursor position using FocusManager
+                    focusManager.setEditingNode(node.id, e.detail.cursorPosition);
                   }}
                   on:iconClick={handleIconClick}
                   on:taskStateChanged={(e) => {

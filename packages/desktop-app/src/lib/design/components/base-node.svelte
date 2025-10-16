@@ -42,6 +42,7 @@
   import type { TriggerContext } from '$lib/services/node-reference-service';
   import { getIconConfig, resolveNodeState, type NodeType } from '$lib/design/icons/registry';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
+  import { focusManager } from '$lib/services/focus-manager.svelte';
 
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
   let {
@@ -578,13 +579,25 @@
   // Focus programmatically when autoFocus changes
   $effect(() => {
     if (controller && autoFocus) {
+      // Check if there's a pending cursor position from FocusManager
+      const pendingPosition = focusManager.pendingCursorPosition;
+
       // Use a small delay to ensure DOM is updated after nodeType change
       setTimeout(() => {
         if (controller) {
           controller.focus();
-          // Position cursor at beginning of first line, skipping syntax
-          // Uses CursorPositioningService for consistent, maintainable behavior
-          controller.positionCursorAtLineBeginning(0, true);
+
+          // If there's a pending cursor position, use it precisely
+          if (pendingPosition !== null && focusManager.editingNodeId === nodeId) {
+            // Position cursor at the specific position
+            controller.setCursorPosition(pendingPosition);
+            // Clear the consumed position
+            focusManager.clearCursorPosition();
+          } else {
+            // Default: position cursor at beginning of first line, skipping syntax
+            // Uses CursorPositioningService for consistent, maintainable behavior
+            controller.positionCursorAtLineBeginning(0, true);
+          }
         }
       }, 10);
     }
