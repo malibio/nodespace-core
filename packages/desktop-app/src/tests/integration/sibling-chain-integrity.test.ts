@@ -236,12 +236,17 @@ describe('Sibling Chain Integrity', () => {
     service.deleteNode('node-2');
 
     await waitForDatabaseWrites();
-    // Note: Transient SQLite locking errors can occur during rapid test execution
-    // against the HTTP dev server. These are infrastructure issues, not logic bugs.
-    // The sibling chain repair logic itself is verified by the assertions below.
-    // Related: The dev server uses a shared database connection which can experience
-    // contention under concurrent test load.
-    // expect(sharedNodeStore.getTestErrors()).toHaveLength(0);
+
+    // TEMPORARY: Re-enable to diagnose actual error
+    const errors = sharedNodeStore.getTestErrors();
+    if (errors.length > 0) {
+      console.error('=== TEST ERRORS DETECTED ===');
+      errors.forEach((err, idx) => {
+        console.error(`Error ${idx + 1}:`, err.message);
+        console.error('Stack:', err.stack);
+      });
+    }
+    expect(sharedNodeStore.getTestErrors()).toHaveLength(0);
 
     // Verify: Chain repaired
     const validation = validateSiblingChain(null);
