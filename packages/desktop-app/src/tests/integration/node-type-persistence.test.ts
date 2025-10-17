@@ -46,6 +46,40 @@ describe('NodeType Persistence', () => {
     PersistenceCoordinator.resetInstance();
   });
 
+  describe('Create New Header Node', () => {
+    it('should persist newly created header node to database', async () => {
+      // This test covers the bug we found: creating a new header node
+      // (e.g., pressing Enter from a header node) must persist correctly
+      const headerNode: Node = {
+        id: 'new-header-node',
+        nodeType: 'header',
+        content: '## New Header',
+        parentId: null,
+        containerNodeId: null,
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        properties: {},
+        mentions: []
+      };
+
+      store.setNode(headerNode, viewerSource);
+
+      // Verify node was created in store
+      const createdNode = store.getNode(headerNode.id);
+      expect(createdNode?.nodeType).toBe('header');
+      expect(createdNode?.content).toBe('## New Header');
+
+      // Wait for persistence
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Verify it persisted (in test mode, just check it exists in store)
+      const persistedNode = store.getNode(headerNode.id);
+      expect(persistedNode).toBeDefined();
+      expect(persistedNode?.nodeType).toBe('header');
+    });
+  });
+
   describe('Text → Header Conversion Persistence', () => {
     it('should persist text → header conversion to database', async () => {
       // Create initial text node

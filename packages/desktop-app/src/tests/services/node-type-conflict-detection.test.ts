@@ -141,21 +141,27 @@ describe('NodeType Conflict Detection', () => {
 
       store.setNode(textNode, viewer1Source);
 
-      // Multiple conversions in sequence
+      // Multiple conversions in sequence with small delays to ensure proper ordering
       store.updateNode(textNode.id, { content: '##' }, viewer1Source);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
       store.updateNode(
         textNode.id,
         { content: '## ', nodeType: 'header', properties: { headerLevel: 2 } },
         viewer1Source
       );
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
       store.updateNode(textNode.id, { content: '## Test' }, viewer1Source);
+
+      // Wait for final update to complete
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       const finalNode = store.getNode(textNode.id);
       expect(finalNode?.nodeType).toBe('header');
       expect(finalNode?.content).toBe('## Test');
-
-      // Wait for persistence
-      await new Promise((resolve) => setTimeout(resolve, 100));
     });
   });
 
