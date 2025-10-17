@@ -40,8 +40,18 @@
   let internalContent = $state(content);
 
   // Sync internalContent when content prop changes externally
+  // Apply header-specific content transformations (strip newlines for single-line headers)
   $effect(() => {
-    internalContent = content;
+    let cleanedContent = content;
+
+    // Headers are single-line - strip newlines when converting from multiline text nodes
+    if (cleanedContent.includes('\n')) {
+      cleanedContent = cleanedContent.replace(/\n+/g, ' '); // Replace newlines with spaces
+      // Update parent with cleaned content
+      dispatch('contentChanged', { content: cleanedContent });
+    }
+
+    internalContent = cleanedContent;
   });
 
   // Header level - derived from markdown syntax (#, ##, ###, etc.)
@@ -63,6 +73,9 @@
 
   // Compute wrapper classes with header level
   const wrapperClasses = $derived(`header-node-wrapper header-h${headerLevel}`);
+
+  // Compute display content for blur mode (strip hashtags)
+  let displayContent = $derived(internalContent.replace(/^#{1,6}\s+/, ''));
 
   /**
    * Parse header level from markdown syntax
@@ -118,6 +131,7 @@
     {nodeType}
     {autoFocus}
     bind:content={internalContent}
+    {displayContent}
     {children}
     {editableConfig}
     metadata={headerMetadata}
@@ -139,6 +153,12 @@
 </div>
 
 <style>
+  /* Header wrapper must take full available width to prevent content cutoff */
+  .header-node-wrapper {
+    width: 100%;
+    display: block;
+  }
+
   /* Header-specific typography and icon positioning */
   .header-h1 {
     --font-size: 2rem;

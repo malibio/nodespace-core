@@ -616,7 +616,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return;
 
-    sharedNodeStore.updateNode(nodeId, { nodeType }, viewerSource);
+    // CRITICAL: Include content with nodeType update to ensure backend persistence works
+    // Some backends may not support updating nodeType alone
+    const updatePayload = { nodeType, content: node.content };
+    // Skip conflict detection for nodeType changes - they are always intentional conversions
+    sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource, {
+      skipConflictDetection: true
+    });
 
     // Focus is managed by BaseNodeViewer during conversions
     // Do not override cursor position here

@@ -50,6 +50,7 @@
     nodeType = $bindable('text'),
     autoFocus = false,
     content = $bindable(''),
+    displayContent,
     children = [],
     editableConfig = {},
     metadata = {}
@@ -58,6 +59,7 @@
     nodeType?: string;
     autoFocus?: boolean;
     content?: string;
+    displayContent?: string; // Optional content to display in blur mode (for syntax stripping)
     children?: string[];
     editableConfig?: TextareaControllerConfig;
     metadata?: Record<string, unknown>;
@@ -557,7 +559,8 @@
       // IMPORTANT: Process blank lines BEFORE markdownToHtml
       // marked.js with breaks:true converts all \n to <br>, losing the ability to detect \n\n
       const BLANK_LINE_PLACEHOLDER = '___BLANK___';
-      let processedContent = content;
+      // Use displayContent if provided (for node types that strip syntax in blur mode), otherwise use content
+      let processedContent = displayContent ?? content;
 
       // Replace consecutive newlines with placeholders
       processedContent = processedContent.replace(/\n\n+/g, (match) => {
@@ -641,9 +644,34 @@
     const conversionCursorPos = focusManager.nodeTypeConversionCursorPosition;
     const editingNodeId = focusManager.editingNodeId;
 
+    // Only apply if we have a valid controller instance and all conditions are met
+    // The check for controller being truthy ensures this only runs on the NEW component
+    // instance after type conversion, not on the old component during cleanup
     if (controller && isEditing && conversionCursorPos !== null && editingNodeId === nodeId) {
-      controller.setCursorPosition(conversionCursorPos);
-      focusManager.clearNodeTypeConversionCursorPosition();
+      // Use requestAnimationFrame to ensure DOM has fully settled after component switch
+      requestAnimationFrame(() => {
+        if (controller) {
+          // Focus the textarea first to ensure it receives the cursor position
+          controller.focus();
+          // Then set the cursor position
+          controller.setCursorPosition(conversionCursorPos);
+
+          // Some component switches may reset cursor - verify and retry if needed
+          setTimeout(() => {
+            const textarea = document.activeElement as HTMLTextAreaElement;
+            if (
+              controller &&
+              textarea &&
+              textarea.tagName === 'TEXTAREA' &&
+              textarea.selectionStart !== conversionCursorPos
+            ) {
+              controller.setCursorPosition(conversionCursorPos);
+            }
+          }, 10);
+
+          focusManager.clearNodeTypeConversionCursorPosition();
+        }
+      });
     }
   });
 
@@ -827,6 +855,7 @@
       var(--circle-offset, 26px) + var(--circle-diameter, 20px) + var(--circle-text-gap, 8px)
     ); /* Dynamic: circle position + circle width + gap */
     width: 100%;
+    box-sizing: border-box; /* Include padding in width calculation */
     /*
       Circle positioning system using CSS-first dynamic calculation
 
@@ -911,6 +940,8 @@
   .node__content--view {
     /* View mode styles */
     cursor: text;
+    /* Override flex-basis to take full available width, not just content size */
+    flex: 1 1 100%;
   }
 
   .node__content:empty,

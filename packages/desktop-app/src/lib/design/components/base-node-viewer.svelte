@@ -1385,11 +1385,12 @@
                   // Use cursor position from event (captured by TextareaController)
                   const cursorPosition = e.detail.cursorPosition ?? 0;
 
-                  // Update node type through proper API
-                  nodeManager.updateNodeType(node.id, newNodeType);
-
-                  // Set editing with cursor position from event
+                  // CRITICAL: Set editing state BEFORE updating node type
+                  // This ensures focus manager state is ready when the new component mounts
                   focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+
+                  // Update node type through proper API (triggers component re-render)
+                  nodeManager.updateNodeType(node.id, newNodeType);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
@@ -1433,11 +1434,12 @@
                     // Use cursor position from event (captured by TextareaController)
                     const cursorPosition = e.detail.cursorPosition ?? 0;
 
-                    // Update node type through proper API
-                    nodeManager.updateNodeType(node.id, newNodeType);
-
-                    // Set editing with cursor position from event
+                    // CRITICAL: Set editing state BEFORE updating node type
+                    // This ensures focus manager state is ready when the new component mounts
                     focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+
+                    // Update node type through proper API (triggers component re-render)
+                    nodeManager.updateNodeType(node.id, newNodeType);
                   }}
                   on:slashCommandSelected={(
                     e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
