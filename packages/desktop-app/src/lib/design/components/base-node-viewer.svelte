@@ -1378,16 +1378,21 @@
                   e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
                 ) => {
                   const newNodeType = e.detail.nodeType;
+                  const currentNodeId = node.id;
 
                   // Use nodeManager.updateNodeType for proper reactivity
                   // This triggers SharedNodeStore updates and Svelte reactivity
                   requestAnimationFrame(() => {
                     // Update the node type through the proper API
                     // This will trigger _updateTrigger and re-compute visibleNodes
-                    nodeManager.updateNodeType(node.id, newNodeType);
+                    nodeManager.updateNodeType(currentNodeId, newNodeType);
 
-                    // Focus is now set by updateNodeType via FocusManager
-                    // No need to set focusedNodeId here
+                    // CRITICAL: Restore focus after node type conversion
+                    // The component re-renders with new node type, losing focus
+                    // We need to restore editing state so cursor reappears
+                    requestAnimationFrame(() => {
+                      focusManager.setEditingNode(currentNodeId, undefined);
+                    });
                   });
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
