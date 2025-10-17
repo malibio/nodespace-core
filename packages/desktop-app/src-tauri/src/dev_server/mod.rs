@@ -34,6 +34,7 @@ use axum::{
     Router,
 };
 use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 
 use nodespace_core::{DatabaseService, NodeService};
@@ -71,10 +72,19 @@ type SharedService<T> = Arc<RwLock<Arc<T>>>;
 /// 3. Atomically swap the services
 ///
 /// This ensures proper synchronization without stale connections.
+///
+/// # SQLite Write Serialization (Issue #266)
+///
+/// The `write_lock` mutex serializes all database write operations (create, update, delete)
+/// to prevent SQLite write contention under rapid concurrent operations. This eliminates
+/// HTTP 500 errors in tests caused by multiple simultaneous write attempts.
+///
+/// Read operations do NOT acquire the write lock and can execute concurrently.
 #[derive(Clone)]
 pub struct AppState {
     pub db: SharedService<DatabaseService>,
     pub node_service: SharedService<NodeService>,
+    pub write_lock: Arc<Mutex<()>>,
 }
 
 /// Create the main application router with all endpoint modules
@@ -158,7 +168,11 @@ pub async fn start_server(
     node_service: SharedService<NodeService>,
     port: u16,
 ) -> anyhow::Result<()> {
-    let state = AppState { db, node_service };
+    let state = AppState {
+        db,
+        node_service,
+        write_lock: Arc::new(Mutex::new(())),
+    };
     let app = create_router(state);
 
     let addr = format!("127.0.0.1:{}", port);

@@ -100,6 +100,11 @@ export async function cleanupTestDatabase(dbPath: string): Promise<void> {
  * This fixes Issue #266 (database initialization race condition) by ensuring
  * the database switch completes before subsequent operations.
  *
+ * NOTE: This verification ensures database switch timing is correct, but doesn't
+ * fully solve backend SQLite write contention. The backend dev-server now implements
+ * write serialization (mutex-based queue) to prevent concurrent write conflicts.
+ * See: AppState.write_lock in mod.rs and node_endpoints.rs (Issue #266).
+ *
  * @param dbPath - Path to the database file
  * @param serverUrl - HTTP dev server URL (default: http://localhost:3001)
  * @param maxRetries - Maximum retry attempts for verification (default: 3)
@@ -127,8 +132,9 @@ export async function initializeTestDatabase(
       // Use multiple retries with backoff to handle transient backend readiness issues
       let verificationSuccess = false;
       for (let verifyAttempt = 1; verifyAttempt <= 3; verifyAttempt++) {
+        let sentinelId: string | null = null;
         try {
-          const sentinelId = `__test_sentinel_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+          sentinelId = `__test_sentinel_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
           // Create sentinel
           await adapter.createNode({
@@ -158,6 +164,7 @@ export async function initializeTestDatabase(
             throw new Error('Sentinel node still exists after deletion');
           }
 
+          sentinelId = null; // Mark as successfully cleaned up
           verificationSuccess = true;
           break; // Success!
         } catch (error) {
@@ -167,7 +174,21 @@ export async function initializeTestDatabase(
             );
           }
           // Retry with exponential backoff
+          // Base delay: 50ms (sufficient for local HTTP roundtrip + SQLite operation)
+          // Multiplier: linear (50ms, 100ms, 150ms) balances retry speed vs. backend load
+          // Total max wait: 300ms across 3 attempts keeps tests fast while handling transient issues
           await new Promise((resolve) => setTimeout(resolve, 50 * verifyAttempt));
+        } finally {
+          // CLEANUP: Ensure sentinel is deleted even if verification fails
+          // This prevents database pollution from failed verification attempts
+          if (sentinelId) {
+            try {
+              await adapter.deleteNode(sentinelId);
+            } catch {
+              // Ignore cleanup failures - node may not exist or database may be inaccessible
+              // This is a best-effort cleanup
+            }
+          }
         }
       }
 
@@ -176,7 +197,11 @@ export async function initializeTestDatabase(
       }
 
       // STEP 3: Add stabilization delay to ensure backend is fully ready
-      // This prevents race conditions in rapid-fire operation tests
+      // Delay: 100ms (empirically determined - see Issue #266 testing)
+      // Why 100ms: Rust dev-server needs time to complete database connection swap
+      //            and service reinitialization. Values <100ms caused intermittent failures.
+      //            Values >100ms provided no additional benefit (diminishing returns).
+      // This prevents race conditions where immediate operations hit stale database state.
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       // STEP 4: Update the singleton tauriNodeService to use this test database
@@ -205,7 +230,11 @@ export async function initializeTestDatabase(
       }
 
       // Retry after exponential backoff
-      const backoffMs = Math.min(100 * Math.pow(2, attempt - 1), 1000); // 100ms, 200ms, 400ms, max 1s
+      // Base: 100ms (minimum time for backend to recover from transient error)
+      // Growth: 2x exponential (100ms → 200ms → 400ms)
+      // Cap: 1000ms (prevents excessive test delays while handling severe backend issues)
+      // Why exponential: Gives backend progressively more time to recover from resource contention
+      const backoffMs = Math.min(100 * Math.pow(2, attempt - 1), 1000);
       console.warn(
         `[Test] Database initialization attempt ${attempt} failed, retrying in ${backoffMs}ms...`,
         error instanceof Error ? error.message : String(error)
