@@ -432,13 +432,41 @@ export class TextareaController {
   }
 
   /**
-   * Get current pixel offset for arrow navigation (approximation)
+   * Get current pixel offset for arrow navigation (pixel-accurate measurement)
+   * Uses hidden span element to measure actual rendered text width
    */
   public getCurrentPixelOffset(): number {
-    // For textarea, we'll use column-based offset
-    // This is simpler than contenteditable's pixel-perfect measurement
-    const column = this.getCurrentColumn();
-    this.lastKnownPixelOffset = column * 8; // Approximate 8px per character
+    const position = this.element.selectionStart;
+    const textBefore = this.element.value.substring(0, position);
+    const lastNewline = textBefore.lastIndexOf('\n');
+    const currentLineStart = lastNewline === -1 ? 0 : lastNewline + 1;
+    const textBeforeCursor = this.element.value.substring(currentLineStart, position);
+
+    // Get textarea bounding rect for absolute positioning
+    const rect = this.element.getBoundingClientRect();
+
+    // Create hidden measurement span with exact textarea styling
+    const measureEl = document.createElement('span');
+    const computedStyle = window.getComputedStyle(this.element);
+    measureEl.style.cssText = `
+      position: absolute;
+      visibility: hidden;
+      white-space: pre;
+      font-family: ${computedStyle.fontFamily};
+      font-size: ${computedStyle.fontSize};
+      font-weight: ${computedStyle.fontWeight};
+      letter-spacing: ${computedStyle.letterSpacing};
+      word-spacing: ${computedStyle.wordSpacing};
+      line-height: ${computedStyle.lineHeight};
+    `;
+    measureEl.textContent = textBeforeCursor;
+    document.body.appendChild(measureEl);
+
+    const textWidth = measureEl.getBoundingClientRect().width;
+    document.body.removeChild(measureEl);
+
+    // Return absolute pixel position including node indentation
+    this.lastKnownPixelOffset = rect.left + textWidth + window.scrollX;
     return this.lastKnownPixelOffset;
   }
 

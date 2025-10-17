@@ -554,6 +554,10 @@
         html = '<br>'.repeat(leadingNewlines[0].length) + html;
       }
 
+      // Preserve blank lines (consecutive newlines) in the middle of content
+      // Replace double newlines with placeholder <br> tags
+      html = html.replace(/\n\n/g, '\n<br class="blank-line-placeholder">\n');
+
       // Preserve trailing newlines by adding <br> tags
       // Trailing \n: has NO content after it, so needs extra <br> to show empty line
       const trailingNewlines = content.match(/\n+$/);
@@ -797,7 +801,7 @@
     */
 
     /* Default values for normal text - dynamic font-responsive alignment */
-    --line-height: 1.6;
+    --line-height: 1.5;
     --font-size: 1rem;
     /* Note: --icon-vertical-position is defined globally in app.css */
   }
@@ -834,7 +838,7 @@
     background: transparent;
     font-family: inherit;
     font-size: 1rem;
-    line-height: 1.625; /* Whole pixel line-height: 16px * 1.625 = 26px (prevents subpixel shifts) */
+    line-height: 1.5; /* Unified line-height: 16px * 1.5 = 24px (prevents layout shift between modes) */
     color: hsl(var(--foreground));
     outline: none;
     white-space: pre-wrap;
@@ -849,7 +853,7 @@
     overflow: hidden;
     width: 100%;
     /* Explicitly set line-height to match view div */
-    line-height: 1.625;
+    line-height: 1.5;
     box-sizing: border-box;
     /* Match view div display to prevent layout shift */
     display: block;
@@ -943,6 +947,13 @@
   .node--h5 .node__content:empty,
   .node--h6 .node__content:empty {
     min-height: 1.5rem;
+  }
+
+  /* Blank line preservation in view mode */
+  :global(.blank-line-placeholder) {
+    display: block;
+    height: 1.5em;
+    content: '';
   }
 
   /* Markdown formatting styles */
