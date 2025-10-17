@@ -34,8 +34,7 @@ const KEYBOARD_COMMANDS = {
   navigateUp: new NavigateUpCommand(),
   navigateDown: new NavigateDownCommand(),
   formatBold: new FormatTextCommand('bold'),
-  formatItalic: new FormatTextCommand('italic'),
-  formatUnderline: new FormatTextCommand('underline')
+  formatItalic: new FormatTextCommand('italic')
 };
 
 export interface TextareaControllerEvents {
@@ -198,8 +197,6 @@ export class TextareaController {
     registry.register({ key: 'b', ctrl: true }, KEYBOARD_COMMANDS.formatBold);
     registry.register({ key: 'i', meta: true }, KEYBOARD_COMMANDS.formatItalic);
     registry.register({ key: 'i', ctrl: true }, KEYBOARD_COMMANDS.formatItalic);
-    registry.register({ key: 'u', meta: true }, KEYBOARD_COMMANDS.formatUnderline);
-    registry.register({ key: 'u', ctrl: true }, KEYBOARD_COMMANDS.formatUnderline);
 
     TextareaController.keyboardCommandsRegistered = true;
   }

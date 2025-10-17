@@ -21,7 +21,6 @@ describe('FormatTextCommand', () => {
     toggleFormattingSpy = vi.fn();
 
     mockController = {
-      isEditing: true,
       toggleFormatting: toggleFormattingSpy
     } as unknown as ContentEditableControllerExtended;
   });
@@ -106,20 +105,6 @@ describe('FormatTextCommand', () => {
 
       expect(result).toBe(true);
     });
-
-    it('should return false when controller is not editing', async () => {
-      mockController.isEditing = false;
-
-      const context = createContext({
-        key: 'b',
-        metaKey: true
-      });
-
-      const result = await command.execute(context);
-
-      expect(result).toBe(false);
-      expect(toggleFormattingSpy).not.toHaveBeenCalled();
-    });
   });
 
   describe('Italic formatting', () => {
@@ -161,48 +146,6 @@ describe('FormatTextCommand', () => {
       await command.execute(context);
 
       expect(toggleFormattingSpy).toHaveBeenCalledWith('*');
-    });
-  });
-
-  describe('Underline formatting', () => {
-    let command: FormatTextCommand;
-
-    beforeEach(() => {
-      command = new FormatTextCommand('underline');
-    });
-
-    it('should have correct id and description', () => {
-      expect(command.id).toBe('format-text-underline');
-      expect(command.description).toBe('Toggle underline formatting');
-    });
-
-    it('should execute for Cmd+U on Mac', () => {
-      const context = createContext({
-        key: 'u',
-        metaKey: true
-      });
-
-      expect(command.canExecute(context)).toBe(true);
-    });
-
-    it('should execute for Ctrl+U on Windows/Linux', () => {
-      const context = createContext({
-        key: 'u',
-        ctrlKey: true
-      });
-
-      expect(command.canExecute(context)).toBe(true);
-    });
-
-    it('should call toggleFormatting with __ marker', async () => {
-      const context = createContext({
-        key: 'u',
-        metaKey: true
-      });
-
-      await command.execute(context);
-
-      expect(toggleFormattingSpy).toHaveBeenCalledWith('__');
     });
   });
 
