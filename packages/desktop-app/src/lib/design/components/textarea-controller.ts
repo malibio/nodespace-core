@@ -473,7 +473,7 @@ export class TextareaController {
   /**
    * Position cursor when entering from arrow navigation
    * @param direction - 'up' (entering from bottom) or 'down' (entering from top)
-   * @param pixelOffset - Approximate horizontal pixel offset to maintain
+   * @param pixelOffset - Absolute horizontal pixel offset to maintain (viewport-relative)
    */
   public enterFromArrowNavigation(direction: 'up' | 'down', pixelOffset: number): void {
     const content = this.element.value;
@@ -483,8 +483,13 @@ export class TextareaController {
     const lineIndex = direction === 'up' ? lines.length - 1 : 0;
     const targetLine = lines[lineIndex];
 
-    // Convert pixel offset to column (approximate)
-    const approximateColumn = Math.round(pixelOffset / 8);
+    // Convert absolute pixel offset to relative offset within textarea
+    const rect = this.element.getBoundingClientRect();
+    const textareaLeftEdge = rect.left + window.scrollX;
+    const relativePixelOffset = pixelOffset - textareaLeftEdge;
+
+    // Convert relative pixel offset to column (approximate)
+    const approximateColumn = Math.max(0, Math.round(relativePixelOffset / 8));
 
     // Clamp column to line length
     const column = Math.min(approximateColumn, targetLine.length);

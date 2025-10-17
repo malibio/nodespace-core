@@ -33,9 +33,15 @@
  * ```
  */
 
+export interface ArrowNavigationContext {
+  direction: 'up' | 'down';
+  pixelOffset: number;
+}
+
 export interface FocusState {
   nodeId: string | null;
   cursorPosition: number | null;
+  arrowNavigationContext: ArrowNavigationContext | null;
 }
 
 /**
@@ -51,6 +57,11 @@ let _editingNodeId = $state<string | null>(null);
 
 // Optional cursor position for precise positioning after node type changes
 let _pendingCursorPosition = $state<number | null>(null);
+
+// Optional arrow navigation context for pixel-accurate horizontal positioning
+// Store as separate primitive values for better Svelte reactivity tracking
+let _arrowNavDirection = $state<'up' | 'down' | null>(null);
+let _arrowNavPixelOffset = $state<number | null>(null);
 
 export const focusManager = {
   /**
@@ -68,6 +79,30 @@ export const focusManager = {
   },
 
   /**
+   * Public reactive getter for arrow navigation context
+   */
+  get arrowNavigationContext(): ArrowNavigationContext | null {
+    if (_arrowNavDirection !== null && _arrowNavPixelOffset !== null) {
+      return { direction: _arrowNavDirection, pixelOffset: _arrowNavPixelOffset };
+    }
+    return null;
+  },
+
+  /**
+   * Public reactive getter for arrow navigation direction (primitive for reactivity)
+   */
+  get arrowNavDirection(): 'up' | 'down' | null {
+    return _arrowNavDirection;
+  },
+
+  /**
+   * Public reactive getter for arrow navigation pixel offset (primitive for reactivity)
+   */
+  get arrowNavPixelOffset(): number | null {
+    return _arrowNavPixelOffset;
+  },
+
+  /**
    * Set which node is being edited
    * @param nodeId - The node to edit, or null to clear editing state
    * @param cursorPosition - Optional cursor position for precise positioning
@@ -75,6 +110,25 @@ export const focusManager = {
   setEditingNode(nodeId: string | null, cursorPosition?: number): void {
     _editingNodeId = nodeId;
     _pendingCursorPosition = cursorPosition ?? null;
+    _arrowNavDirection = null; // Clear arrow navigation when setting via cursor position
+    _arrowNavPixelOffset = null;
+  },
+
+  /**
+   * Set which node is being edited via arrow navigation
+   * @param nodeId - The node to edit
+   * @param direction - Navigation direction ('up' or 'down')
+   * @param pixelOffset - Horizontal pixel offset to maintain
+   */
+  setEditingNodeFromArrowNavigation(
+    nodeId: string,
+    direction: 'up' | 'down',
+    pixelOffset: number
+  ): void {
+    _editingNodeId = nodeId;
+    _pendingCursorPosition = null; // Clear cursor position when using arrow navigation
+    _arrowNavDirection = direction;
+    _arrowNavPixelOffset = pixelOffset;
   },
 
   /**
@@ -83,6 +137,8 @@ export const focusManager = {
   clearEditing(): void {
     _editingNodeId = null;
     _pendingCursorPosition = null;
+    _arrowNavDirection = null;
+    _arrowNavPixelOffset = null;
   },
 
   /**
@@ -100,12 +156,21 @@ export const focusManager = {
   },
 
   /**
+   * Clear arrow navigation context after it's been consumed
+   */
+  clearArrowNavigationContext(): void {
+    _arrowNavDirection = null;
+    _arrowNavPixelOffset = null;
+  },
+
+  /**
    * Get current focus state (for debugging/logging)
    */
   getCurrentState(): FocusState {
     return {
       nodeId: _editingNodeId,
-      cursorPosition: _pendingCursorPosition
+      cursorPosition: _pendingCursorPosition,
+      arrowNavigationContext: this.arrowNavigationContext
     };
   }
 };

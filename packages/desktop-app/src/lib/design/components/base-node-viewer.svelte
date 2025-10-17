@@ -1036,6 +1036,34 @@
     }
   }
 
+  /**
+   * Navigate to a target node using FocusManager (reactive approach)
+   * Passes arrow navigation context to FocusManager for pixel-accurate positioning
+   *
+   * @param targetNodeId The node to navigate to
+   * @param direction Navigation direction ('up' or 'down')
+   * @param pixelOffset Horizontal pixel offset to maintain
+   */
+  function handleNavigateToNode(
+    targetNodeId: string,
+    direction: 'up' | 'down',
+    pixelOffset: number
+  ): void {
+    // Find the target node
+    const targetNode = nodeManager.findNode(targetNodeId);
+    if (!targetNode) {
+      console.warn(`[Navigation] Target node ${targetNodeId} not found`);
+      return;
+    }
+
+    // Use FocusManager with arrow navigation context
+    // This triggers reactive effects that handle:
+    // 1. Switching from view mode to edit mode (isEditing derived value)
+    // 2. Focusing the textarea (autoFocus effect in base-node.svelte)
+    // 3. Calling controller.enterFromArrowNavigation() with pixel-accurate positioning
+    focusManager.setEditingNodeFromArrowNavigation(targetNodeId, direction, pixelOffset);
+  }
+
   // Handle arrow key navigation between nodes using entry/exit methods
   function handleArrowNavigation(
     event: CustomEvent<{
@@ -1058,252 +1086,20 @@
     while (targetIndex >= 0 && targetIndex < currentVisibleNodes.length) {
       const candidateNode = currentVisibleNodes[targetIndex];
 
-      // Check if this node accepts navigation (skip if it doesn\'t)
+      // Check if this node accepts navigation (skip if it doesn't)
       // For now, assume all nodes accept navigation (will be refined per node type)
       const acceptsNavigation = true; // candidateNode.navigationMethods?.canAcceptNavigation() ?? true;
 
       if (acceptsNavigation) {
-        // Found a node that accepts navigation - try to enter it
-        const success = enterNodeAtPosition(candidateNode.id, direction, pixelOffset);
-        if (success) return;
-      }
-
-      // This node doesn\'t accept navigation or entry failed - try next one
-      targetIndex = direction === 'up' ? targetIndex - 1 : targetIndex + 1;
-    }
-  }
-
-  /**
-   * Position cursor at a target pixel offset within a line by iterating through characters.
-   * Uses viewport-relative positioning to maintain horizontal position across nodes with different font sizes.
-   */
-  function setCursorAtPixelOffset(
-    element: HTMLElement,
-    lineElement: Element,
-    targetPixelOffset: number
-  ) {
-    const textNodes = getTextNodes(lineElement as HTMLElement);
-    if (textNodes.length === 0) {
-      // Empty line - position at start
-      const selection = window.getSelection();
-      if (selection) {
-        const range = document.createRange();
-        range.selectNodeContents(lineElement);
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-      return;
-    }
-
-    // Linear search through character positions to find closest to target pixel offset
-    // Target is viewport-relative (including scroll offset), so compare with testRect.left + scrollX
-    let bestOffset = 0;
-    let bestDistance = Infinity;
-    let bestNode: Text | null = null;
-
-    for (const textNode of textNodes) {
-      const textContent = textNode.textContent || '';
-      for (let i = 0; i <= textContent.length; i++) {
-        try {
-          const testRange = document.createRange();
-          testRange.setStart(textNode, i);
-          testRange.setEnd(textNode, i);
-          const testRect = testRange.getBoundingClientRect();
-          const currentPixel = testRect.left + window.scrollX;
-          const distance = Math.abs(currentPixel - targetPixelOffset);
-
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestOffset = i;
-            bestNode = textNode;
-          }
-
-          // Early exit if we've gone past the target
-          if (currentPixel > targetPixelOffset) break;
-        } catch {
-          // Skip invalid positions
-        }
-      }
-    }
-
-    // Set cursor at best position
-    const selection = window.getSelection();
-    if (selection && bestNode) {
-      const range = document.createRange();
-      range.setStart(bestNode, bestOffset);
-      range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
-    } else if (selection) {
-      // Defensive fallback: ensure lineElement is valid before using it
-      if (lineElement && lineElement.nodeType === Node.ELEMENT_NODE) {
-        const range = document.createRange();
-        range.selectNodeContents(lineElement);
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      } else {
-        // Ultimate fallback: position at element start if lineElement is invalid
-        const range = document.createRange();
-        range.selectNodeContents(element);
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-    }
-  }
-
-  // Enter a node using its entry methods or fallback positioning
-  function enterNodeAtPosition(
-    targetNodeId: string,
-    direction: 'up' | 'down',
-    pixelOffset: number
-  ): boolean {
-    // Try component-level navigation methods first (future enhancement)
-    // const nodeComponent = getNodeComponent(targetNodeId);
-    // if (nodeComponent?.navigationMethods) {
-    //   return direction === 'up'
-    //     ? nodeComponent.navigationMethods.enterFromBottom(columnHint)
-    //     : nodeComponent.navigationMethods.enterFromTop(columnHint);
-    // }
-
-    // Pixel-based positioning - works correctly with proportional fonts
-    setTimeout(() => {
-      // Try textarea first (new approach), fallback to contenteditable
-      let targetElement = document.getElementById(
-        `textarea-${targetNodeId}`
-      ) as HTMLTextAreaElement;
-      const isTextarea = !!targetElement;
-
-      if (!targetElement) {
-        targetElement = document.getElementById(
-          `contenteditable-${targetNodeId}`
-        ) as HTMLTextAreaElement;
-      }
-
-      // If no textarea/contenteditable found, node might be in view mode
-      // Find the view div and trigger edit mode without default focus
-      if (!targetElement) {
-        const viewElement = document.getElementById(`view-${targetNodeId}`);
-        if (viewElement) {
-          // Mark node as being entered via arrow navigation
-          // This tells BaseNode to suppress the default focus behavior
-          viewElement.dataset.arrowNavigation = 'true';
-
-          // Click the view element to switch to edit mode
-          viewElement.click();
-
-          // Wait for textarea to appear after switching to edit mode
-          setTimeout(() => {
-            const newTextarea = document.getElementById(
-              `textarea-${targetNodeId}`
-            ) as HTMLTextAreaElement;
-            if (newTextarea) {
-              // Hide caret during navigation to prevent visible cursor bounce
-              newTextarea.style.caretColor = 'transparent';
-
-              const controller = (
-                newTextarea as unknown as {
-                  _textareaController?: {
-                    enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void;
-                  };
-                }
-              )._textareaController;
-
-              if (controller && typeof controller.enterFromArrowNavigation === 'function') {
-                // Focus the textarea first
-                newTextarea.focus();
-                // Use the controller's method to position cursor
-                requestAnimationFrame(() => {
-                  controller.enterFromArrowNavigation(direction, pixelOffset);
-                  // Show caret after positioning is complete
-                  requestAnimationFrame(() => {
-                    newTextarea.style.caretColor = '';
-                  });
-                });
-              } else {
-                // Fallback: just focus
-                newTextarea.focus();
-                newTextarea.style.caretColor = '';
-              }
-
-              // Clean up the flag
-              if (viewElement.dataset.arrowNavigation) {
-                delete viewElement.dataset.arrowNavigation;
-              }
-            }
-          }, 50);
-        }
+        // Navigate using reactive approach (FocusManager)
+        handleNavigateToNode(candidateNode.id, direction, pixelOffset);
         return;
       }
 
-      if (isTextarea) {
-        // Handle textarea with TextareaController
-        const controller = (
-          targetElement as unknown as {
-            _textareaController?: {
-              enterFromArrowNavigation?: (_dir: 'up' | 'down', _offset: number) => void;
-            };
-          }
-        )._textareaController;
-
-        targetElement.focus();
-
-        if (controller && typeof controller.enterFromArrowNavigation === 'function') {
-          // Use the controller's method to position cursor
-          requestAnimationFrame(() => {
-            controller.enterFromArrowNavigation(direction, pixelOffset);
-          });
-        }
-      } else {
-        // Handle contenteditable (legacy)
-        // Prepare the controller for arrow navigation to prevent content update
-        const controller = (
-          targetElement as unknown as {
-            _contentEditableController?: { prepareForArrowNavigation?: () => void };
-          }
-        )._contentEditableController;
-        if (controller && typeof controller.prepareForArrowNavigation === 'function') {
-          controller.prepareForArrowNavigation();
-        }
-
-        // Hide caret during navigation to prevent visible cursor bounce
-        targetElement.style.caretColor = 'transparent';
-
-        targetElement.focus();
-
-        // Wait for DOM to update after focus
-        // With DIVs in both display and editing modes, structure is already ready
-        // Use requestAnimationFrame for minimal delay (next paint frame)
-        requestAnimationFrame(() => {
-          // Check if multiline or single-line
-          const divElements = targetElement.querySelectorAll(':scope > div');
-          const isMultiline = divElements.length > 0;
-
-          if (isMultiline) {
-            // For multiline: position cursor at pixelOffset within the first/last line
-            const lineElement =
-              direction === 'up'
-                ? divElements[divElements.length - 1] // Last line when entering from bottom
-                : divElements[0]; // First line when entering from top
-
-            setCursorAtPixelOffset(targetElement, lineElement, pixelOffset);
-          } else {
-            // For single-line: position cursor at pixelOffset within the single line
-            setCursorAtPixelOffset(targetElement, targetElement, pixelOffset);
-          }
-
-          // Show caret after positioning is complete
-          targetElement.style.caretColor = '';
-        });
-      }
-    }, 0);
-
-    return true;
+      // This node doesn't accept navigation - try next one
+      targetIndex = direction === 'up' ? targetIndex - 1 : targetIndex + 1;
+    }
   }
-
-  // Utility to set cursor position in any contenteditable element
 
   // Handle combining current node with previous node (Backspace at start of node)
   // CLEAN DELEGATION: All logic handled by NodeManager

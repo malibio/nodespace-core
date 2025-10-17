@@ -415,14 +415,21 @@
     headerLevelChanged: (level: number) => dispatch('headerLevelChanged', { level }),
     focus: () => {
       // Use FocusManager as single source of truth
-      focusManager.setEditingNode(nodeId);
+      // Only update if this node isn't already set as editing
+      // (Don't overwrite arrow navigation context set by setEditingNodeFromArrowNavigation)
+      if (focusManager.editingNodeId !== nodeId) {
+        focusManager.setEditingNode(nodeId);
+      }
       dispatch('focus');
     },
     blur: () => {
       // Use FocusManager as single source of truth
-      // Wrap in untrack to avoid state_unsafe_mutation error
+      // Only clear editing if THIS node is still the editing node
+      // (Don't clear if focus has already moved to another node via arrow navigation)
       untrack(() => {
-        focusManager.clearEditing();
+        if (focusManager.editingNodeId === nodeId) {
+          focusManager.clearEditing();
+        }
       });
 
       // Hide autocomplete modal when losing focus
@@ -603,27 +610,45 @@
       // Mark as processed immediately to prevent re-triggering
       autoFocusProcessed = true;
 
-      // Check if there's a pending cursor position from FocusManager
       const pendingPosition = focusManager.pendingCursorPosition;
+      const hasArrowNav =
+        focusManager.arrowNavDirection !== null && focusManager.arrowNavPixelOffset !== null;
 
-      // Use a small delay to ensure DOM is updated after nodeType change
+      // Skip autoFocus positioning if arrow navigation is handling it
+      if (hasArrowNav) {
+        return;
+      }
+
       setTimeout(() => {
         if (controller) {
           controller.focus();
 
-          // If there's a pending cursor position, use it precisely
           if (pendingPosition !== null && focusManager.editingNodeId === nodeId) {
-            // Position cursor at the specific position
             controller.setCursorPosition(pendingPosition);
-            // Clear the consumed position
             focusManager.clearCursorPosition();
           } else {
-            // Default: position cursor at beginning of first line, skipping syntax
-            // Uses CursorPositioningService for consistent, maintainable behavior
             controller.positionCursorAtLineBeginning(0, true);
           }
         }
       }, 10);
+    }
+  });
+
+  // Handle arrow navigation cursor positioning
+  $effect(() => {
+    const arrowDirection = focusManager.arrowNavDirection;
+    const arrowPixelOffset = focusManager.arrowNavPixelOffset;
+    const editingNodeId = focusManager.editingNodeId;
+
+    if (
+      controller &&
+      isEditing &&
+      arrowDirection !== null &&
+      arrowPixelOffset !== null &&
+      editingNodeId === nodeId
+    ) {
+      controller.enterFromArrowNavigation(arrowDirection, arrowPixelOffset);
+      focusManager.clearArrowNavigationContext();
     }
   });
 
