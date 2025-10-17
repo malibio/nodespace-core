@@ -1,5 +1,21 @@
 # Enhanced ContentEditable Architecture
 
+> **⚠️ DEPRECATED (October 2025)**
+>
+> This architecture has been **replaced** by the [Textarea-Based Editor Architecture](./textarea-editor-architecture.md).
+>
+> **Migration**: See Issue #274 for the complete migration from ContentEditable to Textarea-based editing.
+>
+> **Why Replaced**:
+> - Eliminated dual-state synchronization bugs (markdown ↔ HTML)
+> - Reduced code complexity from 4,250 lines to 950 lines
+> - Native textarea APIs instead of complex DOM Range manipulation
+> - Better performance and maintainability
+>
+> **This document is preserved for historical reference only.**
+
+---
+
 ## Overview
 
 The NodeSpace Enhanced ContentEditable system provides sophisticated text editing with Logseq-inspired dual-representation patterns, built around a service-oriented architecture with **BaseNode** (preserved foundation), **ContentProcessor** (dual-representation), **NodeManager** (operations), and **BacklinkService** (knowledge management).
