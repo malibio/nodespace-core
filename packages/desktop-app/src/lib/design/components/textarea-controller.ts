@@ -9,7 +9,7 @@
  * - Native cursor APIs (selectionStart/End) instead of DOM Range manipulation
  * - No HTML/markdown synchronization bugs
  * - Simpler testing (string assertions instead of DOM queries)
- * - ~500-800 lines vs ~4250 lines
+ * - ~950 lines (self-contained) vs ~4250 lines (ContentEditableController + dependencies)
  */
 
 import ContentProcessor from '$lib/services/content-processor';
@@ -24,6 +24,7 @@ import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 import { CursorPositioningService } from '$lib/services/cursor-positioning-service';
+import { untrack } from 'svelte';
 
 // Module-level command singletons - created once and reused
 const KEYBOARD_COMMANDS = {
@@ -103,6 +104,7 @@ export class TextareaController {
   private static readonly HEADER_PATTERN = /^(#{1,6})\s/;
   private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
   private static readonly QUOTE_PATTERN = /^>\s/;
+  // Maximum autocomplete query length (reasonable UX limit, prevents performance issues)
   private static readonly MAX_QUERY_LENGTH = 100;
 
   private static keyboardCommandsRegistered = false;
@@ -119,6 +121,9 @@ export class TextareaController {
 
   // Cursor state for arrow navigation
   private lastKnownPixelOffset: number = 0;
+
+  // Singleton measurement element for pixel offset calculations (created lazily)
+  private measurementElement: HTMLSpanElement | null = null;
 
   // Dropdown state
   public slashCommandDropdownActive: boolean = false;
@@ -318,6 +323,11 @@ export class TextareaController {
     // Clean up the controller reference from DOM element
     delete (this.element as unknown as { _textareaController?: TextareaController })
       ._textareaController;
+    // Clean up singleton measurement element
+    if (this.measurementElement && this.measurementElement.parentNode) {
+      this.measurementElement.parentNode.removeChild(this.measurementElement);
+      this.measurementElement = null;
+    }
   }
 
   /**
@@ -433,7 +443,7 @@ export class TextareaController {
 
   /**
    * Get current pixel offset for arrow navigation (pixel-accurate measurement)
-   * Uses hidden span element to measure actual rendered text width
+   * Uses singleton hidden span element to measure actual rendered text width
    */
   public getCurrentPixelOffset(): number {
     const position = this.element.selectionStart;
@@ -445,25 +455,27 @@ export class TextareaController {
     // Get textarea bounding rect for absolute positioning
     const rect = this.element.getBoundingClientRect();
 
-    // Create hidden measurement span with exact textarea styling
-    const measureEl = document.createElement('span');
-    const computedStyle = window.getComputedStyle(this.element);
-    measureEl.style.cssText = `
-      position: absolute;
-      visibility: hidden;
-      white-space: pre;
-      font-family: ${computedStyle.fontFamily};
-      font-size: ${computedStyle.fontSize};
-      font-weight: ${computedStyle.fontWeight};
-      letter-spacing: ${computedStyle.letterSpacing};
-      word-spacing: ${computedStyle.wordSpacing};
-      line-height: ${computedStyle.lineHeight};
-    `;
-    measureEl.textContent = textBeforeCursor;
-    document.body.appendChild(measureEl);
+    // Lazy initialization: create singleton measurement element on first use
+    if (!this.measurementElement) {
+      this.measurementElement = document.createElement('span');
+      const computedStyle = window.getComputedStyle(this.element);
+      this.measurementElement.style.cssText = `
+        position: absolute;
+        visibility: hidden;
+        white-space: pre;
+        font-family: ${computedStyle.fontFamily};
+        font-size: ${computedStyle.fontSize};
+        font-weight: ${computedStyle.fontWeight};
+        letter-spacing: ${computedStyle.letterSpacing};
+        word-spacing: ${computedStyle.wordSpacing};
+        line-height: ${computedStyle.lineHeight};
+      `;
+      document.body.appendChild(this.measurementElement);
+    }
 
-    const textWidth = measureEl.getBoundingClientRect().width;
-    document.body.removeChild(measureEl);
+    // Reuse measurement element: update text content and measure
+    this.measurementElement.textContent = textBeforeCursor;
+    const textWidth = this.measurementElement.getBoundingClientRect().width;
 
     // Return absolute pixel position including node indentation
     this.lastKnownPixelOffset = rect.left + textWidth + window.scrollX;
@@ -489,6 +501,7 @@ export class TextareaController {
     const relativePixelOffset = pixelOffset - textareaLeftEdge;
 
     // Convert relative pixel offset to column (approximate)
+    // Fallback: ~8px per character for monospace estimation when measurement unavailable
     const approximateColumn = Math.max(0, Math.round(relativePixelOffset / 8));
 
     // Clamp column to line length
@@ -732,16 +745,17 @@ export class TextareaController {
     if (headerMatch) {
       const level = headerMatch[1].length;
 
-      // Defer event emission to avoid Svelte 5 state_unsafe_mutation error
-      // This ensures the event is processed outside the current reactive context
-      setTimeout(() => {
+      // Use untrack to prevent Svelte 5 reactive tracking during event emission
+      // This prevents state_unsafe_mutation errors when parent components update state
+      // in response to these events during their own reactive updates
+      untrack(() => {
         this.events.headerLevelChanged(level);
         this.events.nodeTypeConversionDetected({
           nodeId: this.nodeId,
           newNodeType: 'header',
           cleanedContent: content // Keep the full content with "# " for editing
         });
-      }, 0);
+      });
       return;
     }
 
@@ -783,7 +797,8 @@ export class TextareaController {
     const textBefore = this.element.value.substring(0, position);
     const lines = textBefore.split('\n');
     const lineNumber = lines.length - 1;
-    const lineHeight = 24; // Approximate line height
+    // Default line height in pixels (matches CSS --line-height: 1.5 * 16px base font)
+    const lineHeight = 24;
 
     return {
       x: rect.left,
