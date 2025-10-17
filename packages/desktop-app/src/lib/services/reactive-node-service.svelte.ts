@@ -618,9 +618,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     sharedNodeStore.updateNode(nodeId, { nodeType }, viewerSource);
 
-    // Set focus using FocusManager (single source of truth)
-    // This replaces the setTimeout-based autoFocus clearing logic
-    focusManager.setEditingNode(nodeId);
+    // Focus is managed by BaseNodeViewer during conversions
+    // Do not override cursor position here
 
     emitNodeUpdated(nodeId, 'nodeType', nodeType);
     scheduleContentProcessing(nodeId, node.content);

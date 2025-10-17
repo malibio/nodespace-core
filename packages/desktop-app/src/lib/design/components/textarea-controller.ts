@@ -90,6 +90,7 @@ export interface TextareaControllerEvents {
     nodeId: string;
     newNodeType: string;
     cleanedContent: string;
+    cursorPosition: number; // Cursor position at time of conversion
   }) => void;
 }
 
@@ -268,6 +269,13 @@ export class TextareaController {
       this.adjustHeight();
       this.setCursorPosition(content.length); // Position at end
     });
+  }
+
+  /**
+   * Update the node type (called after successful node type conversion)
+   */
+  public updateNodeType(newNodeType: string): void {
+    this.nodeType = newNodeType;
   }
 
   /**
@@ -748,6 +756,9 @@ export class TextareaController {
       // Pattern detected - convert to specialized node type
       const { config, match, metadata } = detection;
 
+      // CRITICAL: Capture cursor position BEFORE event emission
+      const cursorPosition = this.getCursorPosition();
+
       // Calculate cleaned content based on plugin config
       const cleanedContent = config.cleanContent
         ? content.replace(match[0], '') // Remove pattern from content
@@ -762,23 +773,34 @@ export class TextareaController {
           this.events.headerLevelChanged(metadata.headerLevel as number);
         }
 
-        // Emit node type conversion event
+        // Emit node type conversion event with cursor position
         this.events.nodeTypeConversionDetected({
           nodeId: this.nodeId,
           newNodeType: config.targetNodeType,
-          cleanedContent: cleanedContent
+          cleanedContent: cleanedContent,
+          cursorPosition: cursorPosition
         });
+
+        // CRITICAL: Update internal nodeType so reverse conversion can detect it
+        this.nodeType = config.targetNodeType;
       });
     } else if (this.nodeType !== 'text') {
       // No pattern detected AND current node is NOT text
       // This means user removed the pattern (e.g., backspaced "## " to "##")
+      // CRITICAL: Capture cursor position BEFORE event emission
+      const cursorPosition = this.getCursorPosition();
+
       // Convert back to plain text node
       untrack(() => {
         this.events.nodeTypeConversionDetected({
           nodeId: this.nodeId,
           newNodeType: 'text',
-          cleanedContent: content
+          cleanedContent: content,
+          cursorPosition: cursorPosition
         });
+
+        // CRITICAL: Update internal nodeType so future conversions work correctly
+        this.nodeType = 'text';
       });
     }
   }

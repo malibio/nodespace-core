@@ -1340,7 +1340,7 @@
 
           <!-- Node viewer with stable component references -->
           {#if node.nodeType === 'text'}
-            {#key `${node.id}-${node.nodeType}`}
+            {#key node.id}
               <TextNodeViewer
                 nodeId={node.id}
                 nodeType={node.nodeType}
@@ -1375,25 +1375,21 @@
                   focusManager.setEditingNode(node.id, e.detail.cursorPosition);
                 }}
                 on:nodeTypeChanged={(
-                  e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
+                  e: CustomEvent<{
+                    nodeType: string;
+                    cleanedContent?: string;
+                    cursorPosition?: number;
+                  }>
                 ) => {
                   const newNodeType = e.detail.nodeType;
-                  const currentNodeId = node.id;
+                  // Use cursor position from event (captured by TextareaController)
+                  const cursorPosition = e.detail.cursorPosition ?? 0;
 
-                  // Use nodeManager.updateNodeType for proper reactivity
-                  // This triggers SharedNodeStore updates and Svelte reactivity
-                  requestAnimationFrame(() => {
-                    // Update the node type through the proper API
-                    // This will trigger _updateTrigger and re-compute visibleNodes
-                    nodeManager.updateNodeType(currentNodeId, newNodeType);
+                  // Update node type through proper API
+                  nodeManager.updateNodeType(node.id, newNodeType);
 
-                    // CRITICAL: Restore focus after node type conversion
-                    // The component re-renders with new node type, losing focus
-                    // We need to restore editing state so cursor reappears
-                    requestAnimationFrame(() => {
-                      focusManager.setEditingNode(currentNodeId, undefined);
-                    });
-                  });
+                  // Set editing with cursor position from event
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
@@ -1402,7 +1398,7 @@
           {:else}
             <!-- Use plugin registry for non-text node types with key for re-rendering -->
             {#if node.nodeType in loadedNodes}
-              {#key `${node.id}-${node.nodeType}`}
+              {#key node.id}
                 {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
                 <NodeComponent
                   nodeId={node.id}
@@ -1427,37 +1423,21 @@
                     // Focus management handled by FocusManager (single source of truth)
                   }}
                   on:nodeTypeChanged={(
-                    e: CustomEvent<{ nodeType: string; cleanedContent?: string }>
+                    e: CustomEvent<{
+                      nodeType: string;
+                      cleanedContent?: string;
+                      cursorPosition?: number;
+                    }>
                   ) => {
-                    const nodeType = e.detail.nodeType;
-                    const targetNode = nodeManager.nodes.get(node.id);
-                    if (targetNode) {
-                      // Wrap mutations in requestAnimationFrame to avoid Svelte 5 state_unsafe_mutation error
-                      requestAnimationFrame(() => {
-                        // Update the node type only - don't touch the content during conversion
-                        targetNode.nodeType = nodeType;
+                    const newNodeType = e.detail.nodeType;
+                    // Use cursor position from event (captured by TextareaController)
+                    const cursorPosition = e.detail.cursorPosition ?? 0;
 
-                        // Don't update content here - it stays as the user typed it
-                        // cleanedContent will be applied when saving to database on blur
+                    // Update node type through proper API
+                    nodeManager.updateNodeType(node.id, newNodeType);
 
-                        // CRITICAL: Clean up type-specific properties when changing node types
-                        if (nodeType === 'text' && targetNode.properties.taskState) {
-                          // When converting from task to text, remove task-specific properties
-                          const { taskState, ...cleanProperties } = targetNode.properties;
-                          void taskState; // Intentionally unused - extracted to remove from properties
-                          targetNode.properties = { ...cleanProperties, _forceUpdate: Date.now() };
-                        } else {
-                          // For other conversions, just force update
-                          targetNode.properties = {
-                            ...targetNode.properties,
-                            _forceUpdate: Date.now()
-                          };
-                        }
-
-                        // Focus management handled by FocusManager (single source of truth)
-                        focusManager.setEditingNode(node.id);
-                      });
-                    }
+                    // Set editing with cursor position from event
+                    focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
                   }}
                   on:slashCommandSelected={(
                     e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>

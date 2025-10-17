@@ -406,7 +406,7 @@
     nodeReferenceSelected: { nodeId: string; nodeTitle: string };
     slashCommandSelected: { command: string; nodeType: string; cursorPosition?: number };
     iconClick: { nodeId: string; nodeType: string; currentState?: string };
-    nodeTypeChanged: { nodeType: string; cleanedContent?: string };
+    nodeTypeChanged: { nodeType: string; cleanedContent?: string; cursorPosition?: number };
   }>();
 
   // Controller event handlers
@@ -509,12 +509,14 @@
       nodeId: string;
       newNodeType: string;
       cleanedContent: string;
+      cursorPosition: number;
     }) => {
       // Don't dispatch contentChanged here - it causes Svelte 5 state_unsafe_mutation error
       // The cleaned content is passed in nodeTypeChanged event and handled by parent
       dispatch('nodeTypeChanged', {
         nodeType: data.newNodeType,
-        cleanedContent: data.cleanedContent
+        cleanedContent: data.cleanedContent,
+        cursorPosition: data.cursorPosition
       });
     }
   };
@@ -631,6 +633,17 @@
           }
         }
       }, 10);
+    }
+  });
+
+  // Handle cursor positioning during node type conversion (similar to arrow navigation)
+  $effect(() => {
+    const conversionCursorPos = focusManager.nodeTypeConversionCursorPosition;
+    const editingNodeId = focusManager.editingNodeId;
+
+    if (controller && isEditing && conversionCursorPos !== null && editingNodeId === nodeId) {
+      controller.setCursorPosition(conversionCursorPos);
+      focusManager.clearNodeTypeConversionCursorPosition();
     }
   });
 
