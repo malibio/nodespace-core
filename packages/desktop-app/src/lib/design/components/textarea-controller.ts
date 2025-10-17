@@ -735,38 +735,52 @@ export class TextareaController {
   /**
    * Detect node type conversion patterns using plugin registry
    * Replaces hardcoded pattern detection with extensible plugin-based system
+   *
+   * Handles bidirectional conversion:
+   * - Pattern match → Convert to specialized node type (e.g., text → header)
+   * - Pattern removed → Convert back to text node (e.g., header → text)
    */
   private detectNodeTypeConversion(content: string): void {
     // Use plugin registry to detect patterns
     const detection = pluginRegistry.detectPatternInContent(content);
 
-    if (!detection) {
-      return; // No pattern detected
-    }
+    if (detection) {
+      // Pattern detected - convert to specialized node type
+      const { config, match, metadata } = detection;
 
-    const { config, match, metadata } = detection;
+      // Calculate cleaned content based on plugin config
+      const cleanedContent = config.cleanContent
+        ? content.replace(match[0], '') // Remove pattern from content
+        : content; // Keep pattern in content (e.g., headers keep "# ")
 
-    // Calculate cleaned content based on plugin config
-    const cleanedContent = config.cleanContent
-      ? content.replace(match[0], '') // Remove pattern from content
-      : content; // Keep pattern in content (e.g., headers keep "# ")
+      // Use untrack to prevent Svelte 5 reactive tracking during event emission
+      // This prevents state_unsafe_mutation errors when parent components update state
+      // in response to these events during their own reactive updates
+      untrack(() => {
+        // Emit header level changed event if metadata contains headerLevel
+        if (metadata.headerLevel !== undefined) {
+          this.events.headerLevelChanged(metadata.headerLevel as number);
+        }
 
-    // Use untrack to prevent Svelte 5 reactive tracking during event emission
-    // This prevents state_unsafe_mutation errors when parent components update state
-    // in response to these events during their own reactive updates
-    untrack(() => {
-      // Emit header level changed event if metadata contains headerLevel
-      if (metadata.headerLevel !== undefined) {
-        this.events.headerLevelChanged(metadata.headerLevel as number);
-      }
-
-      // Emit node type conversion event
-      this.events.nodeTypeConversionDetected({
-        nodeId: this.nodeId,
-        newNodeType: config.targetNodeType,
-        cleanedContent: cleanedContent
+        // Emit node type conversion event
+        this.events.nodeTypeConversionDetected({
+          nodeId: this.nodeId,
+          newNodeType: config.targetNodeType,
+          cleanedContent: cleanedContent
+        });
       });
-    });
+    } else if (this.nodeType !== 'text') {
+      // No pattern detected AND current node is NOT text
+      // This means user removed the pattern (e.g., backspaced "## " to "##")
+      // Convert back to plain text node
+      untrack(() => {
+        this.events.nodeTypeConversionDetected({
+          nodeId: this.nodeId,
+          newNodeType: 'text',
+          cleanedContent: content
+        });
+      });
+    }
   }
 
   /**

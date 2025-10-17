@@ -117,14 +117,15 @@ export const taskNodePlugin: PluginDefinition = {
       }
     ],
     // Pattern detection for task checkbox auto-conversion
+    // Supports: [ ], [x], [X], - [ ], - [x], * [ ], * [x], + [ ], + [x]
     patternDetection: [
       {
-        pattern: /^\[\s*[x\s]\s*\]\s/i,
+        pattern: /^[-*+]?\s*\[\s*[xX\s]\s*\]\s/,
         targetNodeType: 'task',
         cleanContent: true, // Remove "[ ]" from content, task state shown in icon
         extractMetadata: (match: RegExpMatchArray) => {
-          // Check if checkbox is marked (contains 'x')
-          const isCompleted = /x/i.test(match[0]);
+          // Check if checkbox is marked (contains 'x' or 'X')
+          const isCompleted = /[xX]/.test(match[0]);
           return {
             taskState: isCompleted ? 'completed' : 'pending'
           };
