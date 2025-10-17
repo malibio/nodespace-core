@@ -12,10 +12,12 @@ NodeSpace follows a **consistent, hierarchical component architecture** with cle
 - **Purpose**: Abstract core component providing fundamental node functionality
 - **Usage**: INTERNAL USE ONLY - should never be used directly in application code
 - **Responsibilities**:
-  - Content editing via ContentEditableController
+  - Content editing via **TextareaController** (see [Textarea Architecture](./textarea-editor-architecture.md))
+  - Dual-mode rendering (edit: `<textarea>`, view: rendered markdown)
   - Markdown syntax handling
-  - Keyboard shortcuts (Ctrl+B, Ctrl+I, etc.)
-  - Event dispatch and management
+  - Keyboard shortcuts (Cmd+B, Cmd+I for formatting)
+  - Event dispatch and management via keyboard command system
+  - Focus management integration with FocusManager service
   - Base styling and layout
 
 **BaseNodeViewer** (`src/lib/design/components/base-node-viewer.svelte`)
