@@ -75,6 +75,18 @@ export const headerNodePlugin: PluginDefinition = {
         nodeType: 'header'
       }
     ],
+    // Unified pattern detection for h1-h6 auto-conversion
+    patternDetection: [
+      {
+        pattern: /^(#{1,6})\s/,
+        targetNodeType: 'header',
+        cleanContent: false, // Keep "# " syntax in content for editing
+        extractMetadata: (match: RegExpMatchArray) => ({
+          headerLevel: match[1].length // Capture group 1 is the hashtags
+        }),
+        priority: 10
+      }
+    ],
     canHaveChildren: true,
     canBeChild: true
   },
@@ -102,6 +114,22 @@ export const taskNodePlugin: PluginDefinition = {
         shortcut: '[ ]',
         contentTemplate: '', // Empty content - task icon shows the state instead
         nodeType: 'task' // Set node type to 'task' when selected
+      }
+    ],
+    // Pattern detection for task checkbox auto-conversion
+    patternDetection: [
+      {
+        pattern: /^\[\s*[x\s]\s*\]\s/i,
+        targetNodeType: 'task',
+        cleanContent: true, // Remove "[ ]" from content, task state shown in icon
+        extractMetadata: (match: RegExpMatchArray) => {
+          // Check if checkbox is marked (contains 'x')
+          const isCompleted = /x/i.test(match[0]);
+          return {
+            taskState: isCompleted ? 'completed' : 'pending'
+          };
+        },
+        priority: 10
       }
     ],
     canHaveChildren: true,

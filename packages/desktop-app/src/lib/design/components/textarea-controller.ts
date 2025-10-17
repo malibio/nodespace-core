@@ -24,6 +24,7 @@ import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 import { CursorPositioningService } from '$lib/services/cursor-positioning-service';
+import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { untrack } from 'svelte';
 
 // Module-level command singletons - created once and reused
@@ -100,10 +101,6 @@ export class TextareaController {
   // Cursor positioning service
   private cursorService = CursorPositioningService.getInstance();
 
-  // Syntax detection patterns
-  private static readonly HEADER_PATTERN = /^(#{1,6})\s/;
-  private static readonly CHECKBOX_PATTERN = /^\[\s*[x\s]\s*\]\s/i;
-  private static readonly QUOTE_PATTERN = /^>\s/;
   // Maximum autocomplete query length (reasonable UX limit, prevents performance issues)
   private static readonly MAX_QUERY_LENGTH = 100;
 
@@ -736,53 +733,40 @@ export class TextareaController {
   }
 
   /**
-   * Detect node type conversion patterns
+   * Detect node type conversion patterns using plugin registry
+   * Replaces hardcoded pattern detection with extensible plugin-based system
    */
   private detectNodeTypeConversion(content: string): void {
-    // Detect header pattern FIRST (before trimming) - `# ` to `###### `
-    // Don't trim - we need to preserve trailing spaces for detection
-    const headerMatch = content.match(TextareaController.HEADER_PATTERN);
-    if (headerMatch) {
-      const level = headerMatch[1].length;
+    // Use plugin registry to detect patterns
+    const detection = pluginRegistry.detectPatternInContent(content);
 
-      // Use untrack to prevent Svelte 5 reactive tracking during event emission
-      // This prevents state_unsafe_mutation errors when parent components update state
-      // in response to these events during their own reactive updates
-      untrack(() => {
-        this.events.headerLevelChanged(level);
-        this.events.nodeTypeConversionDetected({
-          nodeId: this.nodeId,
-          newNodeType: 'header',
-          cleanedContent: content // Keep the full content with "# " for editing
-        });
-      });
-      return;
+    if (!detection) {
+      return; // No pattern detected
     }
 
-    // For other patterns, trim is OK
-    const trimmed = content.trim();
+    const { config, match, metadata } = detection;
 
-    // Detect task node pattern: `- [ ]` or `- [x]`
-    if (TextareaController.CHECKBOX_PATTERN.test(trimmed)) {
-      const cleanedContent = trimmed.replace(TextareaController.CHECKBOX_PATTERN, '');
+    // Calculate cleaned content based on plugin config
+    const cleanedContent = config.cleanContent
+      ? content.replace(match[0], '') // Remove pattern from content
+      : content; // Keep pattern in content (e.g., headers keep "# ")
+
+    // Use untrack to prevent Svelte 5 reactive tracking during event emission
+    // This prevents state_unsafe_mutation errors when parent components update state
+    // in response to these events during their own reactive updates
+    untrack(() => {
+      // Emit header level changed event if metadata contains headerLevel
+      if (metadata.headerLevel !== undefined) {
+        this.events.headerLevelChanged(metadata.headerLevel as number);
+      }
+
+      // Emit node type conversion event
       this.events.nodeTypeConversionDetected({
         nodeId: this.nodeId,
-        newNodeType: 'task',
+        newNodeType: config.targetNodeType,
         cleanedContent: cleanedContent
       });
-      return;
-    }
-
-    // Detect quote pattern: `> `
-    if (TextareaController.QUOTE_PATTERN.test(trimmed)) {
-      const cleanedContent = trimmed.replace(TextareaController.QUOTE_PATTERN, '');
-      this.events.nodeTypeConversionDetected({
-        nodeId: this.nodeId,
-        newNodeType: 'quote',
-        cleanedContent: cleanedContent
-      });
-      return;
-    }
+    });
   }
 
   /**
