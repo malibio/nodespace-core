@@ -236,16 +236,6 @@ describe('Sibling Chain Integrity', () => {
     service.deleteNode('node-2');
 
     await waitForDatabaseWrites();
-
-    // TEMPORARY: Re-enable to diagnose actual error
-    const errors = sharedNodeStore.getTestErrors();
-    if (errors.length > 0) {
-      console.error('=== TEST ERRORS DETECTED ===');
-      errors.forEach((err, idx) => {
-        console.error(`Error ${idx + 1}:`, err.message);
-        console.error('Stack:', err.stack);
-      });
-    }
     expect(sharedNodeStore.getTestErrors()).toHaveLength(0);
 
     // Verify: Chain repaired
@@ -557,20 +547,24 @@ describe('Sibling Chain Integrity', () => {
 
     service.initializeNodes([node1, node2]);
 
-    // Act: Perform complex sequence
+    // Act: Perform complex sequence with proper sequencing to avoid thundering herd
+    // Each operation must complete before starting the next to prevent database contention
     const node3Id = service.createNode('node-2', 'Node 3', 'text'); // Create
-    service.indentNode('node-2'); // Indent node-2 under node-1
-    const node4Id = service.createNode('node-1', 'Node 4', 'text'); // Create after node-1
-    service.outdentNode('node-2'); // Outdent node-2 back to root
-    service.combineNodes(node3Id, 'node-2'); // Combine node-3 into node-2
-
     await waitForDatabaseWrites();
-    // Note: This test performs many rapid operations which can cause transient
-    // SQLite locking errors. These are infrastructure issues, not logic bugs.
-    // The sibling chain logic itself is verified by the assertions below.
-    // Related: The dev server uses a shared database connection which can experience
-    // contention under concurrent test load.
-    // expect(sharedNodeStore.getTestErrors()).toHaveLength(0);
+
+    service.indentNode('node-2'); // Indent node-2 under node-1
+    await waitForDatabaseWrites();
+
+    const node4Id = service.createNode('node-1', 'Node 4', 'text'); // Create after node-1
+    await waitForDatabaseWrites();
+
+    service.outdentNode('node-2'); // Outdent node-2 back to root
+    await waitForDatabaseWrites();
+
+    await service.combineNodes(node3Id, 'node-2'); // Combine node-3 into node-2
+    await waitForDatabaseWrites();
+
+    expect(sharedNodeStore.getTestErrors()).toHaveLength(0);
 
     // Verify: node-3 was deleted by combineNodes (combined into node-2)
     expect(service.findNode(node3Id)).toBeNull();

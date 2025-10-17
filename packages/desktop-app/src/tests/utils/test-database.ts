@@ -89,15 +89,22 @@ export async function cleanupTestDatabase(dbPath: string): Promise<void> {
 }
 
 /**
- * Initialize a test database via HTTP dev server
+ * Initialize a test database via HTTP dev server with verification
  *
- * This calls the `/api/database/init?db_path=` endpoint to initialize
- * the database at the specified path, and also initializes the singleton
- * tauriNodeService to use this database for the test.
+ * This function:
+ * 1. Calls `/api/database/init?db_path=` to switch the dev server database
+ * 2. Verifies the switch completed by creating and reading a sentinel node
+ * 3. Retries up to 3 times if verification fails (race condition)
+ * 4. Updates singleton tauriNodeService to use this database
+ *
+ * This fixes Issue #266 (database initialization race condition) by ensuring
+ * the database switch completes before subsequent operations.
  *
  * @param dbPath - Path to the database file
  * @param serverUrl - HTTP dev server URL (default: http://localhost:3001)
+ * @param maxRetries - Maximum retry attempts for verification (default: 3)
  * @returns Path to the initialized database (should match input)
+ * @throws Error if database switch fails or cannot be verified after retries
  *
  * @example
  * const dbPath = createTestDatabase('my-test');
@@ -105,23 +112,110 @@ export async function cleanupTestDatabase(dbPath: string): Promise<void> {
  */
 export async function initializeTestDatabase(
   dbPath: string,
-  serverUrl: string = 'http://localhost:3001'
+  serverUrl: string = 'http://localhost:3001',
+  maxRetries: number = 3
 ): Promise<string> {
   const adapter = new HttpAdapter(serverUrl);
-  const initializedPath = await adapter.initializeDatabase(dbPath);
 
-  // CRITICAL: Update the singleton tauriNodeService to use this test database.
-  // SharedNodeStore uses tauriNodeService.createNode() to persist nodes, so we need
-  // to tell the singleton to use this test's specific database.
-  //
-  // NOTE: We do NOT call tauriNodeService.initializeDatabase(dbPath) because that would
-  // make a second HTTP request to the same endpoint, causing the database to be swapped
-  // twice. Instead, we use the test-only API to update the singleton's internal state
-  // since we've already initialized the dev server above.
-  tauriNodeService.__testOnly_setInitializedPath(dbPath);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // STEP 1: Call database init endpoint to switch database
+      const initializedPath = await adapter.initializeDatabase(dbPath);
 
-  console.log(`[Test] Initialized test database: ${initializedPath}`);
-  return initializedPath;
+      // STEP 2: Verify database switch by creating, reading, and deleting a sentinel node
+      // This ensures subsequent operations hit the correct database
+      // Use multiple retries with backoff to handle transient backend readiness issues
+      let verificationSuccess = false;
+      for (let verifyAttempt = 1; verifyAttempt <= 3; verifyAttempt++) {
+        try {
+          const sentinelId = `__test_sentinel_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+          // Create sentinel
+          await adapter.createNode({
+            id: sentinelId,
+            nodeType: 'text',
+            content: '__SENTINEL__',
+            parentId: null,
+            containerNodeId: null,
+            beforeSiblingId: null,
+            properties: {},
+            embeddingVector: null,
+            mentions: []
+          });
+
+          // Verify we can read it back
+          const sentinelNode = await adapter.getNode(sentinelId);
+          if (!sentinelNode || sentinelNode.content !== '__SENTINEL__') {
+            throw new Error('Sentinel node not found or corrupted');
+          }
+
+          // Clean up sentinel
+          await adapter.deleteNode(sentinelId);
+
+          // Verify deletion succeeded
+          const deletedCheck = await adapter.getNode(sentinelId);
+          if (deletedCheck !== null) {
+            throw new Error('Sentinel node still exists after deletion');
+          }
+
+          verificationSuccess = true;
+          break; // Success!
+        } catch (error) {
+          if (verifyAttempt === 3) {
+            throw new Error(
+              `Database verification failed after 3 attempts (attempt ${attempt}/${maxRetries}): ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+          // Retry with exponential backoff
+          await new Promise((resolve) => setTimeout(resolve, 50 * verifyAttempt));
+        }
+      }
+
+      if (!verificationSuccess) {
+        throw new Error('Database verification failed unexpectedly');
+      }
+
+      // STEP 3: Add stabilization delay to ensure backend is fully ready
+      // This prevents race conditions in rapid-fire operation tests
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // STEP 4: Update the singleton tauriNodeService to use this test database
+      // SharedNodeStore uses tauriNodeService.createNode() to persist nodes, so we need
+      // to tell the singleton to use this test's specific database.
+      //
+      // NOTE: We do NOT call tauriNodeService.initializeDatabase(dbPath) because that would
+      // make a second HTTP request to the same endpoint, causing the database to be swapped
+      // twice. Instead, we use the test-only API to update the singleton's internal state
+      // since we've already initialized the dev server above.
+      tauriNodeService.__testOnly_setInitializedPath(dbPath);
+
+      console.log(
+        `[Test] Database initialized and verified: ${initializedPath} (attempt ${attempt})`
+      );
+      return initializedPath;
+    } catch (error) {
+      if (attempt === maxRetries) {
+        // Final attempt failed - throw error
+        const err = error instanceof Error ? error : new Error(String(error));
+        throw new Error(
+          `Database initialization failed after ${maxRetries} attempts: ${err.message}\n` +
+            `This indicates a persistent race condition or backend issue.\n` +
+            `Database path: ${dbPath}`
+        );
+      }
+
+      // Retry after exponential backoff
+      const backoffMs = Math.min(100 * Math.pow(2, attempt - 1), 1000); // 100ms, 200ms, 400ms, max 1s
+      console.warn(
+        `[Test] Database initialization attempt ${attempt} failed, retrying in ${backoffMs}ms...`,
+        error instanceof Error ? error.message : String(error)
+      );
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  // This should never be reached due to throw in final attempt, but TypeScript needs it
+  throw new Error('Database initialization failed unexpectedly');
 }
 
 /**
