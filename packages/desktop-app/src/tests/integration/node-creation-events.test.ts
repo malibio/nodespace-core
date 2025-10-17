@@ -78,7 +78,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor = document.querySelector('[contenteditable="true"]');
+      const editor = document.querySelector('textarea');
       expect(editor).toBeInTheDocument();
 
       // Position cursor at end and press Enter
@@ -89,7 +89,7 @@ describe('Node Creation Event Chain', () => {
 
       // Verify editor remains functional after Enter key
       expect(editor).toBeInTheDocument();
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
 
     it('should render and remain functional after Enter key in middle of content', async () => {
@@ -101,7 +101,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor = document.querySelector('[contenteditable="true"]');
+      const editor = document.querySelector('textarea');
 
       // Position cursor in middle (after "Hello ")
       await user.click(editor!);
@@ -125,7 +125,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor = document.querySelector('[contenteditable="true"]');
+      const editor = document.querySelector('textarea');
 
       // Select text and press Enter
       await user.click(editor!);
@@ -149,7 +149,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor = document.querySelector('[contenteditable="true"]');
+      const editor = document.querySelector('textarea');
 
       await user.click(editor!);
       await user.keyboard('{Enter}{Enter}{Enter}');
@@ -168,7 +168,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor = document.querySelector('[contenteditable="true"]');
+      const editor = document.querySelector('textarea');
 
       await user.click(editor!);
       await user.keyboard('{Enter}');
@@ -450,7 +450,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor1 = container1.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor1 = container1.querySelector('textarea') as HTMLElement;
       expect(editor1).toBeInTheDocument();
 
       // Position cursor at end and press Enter (this triggers createNewNode event)
@@ -467,15 +467,13 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      // Verify: Both contenteditable elements exist in DOM
-      const editor2 = container2.querySelector('[contenteditable="true"]') as HTMLElement;
+      // Verify: Both textarea elements exist in DOM
+      const editor2 = container2.querySelector('textarea') as HTMLElement;
       expect(editor1).toBeInTheDocument();
       expect(editor2).toBeInTheDocument();
 
       // Verify both are rendered correctly
-      expect(document.querySelectorAll('[contenteditable="true"]').length).toBeGreaterThanOrEqual(
-        2
-      );
+      expect(document.querySelectorAll('textarea').length).toBeGreaterThanOrEqual(2);
     });
 
     it('should split content visually when Enter in middle', async () => {
@@ -487,8 +485,8 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const editorBefore = containerBefore.querySelector('[contenteditable="true"]') as HTMLElement;
-      expect(editorBefore.textContent).toContain('Hello World');
+      const editorBefore = containerBefore.querySelector('textarea') as HTMLElement;
+      expect(editorBefore.value).toContain('Hello World');
 
       // Render the after state: two nodes with split content
       const { container: container1 } = render(BaseNode, {
@@ -506,11 +504,11 @@ describe('Node Creation Event Chain', () => {
       });
 
       // Verify: Content is properly split between two nodes
-      const editor1 = container1.querySelector('[contenteditable="true"]') as HTMLElement;
-      const editor2 = container2.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor1 = container1.querySelector('textarea') as HTMLElement;
+      const editor2 = container2.querySelector('textarea') as HTMLElement;
 
-      expect(editor1.textContent).toContain('Hello');
-      expect(editor2.textContent).toContain('World');
+      expect(editor1.value).toContain('Hello');
+      expect(editor2.value).toContain('World');
     });
 
     it('should move focus to new node after creation', async () => {
@@ -522,7 +520,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const editor1 = container1.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor1 = container1.querySelector('textarea') as HTMLElement;
 
       // Verify original node can receive focus
       editor1.focus();
@@ -536,7 +534,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const editor2 = container2.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor2 = container2.querySelector('textarea') as HTMLElement;
 
       // Wait for focus to move to new node (autoFocus triggers this)
       await waitFor(() => {

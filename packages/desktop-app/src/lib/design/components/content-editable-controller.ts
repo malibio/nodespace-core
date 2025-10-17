@@ -1166,6 +1166,7 @@ export class ContentEditableController {
   private async handleKeyDown(event: KeyboardEvent): Promise<void> {
     // Try keyboard command registry first
     const context = this.buildKeyboardContext(event);
+    // @ts-expect-error - ContentEditableController is obsolete, will be deleted in issue #274 cleanup
     const handled = await KeyboardCommandRegistry.getInstance().execute(event, this, context);
 
     if (handled) {

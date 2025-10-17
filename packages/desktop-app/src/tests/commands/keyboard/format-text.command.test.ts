@@ -11,10 +11,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 import type { KeyboardContext } from '$lib/services/keyboard-command-registry';
-import type { ContentEditableControllerExtended } from '$lib/services/keyboard-command-registry';
+import type { TextareaController } from '$lib/design/components/textarea-controller';
 
 describe('FormatTextCommand', () => {
-  let mockController: Partial<ContentEditableControllerExtended>;
+  let mockController: Partial<TextareaController>;
   let toggleFormattingSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe('FormatTextCommand', () => {
 
     mockController = {
       toggleFormatting: toggleFormattingSpy
-    } as unknown as ContentEditableControllerExtended;
+    } as unknown as TextareaController;
   });
 
   describe('Bold formatting', () => {
@@ -167,7 +167,7 @@ describe('FormatTextCommand', () => {
 
     return {
       event,
-      controller: mockController as ContentEditableControllerExtended,
+      controller: mockController as TextareaController,
       nodeId: 'test-node',
       nodeType: 'text',
       content: '',

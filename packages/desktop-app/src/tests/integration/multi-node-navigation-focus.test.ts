@@ -31,7 +31,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
  *   // 3. Wrap BaseNodeViewer in NodeServiceContext
  *   // 4. Render with proper context providers
  *   const { container } = render(...);
- *   const editors = Array.from(container.querySelectorAll('[contenteditable="true"]'));
+ *   const editors = Array.from(container.querySelectorAll('textarea'));
  *   return { user, container, editors };
  * }
  */

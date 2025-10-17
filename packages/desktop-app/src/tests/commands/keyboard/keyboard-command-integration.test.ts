@@ -18,11 +18,11 @@ import { MergeNodesCommand } from '$lib/commands/keyboard/merge-nodes.command';
 import { NavigateUpCommand } from '$lib/commands/keyboard/navigate-up.command';
 import { NavigateDownCommand } from '$lib/commands/keyboard/navigate-down.command';
 import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
-import type { ContentEditableControllerExtended } from '$lib/services/keyboard-command-registry';
+import type { TextareaController } from '$lib/design/components/textarea-controller';
 
 describe('Keyboard Command Integration', () => {
   let registry: KeyboardCommandRegistry;
-  let mockController: ContentEditableControllerExtended;
+  let mockController: TextareaController;
   let mockEvents: {
     createNewNode: ReturnType<typeof vi.fn>;
     indentNode: ReturnType<typeof vi.fn>;
@@ -59,7 +59,7 @@ describe('Keyboard Command Integration', () => {
       isAtLastLine: vi.fn(() => true),
       getCurrentPixelOffset: vi.fn(() => 100),
       toggleFormatting: vi.fn()
-    } as unknown as ContentEditableControllerExtended;
+    } as unknown as TextareaController;
 
     // Add text content to element
     mockController.element.textContent = 'test content';

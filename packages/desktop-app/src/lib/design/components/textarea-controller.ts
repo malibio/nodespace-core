@@ -343,7 +343,7 @@ export class TextareaController {
   /**
    * Auto-resize textarea to fit content
    */
-  private adjustHeight(): void {
+  public adjustHeight(): void {
     // Reset height to auto to get correct scrollHeight
     this.element.style.height = 'auto';
     this.element.style.height = `${this.element.scrollHeight}px`;

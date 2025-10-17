@@ -40,7 +40,7 @@ async function setupFocusedEditor(content = '', nodeType: string = 'text') {
     autoFocus: true
   });
 
-  const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+  const editor = container.querySelector('textarea') as HTMLElement;
   if (!editor) throw new Error('Editor not found in test setup');
 
   await waitFor(() => {
@@ -197,16 +197,15 @@ describe('Focus Management', () => {
       await waitForEffects();
 
       // Content should have been updated (proving focus is correct)
-      const contentAfter = editor.textContent || '';
+      const contentAfter = editor.value || '';
       expect(contentAfter.length).toBeGreaterThan(0);
     });
 
     it('should support programmatic focus via autoFocus prop', async () => {
       const { editor } = await setupFocusedEditor('Test');
 
-      // Editor should be ready for input (has correct attributes)
-      expect(editor).toHaveAttribute('contenteditable', 'true');
-      expect(editor).toHaveAttribute('tabindex', '0');
+      // Editor should be ready for input (textarea is naturally focusable)
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
 
     it('should allow manual focus restoration after blur', async () => {
@@ -225,7 +224,7 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
 
       // Verify editor is still functional
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
   });
 
@@ -268,7 +267,7 @@ describe('Focus Management', () => {
 
       // Focus still in editor
       expect(document.activeElement).toBe(editor);
-      expect(editor.textContent).toBe('Replaced');
+      expect(editor.value).toBe('Replaced');
     });
 
     it('should maintain focusability after user interaction', async () => {
@@ -285,7 +284,7 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
 
       // Editor should remain functional
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
   });
 
@@ -318,7 +317,7 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
 
       // Editor should remain editable and functional
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
 
     it('should auto-focus editor after node type conversion via slash command', async () => {
@@ -349,7 +348,7 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
 
       // Editor should remain editable
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
   });
 
@@ -365,7 +364,7 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
 
       // Editor should remain editable
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
 
     it('should maintain focus if slash command fails', async () => {
@@ -379,7 +378,7 @@ describe('Focus Management', () => {
       expect(document.activeElement).toBe(editor);
 
       // Editor should remain editable
-      expect(editor).toHaveAttribute('contenteditable', 'true');
+      expect(editor.tagName.toLowerCase()).toBe('textarea');
     });
   });
 });

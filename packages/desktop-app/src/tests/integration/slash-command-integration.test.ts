@@ -43,7 +43,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
         autoFocus: true
       });
 
-      const contentEditableElement = container.querySelector('[contenteditable="true"]');
+      const contentEditableElement = container.querySelector('textarea');
       expect(contentEditableElement).toBeInTheDocument();
 
       // Type "/" to trigger slash command dropdown
@@ -71,7 +71,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
         autoFocus: true
       });
 
-      const contentEditableElement = container.querySelector('[contenteditable="true"]');
+      const contentEditableElement = container.querySelector('textarea');
       expect(contentEditableElement).toBeInTheDocument();
 
       // Type "/task" to filter for task command
@@ -112,7 +112,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
         autoFocus: true
       });
 
-      const contentEditableElement = container.querySelector('[contenteditable="true"]');
+      const contentEditableElement = container.querySelector('textarea');
 
       // Type "/" to show dropdown
       await user.click(contentEditableElement!);
@@ -154,7 +154,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
         autoFocus: true
       });
 
-      const contentEditableElement = container.querySelector('[contenteditable="true"]');
+      const contentEditableElement = container.querySelector('textarea');
 
       // Type "/" to show dropdown
       await user.click(contentEditableElement!);
@@ -191,7 +191,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
         autoFocus: true
       });
 
-      const contentEditableElement = container.querySelector('[contenteditable="true"]');
+      const contentEditableElement = container.querySelector('textarea');
 
       // Type "/" to show dropdown
       await user.click(contentEditableElement!);
@@ -216,7 +216,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
       );
 
       // Content should still contain the "/"
-      expect(contentEditableElement!.textContent).toContain('/');
+      expect(contentEditableElement!.value).toContain('/');
     });
   });
 
@@ -231,7 +231,7 @@ describe('Slash Command Integration - Regression Tests for #187', () => {
         autoFocus: true
       });
 
-      const contentEditableElement = container.querySelector('[contenteditable="true"]');
+      const contentEditableElement = container.querySelector('textarea');
 
       // Type "/" to show dropdown
       await user.click(contentEditableElement!);

@@ -60,7 +60,7 @@ async function setupNode(content: string, nodeType = 'text', headerLevel = 0) {
     editableConfig: { allowMultiline: true }
   });
 
-  const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+  const editor = container.querySelector('textarea') as HTMLElement;
   if (!editor) throw new Error('Editor not found in test setup');
 
   await waitForEffects();
@@ -172,7 +172,7 @@ describe('Cursor Positioning', () => {
         editableConfig: { allowMultiline: false } // Single-line node
       });
 
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor = container.querySelector('textarea') as HTMLElement;
       await waitForEffects();
 
       const execCommandSpy = vi.spyOn(document, 'execCommand');
@@ -202,7 +202,7 @@ describe('Cursor Positioning', () => {
         editableConfig: { allowMultiline: false } // Single-line node
       });
 
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor = container.querySelector('textarea') as HTMLElement;
       await waitForEffects();
 
       const execCommandSpy = vi.spyOn(document, 'execCommand');
@@ -246,7 +246,7 @@ describe('Cursor Positioning', () => {
       await waitForEffects();
 
       // For multiline nodes without inline formatting, content should be split with newline
-      const content = editor.textContent || '';
+      const content = editor.value || '';
       expect(content).toContain('Plain ');
       expect(content).toContain('text content');
 
@@ -306,7 +306,7 @@ describe('Cursor Positioning', () => {
       await waitForEffects();
 
       // Content should be split with formatting preserved on both lines
-      const content = editor.textContent || '';
+      const content = editor.value || '';
 
       // Should contain both parts of the split text
       expect(content).toContain('bol');
@@ -372,7 +372,7 @@ describe('Cursor Positioning', () => {
         editableConfig: { allowMultiline: false } // Headers are single-line
       });
 
-      const editor = container.querySelector('[contenteditable="true"]') as HTMLElement;
+      const editor = container.querySelector('textarea') as HTMLElement;
       if (!editor) throw new Error('Editor not found');
 
       await waitForEffects();
@@ -391,14 +391,14 @@ describe('Cursor Positioning', () => {
       await waitForEffects();
 
       // Store original content
-      const originalContent = editor.textContent || '';
+      const originalContent = editor.value || '';
 
       // Press Shift+Enter
       await user.keyboard('{Shift>}{Enter}{/Shift}');
       await waitForEffects();
 
       // Content should remain unchanged (Shift+Enter rejected for single-line nodes)
-      const content = editor.textContent || '';
+      const content = editor.value || '';
       expect(content).toBe(originalContent);
       expect(content).toContain('## Short');
 

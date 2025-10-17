@@ -51,7 +51,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       expect(editor).toBeInTheDocument();
 
       // Type "@" to trigger autocomplete
@@ -77,7 +77,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       expect(editor).toBeInTheDocument();
 
       // Position cursor at end and type "@"
@@ -102,7 +102,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       expect(editor).toBeInTheDocument();
 
       // Position cursor after "email" and type "@"
@@ -128,7 +128,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type just "@"
       await user.click(editor!);
@@ -155,7 +155,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@task" (matches "Task List" in mock data)
       await user.click(editor!);
@@ -190,7 +190,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type query that won't match any mock data
       await user.click(editor!);
@@ -218,7 +218,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" to trigger autocomplete
       await user.click(editor!);
@@ -251,7 +251,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" to trigger
       await user.click(editor!);
@@ -287,7 +287,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       const originalContent = 'Before ';
 
       // Type "@"
@@ -324,7 +324,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@t"
       await user.click(editor!);
@@ -360,7 +360,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" and select
       await user.click(editor!);
@@ -406,7 +406,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" then Escape
       await user.click(editor!);
@@ -439,7 +439,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" and select
       await user.click(editor!);
@@ -487,7 +487,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" and select
       await user.click(editor!);
@@ -525,7 +525,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" then Escape
       await user.click(editor!);
@@ -555,7 +555,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" to trigger
       await user.click(editor!);
@@ -605,7 +605,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@"
       await user.click(editor!);
@@ -632,7 +632,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" and select
       await user.click(editor!);
@@ -664,7 +664,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Type "@" and select
       await user.click(editor!);
@@ -704,7 +704,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         autoFocus: true
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
 
       // Position at end, type "@", select, then add " After"
       await user.click(editor!);
@@ -770,7 +770,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         content: ''
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       expect(editor).toBeTruthy();
 
       await user.click(editor!);
@@ -820,7 +820,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         content: ''
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       expect(editor).toBeTruthy();
 
       await user.click(editor!);
@@ -858,7 +858,7 @@ describe('Node Reference Autocomplete - Complete Flow', () => {
         content: ''
       });
 
-      const editor = container.querySelector('[contenteditable="true"]');
+      const editor = container.querySelector('textarea');
       expect(editor).toBeTruthy();
 
       await user.click(editor!);

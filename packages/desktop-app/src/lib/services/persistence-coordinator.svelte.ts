@@ -408,13 +408,15 @@ export class PersistenceCoordinator {
    */
   flushPending(): void {
     const pendingOps = Array.from(this.operations.values()).filter(
-      (op) => op.status === 'pending' && op.timer !== null
+      (op) => op.status === 'pending'
     );
 
     for (const op of pendingOps) {
-      // Clear the debounce timer
-      clearTimeout(op.timer);
-      op.timer = null;
+      // Clear the debounce timer if one exists
+      if (op.timer !== undefined) {
+        clearTimeout(op.timer);
+        op.timer = undefined;
+      }
 
       // Execute immediately (fire-and-forget for unmount scenarios)
       this.executeOperation(op);
