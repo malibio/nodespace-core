@@ -407,9 +407,7 @@ export class PersistenceCoordinator {
    * but we don't wait for them to complete (to avoid blocking unmount)
    */
   flushPending(): void {
-    const pendingOps = Array.from(this.operations.values()).filter(
-      (op) => op.status === 'pending'
-    );
+    const pendingOps = Array.from(this.operations.values()).filter((op) => op.status === 'pending');
 
     for (const op of pendingOps) {
       // Clear the debounce timer if one exists

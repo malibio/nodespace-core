@@ -48,19 +48,18 @@ beforeEach(() => {
 /**
  * Helper to set up a node for cursor positioning tests
  */
-async function setupNode(content: string, nodeType = 'text', headerLevel = 0) {
+async function setupNode(content: string, nodeType = 'text') {
   const user = userEvent.setup();
 
   const { container } = render(BaseNode, {
     nodeId: 'test-node',
     nodeType,
     content,
-    headerLevel,
     autoFocus: true,
     editableConfig: { allowMultiline: true }
   });
 
-  const editor = container.querySelector('textarea') as HTMLElement;
+  const editor = container.querySelector('textarea') as HTMLTextAreaElement;
   if (!editor) throw new Error('Editor not found in test setup');
 
   await waitForEffects();
@@ -167,12 +166,11 @@ describe('Cursor Positioning', () => {
         nodeId: 'test-node',
         nodeType: 'text',
         content: '## Test heading',
-        headerLevel: 2,
         autoFocus: true,
         editableConfig: { allowMultiline: false } // Single-line node
       });
 
-      const editor = container.querySelector('textarea') as HTMLElement;
+      const editor = container.querySelector('textarea') as HTMLTextAreaElement;
       await waitForEffects();
 
       const execCommandSpy = vi.spyOn(document, 'execCommand');
@@ -202,7 +200,7 @@ describe('Cursor Positioning', () => {
         editableConfig: { allowMultiline: false } // Single-line node
       });
 
-      const editor = container.querySelector('textarea') as HTMLElement;
+      const editor = container.querySelector('textarea') as HTMLTextAreaElement;
       await waitForEffects();
 
       const execCommandSpy = vi.spyOn(document, 'execCommand');
@@ -367,12 +365,11 @@ describe('Cursor Positioning', () => {
         nodeId: 'test-node',
         nodeType: 'text',
         content: '## Short',
-        headerLevel: 2,
         autoFocus: true,
         editableConfig: { allowMultiline: false } // Headers are single-line
       });
 
-      const editor = container.querySelector('textarea') as HTMLElement;
+      const editor = container.querySelector('textarea') as HTMLTextAreaElement;
       if (!editor) throw new Error('Editor not found');
 
       await waitForEffects();

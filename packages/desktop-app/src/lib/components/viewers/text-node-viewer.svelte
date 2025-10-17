@@ -103,7 +103,6 @@
   {nodeType}
   {autoFocus}
   content={internalContent}
-  {headerLevel}
   {children}
   {editableConfig}
   on:createNewNode={(e) =>

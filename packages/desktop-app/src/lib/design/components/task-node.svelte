@@ -24,7 +24,6 @@
     nodeType = 'task',
     autoFocus = false,
     content = '',
-    headerLevel = 0,
     children = [],
     metadata = {}
   }: {
@@ -32,7 +31,6 @@
     nodeType?: string;
     autoFocus?: boolean;
     content?: string;
-    headerLevel?: number;
     children?: string[];
     metadata?: Record<string, unknown>;
   } = $props();
@@ -176,7 +174,6 @@
     {nodeType}
     {autoFocus}
     bind:content={internalContent}
-    {headerLevel}
     {children}
     {editableConfig}
     metadata={taskMetadata}

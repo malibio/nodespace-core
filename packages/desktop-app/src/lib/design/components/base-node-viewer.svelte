@@ -1404,7 +1404,6 @@
                   nodeType={node.nodeType}
                   autoFocus={node.autoFocus}
                   content={node.content}
-                  headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
                   metadata={node.properties || {}}
                   editableConfig={{ allowMultiline: true }}
@@ -1493,7 +1492,6 @@
                   nodeType={node.nodeType}
                   autoFocus={node.autoFocus}
                   content={node.content}
-                  headerLevel={node.inheritHeaderLevel || 0}
                   children={node.children}
                   metadata={node.properties || {}}
                   editableConfig={{ allowMultiline: true }}

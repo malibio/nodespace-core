@@ -80,9 +80,10 @@ describe('Node Creation Event Chain', () => {
       const user = userEvent.setup();
       const editor = document.querySelector('textarea');
       expect(editor).toBeInTheDocument();
+      if (!editor) throw new Error('Editor not found');
 
       // Position cursor at end and press Enter
-      await user.click(editor!);
+      await user.click(editor);
       await user.keyboard('{End}');
       await user.keyboard('{Enter}');
       await waitForEffects();
@@ -450,7 +451,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       const user = userEvent.setup();
-      const editor1 = container1.querySelector('textarea') as HTMLElement;
+      const editor1 = container1.querySelector('textarea') as HTMLTextAreaElement;
       expect(editor1).toBeInTheDocument();
 
       // Position cursor at end and press Enter (this triggers createNewNode event)
@@ -468,7 +469,7 @@ describe('Node Creation Event Chain', () => {
       });
 
       // Verify: Both textarea elements exist in DOM
-      const editor2 = container2.querySelector('textarea') as HTMLElement;
+      const editor2 = container2.querySelector('textarea') as HTMLTextAreaElement;
       expect(editor1).toBeInTheDocument();
       expect(editor2).toBeInTheDocument();
 
@@ -485,7 +486,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const editorBefore = containerBefore.querySelector('textarea') as HTMLElement;
+      const editorBefore = containerBefore.querySelector('textarea') as HTMLTextAreaElement;
       expect(editorBefore.value).toContain('Hello World');
 
       // Render the after state: two nodes with split content
@@ -504,8 +505,8 @@ describe('Node Creation Event Chain', () => {
       });
 
       // Verify: Content is properly split between two nodes
-      const editor1 = container1.querySelector('textarea') as HTMLElement;
-      const editor2 = container2.querySelector('textarea') as HTMLElement;
+      const editor1 = container1.querySelector('textarea') as HTMLTextAreaElement;
+      const editor2 = container2.querySelector('textarea') as HTMLTextAreaElement;
 
       expect(editor1.value).toContain('Hello');
       expect(editor2.value).toContain('World');
@@ -520,7 +521,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const editor1 = container1.querySelector('textarea') as HTMLElement;
+      const editor1 = container1.querySelector('textarea') as HTMLTextAreaElement;
 
       // Verify original node can receive focus
       editor1.focus();
@@ -534,7 +535,7 @@ describe('Node Creation Event Chain', () => {
         autoFocus: true
       });
 
-      const editor2 = container2.querySelector('textarea') as HTMLElement;
+      const editor2 = container2.querySelector('textarea') as HTMLTextAreaElement;
 
       // Wait for focus to move to new node (autoFocus triggers this)
       await waitFor(() => {

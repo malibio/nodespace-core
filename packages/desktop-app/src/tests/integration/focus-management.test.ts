@@ -40,7 +40,7 @@ async function setupFocusedEditor(content = '', nodeType: string = 'text') {
     autoFocus: true
   });
 
-  const editor = container.querySelector('textarea') as HTMLElement;
+  const editor = container.querySelector('textarea') as HTMLTextAreaElement;
   if (!editor) throw new Error('Editor not found in test setup');
 
   await waitFor(() => {
