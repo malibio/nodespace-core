@@ -545,21 +545,32 @@
   // Update view mode rendering when content or editing state changes
   $effect(() => {
     if (!isEditing && viewElement) {
-      let html = markdownToHtml(content);
+      // IMPORTANT: Process blank lines BEFORE markdownToHtml
+      // marked.js with breaks:true converts all \n to <br>, losing the ability to detect \n\n
+      const BLANK_LINE_PLACEHOLDER = '___BLANK___';
+      let processedContent = content;
 
-      // Preserve leading newlines by adding <br> tags
-      // Leading \n: has content after it, so one-to-one <br> replacement
+      // Replace consecutive newlines with placeholders
+      processedContent = processedContent.replace(/\n\n+/g, (match) => {
+        // Number of blank lines = (number of \n) - 1
+        // "\n\n" = 1 blank line, "\n\n\n" = 2 blank lines
+        const blankLineCount = match.length - 1;
+        return '\n' + BLANK_LINE_PLACEHOLDER.repeat(blankLineCount);
+      });
+
+      // Process markdown (converts \n to <br>, handles formatting)
+      let html = markdownToHtml(processedContent);
+
+      // Replace placeholders with <br> tags for blank lines
+      html = html.replace(new RegExp(BLANK_LINE_PLACEHOLDER, 'g'), '<br>');
+
+      // Preserve leading newlines
       const leadingNewlines = content.match(/^\n+/);
       if (leadingNewlines) {
         html = '<br>'.repeat(leadingNewlines[0].length) + html;
       }
 
-      // Preserve blank lines (consecutive newlines) in the middle of content
-      // Replace double newlines with placeholder <br> tags
-      html = html.replace(/\n\n/g, '\n<br class="blank-line-placeholder">\n');
-
-      // Preserve trailing newlines by adding <br> tags
-      // Trailing \n: has NO content after it, so needs extra <br> to show empty line
+      // Preserve trailing newlines
       const trailingNewlines = content.match(/\n+$/);
       if (trailingNewlines) {
         html += '<br>'.repeat(trailingNewlines[0].length + 1);
@@ -947,13 +958,6 @@
   .node--h5 .node__content:empty,
   .node--h6 .node__content:empty {
     min-height: 1.5rem;
-  }
-
-  /* Blank line preservation in view mode */
-  :global(.blank-line-placeholder) {
-    display: block;
-    height: 1.5em;
-    content: '';
   }
 
   /* Markdown formatting styles */
