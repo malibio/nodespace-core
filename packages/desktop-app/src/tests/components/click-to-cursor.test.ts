@@ -137,12 +137,20 @@ describe('Click-to-Cursor Positioning', () => {
     const content = 'Test';
     const mockElement = createMockElementForView(viewDiv, content);
 
-    // Verify mock element has similar styling
-    expect(mockElement.style.fontFamily).toContain('Arial');
-    expect(mockElement.style.fontSize).toContain('20');
-    expect(mockElement.style.fontWeight).toBe('bold');
-    expect(mockElement.style.lineHeight).toContain('2');
-    expect(mockElement.style.padding).toContain('10');
+    // Verify base styles are always present
+    expect(mockElement.style.position).toBe('absolute');
+    expect(mockElement.style.visibility).toBe('hidden');
+    expect(mockElement.style.whiteSpace).toBe('pre-wrap');
+
+    // In environments with getComputedStyle support (real browsers),
+    // verify computed styles are copied
+    if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+      expect(mockElement.style.fontFamily).toContain('Arial');
+      expect(mockElement.style.fontSize).toContain('20');
+      expect(mockElement.style.fontWeight).toBe('bold');
+      expect(mockElement.style.lineHeight).toContain('2');
+      expect(mockElement.style.padding).toContain('10');
+    }
 
     mockElement.remove();
     viewDiv.remove();

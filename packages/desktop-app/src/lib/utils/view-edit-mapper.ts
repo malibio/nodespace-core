@@ -12,6 +12,33 @@
  */
 
 /**
+ * Markdown syntax markers with their lengths
+ * Order matters: longer markers (**, __) must be checked before shorter ones (*, _)
+ */
+const MARKDOWN_MARKERS: ReadonlyArray<readonly [string, number]> = [
+  ['**', 2], // Bold (asterisk)
+  ['__', 2], // Bold (underscore)
+  ['~~', 2], // Strikethrough
+  ['*', 1], // Italic (asterisk)
+  ['_', 1], // Italic (underscore)
+  ['`', 1] // Code
+] as const;
+
+/**
+ * Check if the remaining string starts with any markdown marker
+ * @param remaining - The substring to check
+ * @returns Length of marker to skip, or 0 if no marker found
+ */
+function getMarkerLength(remaining: string): number {
+  for (const [marker, length] of MARKDOWN_MARKERS) {
+    if (remaining.startsWith(marker)) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+/**
  * Map character position from view content to edit content
  *
  * View content has markdown syntax stripped (e.g., "Hello world")
@@ -43,26 +70,11 @@ export function mapViewPositionToEditPosition(
   if (viewPosition === 0) {
     let editIndex = 0;
     while (editIndex < editContent.length) {
-      const remaining = editContent.substring(editIndex);
-
-      // Skip markdown syntax markers
-      if (remaining.startsWith('**') || remaining.startsWith('__')) {
-        editIndex += 2;
+      const markerLength = getMarkerLength(editContent.substring(editIndex));
+      if (markerLength > 0) {
+        editIndex += markerLength;
         continue;
       }
-      if (remaining.startsWith('*') || remaining.startsWith('_')) {
-        editIndex += 1;
-        continue;
-      }
-      if (remaining.startsWith('~~')) {
-        editIndex += 2;
-        continue;
-      }
-      if (remaining.startsWith('`')) {
-        editIndex += 1;
-        continue;
-      }
-
       // Found first non-marker character
       break;
     }
@@ -76,23 +88,11 @@ export function mapViewPositionToEditPosition(
 
   while (viewIndex < viewPosition && editIndex < editContent.length) {
     // Check if we're at a syntax marker in edit content
-    const remaining = editContent.substring(editIndex);
+    const markerLength = getMarkerLength(editContent.substring(editIndex));
 
-    // Skip markdown syntax markers (don't advance viewIndex)
-    if (remaining.startsWith('**') || remaining.startsWith('__')) {
-      editIndex += 2; // Skip bold markers (**)
-      continue;
-    }
-    if (remaining.startsWith('*') || remaining.startsWith('_')) {
-      editIndex += 1; // Skip italic markers (*)
-      continue;
-    }
-    if (remaining.startsWith('~~')) {
-      editIndex += 2; // Skip strikethrough markers (~~)
-      continue;
-    }
-    if (remaining.startsWith('`')) {
-      editIndex += 1; // Skip code markers (`)
+    if (markerLength > 0) {
+      // Skip markdown syntax markers (don't advance viewIndex)
+      editIndex += markerLength;
       continue;
     }
 
