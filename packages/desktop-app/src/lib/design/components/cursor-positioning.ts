@@ -327,6 +327,63 @@ export class PositioningPerformanceMonitor {
 export const performanceMonitor = new PositioningPerformanceMonitor();
 
 /**
+ * Create temporary mock element with character spans for view div
+ * Mirrors exact rendering from view mode for accurate click positioning
+ *
+ * IMPORTANT: Caller must call mockElement.remove() after use!
+ *
+ * @param viewElement - The view div element to mirror
+ * @param content - The view content to wrap in character spans
+ * @returns Mock div element with character spans (caller must remove!)
+ */
+export function createMockElementForView(
+  viewElement: HTMLDivElement,
+  content: string
+): HTMLDivElement {
+  const mockElement = document.createElement('div');
+
+  // Copy computed styles from view element for accurate positioning
+  const computedStyle = window.getComputedStyle(viewElement);
+  mockElement.style.cssText = `
+    position: absolute;
+    visibility: hidden;
+    top: 0;
+    left: 0;
+    font-family: ${computedStyle.fontFamily};
+    font-size: ${computedStyle.fontSize};
+    font-weight: ${computedStyle.fontWeight};
+    line-height: ${computedStyle.lineHeight};
+    letter-spacing: ${computedStyle.letterSpacing};
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    padding: ${computedStyle.padding};
+  `;
+
+  // Wrap each character in span with data-position attribute
+  // This allows findCharacterFromClickFast to map coordinates → position
+  content.split('').forEach((char, index) => {
+    if (char === '\n') {
+      // Handle newlines: add span + <br> (matches view rendering)
+      const span = document.createElement('span');
+      span.dataset.position = String(index);
+      span.textContent = '0'; // Placeholder character for height calculation
+      mockElement.appendChild(span);
+      mockElement.appendChild(document.createElement('br'));
+    } else {
+      // Regular character
+      const span = document.createElement('span');
+      span.dataset.position = String(index);
+      span.textContent = char;
+      mockElement.appendChild(span);
+    }
+  });
+
+  // Append to body for rendering (required for getBoundingClientRect)
+  document.body.appendChild(mockElement);
+  return mockElement;
+}
+
+/**
  * Validate if click is within reasonable bounds of the text area
  * @param clickX - Click X coordinate
  * @param clickY - Click Y coordinate

@@ -44,6 +44,8 @@
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import { positionCursor } from '$lib/actions/position-cursor';
+  import { createMockElementForView, findCharacterFromClickFast } from './cursor-positioning';
+  import { mapViewPositionToEditPosition } from '$lib/utils/view-edit-mapper';
 
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
   let {
@@ -747,13 +749,36 @@
       id="view-{nodeId}"
       tabindex="0"
       onclick={(e) => {
-        // Use FocusManager instead of directly setting isEditing
-        focusManager.setEditingNode(nodeId);
-        // Don't focus if this is arrow navigation (will be positioned externally)
-        const target = e.currentTarget as HTMLElement;
-        if (!target.dataset.arrowNavigation) {
-          setTimeout(() => controller?.focus(), 0);
-        }
+        // Capture click coordinates
+        const clickX = e.pageX;
+        const clickY = e.pageY;
+
+        // Get view element bounds for coordinate mapping
+        const viewRect = viewElement!.getBoundingClientRect();
+
+        // Create temporary mock element with character spans
+        const mockElement = createMockElementForView(viewElement!, displayContent ?? content);
+
+        // Find character position in VIEW content
+        const viewPositionResult = findCharacterFromClickFast(mockElement, clickX, clickY, {
+          left: viewRect.left,
+          top: viewRect.top,
+          width: viewRect.width,
+          height: viewRect.height
+        });
+
+        // Clean up mock element immediately
+        mockElement.remove();
+
+        // Map view position → edit position (accounting for syntax)
+        const editPosition = mapViewPositionToEditPosition(
+          viewPositionResult.index,
+          displayContent ?? content, // View content (syntax stripped)
+          content // Edit content (with syntax)
+        );
+
+        // Set focus with cursor position via FocusManager
+        focusManager.focusNodeAtPosition(nodeId, editPosition);
       }}
       onkeydown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
