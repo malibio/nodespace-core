@@ -1129,6 +1129,12 @@
         return;
       }
 
+      // Prevent merging into structured nodes (code-block, quote-block)
+      // These nodes have specific formatting that can't accept arbitrary content
+      if (previousNode.nodeType === 'code-block' || previousNode.nodeType === 'quote-block') {
+        return; // Silently prevent merge - user can still delete current node if empty
+      }
+
       // Store the original content length before merge (this is where cursor should be positioned)
       const cursorPositionAfterMerge = previousNode.content.length;
 
@@ -1170,6 +1176,14 @@
       if (!previousNode || !nodeManager.nodes.has(previousNode.id)) {
         console.error('Previous node not found for focus after deletion:', previousNode?.id);
         // Can't combine without previous node - this shouldn't happen in normal usage
+        return;
+      }
+
+      // Prevent merging into structured nodes (code-block, quote-block)
+      // These nodes have specific formatting that can't accept arbitrary content
+      if (previousNode.nodeType === 'code-block' || previousNode.nodeType === 'quote-block') {
+        // Block the action entirely - don't delete, don't merge, don't focus
+        // User must manually delete the node (e.g., Cmd+Backspace) or add content first
         return;
       }
 
