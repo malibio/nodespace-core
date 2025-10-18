@@ -76,8 +76,14 @@ type SharedService<T> = Arc<RwLock<Arc<T>>>;
 /// # SQLite Write Serialization (Issue #266)
 ///
 /// The `write_lock` mutex serializes all database write operations (create, update, delete)
-/// to prevent SQLite write contention under rapid concurrent operations. This eliminates
-/// HTTP 500 errors in tests caused by multiple simultaneous write attempts.
+/// to reduce SQLite write contention under rapid concurrent operations. This significantly
+/// improves test reliability but does NOT completely eliminate occasional "database is locked"
+/// errors due to SQLite's internal locking behavior.
+///
+/// **Known Limitation**: SQLite can still report "database is locked" even with request-level
+/// serialization due to connection management, WAL mode checkpoints, and busy timeout settings.
+/// Tests may still fail intermittently (~10-20% of runs). For 100% reliability, see Issue #285
+/// (refactor integration tests to use in-memory database instead of HTTP dev-server).
 ///
 /// Read operations do NOT acquire the write lock and can execute concurrently.
 #[derive(Clone)]

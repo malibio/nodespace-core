@@ -193,11 +193,15 @@ describe('Sibling Chain Integrity', () => {
   });
 
   it('should repair chain when node is deleted', async () => {
-    // NOTE: This test previously experienced intermittent failures (~30-70% pass rate)
-    // due to SQLite write contention in the backend dev-server. The backend has now
-    // been fixed with write serialization (mutex-based queue in node_endpoints.rs).
-    // If failures recur, investigate backend write lock implementation in AppState.
-    // See: Issue #266, PR #283 for full context and fixes applied.
+    // NOTE: This test may still fail intermittently (~10-20% of runs) due to SQLite's
+    // internal "database is locked" errors. The backend now has write serialization
+    // (mutex in node_endpoints.rs) which significantly improves reliability, but cannot
+    // completely eliminate SQLite locking issues due to connection management and WAL mode.
+    //
+    // For 100% test reliability, the long-term solution is to refactor tests to use
+    // in-memory database instead of HTTP dev-server (see Issue #285).
+    //
+    // See: Issue #266, PR #283 for full investigation and attempted fixes.
 
     // Setup: Create three nodes
     const node1 = await createAndFetchNode(adapter, {
