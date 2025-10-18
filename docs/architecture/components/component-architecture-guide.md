@@ -72,6 +72,14 @@ NodeSpace follows a **consistent, hierarchical component architecture** with cle
   - Date parsing utilities
   - Cannot be created via slash commands (exists implicitly for all dates)
 
+- **CodeBlockNode** (`src/lib/design/components/code-block-node.svelte`)
+  - Multiline code editing with language selection
+  - Markdown processing bypass via metadata (`disableMarkdown: true`)
+  - Three-phase content transformation (storage/edit/view)
+  - Language dropdown and copy button UI
+  - Leaf node (cannot have children)
+  - Auto-completion for fence syntax
+
 ### 3. Viewer Components Layer
 
 **Naming Convention**: `*NodeViewer` (e.g., DateNodeViewer, TaskNodeViewer)
@@ -301,6 +309,141 @@ export const customNodePlugin: PluginDefinition = {
     /* Content area styling */
   }
 </style>
+```
+
+## Advanced Patterns
+
+### Metadata-Driven Extension (CodeBlockNode Example)
+
+CodeBlockNode demonstrates how to extend BaseNode functionality without modifying its core API, using the metadata-driven extension pattern:
+
+**Pattern Overview**:
+- BaseNode accepts a `metadata` prop with arbitrary properties
+- Node components can add custom metadata flags to control BaseNode behavior
+- This maintains BaseNode's generality while enabling specialized behavior
+
+**CodeBlockNode Implementation**:
+
+```svelte
+<script lang="ts">
+  import BaseNode from '$lib/design/components/base-node.svelte';
+
+  // Parse language from fence syntax
+  let language = $state<string>(parseLanguage(content));
+
+  // Create reactive metadata with custom flags
+  let codeMetadata = $derived({
+    language,
+    disableMarkdown: true  // Tell BaseNode to skip markdown processing
+  });
+</script>
+
+<BaseNode
+  {nodeId}
+  {nodeType}
+  {content}
+  metadata={codeMetadata}
+  on:contentChanged
+  on:createNewNode
+/>
+```
+
+**BaseNode Metadata Extension Points**:
+```typescript
+/**
+ * Metadata extension points supported by BaseNode:
+ *
+ * - disableMarkdown: boolean
+ *   Skip markdown processing (e.g., for code blocks, raw text)
+ *   Implementation: base-node.svelte lines 556-591
+ *
+ * - language: string
+ *   Language identifier (e.g., for code blocks)
+ *   Usage: Stored in node metadata, displayed in UI
+ *
+ * - headerLevel: number
+ *   Header level 1-6 (for header nodes)
+ *   Usage: Controls markdown heading syntax
+ *
+ * - taskState: string
+ *   Task completion state (for task nodes)
+ *   Values: 'pending' | 'inProgress' | 'completed'
+ */
+```
+
+**Content Transformation Pattern (CodeBlockNode)**:
+
+CodeBlockNode demonstrates a three-phase content transformation approach:
+
+```svelte
+<script lang="ts">
+  // Phase 1: Storage format (with language in fence)
+  // Stored: ```javascript\ncode\n```
+  let internalContent = $state(content);
+
+  // Phase 2: Edit format (fences without language)
+  // User edits: ```\ncode\n``` (language managed by dropdown)
+  function extractCodeForEditing(content: string): string {
+    return content.replace(/^```\w+/, '```');
+  }
+  let editContent = $derived(extractCodeForEditing(internalContent));
+
+  // Phase 3: Display format (no fences, just code)
+  // User sees: code (fences become empty lines for spacing)
+  function extractCodeForDisplay(content: string): string {
+    let result = content.replace(/^```\w*/, '');
+    result = result.replace(/```$/, '\n');
+    return result;
+  }
+  let displayContent = $derived(extractCodeForDisplay(internalContent));
+</script>
+
+<BaseNode
+  content={editContent}
+  {displayContent}
+  metadata={{ disableMarkdown: true }}
+/>
+```
+
+**Benefits of This Pattern**:
+- ✅ **No BaseNode modification** - Maintains core component stability
+- ✅ **Type-specific behavior** - Each node type controls its own rendering
+- ✅ **Clear separation** - Storage, editing, and display logic isolated
+- ✅ **Reusable pattern** - Other node types can follow the same approach
+
+**Leaf Node Pattern (CodeBlockNode)**:
+
+Some node types should not have children. CodeBlockNode demonstrates proper leaf node implementation:
+
+```typescript
+// In plugin configuration (core-plugins.ts)
+export const codeBlockNodePlugin: PluginDefinition = {
+  config: {
+    canHaveChildren: false,  // Leaf node constraint
+    canBeChild: true         // Can be nested under other nodes
+  }
+};
+
+// Backend validation (mod.rs - Rust)
+pub struct CodeBlockNodeBehavior;
+
+impl NodeBehavior for CodeBlockNodeBehavior {
+    fn can_have_children(&self) -> bool {
+        false  // Enforced at backend level
+    }
+}
+```
+
+**Icon Registry Configuration**:
+```typescript
+// Icon registry (registry.ts)
+iconRegistry.register('code-block', {
+  component: CodeBlockIcon,
+  semanticClass: 'node-icon',
+  colorVar: 'hsl(var(--node-text, 200 40% 45%))',
+  hasState: false,
+  hasRingEffect: false  // No ring because leaf nodes have no children
+});
 ```
 
 ## Development Guidelines

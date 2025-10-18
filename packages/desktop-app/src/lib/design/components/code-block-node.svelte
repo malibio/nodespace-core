@@ -99,6 +99,9 @@
   let showLanguageDropdown = $state(false);
   let wrapperElement = $state<HTMLDivElement | undefined>(undefined);
 
+  // Copy button state
+  let copied = $state(false);
+
   // Create reactive metadata object with language and markdown flag
   let codeMetadata = $derived({
     language,
@@ -147,11 +150,14 @@
   let displayContent = $derived(extractCodeForDisplay(internalContent));
 
   /**
-   * Extract code content (strip opening fence for copy functionality)
+   * Extract code content (strip both opening and closing fences for copy functionality)
    */
   function extractCodeContent(content: string): string {
-    // Remove opening ```language fence for copy
-    return content.replace(/^```\w*\s*\n?/, '');
+    // Remove opening ```language fence
+    let result = content.replace(/^```\w*\s*\n?/, '');
+    // Remove closing ``` fence
+    result = result.replace(/\n?```\s*$/, '');
+    return result;
   }
 
   /**
@@ -192,6 +198,11 @@
       // Check if clipboard API is available (browser environment)
       if (typeof window !== 'undefined' && window.navigator?.clipboard) {
         await window.navigator.clipboard.writeText(codeContent);
+        // Show "copied!" feedback for 2 seconds
+        copied = true;
+        setTimeout(() => {
+          copied = false;
+        }, 2000);
       }
     } catch {
       // Silently fail - clipboard access may be denied
@@ -366,13 +377,14 @@
   <!-- Copy button (appears on hover, always visible) -->
   <button
     class="code-copy-button"
+    class:copied
     onclick={(e) => {
       e.stopPropagation();
       handleCopy();
     }}
     type="button"
   >
-    copy
+    {copied ? 'copied!' : 'copy'}
   </button>
 </div>
 
@@ -480,5 +492,13 @@
 
   .code-block-node-wrapper:hover .code-copy-button {
     opacity: 1;
+  }
+
+  /* Copied state - green background with success color */
+  .code-copy-button.copied {
+    opacity: 1;
+    background: hsl(var(--success, 142 76% 36%));
+    color: hsl(var(--success-foreground, 0 0% 100%));
+    border-color: hsl(var(--success, 142 76% 36%));
   }
 </style>
