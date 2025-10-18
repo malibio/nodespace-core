@@ -24,24 +24,25 @@
   import { focusManager } from '$lib/services/focus-manager.svelte';
 
   // Supported languages for code blocks
+  // Alphabetically sorted with 'plaintext' as default first option
   const LANGUAGES = [
-    'plaintext',
-    'javascript',
-    'typescript',
-    'python',
-    'rust',
-    'go',
-    'java',
+    'plaintext', // Default - always first
     'cpp',
-    'ruby',
-    'php',
-    'swift',
-    'kotlin',
-    'shell',
-    'html',
     'css',
+    'go',
+    'html',
+    'java',
+    'javascript',
+    'kotlin',
+    'markdown',
+    'php',
+    'python',
+    'ruby',
+    'rust',
+    'shell',
     'sql',
-    'markdown'
+    'swift',
+    'typescript'
   ];
 
   // Props using Svelte 5 runes mode - same interface as BaseNode
