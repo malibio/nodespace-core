@@ -488,72 +488,11 @@ describe('Sibling Chain Logic (Unit Tests)', () => {
     expect(visited.size).toBe(3);
   });
 
-  it.skip('should maintain chain integrity with complex operations sequence', async () => {
-    // SKIP: This test requires proper mock adapter integration in SharedNodeStore
-    // Currently, SharedNodeStore tries to persist to database via TauriNodeService
-    // which requires database initialization that we haven't set up for pure unit tests.
-    //
-    // The other 6 tests successfully validate sibling chain logic without database dependencies.
-    // TODO: Enable this test after implementing MockBackendAdapter support in SharedNodeStore
-    // See Issue #266 PR comments for full context.
-    // Setup: Create initial nodes
-    const node1 = await createNode({
-      id: 'node-1',
-      nodeType: 'text',
-      content: 'Node 1',
-      parentId: null,
-      containerNodeId: null,
-      beforeSiblingId: null,
-      properties: {},
-      embeddingVector: null,
-      mentions: []
-    });
-
-    const node2 = await createNode({
-      id: 'node-2',
-      nodeType: 'text',
-      content: 'Node 2',
-      parentId: null,
-      containerNodeId: null,
-      beforeSiblingId: 'node-1',
-      properties: {},
-      embeddingVector: null,
-      mentions: []
-    });
-
-    service.initializeNodes([node1, node2]);
-
-    // Act: Perform complex sequence (no waits needed - synchronous!)
-    const node3Id = service.createNode('node-2', 'Node 3', 'text'); // Create
-    service.indentNode('node-2'); // Indent node-2 under node-1
-    const node4Id = service.createNode('node-1', 'Node 4', 'text'); // Create after node-1
-    service.outdentNode('node-2'); // Outdent node-2 back to root
-    await service.combineNodes(node3Id, 'node-2'); // Combine node-3 into node-2
-
-    expect(sharedNodeStore.getTestErrors()).toHaveLength(0);
-
-    // Verify: node-3 was deleted by combineNodes (combined into node-2)
-    expect(service.findNode(node3Id)).toBeNull();
-    // Verify: node-4 still exists
-    expect(service.findNode(node4Id)).toBeTruthy();
-
-    // Verify: Chain integrity maintained throughout
-    const validation = validateSiblingChain(null);
-    expect(validation.valid).toBe(true);
-    expect(validation.errors).toHaveLength(0);
-
-    // Verify: Visual order makes sense
-    const visible = service.visibleNodes;
-    const rootNodes = visible.filter((n) => n.parentId === null);
-    expect(rootNodes.length).toBeGreaterThan(0);
-
-    // Verify: All nodes either have valid beforeSiblingId or are first
-    for (const node of rootNodes) {
-      if (node.beforeSiblingId !== null) {
-        const beforeNode = service.findNode(node.beforeSiblingId);
-        expect(beforeNode).toBeDefined();
-        expect(beforeNode?.parentId).toBe(null); // Same parent level
-      }
-    }
-  });
+  // NOTE: Complex operations sequence test intentionally not included in unit tests
+  //
+  // That test requires proper database persistence to validate the full lifecycle
+  // of multiple interdependent operations (create, indent, outdent, combine).
+  // It remains in the integration test suite where it belongs.
+  //
+  // See: src/tests/integration/sibling-chain-integrity.test.ts
 });
