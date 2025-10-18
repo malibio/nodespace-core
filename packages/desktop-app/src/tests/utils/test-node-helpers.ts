@@ -36,7 +36,8 @@ export async function retryOperation<T>(
       // Only retry on HTTP 500 errors (SQLite "database is locked")
       // Don't retry on other errors (404, validation errors, etc.)
       const errorMessage = lastError.message;
-      const isTransientError = errorMessage.includes('500') || errorMessage.includes('database is locked');
+      const isTransientError =
+        errorMessage.includes('500') || errorMessage.includes('database is locked');
 
       if (!isTransientError || attempt === maxRetries) {
         throw lastError;
@@ -44,7 +45,7 @@ export async function retryOperation<T>(
 
       // Exponential backoff: 50ms, 100ms, 200ms
       const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 

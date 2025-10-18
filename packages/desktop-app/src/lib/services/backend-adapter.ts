@@ -600,8 +600,8 @@ export class HttpAdapter implements BackendAdapter {
 
         // Only retry on HTTP 500 errors (SQLite "database is locked")
         // Don't retry validation errors (400), not found (404), etc.
-        const isTransientError = lastError.message.includes('500') ||
-                                 lastError.message.includes('database is locked');
+        const isTransientError =
+          lastError.message.includes('500') || lastError.message.includes('database is locked');
 
         if (!isTransientError || attempt === maxRetries) {
           throw lastError;
@@ -609,7 +609,7 @@ export class HttpAdapter implements BackendAdapter {
 
         // Exponential backoff: 50ms, 100ms, 200ms
         const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
 
