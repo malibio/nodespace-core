@@ -28,12 +28,20 @@ NodeSpace uses a **textarea-based editing architecture** inspired by Logseq's pr
 │  Edit Mode: <textarea> (raw markdown)   │
 │  View Mode: Rendered HTML (formatted)   │
 │  - Mode switching on focus/blur         │
+│  - Declarative cursor via $derived      │
+└─────────────────────────────────────────┘
+                    ↕
+┌─────────────────────────────────────────┐
+│        positionCursor Action (NEW)      │
+│  - Encapsulates DOM cursor manipulation │
+│  - requestAnimationFrame for smoothness │
+│  - Handles all cursor position types    │
 └─────────────────────────────────────────┘
                     ↕
 ┌─────────────────────────────────────────┐
 │           FocusManager Service          │
-│  - Reactive focus state                 │
-│  - Arrow navigation context             │
+│  - Unified cursorPosition state         │
+│  - Type-safe positioning API            │
 │  - Single source of truth for focus     │
 └─────────────────────────────────────────┘
 ```
@@ -113,80 +121,163 @@ class TextareaController {
 {/if}
 ```
 
-**Reactive State**:
+**Reactive State** (Updated with Svelte Actions - Issue #281):
 
 ```typescript
 // FocusManager integration (single source of truth)
 let isEditing = $derived(focusManager.editingNodeId === nodeId);
 
-// Auto-focus effect
-$effect(() => {
-  if (autoFocus && textareaElement && !controller) {
-    focusManager.setEditingNode(nodeId, cursorPosition);
-  }
-});
+// Derive cursor position data for the action
+let cursorPositionData = $derived(
+  isEditing && focusManager.editingNodeId === nodeId
+    ? focusManager.cursorPosition
+    : null
+);
+```
 
-// Arrow navigation effect (watches FocusManager primitives)
-$effect(() => {
-  const direction = focusManager.arrowNavDirection;
-  const pixelOffset = focusManager.arrowNavPixelOffset;
-
-  if (isEditing && direction && pixelOffset !== null && controller) {
-    controller.enterFromArrowNavigation(direction, pixelOffset);
-  }
-});
+```svelte
+{#if isEditing}
+  <!-- Declarative cursor positioning via Svelte action -->
+  <textarea
+    bind:this={textareaElement}
+    use:positionCursor={{ data: cursorPositionData, controller }}
+  />
+{/if}
 ```
 
 **Key Features**:
 - **Mode switching**: Focus triggers edit mode, blur triggers view mode
 - **FocusManager integration**: Reactive state from single source of truth
-- **Arrow navigation**: Pixel-accurate cursor positioning across nodes
-- **Svelte 5 patterns**: Uses `$derived()` and `$effect()` runes
+- **Declarative cursor positioning**: Svelte action encapsulates DOM manipulation
+- **Reactive action-based**: No imperative `$effect()` blocks for cursor positioning
+- **Svelte 5 patterns**: Uses `$derived()` with actions for clean reactive flow
 
 ### 3. FocusManager Service
 
 **File**: `packages/desktop-app/src/lib/services/focus-manager.svelte.ts`
 
-**Reactive State Management**:
+**Unified Cursor Position Architecture** (Refactored in Issue #281):
 
 ```typescript
-class FocusManager {
+// Unified cursor position type
+type CursorPosition =
+  | { type: 'default'; skipSyntax: boolean }
+  | { type: 'absolute'; position: number }
+  | { type: 'line-column'; line: number; skipSyntax: boolean }
+  | { type: 'arrow-navigation'; direction: 'up' | 'down'; pixelOffset: number }
+  | { type: 'node-type-conversion'; position: number };
+
+const focusManager = {
   // Core state (Svelte 5 $state)
-  editingNodeId = $state<string | null>(null);
-  cursorPosition = $state<number | null>(null);
+  editingNodeId: string | null;
+  cursorPosition: CursorPosition | null;
 
-  // Arrow navigation state (separate primitives for reactivity)
-  arrowNavDirection = $state<'up' | 'down' | null>(null);
-  arrowNavPixelOffset = $state<number | null>(null);
+  // New unified API
+  focusNode(nodeId: string): void;
+  focusNodeAtPosition(nodeId: string, position: number): void;
+  focusNodeAtLine(nodeId: string, line: number, skipSyntax?: boolean): void;
+  focusNodeFromArrowNav(nodeId: string, direction: 'up' | 'down', pixelOffset: number): void;
+  focusNodeFromTypeConversion(nodeId: string, position: number): void;
 
-  // Methods
-  setEditingNode(nodeId: string, position?: number): void
-  setEditingNodeFromArrowNavigation(nodeId, direction, pixelOffset): void
-  clearEditingNode(): void
-}
+  clearCursorPosition(): void;
+};
 ```
 
-**Why Primitive State Values?**
-- Svelte 5 `$effect()` tracks primitive reads for reactivity
-- Getter patterns (returning objects) don't trigger effects reliably
-- Separate primitives (`arrowNavDirection`, `arrowNavPixelOffset`) ensure effects re-run
+**Architectural Benefits**:
+- **Single source of truth**: Unified `cursorPosition` replaces multiple separate state variables
+- **Type-safe**: All cursor positioning scenarios explicitly typed
+- **Declarative**: State flows through `$derived` → action, no imperative `$effect` blocks
+- **Maintainable**: Clear data flow, encapsulated DOM manipulation in actions
+- **Scalable**: Supports multi-pane, node links, programmatic focus naturally
 
-**Usage Pattern**:
+**Usage Pattern** (Declarative with Actions):
 
 ```typescript
-// Components read primitive state directly
-$effect(() => {
-  const direction = focusManager.arrowNavDirection;  // Primitive read
-  const offset = focusManager.arrowNavPixelOffset;   // Primitive read
-
-  // Effect re-runs when EITHER primitive changes
-  if (direction && offset !== null) {
-    controller.enterFromArrowNavigation(direction, offset);
-  }
-});
+// Component derives cursor data from FocusManager
+let cursorPositionData = $derived(
+  isEditing ? focusManager.cursorPosition : null
+);
 ```
 
-### 4. Keyboard Command System
+```svelte
+<!-- Action applies cursor position declaratively -->
+<textarea use:positionCursor={{ data: cursorPositionData, controller }} />
+```
+
+### 4. positionCursor Svelte Action
+
+**File**: `packages/desktop-app/src/lib/actions/position-cursor.ts`
+
+**Purpose**: Encapsulates all imperative DOM cursor manipulation in a reusable Svelte action.
+
+```typescript
+export const positionCursor: Action<
+  HTMLTextAreaElement,
+  { data: CursorPosition | null; controller: TextareaController }
+> = (element, params) => {
+  function apply(data: CursorPosition | null) {
+    if (!data) return;
+
+    requestAnimationFrame(() => {
+      switch (data.type) {
+        case 'default':
+          // Position at beginning of first line, optionally skip syntax
+          const position = data.skipSyntax
+            ? params.controller.getFirstNonSyntaxPosition(0)
+            : 0;
+          element.selectionStart = element.selectionEnd = position;
+          break;
+
+        case 'absolute':
+          // Position at specific character offset
+          element.selectionStart = element.selectionEnd = data.position;
+          break;
+
+        case 'line-column':
+          // Position at beginning of specific line
+          const linePos = params.controller.getPositionAtLine(
+            data.line,
+            data.skipSyntax
+          );
+          element.selectionStart = element.selectionEnd = linePos;
+          break;
+
+        case 'arrow-navigation':
+          // Maintain horizontal position from previous node
+          const arrowPos = params.controller.getPositionFromPixelOffset(
+            data.direction === 'down' ? 0 : params.controller.getLineCount() - 1,
+            data.pixelOffset
+          );
+          element.selectionStart = element.selectionEnd = arrowPos;
+          break;
+
+        case 'node-type-conversion':
+          // Preserve cursor position during node type changes
+          element.selectionStart = element.selectionEnd = data.position;
+          break;
+      }
+      element.focus();
+    });
+  }
+
+  apply(params.data);
+
+  return {
+    update(newParams) {
+      apply(newParams.data);
+    }
+  };
+};
+```
+
+**Benefits**:
+- **Encapsulation**: All cursor positioning logic in one place
+- **Performance**: Uses `requestAnimationFrame` for smooth, non-blocking updates
+- **Reusability**: Can be applied to any textarea with any controller
+- **Testing**: Easy to test in isolation
+- **Declarative**: Components just set state, action handles DOM
+
+### 5. Keyboard Command System
 
 **File**: `packages/desktop-app/src/lib/services/keyboard-command-registry.ts`
 
@@ -256,7 +347,7 @@ interface KeyboardCommand {
 
 **Problem**: Maintain horizontal cursor position when navigating between nodes with different indentation levels.
 
-**Solution**:
+**Solution** (Refactored with Reactive Actions - Issue #281):
 
 ```typescript
 // Step 1: Current controller calculates absolute pixel offset
@@ -270,28 +361,34 @@ getCurrentPixelOffset(): number {
   return nodeRect.left + textWidth;
 }
 
-// Step 2: FocusManager stores arrow navigation context
-setEditingNodeFromArrowNavigation(nodeId, direction, pixelOffset) {
-  this.arrowNavDirection = direction;
-  this.arrowNavPixelOffset = pixelOffset;
-  this.editingNodeId = nodeId;
-}
+// Step 2: FocusManager stores unified cursor position
+focusManager.focusNodeFromArrowNav(nodeId, direction, pixelOffset);
+// Internally sets:
+// cursorPosition = { type: 'arrow-navigation', direction, pixelOffset }
 
-// Step 3: Next controller enters at pixel offset
-enterFromArrowNavigation(direction, absolutePixelOffset) {
-  // Convert absolute → relative (subtract node's left edge)
-  const relativePixelOffset = absolutePixelOffset - nodeRect.left;
+// Step 3: Component derives cursor data reactively
+let cursorPositionData = $derived(
+  isEditing ? focusManager.cursorPosition : null
+);
 
-  // Calculate column position from pixel offset
-  const column = this.calculateColumnFromPixelOffset(relativePixelOffset);
-
-  // Position cursor
-  this.element.selectionStart = column;
-  this.element.selectionEnd = column;
-}
+// Step 4: positionCursor action applies positioning declaratively
+<textarea use:positionCursor={{ data: cursorPositionData, controller }} />
 ```
 
-**Result**: Cursor maintains horizontal position across nodes, even with different indentation levels.
+**Data Flow**:
+```
+NavigateCommand → FocusManager.focusNodeFromArrowNav()
+  ↓
+FocusManager.cursorPosition updated
+  ↓
+Component $derived re-runs
+  ↓
+positionCursor action receives new data
+  ↓
+requestAnimationFrame → DOM cursor positioned
+```
+
+**Result**: Cursor maintains horizontal position across nodes with clean reactive architecture.
 
 ### 2. Click-to-Edit Cursor Positioning
 
