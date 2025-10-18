@@ -45,6 +45,13 @@
     'typescript'
   ];
 
+  /**
+   * Template for empty code blocks
+   * Language is managed separately via dropdown state (defaults to 'plaintext')
+   * Format: opening fence, two newlines (empty content line), closing fence
+   */
+  const EMPTY_CODE_BLOCK_TEMPLATE = '```\n\n```';
+
   // Props using Svelte 5 runes mode - same interface as BaseNode
   let {
     nodeId,
@@ -229,7 +236,7 @@
     // For code-blocks: no splitting, create blank code-block below with cursor ready
     if (detail.nodeType === 'code-block') {
       detail.currentContent = internalContent; // Keep current node unchanged
-      detail.newContent = '```\n\n```'; // New blank code-block (language managed by dropdown state)
+      detail.newContent = EMPTY_CODE_BLOCK_TEMPLATE; // New blank code-block (language managed by dropdown state)
       // Cursor position is for edit content (```\n|\n```) which is position 4
       detail.newNodeCursorPosition = 4; // After ```\n, on the empty line
     }
@@ -259,8 +266,8 @@
 
           let completedContent;
           if (afterFence === '' || afterFence === '\n') {
-            // Empty: ```\n\n``` (language managed by dropdown)
-            completedContent = '```\n\n```';
+            // Empty: use template (language managed by dropdown)
+            completedContent = EMPTY_CODE_BLOCK_TEMPLATE;
           } else {
             // Has content: ```\nContent\n``` (language managed by dropdown)
             const contentLines = afterFence.split('\n').filter((line: string) => line.trim());

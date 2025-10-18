@@ -81,6 +81,21 @@
   let pendingStructuralUpdatesPromise: Promise<void> | null = null;
 
   /**
+   * Node types that have structured content and cannot accept arbitrary merges
+   * These nodes must maintain specific formatting (e.g., code fences, quote prefixes)
+   */
+  const STRUCTURED_NODE_TYPES = ['code-block', 'quote-block'] as const;
+
+  /**
+   * Check if a node type is a structured node that cannot accept arbitrary merges
+   * @param nodeType - The node type to check
+   * @returns true if the node type is structured and cannot accept merges
+   */
+  function isStructuredNode(nodeType: string): boolean {
+    return STRUCTURED_NODE_TYPES.includes(nodeType as (typeof STRUCTURED_NODE_TYPES)[number]);
+  }
+
+  /**
    * Wait for a pending node save to complete, with timeout and grace period
    * Delegates to SharedNodeStore which tracks pending saves
    * @param nodeIds - Array of node IDs to wait for
@@ -1131,7 +1146,7 @@
 
       // Prevent merging into structured nodes (code-block, quote-block)
       // These nodes have specific formatting that can't accept arbitrary content
-      if (previousNode.nodeType === 'code-block' || previousNode.nodeType === 'quote-block') {
+      if (isStructuredNode(previousNode.nodeType)) {
         return; // Silently prevent merge - user can still delete current node if empty
       }
 
@@ -1181,7 +1196,7 @@
 
       // Prevent merging into structured nodes (code-block, quote-block)
       // These nodes have specific formatting that can't accept arbitrary content
-      if (previousNode.nodeType === 'code-block' || previousNode.nodeType === 'quote-block') {
+      if (isStructuredNode(previousNode.nodeType)) {
         // Block the action entirely - don't delete, don't merge, don't focus
         // User must manually delete the node (e.g., Cmd+Backspace) or add content first
         return;

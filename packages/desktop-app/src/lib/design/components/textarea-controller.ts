@@ -99,7 +99,10 @@ export interface TextareaControllerConfig {
   /**
    * Whether other nodes can merge into this node via Backspace
    * Set to false for structured nodes (code-block, quote-block) that can't accept arbitrary merges
-   * Default: true
+   * @default true
+   * @example
+   * // Code block with merge prevention
+   * const editableConfig = { allowMultiline: true, allowMergeInto: false };
    */
   allowMergeInto?: boolean;
 }
