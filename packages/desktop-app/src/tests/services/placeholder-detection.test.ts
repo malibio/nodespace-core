@@ -126,7 +126,9 @@ describe('Placeholder Node Detection', () => {
 
     it('should NOT detect ordered-list with actual content as placeholder', () => {
       expect(isPlaceholderNode({ nodeType: 'ordered-list', content: '1. First item' })).toBe(false);
-      expect(isPlaceholderNode({ nodeType: 'ordered-list', content: '1. Hello world' })).toBe(false);
+      expect(isPlaceholderNode({ nodeType: 'ordered-list', content: '1. Hello world' })).toBe(
+        false
+      );
       expect(isPlaceholderNode({ nodeType: 'ordered-list', content: '1. A' })).toBe(false);
     });
   });
