@@ -93,22 +93,29 @@
     const prefixedLines = lines.map((line) => {
       const trimmed = line.trim();
 
+      // Empty line - preserve placeholder with proper spacing
       if (trimmed === '') {
-        return '1. '; // Empty line becomes "1. " (with space for cursor)
+        return '1. ';
       }
+
+      // Already properly formatted with "1. " prefix
       if (trimmed.startsWith('1. ')) {
-        return line; // Already has "1. " (with space)
+        return line;
       }
+
+      // Missing space after period: "1." → "1. "
       if (trimmed.startsWith('1.')) {
-        // Has "1." but no space - add space
         return line.replace(/^1\./, '1. ');
       }
+
+      // Malformed prefix (missing dot and/or space): "1Item", "1 Item", "1" → "1. Item"
+      // This handles edge cases from backspace operations where user deletes characters
+      // between "1" and the content, creating intermediate states like "1Item"
       if (trimmed.startsWith('1')) {
-        // Has "1" but malformed (no dot or space) - fix it
-        // This handles "1Item", "1 Item", or just "1"
         return line.replace(/^1\.?\s?/, '1. ');
       }
-      // Add "1. " prefix
+
+      // Missing prefix entirely - add "1. " before content
       return `1. ${line}`;
     });
     const prefixedContent = prefixedLines.join('\n');
@@ -199,7 +206,7 @@
 
 <!-- Wrap BaseNode with ordered-list-specific styling -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="ordered-list-node-wrapper" onkeydown={handleKeyDown}>
+<div class="ordered-list-node-wrapper" data-node-type="ordered-list" onkeydown={handleKeyDown}>
   <BaseNode
     {nodeId}
     {nodeType}

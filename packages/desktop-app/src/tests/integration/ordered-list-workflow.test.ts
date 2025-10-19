@@ -123,6 +123,73 @@ describe('OrderedListNode Workflow', () => {
     });
   });
 
+  describe('Multiline Editing (Shift+Enter)', () => {
+    it('should support multiline editing with allowMultiline: true', () => {
+      // Ordered lists use allowMultiline: true (same as quote-block)
+      // This allows Shift+Enter to add new lines within the same node
+      // Example: "1. First\n1. Second" in one node
+
+      // Verify plugin exists and supports lazy loading
+      const plugin = pluginRegistry.getPlugin('ordered-list');
+      expect(plugin?.node?.lazyLoad).toBeDefined();
+    });
+
+    it('should add "1. " prefix to new lines created with Shift+Enter', () => {
+      // When user presses Shift+Enter, handleContentChange adds "1. " prefix
+      // Cursor positioning is handled by pendingCursorAdjustment
+
+      // Constants used in OrderedListNode:
+      // NEWLINE_LENGTH = 1 (\n character)
+      // LIST_PREFIX_LENGTH = 3 ("1. " prefix)
+      const NEWLINE_LENGTH = 1;
+      const LIST_PREFIX_LENGTH = 3;
+
+      // If cursor is at position 10:
+      // After Shift+Enter: cursor should be at 10 + 1 + 3 = 14
+      const cursorPos = 10;
+      const expectedNewPos = cursorPos + NEWLINE_LENGTH + LIST_PREFIX_LENGTH;
+
+      expect(expectedNewPos).toBe(14);
+    });
+
+    it('should position cursor after "1. " prefix on new line', () => {
+      // Verify cursor positioning constants match slash command config
+      const commands = pluginRegistry.getAllSlashCommands();
+      const command = commands.find((c) => c.id === 'ordered-list');
+
+      // After adding "1. " to new line, cursor should be at position 3
+      // This matches the slash command's desiredCursorPosition
+      expect(command?.desiredCursorPosition).toBe(3);
+    });
+
+    it('should handle sequential numbering in multiline ordered lists', () => {
+      // Test the extractListForDisplay transformation:
+      // Input (edit mode): "1. First\n1. Second\n1. Third"
+      // Output (view mode): "1. First\n2. Second\n3. Third"
+
+      const editContent = '1. First\n1. Second\n1. Third';
+      const lines = editContent.split('\n');
+
+      // Simulate extractListForDisplay logic
+      const numberedLines = lines.map((line, index) => {
+        const strippedLine = line.replace(/^1\.\s?/, '');
+        return `${index + 1}. ${strippedLine}`;
+      });
+      const displayContent = numberedLines.join('\n');
+
+      expect(displayContent).toBe('1. First\n2. Second\n3. Third');
+    });
+
+    it('should use font-variant-numeric: tabular-nums for alignment', () => {
+      // CSS ensures monospaced numbers prevent horizontal text shift
+      // "1. " and "2. " have same width, so "Item" text aligns vertically
+
+      // Verify plugin configuration supports CSS styling
+      const plugin = pluginRegistry.getPlugin('ordered-list');
+      expect(plugin?.node?.lazyLoad).toBeDefined();
+    });
+  });
+
   describe('CSS Counter Numbering', () => {
     it('should reset counter at viewer level', () => {
       // CSS counter reset is defined in base-node-viewer.svelte

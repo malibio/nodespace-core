@@ -1779,7 +1779,8 @@
   }
 
   /* Also reset when ordered list sequence is broken by non-list nodes */
-  .base-node-viewer > *:not(:global(.ordered-list-node-wrapper)) {
+  /* Using data attribute for semantic clarity and maintainability */
+  .base-node-viewer > *:not([data-node-type='ordered-list']) {
     counter-reset: ordered-list-counter;
   }
 </style>
