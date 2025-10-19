@@ -86,6 +86,26 @@
     services?.nodeReferenceService ||
     (import.meta.env.VITEST ? ({} as Record<string, never>) : null);
 
+  /**
+   * Extract text from view element while preserving line breaks from <br> tags
+   * @param element - The view div element
+   * @returns Text content with \n for each <br> tag
+   */
+  function extractTextWithLineBreaks(element: HTMLElement): string {
+    let text = '';
+    const walk = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent || '';
+      } else if (node.nodeName === 'BR') {
+        text += '\n';
+      } else if (node.childNodes) {
+        node.childNodes.forEach(walk);
+      }
+    };
+    walk(element);
+    return text;
+  }
+
   // DOM element and controller - Svelte bind:this assignment
   let textareaElement = $state<HTMLTextAreaElement | undefined>(undefined);
   let controller = $state<TextareaController | null>(null);
@@ -753,18 +773,21 @@
         const clickX = e.pageX;
         const clickY = e.pageY;
 
-        // Get view element bounds for coordinate mapping
-        const viewRect = viewElement!.getBoundingClientRect();
+        // Get the actual rendered text from the view element
+        // This is what the user sees (syntax stripped by markdown renderer)
+        // IMPORTANT: We need to preserve line breaks from <br> tags
+        const viewText = extractTextWithLineBreaks(viewElement!);
 
-        // Create temporary mock element with character spans
-        const mockElement = createMockElementForView(viewElement!, displayContent ?? content);
+        // Create temporary mock element with character spans using the rendered view text
+        const mockElement = createMockElementForView(viewElement!, viewText);
+        const mockRect = mockElement.getBoundingClientRect();
 
         // Find character position in VIEW content
         const viewPositionResult = findCharacterFromClickFast(mockElement, clickX, clickY, {
-          left: viewRect.left,
-          top: viewRect.top,
-          width: viewRect.width,
-          height: viewRect.height
+          left: mockRect.left,
+          top: mockRect.top,
+          width: mockRect.width,
+          height: mockRect.height
         });
 
         // Clean up mock element immediately
@@ -773,7 +796,7 @@
         // Map view position → edit position (accounting for syntax)
         const editPosition = mapViewPositionToEditPosition(
           viewPositionResult.index,
-          displayContent ?? content, // View content (syntax stripped)
+          viewText, // View content (actual rendered text)
           content // Edit content (with syntax)
         );
 

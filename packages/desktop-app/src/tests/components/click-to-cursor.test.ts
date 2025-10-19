@@ -2,10 +2,60 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createMockElementForView } from '$lib/design/components/cursor-positioning';
 import { mapViewPositionToEditPosition } from '$lib/utils/view-edit-mapper';
 
+/**
+ * Extract text from HTML element while preserving line breaks from <br> tags
+ * This is the same logic used in base-node.svelte
+ */
+function extractTextWithLineBreaks(element: HTMLElement): string {
+  let text = '';
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent || '';
+    } else if (node.nodeName === 'BR') {
+      text += '\n';
+    } else if (node.childNodes) {
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(element);
+  return text;
+}
+
 describe('Click-to-Cursor Positioning', () => {
   beforeEach(() => {
     // Reset any global state if needed
     vi.clearAllMocks();
+  });
+
+  describe('extractTextWithLineBreaks', () => {
+    it('extracts plain text without br tags', () => {
+      const div = document.createElement('div');
+      div.textContent = 'Hello world';
+      expect(extractTextWithLineBreaks(div)).toBe('Hello world');
+    });
+
+    it('preserves newlines from br tags', () => {
+      const div = document.createElement('div');
+      div.innerHTML = 'Line 1<br>Line 2<br>Line 3';
+      expect(extractTextWithLineBreaks(div)).toBe('Line 1\nLine 2\nLine 3');
+    });
+
+    it('handles mixed text nodes and br tags', () => {
+      const div = document.createElement('div');
+      div.innerHTML = 'First<br><strong>Second</strong><br>Third';
+      expect(extractTextWithLineBreaks(div)).toBe('First\nSecond\nThird');
+    });
+
+    it('handles nested elements with br tags', () => {
+      const div = document.createElement('div');
+      div.innerHTML = '<p>Para 1<br>Para 2</p>';
+      expect(extractTextWithLineBreaks(div)).toBe('Para 1\nPara 2');
+    });
+
+    it('handles empty content', () => {
+      const div = document.createElement('div');
+      expect(extractTextWithLineBreaks(div)).toBe('');
+    });
   });
 
   it('creates mock element and finds character position - plain text', () => {
@@ -89,6 +139,46 @@ describe('Click-to-Cursor Positioning', () => {
     viewDiv.remove();
   });
 
+  it('mock element positioning matches view element', () => {
+    const viewDiv = document.createElement('div');
+    viewDiv.style.fontFamily = 'monospace';
+    viewDiv.style.fontSize = '16px';
+    viewDiv.style.position = 'absolute';
+    viewDiv.style.top = '100px';
+    viewDiv.style.left = '200px';
+    viewDiv.style.width = '500px';
+    document.body.appendChild(viewDiv);
+
+    const content = 'Test content';
+    const mockElement = createMockElementForView(viewDiv, content);
+
+    const viewRect = viewDiv.getBoundingClientRect();
+    const mockRect = mockElement.getBoundingClientRect();
+
+    // Mock element should be positioned at same location as view element
+    expect(mockRect.left).toBe(viewRect.left);
+    expect(mockRect.top).toBe(viewRect.top);
+    expect(mockRect.width).toBe(viewRect.width);
+
+    mockElement.remove();
+    viewDiv.remove();
+  });
+
+  it('extracts text with line breaks from view element with br tags', () => {
+    const viewDiv = document.createElement('div');
+    viewDiv.innerHTML = 'Line 1<br>Line 2<br>Line 3';
+    document.body.appendChild(viewDiv);
+
+    const extractedText = extractTextWithLineBreaks(viewDiv);
+    expect(extractedText).toBe('Line 1\nLine 2\nLine 3');
+
+    // Verify this differs from textContent (which doesn't preserve br as \n)
+    expect(viewDiv.textContent).not.toContain('\n');
+    expect(extractedText).toContain('\n');
+
+    viewDiv.remove();
+  });
+
   it('handles empty content gracefully', () => {
     const viewDiv = document.createElement('div');
     viewDiv.style.fontFamily = 'monospace';
@@ -164,5 +254,37 @@ describe('Click-to-Cursor Positioning', () => {
     expect(mapViewPositionToEditPosition(0, view, edit)).toBe(2);
     // Position 6 -> skip **, then space, then skip _ -> position 10
     expect(mapViewPositionToEditPosition(6, view, edit)).toBe(10);
+  });
+
+  it('full integration: extract text from view with br tags and create mock element', () => {
+    const viewDiv = document.createElement('div');
+    viewDiv.style.fontFamily = 'monospace';
+    viewDiv.style.fontSize = '16px';
+    viewDiv.style.padding = '0px';
+    // Simulate markdown-rendered content with <br> tags
+    viewDiv.innerHTML = 'Multi-line:<br>Line with <strong>bold</strong>';
+    document.body.appendChild(viewDiv);
+
+    // Extract with preserved line breaks
+    const viewText = extractTextWithLineBreaks(viewDiv);
+    expect(viewText).toBe('Multi-line:\nLine with bold');
+
+    // Create mock element with extracted text
+    const mockElement = createMockElementForView(viewDiv, viewText);
+
+    // Verify mock has correct structure with newlines
+    const spans = mockElement.querySelectorAll('[data-position]');
+    const brs = mockElement.querySelectorAll('br');
+    expect(spans.length).toBe(viewText.length);
+    expect(brs.length).toBe(1); // One newline
+
+    // Verify mock positioning matches view
+    const viewRect = viewDiv.getBoundingClientRect();
+    const mockRect = mockElement.getBoundingClientRect();
+    expect(mockRect.left).toBe(viewRect.left);
+    expect(mockRect.top).toBe(viewRect.top);
+
+    mockElement.remove();
+    viewDiv.remove();
   });
 });

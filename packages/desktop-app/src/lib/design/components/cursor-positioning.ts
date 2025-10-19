@@ -272,12 +272,14 @@ export function createMockElementForView(
 ): HTMLDivElement {
   const mockElement = document.createElement('div');
 
-  // Base styles required for accurate positioning
+  // Position mock element at same location as view element for accurate coordinate matching
+  const viewRect = viewElement.getBoundingClientRect();
   let cssText = `
     position: absolute;
     visibility: hidden;
-    top: 0;
-    left: 0;
+    top: ${viewRect.top}px;
+    left: ${viewRect.left}px;
+    width: ${viewRect.width}px;
     white-space: pre-wrap;
     word-wrap: break-word;
   `;
