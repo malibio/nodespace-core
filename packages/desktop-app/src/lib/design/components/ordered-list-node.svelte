@@ -242,8 +242,7 @@
   .ordered-list-node-wrapper :global(.node__content--view ol) {
     margin: 0;
     padding: 0;
-    padding-left: 1.5rem; /* Indent for numbers */
-    list-style-position: outside;
+    list-style-position: inside; /* Keep numbers inline with content for alignment */
     font-size: 0; /* Collapse whitespace text nodes between <li> elements */
   }
 
