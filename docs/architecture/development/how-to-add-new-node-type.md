@@ -408,14 +408,21 @@ export const yourNodeTypePlugin: PluginDefinition = {
       }
     ],
     // Optional: Pattern detection for auto-conversion
+    // See: docs/architecture/development/pattern-detection-and-templates.md
     patternDetection: [
       {
         pattern: /^your-pattern-regex/,
         targetNodeType: 'your-node-type',
-        cleanContent: true, // Remove pattern from content
+
+        // Choose ONE content handling strategy:
+        contentTemplate: '',          // Option 1: Apply template (e.g., '```\n\n```' for code blocks)
+        // cleanContent: true,         // Option 2: Remove pattern from content
+        // cleanContent: false,        // Option 3: Keep pattern in content (default)
+
         extractMetadata: (match: RegExpMatchArray) => ({
           // Extract metadata from pattern match
         }),
+        desiredCursorPosition: 0,     // Optional: Cursor position after conversion
         priority: 10
       }
     ],
@@ -596,5 +603,7 @@ If you encounter problems not covered by this guide:
 
 1. Check existing node type implementations for patterns
 2. Review recent issues for similar problems
-3. Consult `docs/architecture/components/component-architecture-guide.md`
+3. Consult these guides:
+   - `docs/architecture/components/component-architecture-guide.md`
+   - `docs/architecture/development/pattern-detection-and-templates.md` (for pattern detection issues)
 4. Create a GitHub issue with the `documentation` label
