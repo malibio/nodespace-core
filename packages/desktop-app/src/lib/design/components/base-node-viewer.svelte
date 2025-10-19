@@ -1772,4 +1772,14 @@
     --line-height: 1.4;
     --icon-vertical-position: calc(0.25rem + (0.875rem * 1.4 / 2));
   }
+
+  /* Reset ordered list counter at viewer level */
+  .base-node-viewer {
+    counter-reset: ordered-list-counter;
+  }
+
+  /* Also reset when ordered list sequence is broken by non-list nodes */
+  .base-node-viewer > *:not(:global(.ordered-list-node-wrapper)) {
+    counter-reset: ordered-list-counter;
+  }
 </style>
