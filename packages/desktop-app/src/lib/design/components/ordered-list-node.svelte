@@ -37,18 +37,23 @@
 
   const dispatch = createEventDispatcher();
 
-  // Cursor positioning constant for creating new items
-  const PREFIX_LENGTH = 3; // "1. " prefix length
+  // Cursor positioning constants for Shift+Enter behavior
+  const NEWLINE_LENGTH = 1; // \n character
+  const LIST_PREFIX_LENGTH = 3; // "1. " prefix length
 
   // Internal reactive state - sync with content prop changes
   let internalContent = $state(content);
+
+  // Track if we just added prefixes (for cursor adjustment)
+  let pendingCursorAdjustment = $state<number | null>(null);
 
   // Sync internalContent when content prop changes externally
   $effect(() => {
     internalContent = content;
   });
 
-  // Ordered lists support multiline: Shift+Enter adds line within item, Enter creates new item
+  // Ordered lists use multiline editing (Shift+Enter for new lines with auto "1. " prefix)
+  // Prevent merging into ordered-lists (structured content can't accept arbitrary merges)
   const editableConfig = { allowMultiline: true, allowMergeInto: false };
 
   // Ordered list metadata - enable markdown processing
@@ -57,38 +62,80 @@
   });
 
   /**
-   * Extract list content for display (strip "1. " prefix)
-   * Edit mode: 1. First item
-   * Display mode: First item (auto-numbered via CSS counter)
+   * Extract list content for display and add auto-numbering
+   * Edit mode: 1. First item\n1. Second item\n1. Third item
+   * Display mode: 1. First item\n2. Second item\n3. Third item
    */
   function extractListForDisplay(content: string): string {
-    // Strip "1. " from the beginning
-    return content.replace(/^1\.\s/, '');
+    // Strip "1. " or "1." from the beginning of each line
+    // Then add sequential numbering (1, 2, 3...)
+    const lines = content.split('\n');
+    const numberedLines = lines.map((line, index) => {
+      const strippedLine = line.replace(/^1\.\s?/, '');
+      return `${index + 1}. ${strippedLine}`;
+    });
+
+    // Join with newlines, preserving structure
+    return numberedLines.join('\n');
   }
 
-  // Display content: Strip "1. " prefix for view mode
+  // Display content: Add sequential numbering for view mode
   let displayContent = $derived(extractListForDisplay(internalContent));
 
   /**
    * Handle content changes from BaseNode
-   * Ensure content starts with "1. " prefix
+   * Add "1. " prefix to all lines before saving (users only type it on first line)
    */
   function handleContentChange(event: CustomEvent<{ content: string }>) {
     const userContent = event.detail.content;
 
-    // Ensure content starts with "1. " prefix
-    let prefixedContent = userContent;
+    // Add "1. " prefix to every line that doesn't have it
+    const lines = userContent.split('\n');
+    const prefixedLines = lines.map((line) => {
+      const trimmed = line.trim();
 
-    if (!prefixedContent.trim().startsWith('1.')) {
-      // Add "1. " prefix if missing
-      prefixedContent = `1. ${prefixedContent}`;
-    } else if (!prefixedContent.startsWith('1. ')) {
-      // Fix spacing: "1." → "1. " or "1.text" → "1. text"
-      prefixedContent = prefixedContent.replace(/^1\.(\s?)/, '1. ');
-    }
+      if (trimmed === '') {
+        return '1. '; // Empty line becomes "1. " (with space for cursor)
+      }
+      if (trimmed.startsWith('1. ')) {
+        return line; // Already has "1. " (with space)
+      }
+      if (trimmed.startsWith('1.')) {
+        // Has "1." but no space - add space
+        return line.replace(/^1\./, '1. ');
+      }
+      // Add "1. " prefix
+      return `1. ${line}`;
+    });
+    const prefixedContent = prefixedLines.join('\n');
 
     internalContent = prefixedContent;
     dispatch('contentChanged', { content: prefixedContent });
+
+    // If we have a pending cursor adjustment (from Shift+Enter), apply it
+    if (pendingCursorAdjustment !== null) {
+      import('$lib/services/focus-manager.svelte').then(({ focusManager }) => {
+        focusManager.focusNodeAtPosition(nodeId, pendingCursorAdjustment!);
+        pendingCursorAdjustment = null; // Clear after use
+      });
+    }
+  }
+
+  /**
+   * Handle Shift+Enter to position cursor after auto-added "1. " prefix
+   */
+  function handleKeyDown(event: CustomEvent<KeyboardEvent>) {
+    const keyEvent = event.detail;
+    if (keyEvent.key === 'Enter' && keyEvent.shiftKey) {
+      // Let the default happen (inserts \n), but track cursor position
+      // After handleContentChange adds "1. ", we'll reposition cursor
+      const textarea = keyEvent.target as HTMLTextAreaElement;
+      const cursorPos = textarea.selectionStart;
+
+      // After the \n is inserted and "1. " is added, cursor should be at:
+      // current position + NEWLINE_LENGTH + LIST_PREFIX_LENGTH
+      pendingCursorAdjustment = cursorPos + NEWLINE_LENGTH + LIST_PREFIX_LENGTH;
+    }
   }
 
   /**
@@ -99,8 +146,11 @@
 
     // If the content no longer starts with "1.", convert to text node
     if (detail.currentContent && !detail.currentContent.trim().startsWith('1.')) {
-      // Remove "1. " prefix
-      const cleanedContent = detail.currentContent.replace(/^1\.\s/, '');
+      // Remove all "1. " prefixes from all lines
+      const cleanedContent = detail.currentContent
+        .split('\n')
+        .map((line: string) => line.replace(/^1\.\s?/, ''))
+        .join('\n');
 
       detail.currentContent = cleanedContent;
       detail.nodeType = 'text'; // Convert to text node
@@ -113,11 +163,12 @@
       });
     }
 
-    // For ordered lists: Enter creates new ordered-list below with "1. " prefix
+    // For ordered lists: Enter creates new TEXT node below (exits the list)
     if (detail.nodeType === 'ordered-list') {
       detail.currentContent = internalContent; // Keep current node unchanged
-      detail.newContent = '1. '; // New ordered-list with "1. " prefix ready
-      detail.newNodeCursorPosition = PREFIX_LENGTH; // Cursor after "1. "
+      detail.newContent = ''; // New TEXT node (empty)
+      detail.nodeType = 'text'; // Exit list, create text node
+      detail.newNodeCursorPosition = 0; // Cursor at start
     }
 
     dispatch('createNewNode', detail);
@@ -156,6 +207,7 @@
     metadata={listMetadata}
     on:createNewNode={handleCreateNewNode}
     on:contentChanged={handleContentChange}
+    on:keydown={handleKeyDown}
     on:indentNode={forwardEvent('indentNode')}
     on:outdentNode={forwardEvent('outdentNode')}
     on:navigateArrow={forwardEvent('navigateArrow')}
@@ -180,20 +232,32 @@
 
   /* Apply ordered list styling to the content area only (BaseNode wraps it) */
   .ordered-list-node-wrapper :global(.node__content) {
-    display: flex;
-    margin-bottom: 0.125rem; /* 2px spacing between items per design spec */
+    display: block;
     position: relative;
     line-height: 1.6;
     white-space: pre-wrap;
   }
 
-  /* Auto-numbering via CSS counter - per design system specs */
-  .ordered-list-node-wrapper :global(.node__content::before) {
-    counter-increment: ordered-list-counter;
-    content: counter(ordered-list-counter) '. ';
-    font-weight: 600;
-    color: hsl(var(--muted-foreground));
-    margin-right: 0.5rem; /* Spacing between number and text */
-    flex-shrink: 0; /* Prevents number from shrinking, ensures proper text wrapping */
+  /* Remove default list spacing in view mode */
+  .ordered-list-node-wrapper :global(.node__content--view ol) {
+    margin: 0;
+    padding: 0;
+    padding-left: 1.5rem; /* Indent for numbers */
+    list-style-position: outside;
+    font-size: 0; /* Collapse whitespace text nodes between <li> elements */
+  }
+
+  .ordered-list-node-wrapper :global(.node__content--view li) {
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+    font-size: 1rem; /* Reset font size from parent ol */
+  }
+
+  /* Remove extra spacing from markdown-generated paragraphs within list items */
+  .ordered-list-node-wrapper :global(.node__content--view li p) {
+    margin: 0;
+    padding: 0;
+    display: inline;
   }
 </style>
