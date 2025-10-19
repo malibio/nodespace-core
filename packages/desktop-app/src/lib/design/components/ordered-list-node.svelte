@@ -236,5 +236,6 @@
     position: relative;
     line-height: 1.6;
     white-space: pre-wrap;
+    font-variant-numeric: tabular-nums; /* Use monospaced numbers for consistent alignment */
   }
 </style>
