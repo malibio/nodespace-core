@@ -48,8 +48,8 @@
     internalContent = content;
   });
 
-  // Ordered lists use single-line editing (prevent multiline with Shift+Enter)
-  const editableConfig = { allowMultiline: false, allowMergeInto: false };
+  // Ordered lists support multiline: Shift+Enter adds line within item, Enter creates new item
+  const editableConfig = { allowMultiline: true, allowMergeInto: false };
 
   // Ordered list metadata - enable markdown processing
   let listMetadata = $derived({
