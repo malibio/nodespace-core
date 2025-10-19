@@ -56,9 +56,9 @@
   // Prevent merging into ordered-lists (structured content can't accept arbitrary merges)
   const editableConfig = { allowMultiline: true, allowMergeInto: false };
 
-  // Ordered list metadata - enable markdown processing
+  // Ordered list metadata - disable markdown to show plain text numbers
   let listMetadata = $derived({
-    disableMarkdown: false // Ordered lists support inline markdown
+    disableMarkdown: true // Show sequential numbers as plain text, not HTML lists
   });
 
   /**
@@ -236,27 +236,5 @@
     position: relative;
     line-height: 1.6;
     white-space: pre-wrap;
-  }
-
-  /* Remove default list spacing in view mode */
-  .ordered-list-node-wrapper :global(.node__content--view ol) {
-    margin: 0;
-    padding: 0;
-    list-style-position: inside; /* Keep numbers inline with content for alignment */
-    font-size: 0; /* Collapse whitespace text nodes between <li> elements */
-  }
-
-  .ordered-list-node-wrapper :global(.node__content--view li) {
-    margin: 0;
-    padding: 0;
-    line-height: 1.6;
-    font-size: 1rem; /* Reset font size from parent ol */
-  }
-
-  /* Remove extra spacing from markdown-generated paragraphs within list items */
-  .ordered-list-node-wrapper :global(.node__content--view li p) {
-    margin: 0;
-    padding: 0;
-    display: inline;
   }
 </style>
