@@ -547,6 +547,168 @@ console.log(result); // Output: 55</code><button class="copy-button">Copy</butto
         </div>
       </section>
 
+      <!-- OrderedListNode Icon System -->
+      <section class="example-section">
+        <h2>OrderedListNode Icon System</h2>
+        <p>Circle-based icons for auto-numbered ordered list items with CSS counter-based rendering. Identical pattern to QuoteNode but with numbered list icon instead of quotation mark.</p>
+
+        <h3>Ordered List Node States</h3>
+        <div class="icon-demo">
+          <!-- Regular Ordered List Node -->
+          <div class="task-state-example">
+            <div class="ns-icon" role="img" aria-label="Ordered list node icon">
+              <div class="ordered-list-circle"></div>
+            </div>
+            <div class="task-state-label">Ordered List Node</div>
+          </div>
+
+          <!-- Note: No parent state - canHaveChildren: false -->
+          <div class="task-state-example" style="opacity: 0.5;">
+            <div class="ns-icon" role="img" aria-label="Ordered list node (no children allowed)">
+              <div class="ordered-list-circle"></div>
+            </div>
+            <div class="task-state-label">No Children Allowed</div>
+          </div>
+        </div>
+
+        <h3>Implementation Code</h3>
+        <div class="example-code">
+          <pre><code><!-- Regular Ordered List Node -->
+&lt;div class="ns-icon"&gt;
+  &lt;div class="ordered-list-circle"&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+<!-- Note: No ring effect variant - canHaveChildren: false -->
+
+<!-- Using Icon Component (Svelte) -->
+&lt;Icon name="ordered-list" size={20} /&gt;</code></pre>
+        </div>
+
+        <h3>CSS Implementation</h3>
+        <div class="example-code">
+          <pre><code>/* Ordered List Node Icons - Numbered list icon with background-matching color */
+.ordered-list-circle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: hsl(var(--node-text)); /* Uses design system primary color */
+}
+
+/* Numbered list icon overlay - light theme
+   NOTE: SVG data URLs cannot use CSS variables, so must be hardcoded
+   Matches: hsl(var(--content-background)) = hsl(0 0% 99%) = #fcfcfc */
+.ordered-list-circle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' height='16px' viewBox='0 0 24 24' width='16px' fill='%23fcfcfc'%3E%3Cpath d='M0 0h24v24H0V0z' fill='none'/%3E%3Cpath d='M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 16px 16px;
+}
+
+/* Dark theme - numbered list icon uses dark background color */
+.dark .ordered-list-circle::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' height='16px' viewBox='0 0 24 24' width='16px' fill='%23252523'%3E%3Cpath d='M0 0h24v24H0V0z' fill='none'/%3E%3Cpath d='M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z'/%3E%3C/svg%3E");
+}</code></pre>
+        </div>
+
+        <h3>Technical Implementation Details</h3>
+        <div class="component-showcase">
+          <div class="component-example">
+            <div class="component-title">CSS-Based Rendering (Matches QuoteNode Pattern)</div>
+            <div class="component-demo">
+              <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+                <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Ordered List Icon Specifications</p>
+                <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                  <li>16x16px filled circle (identical to QuoteNode and CodeNode base)</li>
+                  <li>2px offset positioning in 20x20px container</li>
+                  <li>Background color: hsl(var(--node-text)) - blue-gray from design system (200 40% 45% / 200 40% 55%)</li>
+                  <li>Numbered list icon: Material Design format_list_numbered icon</li>
+                  <li>Icon color: Background color (#fcfcfc light / #252523 dark)</li>
+                  <li>No ring effect: canHaveChildren: false (leaf node only)</li>
+                </ul>
+              </div>
+
+              <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+                <thead>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <th style="padding: 0.5rem; text-align: left;">Element</th>
+                    <th style="padding: 0.5rem; text-align: left;">Size</th>
+                    <th style="padding: 0.5rem; text-align: left;">Purpose</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Ordered List Icon Container</td>
+                    <td style="padding: 0.5rem;"><code>20x20px</code></td>
+                    <td style="padding: 0.5rem;">Standard icon container size</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Ordered List Circle</td>
+                    <td style="padding: 0.5rem;"><code>16x16px</code></td>
+                    <td style="padding: 0.5rem;">Solid filled circle, 2px offset in container</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">Icon Glyph</td>
+                    <td style="padding: 0.5rem;"><code>16x16px SVG</code></td>
+                    <td style="padding: 0.5rem;">Material Design numbered list icon via SVG data URL</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.5rem;">Background Color</td>
+                    <td style="padding: 0.5rem;"><code>hsl(var(--node-text))</code></td>
+                    <td style="padding: 0.5rem;">Blue-gray matching design system (200 40% 45% / 200 40% 55%)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="component-example">
+            <div class="component-title">Design Rationale</div>
+            <div class="component-demo">
+              <ul>
+                <li><strong>Identical to QuoteNode:</strong> Uses exact same base pattern (16x16 circle, 2px offset)</li>
+                <li><strong>Material Design Icon:</strong> format_list_numbered provides universal recognition for ordered lists</li>
+                <li><strong>CSS Pseudo-Element:</strong> SVG data URL in ::after ensures consistent rendering</li>
+                <li><strong>No Ring Effect:</strong> canHaveChildren: false means no parent state needed</li>
+                <li><strong>Background Color Contrast:</strong> Light/dark theme-specific icon colors</li>
+                <li><strong>Consistent Sizing:</strong> Same 20x20 container, 16x16 circle as QuoteNode and CodeNode</li>
+                <li><strong>Theme Adaptive:</strong> Separate SVG data URLs for light and dark modes</li>
+                <li><strong>CSS Counter Integration:</strong> Icon pairs with CSS counter-based auto-numbering (1, 2, 3...)</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <h3>Auto-Numbering Display</h3>
+        <div class="component-showcase">
+          <div class="component-example">
+            <div class="component-title">CSS Counter System</div>
+            <div class="component-demo">
+              <div style="background: hsl(var(--muted)); padding: 1rem; border-radius: var(--radius); margin-bottom: 1rem;">
+                <p style="margin: 0 0 0.5rem 0; font-weight: 500;">Numbering Specifications</p>
+                <ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem; color: hsl(var(--muted-foreground));">
+                  <li>Content stores "1. " prefix for all items (markdown convention)</li>
+                  <li>View mode strips prefix and displays CSS counter numbers</li>
+                  <li>Sequential numbering: 1, 2, 3, 4... (automatic)</li>
+                  <li>Counter resets when sequence broken by non-list nodes</li>
+                  <li>Number style: font-weight 600, muted-foreground color</li>
+                  <li>Number positioning: absolute left, min-width 1.5rem, right-aligned</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Icon System Specifications -->
       <section class="example-section">
         <h2>Icon System Specifications</h2>
@@ -610,6 +772,11 @@ console.log(result); // Output: 55</code><button class="copy-button">Copy</butto
                     <td style="padding: 0.5rem;">CodeNode (with children)</td>
                     <td style="padding: 0.5rem;"><code>16x16px inner + 20x20px ring</code></td>
                     <td style="padding: 0.5rem;">Solid inner with 3px border ring</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid hsl(var(--border));">
+                    <td style="padding: 0.5rem;">OrderedListNode</td>
+                    <td style="padding: 0.5rem;"><code>16x16px</code></td>
+                    <td style="padding: 0.5rem;">Solid filled circle with numbered list icon, 2px offset in 20x20 container (canHaveChildren: false, no ring variant)</td>
                   </tr>
                   <tr style="border-bottom: 1px solid hsl(var(--border));">
                     <td style="padding: 0.5rem;">AI Chat Node (regular)</td>
