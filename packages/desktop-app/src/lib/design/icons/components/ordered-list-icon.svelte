@@ -57,7 +57,7 @@
     background: hsl(var(--node-text));
   }
 
-  /* Numbered list overlay - Material Design list icon */
+  /* Numbered list overlay - Material Design format_list_numbered icon */
   .list-circle::after {
     content: '';
     position: absolute;
@@ -66,7 +66,7 @@
     width: 16px;
     height: 16px;
     transform: translate(-50%, -50%);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' height='16px' viewBox='0 0 24 24' width='16px'%3E%3Cpath d='M2 17h2v.5H3v1h1v.5H2v1h3v-4H2zm1-4h1V9H2v1h1zm-1-4h4V8H2v1zm5 16h14v-2H7zm0-5h14v-2H7zm0-7v2h14V7H7z' fill='%23fcfcfc'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' height='16px' viewBox='0 0 24 24' width='16px' fill='%23fcfcfc'%3E%3Cpath d='M0 0h24v24H0V0z' fill='none'/%3E%3Cpath d='M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
@@ -74,7 +74,7 @@
 
   /* Dark theme - numbered list icon uses dark background color */
   :global(.dark) .list-circle::after {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' height='16px' viewBox='0 0 24 24' width='16px'%3E%3Cpath d='M2 17h2v.5H3v1h1v.5H2v1h3v-4H2zm1-4h1V9H2v1h1zm-1-4h4V8H2v1zm5 16h14v-2H7zm0-5h14v-2H7zm0-7v2h14V7H7z' fill='%231f1f1f'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' height='16px' viewBox='0 0 24 24' width='16px' fill='%23252523'%3E%3Cpath d='M0 0h24v24H0V0z' fill='none'/%3E%3Cpath d='M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z'/%3E%3C/svg%3E");
   }
 
   /* Parent node ring - NOT used for ordered-list since canHaveChildren: false */

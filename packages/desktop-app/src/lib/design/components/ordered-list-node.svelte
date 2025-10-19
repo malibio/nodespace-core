@@ -180,21 +180,20 @@
 
   /* Apply ordered list styling to the content area only (BaseNode wraps it) */
   .ordered-list-node-wrapper :global(.node__content) {
-    padding-left: 2rem; /* Space for auto-numbered counter */
+    display: flex;
+    margin-bottom: 0.125rem; /* 2px spacing between items per design spec */
     position: relative;
     line-height: 1.6;
     white-space: pre-wrap;
   }
 
-  /* Auto-numbering via CSS counter */
+  /* Auto-numbering via CSS counter - per design system specs */
   .ordered-list-node-wrapper :global(.node__content::before) {
     counter-increment: ordered-list-counter;
     content: counter(ordered-list-counter) '. ';
-    position: absolute;
-    left: 0;
     font-weight: 600;
     color: hsl(var(--muted-foreground));
-    min-width: 1.5rem;
-    text-align: right;
+    margin-right: 0.5rem; /* Spacing between number and text */
+    flex-shrink: 0; /* Prevents number from shrinking, ensures proper text wrapping */
   }
 </style>
