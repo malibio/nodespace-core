@@ -3,9 +3,8 @@
 
   Responsibilities:
   - Manages "1. " prefix for ordered list items
-  - Provides auto-numbering via CSS counters
-  - Single-line editing (no multiline like quote-blocks)
-  - Supports inline markdown formatting (bold, italic, code, links)
+  - Provides auto-numbering (sequential 1, 2, 3...) in display mode
+  - Multiline editing with Shift+Enter to add new list items
   - Forwards all other events to BaseNode
 
   Integration:
@@ -104,6 +103,11 @@
         // Has "1." but no space - add space
         return line.replace(/^1\./, '1. ');
       }
+      if (trimmed.startsWith('1')) {
+        // Has "1" but malformed (no dot or space) - fix it
+        // This handles "1Item", "1 Item", or just "1"
+        return line.replace(/^1\.?\s?/, '1. ');
+      }
       // Add "1. " prefix
       return `1. ${line}`;
     });
@@ -124,12 +128,11 @@
   /**
    * Handle Shift+Enter to position cursor after auto-added "1. " prefix
    */
-  function handleKeyDown(event: CustomEvent<KeyboardEvent>) {
-    const keyEvent = event.detail;
-    if (keyEvent.key === 'Enter' && keyEvent.shiftKey) {
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && event.shiftKey) {
       // Let the default happen (inserts \n), but track cursor position
       // After handleContentChange adds "1. ", we'll reposition cursor
-      const textarea = keyEvent.target as HTMLTextAreaElement;
+      const textarea = event.target as HTMLTextAreaElement;
       const cursorPos = textarea.selectionStart;
 
       // After the \n is inserted and "1. " is added, cursor should be at:
@@ -195,7 +198,8 @@
 </script>
 
 <!-- Wrap BaseNode with ordered-list-specific styling -->
-<div class="ordered-list-node-wrapper">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="ordered-list-node-wrapper" onkeydown={handleKeyDown}>
   <BaseNode
     {nodeId}
     {nodeType}
@@ -207,7 +211,6 @@
     metadata={listMetadata}
     on:createNewNode={handleCreateNewNode}
     on:contentChanged={handleContentChange}
-    on:keydown={handleKeyDown}
     on:indentNode={forwardEvent('indentNode')}
     on:outdentNode={forwardEvent('outdentNode')}
     on:navigateArrow={forwardEvent('navigateArrow')}
@@ -234,7 +237,6 @@
   .ordered-list-node-wrapper :global(.node__content) {
     display: block;
     position: relative;
-    line-height: 1.6;
     white-space: pre-wrap;
     font-variant-numeric: tabular-nums; /* Use monospaced numbers for consistent alignment */
   }
