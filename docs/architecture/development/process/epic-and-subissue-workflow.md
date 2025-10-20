@@ -12,11 +12,30 @@ This guide defines the standardized approach for working with Epic issues (paren
 
 ### Epic Issues
 - **Definition**: Large features broken down into multiple sub-issues
-- **Characteristics**: 
-  - Contains list of sub-issues (e.g., `- [ ] #55 - Sub-issue title`)
+- **Characteristics**:
+  - Contains list of sub-issues using simple references: `- [ ] #55` (GitHub auto-decorates with title and status)
   - Labeled with `epic` or similar
   - Has implementation phases or logical groupings
-- **Examples**: Issue #54 (ContentEditable Text Editing Epic)
+- **Examples**: Issue #54 (ContentEditable Text Editing Epic), Issue #206 (Tab/Pane Management UI)
+
+**✅ Correct Epic Sub-Issue Formatting:**
+```markdown
+## Sub-Issues
+- #297
+- #298
+- #299
+```
+
+**❌ Avoid Redundant Formatting:**
+```markdown
+## Sub-Issues (WRONG - GitHub auto-adds this info)
+- [ ] #297 - Implement nodespace:// Link Navigation (2-3 hours)
+- [ ] #298 - Tab UI Controls (4-6 hours)
+```
+
+**Why:** GitHub automatically decorates issue references with titles, status indicators (✅ green checkmark when closed, ⚪ gray when open), and labels. Manual duplication creates maintenance burden.
+
+**Note:** You don't need `- [ ]` checkbox syntax - GitHub automatically adds visual status indicators.
 
 ### Sub-Issues  
 - **Definition**: Individual implementable tasks within an epic

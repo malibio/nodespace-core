@@ -15,13 +15,13 @@ GitHub provides enhanced rendering for issue references when using specific form
 - #15 (blocks this issue)
 - #16 (must be completed first)
 
-## Related Issues  
+## Related Issues
 - #4 (parent feature/epic)
 ```
 
 **Rich GitHub Rendering Triggers:**
 - **Dependencies**: Shows checkboxes with issue status and titles
-- **Related Issues**: Shows checkboxes with issue status and titles  
+- **Related Issues**: Shows checkboxes with issue status and titles
 - **Issues** (generic): Shows checkboxes with issue status and titles
 
 **Simple References:**
@@ -33,14 +33,45 @@ GitHub provides enhanced rendering for issue references when using specific form
 ## Related Issues
 - #26 (parent)
 - #47 (next step)
+
+## Sub-Issues (for Epic issues)
+- #297
+- #298
+- #299
 ```
 
 **❌ AVOID:** Verbose references that duplicate GitHub's auto-generated titles:
 ```markdown
-## Related Issues  
+## Related Issues
 - Issue #26 - Hybrid Markdown Rendering System (parent)
 - Issue #47 - Hybrid Markdown Rendering implementation (next step)
+
+## Sub-Issues (WRONG - GitHub auto-decorates with title and status)
+- [ ] #297 - Implement nodespace:// Link Navigation
+- [ ] #298 - Tab UI Controls: Close Button, Add Button
 ```
+
+**Why this matters:** GitHub automatically decorates issue references with titles, status, completion checkmarks (✅ when closed), and labels. Including this information manually creates redundancy and maintenance burden when issue titles change.
+
+**Note:** You don't need `- [ ]` checkbox syntax - GitHub automatically adds status indicators (✅ green checkmark when issue is closed, ⚪ gray when open).
+
+### Time Estimates and Durations
+
+**❌ DO NOT include time estimates or durations in issue bodies:**
+```markdown
+# WRONG - Don't do this:
+**Estimated Effort:** 2-3 hours
+**Duration:** 4-6 hours
+**Time:** ~5 days
+```
+
+**Why avoid time estimates:**
+- Creates maintenance burden (estimates change as work progresses)
+- Can become outdated quickly
+- Not useful for GitHub project management (use project fields instead)
+- Adds clutter to issue description
+
+**✅ Instead:** Use GitHub Project custom fields for time tracking if needed, or track in comments/discussions.
 
 ### Issue Section Guidelines
 
