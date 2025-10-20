@@ -3,8 +3,12 @@ import { writable } from 'svelte/store';
 export interface Tab {
   id: string;
   title: string;
-  type: 'date' | 'placeholder';
-  content?: unknown;
+  type: 'date' | 'node' | 'placeholder';
+  content?: {
+    nodeId?: string;
+    nodeType?: string;
+    [key: string]: unknown;
+  };
   closeable: boolean;
 }
 

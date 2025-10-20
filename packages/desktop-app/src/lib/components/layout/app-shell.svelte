@@ -9,6 +9,7 @@
   import { layoutState, toggleSidebar } from '$lib/stores/layout';
   import { registerCorePlugins } from '$lib/plugins/core-plugins';
   import { pluginRegistry } from '$lib/plugins/index';
+  import { navigationService } from '$lib/services/navigation-service';
 
   // TypeScript compatibility for Tauri window check
 
@@ -18,6 +19,33 @@
 
     // Initialize the unified plugin registry with core plugins
     registerCorePlugins(pluginRegistry);
+
+    // Global click handler for nodespace:// links
+    const handleLinkClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+
+      // Find closest anchor element (handles clicking on children of <a>)
+      const anchor = target.closest('a');
+      if (!anchor) return;
+
+      const href = anchor.getAttribute('href');
+      if (!href || !href.startsWith('nodespace://')) return;
+
+      // Prevent default browser navigation
+      event.preventDefault();
+
+      // Extract node UUID from nodespace://uuid
+      const nodeId = href.replace('nodespace://', '');
+
+      // Cmd+Click (Mac) or Ctrl+Click (Windows/Linux) for new tab
+      const openInNewTab = event.metaKey || event.ctrlKey;
+
+      // Navigate to node
+      navigationService.navigateToNode(nodeId, openInNewTab);
+    };
+
+    // Attach global event listener
+    document.addEventListener('click', handleLinkClick);
 
     // Listen for menu events from Tauri (only if running in Tauri environment)
     let unlistenMenu: Promise<() => void> | null = null;
@@ -33,6 +61,7 @@
 
     return async () => {
       cleanup?.();
+      document.removeEventListener('click', handleLinkClick);
       if (unlistenMenu) {
         (await unlistenMenu)();
       }
