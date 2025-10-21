@@ -195,7 +195,7 @@ fn get_tool_schemas() -> Value {
         },
         {
             "name": "search_containers",
-            "description": "Search containers using natural language semantic similarity (vector embeddings)",
+            "description": "Search containers using natural language semantic similarity (vector embeddings). Examples: 'Q4 planning tasks', 'machine learning research notes', 'budget discussions'",
             "inputSchema": {
                 "type": "object",
                 "properties": {
