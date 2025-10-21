@@ -538,22 +538,159 @@ const request = {
    { "result": { "node_id": "uuid-123", "success": true } }
 ```
 
-## File Structure
+## Code Organization: Layered Architecture
+
+NodeSpace MCP implementation follows a **layered architecture** that separates pure protocol logic from framework-specific integration.
+
+### Architecture Layers
 
 ```
-src-tauri/src/
-├── mcp/
-│   ├── mod.rs              # Public API and server setup
-│   ├── server.rs           # stdio server loop
-│   ├── types.rs            # JSON-RPC request/response types
-│   └── handlers/
-│       ├── mod.rs
-│       ├── nodes.rs        # Node CRUD operations
-│       ├── markdown.rs     # create_nodes_from_markdown
-│       └── query.rs        # Query operations
-├── lib.rs                  # Spawn MCP task in setup()
-└── ...
+┌─────────────────────────────────────────────────────┐
+│  packages/desktop-app/src-tauri/src/                │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  Tauri Integration Layer                      │  │
+│  │  - mcp_integration.rs (Tauri event wrapper)   │  │
+│  │  - lib.rs (spawns MCP task)                   │  │
+│  └───────────────────────────────────────────────┘  │
+│                        ↓ uses                        │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  packages/core/src/mcp/ (Pure Protocol)      │  │
+│  │  - server.rs (stdio loop, JSON-RPC)           │  │
+│  │  - types.rs (protocol types)                  │  │
+│  │  - handlers/ (business logic)                 │  │
+│  │    ├── initialize.rs (capability negotiation) │  │
+│  │    ├── nodes.rs (CRUD operations)             │  │
+│  │    └── markdown.rs (import/export)            │  │
+│  └───────────────────────────────────────────────┘  │
+│                        ↓ uses                        │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  packages/core/src/services/                  │  │
+│  │  - NodeService (database operations)          │  │
+│  └───────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
 ```
+
+### Why This Separation?
+
+**Core Package (`packages/core/src/mcp/`):**
+- ✅ **Framework-agnostic** - No Tauri dependencies
+- ✅ **Reusable** - Could be used in CLI tools, HTTP servers, etc.
+- ✅ **Testable** - Pure Rust logic, easier to unit test
+- ✅ **Portable** - Works anywhere Rust runs
+
+**Tauri Integration (`packages/desktop-app/src-tauri/src/`):**
+- ✅ **Minimal wrapper** - Only handles Tauri-specific concerns
+- ✅ **Event emissions** - Bridges MCP operations to UI reactivity
+- ✅ **App lifecycle** - Spawns MCP task in Tauri setup
+
+### Concrete Example: create_node Flow
+
+```rust
+// 1. Core protocol layer (packages/core/src/mcp/handlers/nodes.rs)
+pub async fn handle_create_node(
+    service: &Arc<NodeService>,
+    params: Value,
+) -> Result<Value, MCPError> {
+    // Pure business logic - no Tauri dependencies
+    let params: CreateNodeParams = serde_json::from_value(params)?;
+    let node_id = service.create_node(node).await?;
+    Ok(json!({ "node_id": node_id }))
+}
+
+// 2. Core server layer (packages/core/src/mcp/server.rs)
+async fn handle_request(
+    service: &Arc<NodeService>,
+    request: MCPRequest,
+) -> MCPResponse {
+    match request.method.as_str() {
+        "create_node" => handle_create_node(service, request.params).await,
+        // ... other methods
+    }
+}
+
+// 3. Tauri integration layer (packages/desktop-app/src-tauri/src/mcp_integration.rs)
+pub async fn run_mcp_server_with_events(
+    node_service: Arc<NodeService>,
+    app: AppHandle,
+) -> anyhow::Result<()> {
+    // Wraps core MCP server with Tauri event callback
+    let callback = Arc::new(move |method: &str, result: &Value| {
+        if method == "create_node" {
+            // Emit Tauri event for UI reactivity
+            app.emit("node-created", result).ok();
+        }
+    });
+
+    // Run core MCP server with event-emitting callback
+    mcp::run_mcp_server_with_callback(node_service, Some(callback)).await
+}
+```
+
+### Design Benefits
+
+**Testability:**
+```rust
+// Test core protocol without Tauri
+#[tokio::test]
+async fn test_create_node() {
+    let service = setup_test_service();
+    let params = json!({ "node_type": "text", "content": "Test" });
+    let result = handle_create_node(&service, params).await.unwrap();
+    assert!(result["node_id"].is_string());
+}
+```
+
+**Reusability:**
+```rust
+// Example: Could use same core in CLI tool
+async fn cli_main() {
+    let service = Arc::new(NodeService::new(db_pool));
+
+    // Use core MCP server in CLI context (no Tauri)
+    mcp::run_mcp_server(service).await?;
+}
+```
+
+**Maintainability:**
+- Protocol changes isolated to `packages/core/src/mcp/`
+- Tauri upgrades only affect thin integration layer
+- Clear separation of concerns
+
+### File Structure
+
+**Core MCP Protocol (`packages/core/src/mcp/`):**
+```
+packages/core/src/mcp/
+├── mod.rs                      # Public API exports
+├── server.rs                   # stdio server loop, JSON-RPC dispatcher
+├── types.rs                    # MCPRequest, MCPResponse, MCPError, MCPNotification
+└── handlers/
+    ├── mod.rs                  # Handler module exports
+    ├── initialize.rs           # Capability negotiation (Issue #308)
+    ├── nodes.rs                # Node CRUD operations
+    └── markdown.rs             # Markdown import/export (Issues #296, #309)
+```
+
+**Tauri Integration (`packages/desktop-app/src-tauri/src/`):**
+```
+packages/desktop-app/src-tauri/src/
+├── lib.rs                      # Spawns MCP task in Tauri setup
+├── mcp_integration.rs          # Wraps core MCP with Tauri events
+└── commands/                   # Tauri IPC command handlers (separate from MCP)
+    ├── db.rs
+    ├── nodes.rs
+    └── ...
+```
+
+### Key Principle: Single Responsibility
+
+**Core Package** = "What" (Protocol logic, business rules)
+**Tauri Package** = "How" (Desktop app integration, event emissions)
+
+This separation ensures:
+- Core protocol can be tested independently
+- Tauri-specific code is minimal and focused
+- Future frameworks (CLI, HTTP, etc.) can reuse core
 
 ## Implementation Phases
 
@@ -581,11 +718,101 @@ src-tauri/src/
 - Batch operations for performance
 - Authentication and permissions
 
+## Migration Guide: Container Model Change (v0.2.0)
+
+### Breaking Change: First Element as Container
+
+**What Changed:**
+
+In the markdown import implementation, we changed how container nodes are created:
+
+- **Old behavior**: `create_nodes_from_markdown` created a wrapper container node with `container_title` as content, then all parsed markdown elements became children of that wrapper
+- **New behavior**: The first markdown element becomes the container node itself (no wrapper created)
+
+**Visual Example:**
+
+Given this markdown:
+```markdown
+# My Document
+Some text
+```
+
+**Old Model (pre-v0.2.0):**
+```
+Container (node_type="text", content="Test Title")  ← wrapper node
+  └─ Header (node_type="header", content="# My Document")
+     └─ Text (node_type="text", content="Some text")
+```
+
+**New Model (v0.2.0+):**
+```
+Header (node_type="header", content="# My Document")  ← IS the container
+  └─ Text (node_type="text", content="Some text")
+```
+
+**Key Differences:**
+
+1. **No wrapper node**: The first parsed element becomes the container
+2. **container_title parameter deprecated**: Still accepted for backward compatibility but effectively ignored
+3. **Container node structure**: Container has `container_node_id = None`, children have `container_node_id = <container_id>`
+4. **Export format**: When exporting, you get the actual first element content, not a wrapper title
+
+**Why This Change:**
+
+1. **Semantic correctness**: The document structure matches the markdown structure exactly
+2. **Database efficiency**: One less node per markdown import
+3. **Export clarity**: When exporting markdown, you get the actual content, not a synthetic wrapper
+4. **Simpler mental model**: What you see in markdown is what you get in the node structure
+
+**Migration Steps:**
+
+If you have existing code that depends on the old container model:
+
+1. **Update container queries**: Code expecting `container_node_id` to point to a wrapper node should expect it to point to the first markdown element instead
+2. **Re-import existing content**: To migrate existing markdown containers to the new structure, export and re-import them
+3. **Update tests**: Any tests asserting on container content should expect the first markdown element, not the `container_title` value
+4. **Export workflows**: If you're exporting markdown, the container node will now be the first element, not a wrapper with arbitrary title
+
+**Example Code Migration:**
+
+```rust
+// OLD: Expecting wrapper container
+let container = service.get_node(&container_id).await?;
+assert_eq!(container.node_type, "text"); // wrapper was always "text"
+assert_eq!(container.content, "My Title"); // container_title parameter
+
+// NEW: First element is container
+let container = service.get_node(&container_id).await?;
+assert_eq!(container.node_type, "header"); // could be header, text, code-block, etc.
+assert_eq!(container.content, "# My Document"); // actual first markdown element
+```
+
+**Backward Compatibility:**
+
+- The `container_title` parameter is still accepted in `create_nodes_from_markdown` to avoid breaking the API, but it has no effect on the node structure
+- Existing code that doesn't make assumptions about container structure will continue to work
+- The change is only breaking if you relied on the wrapper node existing or having specific content
+
+**Timeline:**
+
+- **Introduced**: Issue #309 (Markdown export feature)
+- **Rationale**: Commits e251b06 and ef1456c in PR #309 detail the refactoring
+- **Status**: Implemented as of v0.2.0
+
+---
+
 ## Related Issues
 
-- **#112**: Add MCP stdio server for AI agent access (Foundation)
+### Completed
+- **#112**: Add MCP stdio server for AI agent access (Foundation) - ✅ **MERGED**
 - **#111**: ~~Implement reactive state synchronization~~ (Closed - automatic with single-process)
-- **TBD**: Add create_nodes_from_markdown MCP method
+- **#296**: Add create_nodes_from_markdown MCP method - ✅ **MERGED**
+
+### In Progress / Planned
+- **#308**: Implement MCP initialization handshake and capability discovery (CRITICAL)
+- **#309**: Add get_markdown_from_node_id for markdown export (AI reading workflow)
+- **#310**: Add batch node operations (get_nodes_batch, update_nodes_batch, update_container_from_markdown)
+- **#312**: Auto-generate MCP tool schemas from Rust types (Future enhancement)
 
 ## References
 

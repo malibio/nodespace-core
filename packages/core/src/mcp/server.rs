@@ -201,6 +201,13 @@ async fn handle_request(
             )
             .await
         }
+        "get_markdown_from_node_id" => {
+            crate::mcp::handlers::markdown::handle_get_markdown_from_node_id(
+                &services.node_service,
+                request.params,
+            )
+            .await
+        }
 
         // Search operations (require initialization)
         "search_containers" => {
