@@ -82,10 +82,6 @@ describe('TextareaController', () => {
         eventCalls.contentChanged = eventCalls.contentChanged || [];
         eventCalls.contentChanged.push(content);
       },
-      headerLevelChanged: (level: number) => {
-        eventCalls.headerLevelChanged = eventCalls.headerLevelChanged || [];
-        eventCalls.headerLevelChanged.push(level);
-      },
       focus: () => {
         eventCalls.focus = eventCalls.focus || [];
         eventCalls.focus.push(true);

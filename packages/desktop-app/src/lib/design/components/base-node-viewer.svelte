@@ -1469,10 +1469,6 @@
                     nodeManager.updateNodeContent(node.id, content);
                     // Focus management handled by FocusManager (single source of truth)
                   }}
-                  on:headerLevelChanged={() => {
-                    // Header level change is handled automatically through content updates
-                    // Focus management handled by FocusManager (single source of truth)
-                  }}
                   on:nodeTypeChanged={(
                     e: CustomEvent<{
                       nodeType: string;

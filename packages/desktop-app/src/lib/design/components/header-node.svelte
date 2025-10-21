@@ -109,14 +109,6 @@
   }
 
   /**
-   * Handle header level changes from controller
-   */
-  function handleHeaderLevelChange(event: CustomEvent<{ level: number }>) {
-    headerLevel = event.detail.level;
-    dispatch('headerLevelChanged', { level: event.detail.level });
-  }
-
-  /**
    * Forward all other events to parent components
    */
   function forwardEvent<T>(eventName: string) {
@@ -137,7 +129,6 @@
     metadata={headerMetadata}
     on:createNewNode={forwardEvent('createNewNode')}
     on:contentChanged={handleContentChange}
-    on:headerLevelChanged={handleHeaderLevelChange}
     on:indentNode={forwardEvent('indentNode')}
     on:outdentNode={forwardEvent('outdentNode')}
     on:navigateArrow={forwardEvent('navigateArrow')}
