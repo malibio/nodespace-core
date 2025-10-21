@@ -78,14 +78,15 @@ describe('MentionSyncService', () => {
     });
 
     it('should deduplicate mentions', () => {
+      const dedupeTestId = '123e4567-e89b-12d3-a456-426614174111';
       const content = `
-        [@Node A](nodespace://same-id-1234567-e89b-12d3-a456-426614174000)
-        [@Node A Again](nodespace://same-id-1234567-e89b-12d3-a456-426614174000)
+        [@Node A](nodespace://${dedupeTestId})
+        [@Node A Again](nodespace://${dedupeTestId})
       `;
       const mentions = service.extractMentions(content);
 
       expect(mentions).toHaveLength(1);
-      expect(mentions[0]).toBe('same-id-1234567-e89b-12d3-a456-426614174000');
+      expect(mentions[0]).toBe(dedupeTestId);
     });
 
     it('should handle dedupe across markdown and plain formats', () => {

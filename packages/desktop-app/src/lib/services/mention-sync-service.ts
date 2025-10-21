@@ -9,10 +9,19 @@ import { backendAdapter } from './backend-adapter';
  * - Automatically create/delete mention relationships in the database
  * - Prevent self-references and invalid mentions
  *
- * Usage:
+ * Integration Example:
+ * Called automatically by `SharedNodeStore.setNode()` whenever node content changes.
  * ```typescript
- * const oldContent = 'Check [@Node A](nodespace://node-a-id)';
- * const newContent = 'Check [@Node B](nodespace://node-b-id)';
+ * // User edits node content from "See [@NodeA](...)" to "See [@NodeB](...)"
+ * // SharedNodeStore automatically calls:
+ * const oldContent = 'See [@Node A](nodespace://abc123-...)';
+ * const newContent = 'See [@Node B](nodespace://def456-...)';
+ * await mentionSyncService.syncMentions('node-123', oldContent, newContent);
+ * // Result: Mention relationship to abc123 deleted, relationship to def456 created
+ * ```
+ *
+ * Manual Usage (rarely needed - typically handled by SharedNodeStore):
+ * ```typescript
  * await mentionSyncService.syncMentions('node-123', oldContent, newContent);
  * ```
  */

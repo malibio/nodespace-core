@@ -1136,7 +1136,7 @@ export class HttpAdapter implements BackendAdapter {
   async getOutgoingMentions(nodeId: string): Promise<string[]> {
     try {
       const response = await globalThis.fetch(
-        `${this.baseUrl}/api/nodes/${nodeId}/outgoing-mentions`,
+        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/outgoing-mentions`,
         {
           method: 'GET'
         }
@@ -1151,7 +1151,7 @@ export class HttpAdapter implements BackendAdapter {
   async getIncomingMentions(nodeId: string): Promise<string[]> {
     try {
       const response = await globalThis.fetch(
-        `${this.baseUrl}/api/nodes/${nodeId}/incoming-mentions`,
+        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/incoming-mentions`,
         {
           method: 'GET'
         }
