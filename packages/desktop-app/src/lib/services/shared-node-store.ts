@@ -338,7 +338,11 @@ export class SharedNodeStore {
         // They will be persisted once user adds real content
         const isPlaceholder = isPlaceholderNode(updatedNode);
 
-        if (shouldPersist && !isPlaceholder) {
+        // CRITICAL: Skip persistence if batch is active for this node
+        // The batch will handle persistence atomically when committed
+        const hasBatchActive = this.activeBatches.has(nodeId);
+
+        if (shouldPersist && !isPlaceholder && !hasBatchActive) {
           // Delegate to PersistenceCoordinator for coordinated persistence
           // Use debounced mode for content changes (typing), immediate for structural changes
           const dependencies: Array<string | (() => Promise<void>)> = [];
@@ -1445,6 +1449,10 @@ export class SharedNodeStore {
     // Cancel existing batch if any (ensures clean state)
     this.cancelBatch(nodeId);
 
+    // CRITICAL: Cancel any pending non-batched persistence operations
+    // This prevents race between old debounced updates and new batch
+    PersistenceCoordinator.getInstance().cancelPending(nodeId);
+
     const batchId = `batch-${nodeId}-${Date.now()}`;
 
     // Auto-commit after timeout to prevent abandoned batches
@@ -1537,23 +1545,15 @@ export class SharedNodeStore {
     // Check if final state is a placeholder
     const isPlaceholder = isPlaceholderNode(finalNode);
 
-    // Check if this node is referenced by other nodes (beforeSiblingId, parentId, etc.)
-    const isReferenced = this.isNodeReferencedByOthers(nodeId);
-
-    // Persist if:
-    // 1. Node has real content (not a placeholder), OR
-    // 2. Node is a placeholder but is referenced (must persist for FOREIGN KEY)
-    const shouldPersist = !isPlaceholder || isReferenced;
+    // Only persist if node has real content (not a placeholder)
+    // Don't persist placeholders even if referenced - they'll persist when user adds content
+    // beforeSiblingId references will be updated via updateDeferredSiblingReferences()
+    const shouldPersist = !isPlaceholder;
 
     if (shouldPersist) {
-      if (isPlaceholder && isReferenced) {
-        // Placeholder is referenced - persist with empty/minimal content
-        console.log(`[SharedNodeStore] Persisting placeholder ${nodeId} for FOREIGN KEY reference`);
-        this.persistPlaceholderForReference(nodeId, batch.changes, finalNode);
-      } else {
-        // Normal persistence with full state
-        this.persistBatchedChanges(nodeId, batch.changes, finalNode);
-      }
+      // Always persist with full batched changes
+      // This handles both new nodes and fixing race conditions where old path persisted first
+      this.persistBatchedChanges(nodeId, batch.changes, finalNode);
     }
   }
 
@@ -1598,6 +1598,9 @@ export class SharedNodeStore {
    * Uses empty/minimal content to satisfy FOREIGN KEY constraints
    * Will be updated with real content when user adds it
    *
+   * NOTE: Removes beforeSiblingId to avoid FK violations when referenced node is also a placeholder
+   * The beforeSiblingId will be set later when both nodes have real content
+   *
    * @param nodeId - Placeholder node to persist
    * @param changes - Batched changes
    * @param finalNode - Final node state
@@ -1607,13 +1610,28 @@ export class SharedNodeStore {
     changes: Partial<Node>,
     finalNode: Node
   ): void {
-    // Persist with empty content for placeholder references
-    const minimalChanges: Partial<Node> = {
-      ...changes,
-      content: finalNode.content || '' // Keep current content (might be pattern like "1. ")
+    // Create minimal node for placeholder promotion
+    // Remove beforeSiblingId to avoid cascading FK violations with other placeholders
+    // IMPORTANT: Persist as 'text' nodeType to avoid backend validation errors
+    // The backend may reject placeholder content for specialized types (quote-block, code-block, etc.)
+    // Will be updated to correct nodeType when user adds real content
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { beforeSiblingId, ...nodeWithoutSibling } = finalNode;
+
+    const minimalNode: Node = {
+      ...nodeWithoutSibling,
+      beforeSiblingId: null, // Explicitly set to null (was stripped to avoid FK violations)
+      nodeType: 'text', // Force text nodeType for placeholder promotion
+      content: changes.content || finalNode.content || '' // Use batch content or fallback
     };
 
-    this.persistBatchedChanges(nodeId, minimalChanges, finalNode);
+    // Persist as text (will be updated to specialized type when content is added)
+    const minimalChanges: Partial<Node> = {
+      nodeType: 'text',
+      content: minimalNode.content
+    };
+
+    this.persistBatchedChanges(nodeId, minimalChanges, minimalNode);
   }
 
   /**
@@ -1656,16 +1674,32 @@ export class SharedNodeStore {
       nodeId,
       async () => {
         try {
+          // STRATEGY: Try UPDATE first (handles race conditions where old path persisted)
+          // Fall back to CREATE if node doesn't exist
           if (isPersistedToDatabase) {
-            // UPDATE existing node
             await tauriNodeService.updateNode(nodeId, changes);
           } else {
-            // CREATE new node
-            await tauriNodeService.createNode(finalNode);
-            this.persistedNodeIds.add(nodeId);
+            // Try CREATE, but if it fails due to race condition, try UPDATE instead
+            try {
+              await tauriNodeService.createNode(finalNode);
+              this.persistedNodeIds.add(nodeId);
 
-            // Update deferred sibling references
-            this.updateDeferredSiblingReferences(nodeId);
+              // Update deferred sibling references
+              this.updateDeferredSiblingReferences(nodeId);
+            } catch (createError) {
+              // If CREATE fails (node already exists from race), try UPDATE with batched changes
+              if (
+                createError instanceof Error &&
+                (createError.message.includes('UNIQUE constraint') ||
+                  createError.message.includes('already exists'))
+              ) {
+                // Race condition: node was persisted by old path, update with batched changes
+                await tauriNodeService.updateNode(nodeId, changes);
+                this.persistedNodeIds.add(nodeId);
+              } else {
+                throw createError;
+              }
+            }
           }
         } catch (dbError) {
           const error = dbError instanceof Error ? dbError : new Error(String(dbError));

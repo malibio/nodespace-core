@@ -1414,7 +1414,9 @@
 
                   // ATOMIC UPDATE: Use batch to ensure content + nodeType persist together
                   // This prevents race conditions where content persists before nodeType changes
-                  sharedNodeStore.startBatch(node.id, 1000);
+                  // Extended timeout (5s) to allow user to type content after pattern
+                  // Batch will auto-commit after 5s of inactivity or when user navigates away
+                  sharedNodeStore.startBatch(node.id, 5000);
 
                   // Update content if cleanedContent is provided (e.g., from contentTemplate)
                   if (cleanedContent !== undefined) {
@@ -1424,8 +1426,8 @@
                   // Update node type through proper API (triggers component re-render)
                   nodeManager.updateNodeType(node.id, newNodeType);
 
-                  // Commit batch atomically
-                  sharedNodeStore.commitBatch(node.id);
+                  // Don't commit immediately - let user finish typing
+                  // Batch will auto-commit after timeout or can be manually committed later
                 }}
                 on:slashCommandSelected={(
                   e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
