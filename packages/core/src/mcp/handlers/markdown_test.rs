@@ -184,7 +184,8 @@ code block
         let mut checked_count = 0;
         let mut unchecked_count = 0;
 
-        for node_id in node_ids.iter().skip(1) {
+        // Include all nodes (first task IS the container)
+        for node_id in node_ids.iter() {
             let node = service
                 .get_node(node_id.as_str().unwrap())
                 .await
@@ -201,7 +202,7 @@ code block
         }
 
         assert_eq!(checked_count, 1);
-        assert_eq!(unchecked_count, 2);
+        assert_eq!(unchecked_count, 2); // First unchecked IS container, third is also unchecked
     }
 
     #[tokio::test]
@@ -345,8 +346,8 @@ Regular paragraph text."#;
 
         // Container should be a root node
         assert!(container.is_root());
-        assert_eq!(container.node_type, "text");
-        assert_eq!(container.content, "Container Test");
+        assert_eq!(container.node_type, "header");
+        assert_eq!(container.content, "# Test");
         assert!(container.parent_id.is_none());
         assert!(container.container_node_id.is_none());
     }
@@ -413,10 +414,10 @@ Text content
 
         assert_eq!(result["success"], true);
 
-        // Find the text node
+        // Find the text node (it IS the container, so it's at index 0)
         let node_ids = result["node_ids"].as_array().unwrap();
         let text_node = service
-            .get_node(node_ids[1].as_str().unwrap())
+            .get_node(node_ids[0].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -459,17 +460,17 @@ Third paragraph"#;
 
         // Get all text nodes
         let first = service
-            .get_node(node_ids[1].as_str().unwrap())
+            .get_node(node_ids[0].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let second = service
-            .get_node(node_ids[2].as_str().unwrap())
+            .get_node(node_ids[1].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let third = service
-            .get_node(node_ids[3].as_str().unwrap())
+            .get_node(node_ids[2].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -480,19 +481,19 @@ Third paragraph"#;
         assert_eq!(third.content, "Third paragraph");
 
         // Verify before_sibling_id ordering (top-to-bottom)
-        // First node has no sibling before it
+        // First node (container) has no sibling before it
         assert_eq!(first.before_sibling_id, None);
 
         // Second node should come before first
         assert_eq!(
             second.before_sibling_id,
-            Some(node_ids[1].as_str().unwrap().to_string())
+            Some(node_ids[0].as_str().unwrap().to_string())
         );
 
         // Third node should come before second
         assert_eq!(
             third.before_sibling_id,
-            Some(node_ids[2].as_str().unwrap().to_string())
+            Some(node_ids[1].as_str().unwrap().to_string())
         );
     }
 
@@ -524,37 +525,37 @@ Text under H6"#;
 
         // Verify all heading levels exist
         let h1 = service
-            .get_node(node_ids[1].as_str().unwrap())
+            .get_node(node_ids[0].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let h2 = service
-            .get_node(node_ids[2].as_str().unwrap())
+            .get_node(node_ids[1].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let h3 = service
-            .get_node(node_ids[3].as_str().unwrap())
+            .get_node(node_ids[2].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let h4 = service
-            .get_node(node_ids[4].as_str().unwrap())
+            .get_node(node_ids[3].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let h5 = service
-            .get_node(node_ids[5].as_str().unwrap())
+            .get_node(node_ids[4].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let h6 = service
-            .get_node(node_ids[6].as_str().unwrap())
+            .get_node(node_ids[5].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
         let text = service
-            .get_node(node_ids[7].as_str().unwrap())
+            .get_node(node_ids[6].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -568,30 +569,30 @@ Text under H6"#;
         assert!(h6.content.starts_with("###### "));
 
         // Verify hierarchy: each heading should be child of previous
-        assert_eq!(h1.parent_id, None); // H1 has no parent
+        assert_eq!(h1.parent_id, None); // H1 has no parent (it's the container)
         assert_eq!(
             h2.parent_id,
-            Some(node_ids[1].as_str().unwrap().to_string())
+            Some(node_ids[0].as_str().unwrap().to_string())
         );
         assert_eq!(
             h3.parent_id,
-            Some(node_ids[2].as_str().unwrap().to_string())
+            Some(node_ids[1].as_str().unwrap().to_string())
         );
         assert_eq!(
             h4.parent_id,
-            Some(node_ids[3].as_str().unwrap().to_string())
+            Some(node_ids[2].as_str().unwrap().to_string())
         );
         assert_eq!(
             h5.parent_id,
-            Some(node_ids[4].as_str().unwrap().to_string())
+            Some(node_ids[3].as_str().unwrap().to_string())
         );
         assert_eq!(
             h6.parent_id,
-            Some(node_ids[5].as_str().unwrap().to_string())
+            Some(node_ids[4].as_str().unwrap().to_string())
         );
         assert_eq!(
             text.parent_id,
-            Some(node_ids[6].as_str().unwrap().to_string())
+            Some(node_ids[5].as_str().unwrap().to_string())
         );
     }
 
@@ -635,13 +636,12 @@ Text paragraph
 
         // Verify nodes array exists with metadata
         let nodes = result["nodes"].as_array().unwrap();
-        assert_eq!(nodes.len(), 4); // container + header + text + list
+        assert_eq!(nodes.len(), 3); // header (container) + text + list
 
         // Verify metadata structure
-        assert_eq!(nodes[0]["node_type"], "text"); // container
-        assert_eq!(nodes[1]["node_type"], "header");
-        assert_eq!(nodes[2]["node_type"], "text");
-        assert_eq!(nodes[3]["node_type"], "text"); // list item
+        assert_eq!(nodes[0]["node_type"], "header"); // container
+        assert_eq!(nodes[1]["node_type"], "text");
+        assert_eq!(nodes[2]["node_type"], "text"); // list item
 
         // Verify IDs match node_ids array
         let node_ids = result["node_ids"].as_array().unwrap();

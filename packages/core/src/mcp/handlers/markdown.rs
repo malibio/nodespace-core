@@ -454,7 +454,7 @@ async fn create_node(
     // All subsequent nodes belong to that container
     let node = if is_first_node {
         Node {
-            container_node_id: None,  // First node IS the container
+            container_node_id: None, // First node IS the container
             before_sibling_id,
             ..node
         }
@@ -583,10 +583,10 @@ pub async fn handle_get_markdown_from_node_id(
 
     // Export children if requested
     if params.include_children {
-        // Find top-level nodes (nodes with no parent_id)
+        // Find direct children of the container node
         let mut top_level_nodes: Vec<&Node> = nodes_map
             .values()
-            .filter(|n| n.parent_id.is_none())
+            .filter(|n| n.parent_id.as_ref() == Some(&root_node.id))
             .collect();
 
         // Sort by sibling order
