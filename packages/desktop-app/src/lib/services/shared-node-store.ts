@@ -109,6 +109,7 @@ export class SharedNodeStore {
       batchId: string;
       createdAt: number;
       timeout: ReturnType<typeof setTimeout>;
+      timeoutMs: number;
     }
   >();
 
@@ -232,6 +233,19 @@ export class SharedNodeStore {
       if (options.batch.commitImmediately) {
         this.commitBatch(nodeId);
       }
+      return;
+    }
+
+    // CRITICAL: Auto-restart batch for pattern-converted node types
+    // After a batch commits, subsequent edits should ALSO be batched to maintain consistency
+    // This prevents falling back to old debounced path which can cause partial content loss
+    const existingNode = this.nodes.get(nodeId);
+    const requiresBatching =
+      existingNode && ['quote-block', 'code-block', 'ordered-list'].includes(existingNode.nodeType);
+
+    if (requiresBatching && changes.content !== undefined) {
+      this.startBatch(nodeId, 2000);
+      this.addToBatch(nodeId, changes);
       return;
     }
 
@@ -1434,7 +1448,7 @@ export class SharedNodeStore {
    * - Ordered lists: content change + nodeType change must be atomic
    *
    * @param nodeId - Node to batch updates for
-   * @param timeoutMs - Auto-commit timeout in ms (default: 1000ms)
+   * @param timeoutMs - Auto-commit timeout in ms (default: 2000ms = 2 seconds)
    * @returns Batch ID for tracking
    *
    * @example
@@ -1445,7 +1459,7 @@ export class SharedNodeStore {
    * store.commitBatch(nodeId); // Atomically persists both changes
    * ```
    */
-  startBatch(nodeId: string, timeoutMs = 1000): string {
+  startBatch(nodeId: string, timeoutMs = 2000): string {
     // Cancel existing batch if any (ensures clean state)
     this.cancelBatch(nodeId);
 
@@ -1466,7 +1480,8 @@ export class SharedNodeStore {
       changes: {},
       batchId,
       createdAt: Date.now(),
-      timeout
+      timeout,
+      timeoutMs
     });
 
     return batchId;
@@ -1507,6 +1522,10 @@ export class SharedNodeStore {
       // Notify subscribers of optimistic update
       this.notifySubscribers(nodeId, updatedNode, { type: 'viewer', viewerId: 'batch' });
     }
+
+    // Reset timeout to extend batch lifetime while user is actively making changes
+    // This ensures batch only commits after true inactivity (no changes for N seconds)
+    this.resetBatchTimeout(nodeId);
   }
 
   /**
@@ -1569,6 +1588,45 @@ export class SharedNodeStore {
       clearTimeout(batch.timeout);
       this.activeBatches.delete(nodeId);
     }
+  }
+
+  /**
+   * Reset the auto-commit timeout for an active batch
+   * Extends the batch lifetime when user continues making changes
+   *
+   * This implements "true inactivity" timeout:
+   * - Timer resets on every change (content, nodeType, metadata, etc.)
+   * - Batch only commits after N seconds of NO activity
+   * - Prevents premature commits while user is actively typing
+   *
+   * @param nodeId - Node whose batch timeout to reset
+   *
+   * @example
+   * ```typescript
+   * store.startBatch(nodeId, 2000); // Start with 2s timeout
+   * // ... user types ...
+   * store.addToBatch(nodeId, { content: 'new' }); // Resets timeout to 2s
+   * // ... user types more ...
+   * store.addToBatch(nodeId, { content: 'newer' }); // Resets timeout to 2s again
+   * // ... after 2s of no activity, auto-commit fires
+   * ```
+   */
+  private resetBatchTimeout(nodeId: string): void {
+    const batch = this.activeBatches.get(nodeId);
+    if (!batch) {
+      return; // No batch active
+    }
+
+    // Clear existing timeout
+    clearTimeout(batch.timeout);
+
+    // Create new timeout with same duration
+    const timeout = setTimeout(() => {
+      this.commitBatch(nodeId);
+    }, batch.timeoutMs);
+
+    // Update batch with new timeout (keep other properties)
+    batch.timeout = timeout;
   }
 
   /**

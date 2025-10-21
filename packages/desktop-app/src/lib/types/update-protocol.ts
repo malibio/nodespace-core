@@ -102,7 +102,7 @@ export interface BatchOptions {
   batchId?: string;
   /** Auto-create batch for this update */
   autoBatch?: boolean;
-  /** Max time before auto-commit in ms (default: 1000ms) */
+  /** Max time before auto-commit in ms (default: 2000ms = 2 seconds) */
   batchTimeout?: number;
   /** Immediately commit batch after this update */
   commitImmediately?: boolean;
