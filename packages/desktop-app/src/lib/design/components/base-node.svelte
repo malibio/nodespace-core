@@ -365,7 +365,10 @@
 
       // Don't update nodeType locally - let parent handle it to avoid double re-renders
       // The parent (base-node-viewer) will update nodeType via nodeManager and trigger autoFocus
-      // Note: Header level changes are handled automatically by HeaderNode's $effect
+      //
+      // ARCHITECTURE (Issue #311): Header level changes are handled by HeaderNode component via $effect
+      // TextareaController only detects pattern → header conversion, NOT level changes within headers
+      // This separation ensures BaseNode remains node-type agnostic
     }
 
     // Hide slash commands and clear state first
