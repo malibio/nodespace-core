@@ -192,6 +192,37 @@ fn get_tool_schemas() -> Value {
                 },
                 "required": ["markdown_content", "container_title"]
             }
+        },
+        {
+            "name": "search_containers",
+            "description": "Search containers using natural language semantic similarity (vector embeddings)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query (e.g., 'Q4 planning tasks')"
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "description": "Similarity threshold 0.0-1.0, lower = more similar (default: 0.7)",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.7
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of results (default: 20)",
+                        "default": 20
+                    },
+                    "exact": {
+                        "type": "boolean",
+                        "description": "Use exact cosine distance instead of approximate DiskANN (default: false)",
+                        "default": false
+                    }
+                },
+                "required": ["query"]
+            }
         }
     ])
 }
