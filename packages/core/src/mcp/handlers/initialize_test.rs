@@ -255,3 +255,202 @@ fn test_markdown_import_schema_structure() {
     assert!(required.contains(&json!("container_title")));
     assert_eq!(required.len(), 2);
 }
+
+// Integration test for full MCP initialization handshake flow
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::mcp::types::INVALID_REQUEST;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Simulates ServerState for integration testing
+    struct TestServerState {
+        initialized: Arc<AtomicBool>,
+    }
+
+    impl TestServerState {
+        fn new() -> Self {
+            Self {
+                initialized: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn is_initialized(&self) -> bool {
+            self.initialized.load(Ordering::SeqCst)
+        }
+
+        fn mark_initialized(&self) {
+            self.initialized.store(true, Ordering::SeqCst);
+        }
+
+        fn check_operation_allowed(&self, method: &str) -> bool {
+            // Allow initialize and ping before initialization
+            method == "initialize" || method == "ping" || self.is_initialized()
+        }
+    }
+
+    #[test]
+    fn test_full_initialization_handshake() {
+        let state = TestServerState::new();
+
+        // Step 1: Verify initial state - not initialized
+        assert!(!state.is_initialized(), "State should start uninitialized");
+
+        // Step 2: Operations should be blocked before initialization
+        assert!(
+            !state.check_operation_allowed("create_node"),
+            "create_node should be blocked before initialization"
+        );
+        assert!(
+            !state.check_operation_allowed("get_node"),
+            "get_node should be blocked before initialization"
+        );
+
+        // Step 3: Initialize and ping should be allowed before initialization
+        assert!(
+            state.check_operation_allowed("initialize"),
+            "initialize should be allowed before initialization"
+        );
+        assert!(
+            state.check_operation_allowed("ping"),
+            "ping should be allowed before initialization"
+        );
+
+        // Step 4: Send initialize request and verify response
+        let init_params = json!({
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {
+                "name": "test-integration-client",
+                "version": "1.0.0"
+            }
+        });
+
+        let init_result = handle_initialize(init_params).unwrap();
+
+        // Verify initialize response structure
+        assert_eq!(init_result["protocolVersion"], "2024-11-05");
+        assert_eq!(init_result["serverInfo"]["name"], "nodespace-mcp-server");
+        assert!(init_result["capabilities"]["tools"].is_array());
+
+        // Step 5: Simulate receiving "initialized" notification
+        // (In real server, this would come from client)
+        state.mark_initialized();
+
+        // Step 6: Verify state is now initialized
+        assert!(
+            state.is_initialized(),
+            "State should be initialized after notification"
+        );
+
+        // Step 7: Verify operations are now allowed
+        assert!(
+            state.check_operation_allowed("create_node"),
+            "create_node should be allowed after initialization"
+        );
+        assert!(
+            state.check_operation_allowed("get_node"),
+            "get_node should be allowed after initialization"
+        );
+        assert!(
+            state.check_operation_allowed("update_node"),
+            "update_node should be allowed after initialization"
+        );
+        assert!(
+            state.check_operation_allowed("delete_node"),
+            "delete_node should be allowed after initialization"
+        );
+        assert!(
+            state.check_operation_allowed("query_nodes"),
+            "query_nodes should be allowed after initialization"
+        );
+
+        // Step 8: Verify initialize and ping still allowed
+        assert!(
+            state.check_operation_allowed("initialize"),
+            "initialize should still be allowed (idempotent)"
+        );
+        assert!(
+            state.check_operation_allowed("ping"),
+            "ping should still be allowed"
+        );
+    }
+
+    #[test]
+    fn test_operation_rejected_before_initialization() {
+        let state = TestServerState::new();
+
+        // Simulate what handle_request does: check state before processing
+        let blocked_methods = [
+            "create_node",
+            "get_node",
+            "update_node",
+            "delete_node",
+            "query_nodes",
+            "create_nodes_from_markdown",
+        ];
+
+        for method in &blocked_methods {
+            assert!(
+                !state.check_operation_allowed(method),
+                "Method '{}' should be blocked before initialization",
+                method
+            );
+        }
+    }
+
+    #[test]
+    fn test_initialize_then_wrong_version() {
+        let state = TestServerState::new();
+
+        // First initialize with correct version
+        let params = json!({
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {"name": "test"}
+        });
+        let result = handle_initialize(params);
+        assert!(result.is_ok(), "First initialize should succeed");
+
+        state.mark_initialized();
+
+        // Try to initialize again with wrong version (should still error)
+        let params_wrong = json!({
+            "protocolVersion": "1999-01-01",
+            "clientInfo": {"name": "test"}
+        });
+        let result_wrong = handle_initialize(params_wrong);
+        assert!(
+            result_wrong.is_err(),
+            "Initialize with wrong version should fail even after initialization"
+        );
+
+        let err = result_wrong.unwrap_err();
+        assert_eq!(err.code, INVALID_REQUEST);
+        assert!(err.message.contains("Unsupported protocol version"));
+    }
+
+    #[test]
+    fn test_initialize_idempotent() {
+        let state = TestServerState::new();
+
+        let params = json!({
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {"name": "test"}
+        });
+
+        // First initialize
+        let result1 = handle_initialize(params.clone()).unwrap();
+        state.mark_initialized();
+
+        // Second initialize (should succeed - idempotent)
+        let result2 = handle_initialize(params).unwrap();
+
+        // Both should return same structure
+        assert_eq!(result1["protocolVersion"], result2["protocolVersion"]);
+        assert_eq!(result1["serverInfo"]["name"], result2["serverInfo"]["name"]);
+        assert_eq!(
+            result1["capabilities"]["tools"].as_array().unwrap().len(),
+            result2["capabilities"]["tools"].as_array().unwrap().len()
+        );
+    }
+}

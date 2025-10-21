@@ -78,43 +78,76 @@ pub async fn run_mcp_server_with_callback(
         debug!("📥 MCP message: {}", line);
 
         // Try parsing as request first (has id field)
-        if let Ok(request) = serde_json::from_str::<MCPRequest>(&line) {
-            let request_id = request.id;
-            let method = request.method.clone();
+        match serde_json::from_str::<MCPRequest>(&line) {
+            Ok(request) => {
+                let request_id = request.id;
+                let method = request.method.clone();
 
-            // Handle request with state tracking
-            let response = handle_request(&node_service, &state, request).await;
+                // Handle request with state tracking
+                let response = handle_request(&node_service, &state, request).await;
 
-            // Invoke callback on successful response
-            if let Some(ref callback) = callback {
-                if let Some(ref result) = response.result {
-                    callback(&method, result);
+                // Invoke callback on successful response
+                if let Some(ref callback) = callback {
+                    if let Some(ref result) = response.result {
+                        callback(&method, result);
+                    }
+                }
+
+                debug!(
+                    "📤 MCP response for method '{}' (id={})",
+                    method, request_id
+                );
+
+                // Write response
+                write_response(&mut writer, &response).await?;
+                continue;
+            }
+            Err(request_err) => {
+                // Try parsing as notification (no id field)
+                match serde_json::from_str::<MCPNotification>(&line) {
+                    Ok(notification) => {
+                        handle_notification(&state, notification).await;
+                        continue; // No response for notifications
+                    }
+                    Err(notification_err) => {
+                        // Neither request nor notification - provide detailed diagnostics
+                        warn!(
+                            "❌ Failed to parse JSON-RPC message. Request parse error: {}. Notification parse error: {}. Message: {}",
+                            request_err, notification_err, line
+                        );
+
+                        // Try to determine the issue type for better error message
+                        let error_message = if line.trim().is_empty() {
+                            "Empty message received".to_string()
+                        } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                            // Valid JSON but not a valid JSON-RPC message
+                            if value.get("jsonrpc").is_none() {
+                                "Missing 'jsonrpc' field (must be \"2.0\")".to_string()
+                            } else if value.get("jsonrpc").and_then(|v| v.as_str()) != Some("2.0") {
+                                format!(
+                                    "Invalid 'jsonrpc' version: {:?} (must be \"2.0\")",
+                                    value.get("jsonrpc")
+                                )
+                            } else if value.get("method").is_none() {
+                                "Missing 'method' field".to_string()
+                            } else if value.get("id").is_some() {
+                                // Has id, so should be request
+                                format!("Invalid request structure: {}", request_err)
+                            } else {
+                                // No id, so should be notification
+                                format!("Invalid notification structure: {}", notification_err)
+                            }
+                        } else {
+                            format!("Invalid JSON: {}", request_err)
+                        };
+
+                        let error_response =
+                            MCPResponse::error(0, MCPError::parse_error(error_message));
+                        write_response(&mut writer, &error_response).await?;
+                    }
                 }
             }
-
-            debug!(
-                "📤 MCP response for method '{}' (id={})",
-                method, request_id
-            );
-
-            // Write response
-            write_response(&mut writer, &response).await?;
-            continue;
         }
-
-        // Try parsing as notification (no id field)
-        if let Ok(notification) = serde_json::from_str::<MCPNotification>(&line) {
-            handle_notification(&state, notification).await;
-            continue; // No response for notifications
-        }
-
-        // Neither request nor notification - parse error
-        warn!("❌ Invalid JSON-RPC message: {}", line);
-        let error_response = MCPResponse::error(
-            0,
-            MCPError::parse_error(format!("Invalid JSON-RPC message: {}", line)),
-        );
-        write_response(&mut writer, &error_response).await?;
     }
 
     info!("🔌 MCP stdio server stopped (stdin closed)");
