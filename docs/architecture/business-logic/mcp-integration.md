@@ -718,6 +718,89 @@ This separation ensures:
 - Batch operations for performance
 - Authentication and permissions
 
+## Migration Guide: Container Model Change (v0.2.0)
+
+### Breaking Change: First Element as Container
+
+**What Changed:**
+
+In the markdown import implementation, we changed how container nodes are created:
+
+- **Old behavior**: `create_nodes_from_markdown` created a wrapper container node with `container_title` as content, then all parsed markdown elements became children of that wrapper
+- **New behavior**: The first markdown element becomes the container node itself (no wrapper created)
+
+**Visual Example:**
+
+Given this markdown:
+```markdown
+# My Document
+Some text
+```
+
+**Old Model (pre-v0.2.0):**
+```
+Container (node_type="text", content="Test Title")  ← wrapper node
+  └─ Header (node_type="header", content="# My Document")
+     └─ Text (node_type="text", content="Some text")
+```
+
+**New Model (v0.2.0+):**
+```
+Header (node_type="header", content="# My Document")  ← IS the container
+  └─ Text (node_type="text", content="Some text")
+```
+
+**Key Differences:**
+
+1. **No wrapper node**: The first parsed element becomes the container
+2. **container_title parameter deprecated**: Still accepted for backward compatibility but effectively ignored
+3. **Container node structure**: Container has `container_node_id = None`, children have `container_node_id = <container_id>`
+4. **Export format**: When exporting, you get the actual first element content, not a wrapper title
+
+**Why This Change:**
+
+1. **Semantic correctness**: The document structure matches the markdown structure exactly
+2. **Database efficiency**: One less node per markdown import
+3. **Export clarity**: When exporting markdown, you get the actual content, not a synthetic wrapper
+4. **Simpler mental model**: What you see in markdown is what you get in the node structure
+
+**Migration Steps:**
+
+If you have existing code that depends on the old container model:
+
+1. **Update container queries**: Code expecting `container_node_id` to point to a wrapper node should expect it to point to the first markdown element instead
+2. **Re-import existing content**: To migrate existing markdown containers to the new structure, export and re-import them
+3. **Update tests**: Any tests asserting on container content should expect the first markdown element, not the `container_title` value
+4. **Export workflows**: If you're exporting markdown, the container node will now be the first element, not a wrapper with arbitrary title
+
+**Example Code Migration:**
+
+```rust
+// OLD: Expecting wrapper container
+let container = service.get_node(&container_id).await?;
+assert_eq!(container.node_type, "text"); // wrapper was always "text"
+assert_eq!(container.content, "My Title"); // container_title parameter
+
+// NEW: First element is container
+let container = service.get_node(&container_id).await?;
+assert_eq!(container.node_type, "header"); // could be header, text, code-block, etc.
+assert_eq!(container.content, "# My Document"); // actual first markdown element
+```
+
+**Backward Compatibility:**
+
+- The `container_title` parameter is still accepted in `create_nodes_from_markdown` to avoid breaking the API, but it has no effect on the node structure
+- Existing code that doesn't make assumptions about container structure will continue to work
+- The change is only breaking if you relied on the wrapper node existing or having specific content
+
+**Timeline:**
+
+- **Introduced**: Issue #309 (Markdown export feature)
+- **Rationale**: Commits e251b06 and ef1456c in PR #309 detail the refactoring
+- **Status**: Implemented as of v0.2.0
+
+---
+
 ## Related Issues
 
 ### Completed

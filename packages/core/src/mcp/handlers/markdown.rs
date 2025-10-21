@@ -550,14 +550,14 @@ pub async fn handle_get_markdown_from_node_id(
     let params: GetMarkdownParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
-    // Validate node exists
+    // Fetch the root node first to validate it exists
     let root_node = service
         .get_node(&params.node_id)
         .await
         .map_err(|e| MCPError::internal_error(format!("Failed to get node: {}", e)))?
         .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
 
-    // Bulk fetch all nodes in this container (efficient single query)
+    // Bulk fetch all child nodes in this container (efficient single query)
     use crate::models::{NodeFilter, OrderBy};
     let filter = NodeFilter::new()
         .with_container_node_id(root_node.id.clone())
@@ -569,9 +569,13 @@ pub async fn handle_get_markdown_from_node_id(
         .map_err(|e| MCPError::internal_error(format!("Failed to query container nodes: {}", e)))?;
 
     // Build a lookup map for efficient hierarchy reconstruction
+    // Include the root node in the map for complete hierarchy
     use std::collections::HashMap;
-    let nodes_map: HashMap<String, Node> =
+    let mut nodes_map: HashMap<String, Node> =
         all_nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+
+    // Add root node to the map
+    nodes_map.insert(root_node.id.clone(), root_node.clone());
 
     // Build markdown by traversing hierarchy in memory
     let mut markdown = String::new();
@@ -584,6 +588,8 @@ pub async fn handle_get_markdown_from_node_id(
     // Export children if requested
     if params.include_children {
         // Find direct children of the container node
+        // Note: With first-element-as-container model, children have parent_id = container_id
+        // (not None - the container itself has parent_id = None or points to its parent)
         let mut top_level_nodes: Vec<&Node> = nodes_map
             .values()
             .filter(|n| n.parent_id.as_ref() == Some(&root_node.id))
@@ -624,7 +630,14 @@ fn export_node_hierarchy(
 ) -> Result<(), MCPError> {
     // Prevent infinite recursion
     if current_depth >= max_depth {
-        tracing::warn!("Max depth {} reached at node {}", max_depth, node.id);
+        let content_preview: String = node.content.chars().take(50).collect();
+        tracing::warn!(
+            "Max depth {} reached at node {} (content: {}{})",
+            max_depth,
+            node.id,
+            content_preview,
+            if node.content.len() > 50 { "..." } else { "" }
+        );
         return Ok(());
     }
 
@@ -662,35 +675,72 @@ fn export_node_hierarchy(
 }
 
 /// Sort nodes by their before_sibling_id chain to maintain visual order
+///
+/// This function reconstructs the sibling order by following the before_sibling_id chain.
+/// The before_sibling_id field means "I come AFTER this node", so we build a forward map
+/// to traverse from head to tail.
 fn sort_by_sibling_chain(nodes: &mut Vec<&Node>) {
     if nodes.is_empty() {
         return;
     }
 
-    // Build a map of before_sibling_id -> node for quick lookup
-    let before_map: std::collections::HashMap<Option<String>, &Node> = nodes
-        .iter()
-        .map(|n| (n.before_sibling_id.clone(), *n))
-        .collect();
+    // Build forward map: before_sibling_id -> nodes that come after it
+    // Using Vec to detect duplicates (multiple nodes with same before_sibling_id)
+    use std::collections::HashMap;
+    let mut after_map: HashMap<Option<String>, Vec<&Node>> = HashMap::new();
 
-    // Find the head of the chain (node with no before_sibling_id or before_sibling not in list)
+    for node in nodes.iter() {
+        after_map
+            .entry(node.before_sibling_id.clone())
+            .or_default()
+            .push(*node);
+    }
+
+    // Detect duplicate before_sibling_ids (data integrity issue)
+    for (before_id, nodes_after) in &after_map {
+        if nodes_after.len() > 1 {
+            tracing::warn!(
+                "Multiple nodes have same before_sibling_id: {:?}. This indicates corrupted sibling chain data.",
+                before_id
+            );
+        }
+    }
+
+    // Find head: node with None or before_sibling not in this set
+    use std::collections::HashSet;
+    let node_ids: HashSet<_> = nodes.iter().map(|n| &n.id).collect();
     let head = nodes
         .iter()
         .find(|n| {
             n.before_sibling_id.is_none()
-                || !nodes
-                    .iter()
-                    .any(|other| Some(&other.id) == n.before_sibling_id.as_ref())
+                || !node_ids.contains(n.before_sibling_id.as_ref().unwrap())
         })
         .copied();
 
     if let Some(mut current) = head {
         let mut sorted = vec![current];
+        let mut visited: HashSet<&str> = HashSet::new();
+        visited.insert(&current.id);
 
-        // Follow the chain forward
-        while let Some(next) = before_map.get(&Some(current.id.clone())) {
-            sorted.push(*next);
-            current = next;
+        // Follow the chain forward using after_map
+        // Use visited set to detect cycles
+        while let Some(next_nodes) = after_map.get(&Some(current.id.clone())) {
+            if let Some(&next) = next_nodes.first() {
+                // Cycle detection: if we've seen this node before, we have a circular reference
+                if visited.contains(next.id.as_str()) {
+                    tracing::error!(
+                        "Circular sibling chain detected at node {}. This is a data corruption issue.",
+                        next.id
+                    );
+                    break;
+                }
+
+                visited.insert(&next.id);
+                sorted.push(next);
+                current = next;
+            } else {
+                break;
+            }
         }
 
         // Replace the original vector with sorted nodes

@@ -6,6 +6,9 @@
 use crate::mcp::types::MCPError;
 use serde_json::{json, Value};
 
+/// MCP protocol version supported by this server
+const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+
 /// Handle MCP initialize request
 ///
 /// This is the FIRST method called when a client connects.
@@ -41,19 +44,18 @@ pub fn handle_initialize(params: Value) -> Result<Value, MCPError> {
     // Version negotiation: Check if we support client's version
     // MCP spec: Server should respond with same version if supported,
     // or suggest alternative version
-    let supported_version = "2024-11-05";
-    if client_version != supported_version {
+    if client_version != MCP_PROTOCOL_VERSION {
         // For now, only support latest version
         // Future: Could negotiate older versions
         return Err(MCPError::invalid_request(format!(
             "Unsupported protocol version: {}. Server supports: {}",
-            client_version, supported_version
+            client_version, MCP_PROTOCOL_VERSION
         )));
     }
 
     // Build capability response
     Ok(json!({
-        "protocolVersion": supported_version,
+        "protocolVersion": MCP_PROTOCOL_VERSION,
         "serverInfo": {
             "name": "nodespace-mcp-server",
             "version": env!("CARGO_PKG_VERSION")
