@@ -37,11 +37,15 @@ Some content under subtitle."#;
             .unwrap();
 
         assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 4); // container + 2 headers + 1 text
+        assert_eq!(result["nodes_created"], 3); // First header IS container + 1 header + 1 text
 
         // Verify node_ids array
         let node_ids = result["node_ids"].as_array().unwrap();
-        assert_eq!(node_ids.len(), 4);
+        assert_eq!(node_ids.len(), 3);
+
+        // Verify first node is the container (# Main Title)
+        let container_id = result["container_node_id"].as_str().unwrap();
+        assert_eq!(container_id, node_ids[0]);
     }
 
     #[tokio::test]
@@ -64,14 +68,14 @@ Text under second H2"#;
             .unwrap();
 
         assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 6); // container + 4 headers + 1 text
+        assert_eq!(result["nodes_created"], 5); // First header IS container + 3 headers + 1 text
 
-        // Get all created nodes
+        // Get the container node (first element - # H1)
         let container_id = result["container_node_id"].as_str().unwrap();
         let container = service.get_node(container_id).await.unwrap().unwrap();
 
-        assert_eq!(container.content, "Hierarchy Test");
-        assert_eq!(container.node_type, "text");
+        assert_eq!(container.content, "# H1"); // First header IS container
+        assert_eq!(container.node_type, "header");
         assert!(container.is_root()); // container_node_id should be None
     }
 
@@ -150,8 +154,8 @@ code block
             .unwrap();
 
         assert_eq!(result["success"], true);
-        // container + 4 list items
-        assert_eq!(result["nodes_created"], 5);
+        // First list item IS container + 3 list items
+        assert_eq!(result["nodes_created"], 4);
     }
 
     #[tokio::test]
@@ -172,7 +176,7 @@ code block
             .unwrap();
 
         assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 4); // container + 3 tasks
+        assert_eq!(result["nodes_created"], 3); // First task IS container + 2 tasks
 
         // Verify task content (checkboxes in content, no properties)
         let node_ids = result["node_ids"].as_array().unwrap();
@@ -220,12 +224,12 @@ fn main() {
             .unwrap();
 
         assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 2); // container + code block
+        assert_eq!(result["nodes_created"], 1); // Code block IS container
 
-        // Verify code block node
+        // Verify code block node (it IS the container)
         let node_ids = result["node_ids"].as_array().unwrap();
         let code_node = service
-            .get_node(node_ids[1].as_str().unwrap())
+            .get_node(node_ids[0].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -234,6 +238,8 @@ fn main() {
         assert!(code_node.content.starts_with("```rust"));
         assert!(code_node.content.contains("fn main()"));
         // Language is in content, not properties
+        // Verify it's the container (container_node_id is None)
+        assert!(code_node.container_node_id.is_none());
     }
 
     #[tokio::test]
@@ -255,16 +261,17 @@ plain code
 
         assert_eq!(result["success"], true);
 
-        // Verify code block content (no language fence)
+        // Verify code block content (no language fence) - it IS the container
         let node_ids = result["node_ids"].as_array().unwrap();
         let code_node = service
-            .get_node(node_ids[1].as_str().unwrap())
+            .get_node(node_ids[0].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
 
         assert_eq!(code_node.node_type, "code-block");
         assert!(code_node.content.starts_with("```\n"));
+        assert!(code_node.container_node_id.is_none()); // It's the container
     }
 
     #[tokio::test]
@@ -300,7 +307,7 @@ Regular paragraph text."#;
 
         // container + 3 headers + 2 tasks + code block + quote + 2 text nodes (quote content + paragraph)
         // Note: Quote content appears as text before being wrapped in quote-block
-        assert_eq!(result["nodes_created"], 10);
+        assert_eq!(result["nodes_created"], 9); // First node IS container
     }
 
     #[tokio::test]
@@ -312,12 +319,10 @@ Regular paragraph text."#;
             "container_title": "Empty Document"
         });
 
-        let result = handle_create_nodes_from_markdown(&service, params)
-            .await
-            .unwrap();
+        let result = handle_create_nodes_from_markdown(&service, params).await;
 
-        assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 1); // Just container
+        // Empty markdown should fail - no container node can be created
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -448,7 +453,7 @@ Third paragraph"#;
             .unwrap();
 
         assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 4); // container + 3 paragraphs
+        assert_eq!(result["nodes_created"], 3); // First paragraph IS container + 2 paragraphs
 
         let node_ids = result["node_ids"].as_array().unwrap();
 
@@ -513,7 +518,7 @@ Text under H6"#;
             .unwrap();
 
         assert_eq!(result["success"], true);
-        assert_eq!(result["nodes_created"], 8); // container + 6 headers + 1 text
+        assert_eq!(result["nodes_created"], 7); // First header IS container + 5 headers + 1 text
 
         let node_ids = result["node_ids"].as_array().unwrap();
 
@@ -678,13 +683,12 @@ Text paragraph
             .unwrap();
         let exported_markdown = result["markdown"].as_str().unwrap();
 
-        // Verify output contains content (including container)
-        assert!(exported_markdown.contains("Test")); // container title
-        assert!(exported_markdown.contains("# Hello World"));
+        // Verify output contains content (first header IS container)
+        assert!(exported_markdown.contains("# Hello World")); // First element (container)
         assert!(exported_markdown.contains("- Item 1"));
 
-        // Verify node count (container + header + list item = 3)
-        assert_eq!(result["node_count"].as_u64().unwrap(), 3);
+        // Verify node count (header (container) + list item = 2)
+        assert_eq!(result["node_count"].as_u64().unwrap(), 2);
         assert_eq!(result["root_node_id"].as_str().unwrap(), root_id);
     }
 
@@ -719,19 +723,18 @@ Text paragraph
             .unwrap();
         let exported_markdown = result["markdown"].as_str().unwrap();
 
-        // Should include container and # Root (within max_depth=2)
-        assert!(exported_markdown.contains("Deep Hierarchy")); // container
-        assert!(exported_markdown.contains("# Root"));
+        // Should include # Root (container) and ## Child 1 (within max_depth=2)
+        assert!(exported_markdown.contains("# Root")); // First element (container)
+        assert!(exported_markdown.contains("## Child 1"));
 
         // Verify max_depth is working
-        // With max_depth=2: depth 0 (container) and depth 1 (# Root) are included
-        // Depth 2 (## Child 1) would be >= max_depth, so it's excluded
-        assert!(!exported_markdown.contains("## Child 1"));
+        // With max_depth=2: depth 0 (# Root container) and depth 1 (## Child 1) are included
+        // Depth 2 (### Child 2) would be >= max_depth, so it's excluded
         assert!(!exported_markdown.contains("### Child 2"));
         assert!(!exported_markdown.contains("#### Child 3"));
 
         let node_count = result["node_count"].as_u64().unwrap();
-        assert_eq!(node_count, 2); // container + # Root
+        assert_eq!(node_count, 2); // # Root (container) + ## Child 1
     }
 
     #[tokio::test]
@@ -762,8 +765,9 @@ Text paragraph
             .unwrap();
         let exported_markdown = result["markdown"].as_str().unwrap();
 
-        // Should only contain container node (children not included)
-        assert!(exported_markdown.contains("Test"));
+        // Should only contain # Root (first element IS container, children not included)
+        assert!(exported_markdown.contains("# Root"));
+        assert!(!exported_markdown.contains("## Child"));
         assert_eq!(result["node_count"].as_u64().unwrap(), 1);
     }
 

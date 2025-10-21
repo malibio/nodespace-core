@@ -69,28 +69,28 @@ struct ParserContext {
     node_ids: Vec<String>,
     /// All created nodes with metadata (id + type)
     nodes: Vec<NodeMetadata>,
-    /// Container node ID (all nodes belong to this container)
-    container_node_id: String,
+    /// Container node ID (first node created becomes the container)
+    container_node_id: Option<String>,
     /// Current list item counter for ordered lists (tracks the number prefix for ordered lists)
     ordered_list_counter: usize,
     /// Whether we're in an ordered list
     in_ordered_list: bool,
+    /// Whether the first node has been created (becomes the container)
+    first_node_created: bool,
 }
 
 impl ParserContext {
-    fn new(container_node_id: String) -> Self {
+    fn new_empty() -> Self {
         Self {
             heading_stack: Vec::new(),
             list_stack: Vec::new(),
             last_sibling: None,
-            node_ids: vec![container_node_id.clone()],
-            nodes: vec![NodeMetadata {
-                id: container_node_id.clone(),
-                node_type: "text".to_string(),
-            }],
-            container_node_id,
+            node_ids: Vec::new(),
+            nodes: Vec::new(),
+            container_node_id: None,
             ordered_list_counter: 0,
             in_ordered_list: false,
+            first_node_created: false,
         }
     }
 
@@ -135,12 +135,23 @@ impl ParserContext {
 
     /// Track a node for sibling ordering
     fn track_node(&mut self, node_id: String, node_type: String) {
+        // If this is the first node, it becomes the container
+        if !self.first_node_created {
+            self.container_node_id = Some(node_id.clone());
+            self.first_node_created = true;
+        }
+
         self.last_sibling = Some(node_id.clone());
         self.node_ids.push(node_id.clone());
         self.nodes.push(NodeMetadata {
             id: node_id,
             node_type,
         });
+    }
+
+    /// Check if this is the first node being created
+    fn is_first_node(&self) -> bool {
+        !self.first_node_created
     }
 }
 
@@ -161,23 +172,9 @@ pub async fn handle_create_nodes_from_markdown(
         )));
     }
 
-    // Create container node
-    let container_node = Node::new(
-        "text".to_string(),
-        params.container_title.clone(),
-        None,
-        json!({}),
-    );
-
-    let container_node_id = service.create_node(container_node).await.map_err(|e| {
-        MCPError::node_creation_failed(format!(
-            "Failed to create container node '{}': {}",
-            params.container_title, e
-        ))
-    })?;
-
     // Parse markdown and create nodes
-    let mut context = ParserContext::new(container_node_id.clone());
+    // The first element will become the container node
+    let mut context = ParserContext::new_empty();
     parse_markdown(&params.markdown_content, service, &mut context).await?;
 
     // Validate we didn't exceed max nodes
@@ -188,6 +185,11 @@ pub async fn handle_create_nodes_from_markdown(
             MAX_NODES_PER_IMPORT
         )));
     }
+
+    // Get the container node ID (first created node)
+    let container_node_id = context
+        .container_node_id
+        .ok_or_else(|| MCPError::internal_error("No container node created".to_string()))?;
 
     Ok(json!({
         "success": true,
@@ -271,8 +273,9 @@ async fn parse_markdown(
                             "header",
                             &content,
                             context.current_parent_id(),
-                            Some(context.container_node_id.clone()),
+                            context.container_node_id.clone(),
                             context.last_sibling.clone(),
+                            context.is_first_node(),
                         )
                         .await?;
 
@@ -293,8 +296,9 @@ async fn parse_markdown(
                                 "text",
                                 content,
                                 context.current_parent_id(),
-                                Some(context.container_node_id.clone()),
+                                context.container_node_id.clone(),
                                 context.last_sibling.clone(),
+                                context.is_first_node(),
                             )
                             .await?;
                             context.track_node(node_id, "text".to_string());
@@ -314,8 +318,9 @@ async fn parse_markdown(
                             "code-block",
                             &content,
                             context.current_parent_id(),
-                            Some(context.container_node_id.clone()),
+                            context.container_node_id.clone(),
                             context.last_sibling.clone(),
+                            context.is_first_node(),
                         )
                         .await?;
                         context.track_node(node_id, "code-block".to_string());
@@ -336,8 +341,9 @@ async fn parse_markdown(
                                 "quote-block",
                                 &content,
                                 context.current_parent_id(),
-                                Some(context.container_node_id.clone()),
+                                context.container_node_id.clone(),
                                 context.last_sibling.clone(),
+                                context.is_first_node(),
                             )
                             .await?;
                             context.track_node(node_id, "quote-block".to_string());
@@ -369,8 +375,9 @@ async fn parse_markdown(
                                 node_type,
                                 &formatted_content,
                                 context.current_parent_id(),
-                                Some(context.container_node_id.clone()),
+                                context.container_node_id.clone(),
                                 context.last_sibling.clone(),
+                                context.is_first_node(),
                             )
                             .await?;
 
@@ -434,6 +441,7 @@ async fn create_node(
     parent_id: Option<String>,
     container_node_id: Option<String>,
     before_sibling_id: Option<String>,
+    is_first_node: bool,
 ) -> Result<String, MCPError> {
     let node = Node::new(
         node_type.to_string(),
@@ -442,10 +450,20 @@ async fn create_node(
         json!({}),
     );
 
-    let node = Node {
-        container_node_id,
-        before_sibling_id,
-        ..node
+    // First node becomes the container (no container_node_id for itself)
+    // All subsequent nodes belong to that container
+    let node = if is_first_node {
+        Node {
+            container_node_id: None,  // First node IS the container
+            before_sibling_id,
+            ..node
+        }
+    } else {
+        Node {
+            container_node_id,
+            before_sibling_id,
+            ..node
+        }
     };
 
     // Create node and provide contextual error on failure
