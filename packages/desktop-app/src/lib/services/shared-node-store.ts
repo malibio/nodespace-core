@@ -290,20 +290,10 @@ export class SharedNodeStore {
 
         // Skip persisting placeholder nodes - they exist in UI but not in database
         // Placeholders are nodes with only type-specific prefixes and no actual content
-        // EXCEPTION: For placeholders with nodeType changes, persist ONLY the nodeType (not content)
-        // This allows pattern detection (e.g., "> " → quote-block) to save the type
+        // They will be persisted once user adds real content
         const isPlaceholder = isPlaceholderNode(updatedNode);
-        const shouldPersistNodeTypeOnly = isPlaceholder && isNodeTypeChange;
 
-        // For placeholder nodeType changes, filter out content to avoid backend validation errors
-        let changesToPersist = changes;
-        if (shouldPersistNodeTypeOnly && 'content' in changes) {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { content, ...rest } = changes;
-          changesToPersist = rest;
-        }
-
-        if (shouldPersist && (!isPlaceholder || shouldPersistNodeTypeOnly)) {
+        if (shouldPersist && !isPlaceholder) {
           // Delegate to PersistenceCoordinator for coordinated persistence
           // Use debounced mode for content changes (typing), immediate for structural changes
           const dependencies: Array<string | (() => Promise<void>)> = [];
@@ -367,7 +357,7 @@ export class SharedNodeStore {
                   // The backend expects NodeUpdate which is a partial update of specific fields
                   // Convert nullable fields properly (undefined = don't update, null = set to null)
                   const updatePayload: Partial<Node> = {};
-                  for (const [key, value] of Object.entries(changesToPersist)) {
+                  for (const [key, value] of Object.entries(changes)) {
                     // @ts-expect-error - Dynamic key access is safe here for partial update
                     updatePayload[key] = value;
                   }
