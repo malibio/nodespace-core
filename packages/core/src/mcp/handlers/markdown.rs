@@ -481,6 +481,211 @@ fn heading_level_to_usize(level: HeadingLevel) -> usize {
     }
 }
 
+// ============================================================================
+// Markdown Export (get_markdown_from_node_id)
+// ============================================================================
+
+/// Parameters for get_markdown_from_node_id method
+#[derive(Debug, Deserialize)]
+pub struct GetMarkdownParams {
+    /// Root node ID to export
+    pub node_id: String,
+
+    /// Include children recursively (default: true)
+    #[serde(default = "default_include_children")]
+    pub include_children: bool,
+
+    /// Maximum recursion depth to prevent infinite loops (default: 20)
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+}
+
+fn default_include_children() -> bool {
+    true
+}
+fn default_max_depth() -> usize {
+    20
+}
+
+/// Export node hierarchy as markdown with minimal metadata
+///
+/// Returns clean markdown with HTML comments containing only node IDs.
+/// This format is optimized for AI reading and understanding.
+///
+/// # Example Output
+///
+/// ```markdown
+/// <!-- container-abc123 -->
+/// # Project Plan
+///
+/// <!-- header-def456 -->
+/// ## Phase 1
+///
+/// <!-- task-ghi789 -->
+/// - [ ] Review architecture
+/// ```
+pub async fn handle_get_markdown_from_node_id(
+    service: &Arc<NodeService>,
+    params: Value,
+) -> Result<Value, MCPError> {
+    // Parse parameters
+    let params: GetMarkdownParams = serde_json::from_value(params)
+        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+
+    // Validate node exists
+    let root_node = service
+        .get_node(&params.node_id)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to get node: {}", e)))?
+        .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+
+    // Bulk fetch all nodes in this container (efficient single query)
+    use crate::models::{NodeFilter, OrderBy};
+    let filter = NodeFilter::new()
+        .with_container_node_id(root_node.id.clone())
+        .with_order_by(OrderBy::CreatedAsc);
+
+    let all_nodes = service
+        .query_nodes(filter)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to query container nodes: {}", e)))?;
+
+    // Build a lookup map for efficient hierarchy reconstruction
+    use std::collections::HashMap;
+    let nodes_map: HashMap<String, Node> =
+        all_nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+
+    // Build markdown by traversing hierarchy in memory
+    let mut markdown = String::new();
+
+    // Export the container node itself
+    markdown.push_str(&format!("<!-- {} -->\n", root_node.id));
+    markdown.push_str(&root_node.content);
+    markdown.push_str("\n\n");
+
+    // Export children if requested
+    if params.include_children {
+        // Find top-level nodes (nodes with no parent_id)
+        let mut top_level_nodes: Vec<&Node> = nodes_map
+            .values()
+            .filter(|n| n.parent_id.is_none())
+            .collect();
+
+        // Sort by sibling order
+        sort_by_sibling_chain(&mut top_level_nodes);
+
+        // Export each top-level node and its descendants
+        for node in top_level_nodes {
+            export_node_hierarchy(
+                node,
+                &nodes_map,
+                &mut markdown,
+                1, // Start at depth 1 (container is depth 0)
+                params.max_depth,
+                true, // Always include children when recursing
+            )?;
+        }
+    }
+
+    // Return result
+    Ok(json!({
+        "markdown": markdown,
+        "root_node_id": params.node_id,
+        "node_count": count_nodes_in_markdown(&markdown)
+    }))
+}
+
+/// Recursively export node hierarchy to markdown using in-memory node map
+fn export_node_hierarchy(
+    node: &Node,
+    nodes_map: &std::collections::HashMap<String, Node>,
+    output: &mut String,
+    current_depth: usize,
+    max_depth: usize,
+    include_children: bool,
+) -> Result<(), MCPError> {
+    // Prevent infinite recursion
+    if current_depth >= max_depth {
+        tracing::warn!("Max depth {} reached at node {}", max_depth, node.id);
+        return Ok(());
+    }
+
+    // Add minimal metadata comment (just ID)
+    output.push_str(&format!("<!-- {} -->\n", node.id));
+
+    // Add content
+    output.push_str(&node.content);
+    output.push_str("\n\n");
+
+    // Recursively export children (if enabled)
+    if include_children {
+        // Find all children of this node from the in-memory map
+        let mut children: Vec<&Node> = nodes_map
+            .values()
+            .filter(|n| n.parent_id.as_ref() == Some(&node.id))
+            .collect();
+
+        // Sort children by sibling order (reconstruct before_sibling_id chain)
+        sort_by_sibling_chain(&mut children);
+
+        for child in children {
+            export_node_hierarchy(
+                child,
+                nodes_map,
+                output,
+                current_depth + 1,
+                max_depth,
+                include_children,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sort nodes by their before_sibling_id chain to maintain visual order
+fn sort_by_sibling_chain(nodes: &mut Vec<&Node>) {
+    if nodes.is_empty() {
+        return;
+    }
+
+    // Build a map of before_sibling_id -> node for quick lookup
+    let before_map: std::collections::HashMap<Option<String>, &Node> = nodes
+        .iter()
+        .map(|n| (n.before_sibling_id.clone(), *n))
+        .collect();
+
+    // Find the head of the chain (node with no before_sibling_id or before_sibling not in list)
+    let head = nodes
+        .iter()
+        .find(|n| {
+            n.before_sibling_id.is_none()
+                || !nodes
+                    .iter()
+                    .any(|other| Some(&other.id) == n.before_sibling_id.as_ref())
+        })
+        .copied();
+
+    if let Some(mut current) = head {
+        let mut sorted = vec![current];
+
+        // Follow the chain forward
+        while let Some(next) = before_map.get(&Some(current.id.clone())) {
+            sorted.push(*next);
+            current = next;
+        }
+
+        // Replace the original vector with sorted nodes
+        nodes.clear();
+        nodes.extend(sorted);
+    }
+}
+
+/// Count number of nodes in markdown (by counting HTML comments)
+fn count_nodes_in_markdown(markdown: &str) -> usize {
+    markdown.matches("<!--").count()
+}
+
 // Include tests
 #[cfg(test)]
 #[path = "markdown_test.rs"]

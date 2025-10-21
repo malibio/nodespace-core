@@ -192,6 +192,30 @@ fn get_tool_schemas() -> Value {
                 },
                 "required": ["markdown_content", "container_title"]
             }
+        },
+        {
+            "name": "get_markdown_from_node_id",
+            "description": "Export node and its children as clean markdown for reading and analysis",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": "Root node ID to export"
+                    },
+                    "include_children": {
+                        "type": "boolean",
+                        "description": "Include child nodes recursively (default: true)",
+                        "default": true
+                    },
+                    "max_depth": {
+                        "type": "number",
+                        "description": "Maximum recursion depth (default: 20)",
+                        "default": 20
+                    }
+                },
+                "required": ["node_id"]
+            }
         }
     ])
 }

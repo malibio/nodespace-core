@@ -538,22 +538,159 @@ const request = {
    { "result": { "node_id": "uuid-123", "success": true } }
 ```
 
-## File Structure
+## Code Organization: Layered Architecture
+
+NodeSpace MCP implementation follows a **layered architecture** that separates pure protocol logic from framework-specific integration.
+
+### Architecture Layers
 
 ```
-src-tauri/src/
-├── mcp/
-│   ├── mod.rs              # Public API and server setup
-│   ├── server.rs           # stdio server loop
-│   ├── types.rs            # JSON-RPC request/response types
-│   └── handlers/
-│       ├── mod.rs
-│       ├── nodes.rs        # Node CRUD operations
-│       ├── markdown.rs     # create_nodes_from_markdown
-│       └── query.rs        # Query operations
-├── lib.rs                  # Spawn MCP task in setup()
-└── ...
+┌─────────────────────────────────────────────────────┐
+│  packages/desktop-app/src-tauri/src/                │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  Tauri Integration Layer                      │  │
+│  │  - mcp_integration.rs (Tauri event wrapper)   │  │
+│  │  - lib.rs (spawns MCP task)                   │  │
+│  └───────────────────────────────────────────────┘  │
+│                        ↓ uses                        │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  packages/core/src/mcp/ (Pure Protocol)      │  │
+│  │  - server.rs (stdio loop, JSON-RPC)           │  │
+│  │  - types.rs (protocol types)                  │  │
+│  │  - handlers/ (business logic)                 │  │
+│  │    ├── initialize.rs (capability negotiation) │  │
+│  │    ├── nodes.rs (CRUD operations)             │  │
+│  │    └── markdown.rs (import/export)            │  │
+│  └───────────────────────────────────────────────┘  │
+│                        ↓ uses                        │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  packages/core/src/services/                  │  │
+│  │  - NodeService (database operations)          │  │
+│  └───────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
 ```
+
+### Why This Separation?
+
+**Core Package (`packages/core/src/mcp/`):**
+- ✅ **Framework-agnostic** - No Tauri dependencies
+- ✅ **Reusable** - Could be used in CLI tools, HTTP servers, etc.
+- ✅ **Testable** - Pure Rust logic, easier to unit test
+- ✅ **Portable** - Works anywhere Rust runs
+
+**Tauri Integration (`packages/desktop-app/src-tauri/src/`):**
+- ✅ **Minimal wrapper** - Only handles Tauri-specific concerns
+- ✅ **Event emissions** - Bridges MCP operations to UI reactivity
+- ✅ **App lifecycle** - Spawns MCP task in Tauri setup
+
+### Concrete Example: create_node Flow
+
+```rust
+// 1. Core protocol layer (packages/core/src/mcp/handlers/nodes.rs)
+pub async fn handle_create_node(
+    service: &Arc<NodeService>,
+    params: Value,
+) -> Result<Value, MCPError> {
+    // Pure business logic - no Tauri dependencies
+    let params: CreateNodeParams = serde_json::from_value(params)?;
+    let node_id = service.create_node(node).await?;
+    Ok(json!({ "node_id": node_id }))
+}
+
+// 2. Core server layer (packages/core/src/mcp/server.rs)
+async fn handle_request(
+    service: &Arc<NodeService>,
+    request: MCPRequest,
+) -> MCPResponse {
+    match request.method.as_str() {
+        "create_node" => handle_create_node(service, request.params).await,
+        // ... other methods
+    }
+}
+
+// 3. Tauri integration layer (packages/desktop-app/src-tauri/src/mcp_integration.rs)
+pub async fn run_mcp_server_with_events(
+    node_service: Arc<NodeService>,
+    app: AppHandle,
+) -> anyhow::Result<()> {
+    // Wraps core MCP server with Tauri event callback
+    let callback = Arc::new(move |method: &str, result: &Value| {
+        if method == "create_node" {
+            // Emit Tauri event for UI reactivity
+            app.emit("node-created", result).ok();
+        }
+    });
+
+    // Run core MCP server with event-emitting callback
+    mcp::run_mcp_server_with_callback(node_service, Some(callback)).await
+}
+```
+
+### Design Benefits
+
+**Testability:**
+```rust
+// Test core protocol without Tauri
+#[tokio::test]
+async fn test_create_node() {
+    let service = setup_test_service();
+    let params = json!({ "node_type": "text", "content": "Test" });
+    let result = handle_create_node(&service, params).await.unwrap();
+    assert!(result["node_id"].is_string());
+}
+```
+
+**Reusability:**
+```rust
+// Example: Could use same core in CLI tool
+async fn cli_main() {
+    let service = Arc::new(NodeService::new(db_pool));
+
+    // Use core MCP server in CLI context (no Tauri)
+    mcp::run_mcp_server(service).await?;
+}
+```
+
+**Maintainability:**
+- Protocol changes isolated to `packages/core/src/mcp/`
+- Tauri upgrades only affect thin integration layer
+- Clear separation of concerns
+
+### File Structure
+
+**Core MCP Protocol (`packages/core/src/mcp/`):**
+```
+packages/core/src/mcp/
+├── mod.rs                      # Public API exports
+├── server.rs                   # stdio server loop, JSON-RPC dispatcher
+├── types.rs                    # MCPRequest, MCPResponse, MCPError, MCPNotification
+└── handlers/
+    ├── mod.rs                  # Handler module exports
+    ├── initialize.rs           # Capability negotiation (Issue #308)
+    ├── nodes.rs                # Node CRUD operations
+    └── markdown.rs             # Markdown import/export (Issues #296, #309)
+```
+
+**Tauri Integration (`packages/desktop-app/src-tauri/src/`):**
+```
+packages/desktop-app/src-tauri/src/
+├── lib.rs                      # Spawns MCP task in Tauri setup
+├── mcp_integration.rs          # Wraps core MCP with Tauri events
+└── commands/                   # Tauri IPC command handlers (separate from MCP)
+    ├── db.rs
+    ├── nodes.rs
+    └── ...
+```
+
+### Key Principle: Single Responsibility
+
+**Core Package** = "What" (Protocol logic, business rules)
+**Tauri Package** = "How" (Desktop app integration, event emissions)
+
+This separation ensures:
+- Core protocol can be tested independently
+- Tauri-specific code is minimal and focused
+- Future frameworks (CLI, HTTP, etc.) can reuse core
 
 ## Implementation Phases
 
@@ -583,9 +720,16 @@ src-tauri/src/
 
 ## Related Issues
 
-- **#112**: Add MCP stdio server for AI agent access (Foundation)
+### Completed
+- **#112**: Add MCP stdio server for AI agent access (Foundation) - ✅ **MERGED**
 - **#111**: ~~Implement reactive state synchronization~~ (Closed - automatic with single-process)
-- **TBD**: Add create_nodes_from_markdown MCP method
+- **#296**: Add create_nodes_from_markdown MCP method - ✅ **MERGED**
+
+### In Progress / Planned
+- **#308**: Implement MCP initialization handshake and capability discovery (CRITICAL)
+- **#309**: Add get_markdown_from_node_id for markdown export (AI reading workflow)
+- **#310**: Add batch node operations (get_nodes_batch, update_nodes_batch, update_container_from_markdown)
+- **#312**: Auto-generate MCP tool schemas from Rust types (Future enhancement)
 
 ## References
 

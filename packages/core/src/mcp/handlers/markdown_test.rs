@@ -644,4 +644,286 @@ Text paragraph
             assert_eq!(node_metadata["id"], node_ids[i]);
         }
     }
+
+    // ============================================================================
+    // Markdown Export Tests (get_markdown_from_node_id)
+    // ============================================================================
+
+    use crate::mcp::handlers::markdown::handle_get_markdown_from_node_id;
+
+    #[tokio::test]
+    async fn test_get_markdown_simple() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        // Create test nodes via import
+        let markdown = "# Hello World\n\n- Item 1";
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "Test"
+        });
+
+        let import_result = handle_create_nodes_from_markdown(&service, params)
+            .await
+            .unwrap();
+        let root_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export markdown
+        let export_params = json!({
+            "node_id": root_id,
+            "include_children": true
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params)
+            .await
+            .unwrap();
+        let exported_markdown = result["markdown"].as_str().unwrap();
+
+        // Verify output contains content (including container)
+        assert!(exported_markdown.contains("Test")); // container title
+        assert!(exported_markdown.contains("# Hello World"));
+        assert!(exported_markdown.contains("- Item 1"));
+
+        // Verify node count (container + header + list item = 3)
+        assert_eq!(result["node_count"].as_u64().unwrap(), 3);
+        assert_eq!(result["root_node_id"].as_str().unwrap(), root_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_markdown_max_depth() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        // Create deep hierarchy
+        let markdown = r#"# Root
+## Child 1
+### Child 2
+#### Child 3"#;
+
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "Deep Hierarchy"
+        });
+
+        let import_result = handle_create_nodes_from_markdown(&service, params)
+            .await
+            .unwrap();
+        let root_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export with max_depth=2 (container=0, # Root=1, ## Child 1=2)
+        let export_params = json!({
+            "node_id": root_id,
+            "max_depth": 2
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params)
+            .await
+            .unwrap();
+        let exported_markdown = result["markdown"].as_str().unwrap();
+
+        // Should include container and # Root (within max_depth=2)
+        assert!(exported_markdown.contains("Deep Hierarchy")); // container
+        assert!(exported_markdown.contains("# Root"));
+
+        // Verify max_depth is working
+        // With max_depth=2: depth 0 (container) and depth 1 (# Root) are included
+        // Depth 2 (## Child 1) would be >= max_depth, so it's excluded
+        assert!(!exported_markdown.contains("## Child 1"));
+        assert!(!exported_markdown.contains("### Child 2"));
+        assert!(!exported_markdown.contains("#### Child 3"));
+
+        let node_count = result["node_count"].as_u64().unwrap();
+        assert_eq!(node_count, 2); // container + # Root
+    }
+
+    #[tokio::test]
+    async fn test_get_markdown_no_children() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        let markdown = r#"# Root
+## Child"#;
+
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "Test"
+        });
+
+        let import_result = handle_create_nodes_from_markdown(&service, params)
+            .await
+            .unwrap();
+        let root_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export WITHOUT children
+        let export_params = json!({
+            "node_id": root_id,
+            "include_children": false
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params)
+            .await
+            .unwrap();
+        let exported_markdown = result["markdown"].as_str().unwrap();
+
+        // Should only contain container node (children not included)
+        assert!(exported_markdown.contains("Test"));
+        assert_eq!(result["node_count"].as_u64().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_import_export() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        // Original markdown
+        let original = r#"# Heading
+
+- Item 1
+- Item 2
+
+- [ ] Task"#;
+
+        // Import
+        let import_params = json!({
+            "markdown_content": original,
+            "container_title": "Test"
+        });
+        let import_result = handle_create_nodes_from_markdown(&service, import_params)
+            .await
+            .unwrap();
+        let container_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export
+        let export_params = json!({
+            "node_id": container_id,
+            "include_children": true
+        });
+        let export_result = handle_get_markdown_from_node_id(&service, export_params)
+            .await
+            .unwrap();
+        let exported = export_result["markdown"].as_str().unwrap();
+
+        // Remove HTML comments for comparison
+        let clean_exported: String = exported
+            .lines()
+            .filter(|line| !line.starts_with("<!--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Should contain all original content (whitespace may differ)
+        assert!(clean_exported.contains("# Heading"));
+        assert!(clean_exported.contains("- Item 1"));
+        assert!(clean_exported.contains("- Item 2"));
+        assert!(clean_exported.contains("- [ ] Task"));
+    }
+
+    #[tokio::test]
+    async fn test_get_markdown_missing_node() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        let export_params = json!({
+            "node_id": "nonexistent-node-id"
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params).await;
+
+        // Should return error for missing node
+        assert!(result.is_err());
+        let error_msg = format!("{:?}", result.unwrap_err());
+        assert!(error_msg.contains("not found") || error_msg.contains("nonexistent"));
+    }
+
+    #[tokio::test]
+    async fn test_get_markdown_invalid_params() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        // Missing node_id
+        let export_params = json!({
+            "include_children": true
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_markdown_preserves_hierarchy() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        let markdown = r#"# Container
+
+## Section 1
+Text under section 1
+
+## Section 2
+- Item 1
+- Item 2"#;
+
+        let import_params = json!({
+            "markdown_content": markdown,
+            "container_title": "Hierarchy Test"
+        });
+
+        let import_result = handle_create_nodes_from_markdown(&service, import_params)
+            .await
+            .unwrap();
+        let root_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export
+        let export_params = json!({
+            "node_id": root_id,
+            "include_children": true
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params)
+            .await
+            .unwrap();
+        let exported = result["markdown"].as_str().unwrap();
+
+        // Verify all content is present (container wrapper is skipped)
+        assert!(exported.contains("# Container"));
+        assert!(exported.contains("## Section 1"));
+        assert!(exported.contains("Text under section 1"));
+        assert!(exported.contains("## Section 2"));
+        assert!(exported.contains("- Item 1"));
+        assert!(exported.contains("- Item 2"));
+    }
+
+    #[tokio::test]
+    async fn test_get_markdown_with_code_blocks() {
+        let (service, _temp_dir) = setup_test_service().await;
+
+        let markdown = r#"# Code Example
+
+```rust
+fn main() {
+    println!("Hello");
+}
+```
+
+Regular text after code."#;
+
+        let import_params = json!({
+            "markdown_content": markdown,
+            "container_title": "Code Test"
+        });
+
+        let import_result = handle_create_nodes_from_markdown(&service, import_params)
+            .await
+            .unwrap();
+        let root_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export
+        let export_params = json!({
+            "node_id": root_id,
+            "include_children": true
+        });
+
+        let result = handle_get_markdown_from_node_id(&service, export_params)
+            .await
+            .unwrap();
+        let exported = result["markdown"].as_str().unwrap();
+
+        // Verify code block is preserved with language
+        assert!(exported.contains("```rust"));
+        assert!(exported.contains("fn main()"));
+        assert!(exported.contains("println!"));
+        assert!(exported.contains("Regular text after code"));
+    }
 }
