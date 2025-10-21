@@ -1222,19 +1222,14 @@
     }
   }
 
-  // Handle icon click events (for non-task node types)
+  // Handle icon click events
+  // Note: Node-specific components handle their own icon behavior (e.g., TaskNode manages task states)
+  // This handler is for any viewer-level icon click coordination if needed in the future
   function handleIconClick(
-    event: CustomEvent<{ nodeId: string; nodeType: string; currentState?: string }>
+    _event: CustomEvent<{ nodeId: string; nodeType: string; currentState?: string }>
   ) {
-    const { nodeType } = event.detail;
-
-    // Skip task nodes - let TaskNode component handle its own state management
-    if (nodeType === 'task') {
-      return;
-    }
-
-    // For other node types, the click could trigger different behaviors
-    // This makes the system extensible for future node types
+    // Currently a no-op - individual node components handle their own icon clicks
+    // This makes the system extensible for future node types that need viewer-level coordination
   }
 
   // Helper functions removed - NodeManager handles all node operations
@@ -1379,15 +1374,97 @@
             </button>
           {/if}
 
-          <!-- Node viewer with stable component references -->
-          {#if node.nodeType === 'text'}
+          <!-- Node viewer with stable component references - all nodes use plugin registry -->
+          {#if node.nodeType in loadedNodes}
             {#key node.id}
+              {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
+              <NodeComponent
+                nodeId={node.id}
+                nodeType={node.nodeType}
+                autoFocus={node.autoFocus}
+                content={node.content}
+                children={node.children}
+                metadata={node.properties || {}}
+                editableConfig={{ allowMultiline: true }}
+                on:createNewNode={handleCreateNewNode}
+                on:indentNode={handleIndentNode}
+                on:outdentNode={handleOutdentNode}
+                on:navigateArrow={handleArrowNavigation}
+                on:contentChanged={(e: CustomEvent<{ content: string }>) => {
+                  const content = e.detail.content;
+                  // Update node content (placeholder flag is handled automatically)
+                  nodeManager.updateNodeContent(node.id, content);
+                  // Focus management handled by FocusManager (single source of truth)
+                }}
+                on:nodeTypeChanged={(
+                  e: CustomEvent<{
+                    nodeType: string;
+                    cleanedContent?: string;
+                    cursorPosition?: number;
+                  }>
+                ) => {
+                  const newNodeType = e.detail.nodeType;
+                  const cleanedContent = e.detail.cleanedContent;
+                  // Use cursor position from event (captured by TextareaController)
+                  const cursorPosition = e.detail.cursorPosition ?? 0;
+
+                  // CRITICAL: Set editing state BEFORE updating node type
+                  // This ensures focus manager state is ready when the new component mounts
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+
+                  // Update content if cleanedContent is provided (e.g., from contentTemplate)
+                  if (cleanedContent !== undefined) {
+                    nodeManager.updateNodeContent(node.id, cleanedContent);
+                  }
+
+                  // Update node type through proper API (triggers component re-render)
+                  nodeManager.updateNodeType(node.id, newNodeType);
+                }}
+                on:slashCommandSelected={(
+                  e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
+                ) => {
+                  // Use cursor position from event (captured by TextareaController)
+                  const cursorPosition = e.detail.cursorPosition ?? 0;
+
+                  // CRITICAL: Set editing state BEFORE updating node type
+                  // This ensures focus manager state is ready when the new component mounts
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+
+                  if (node.isPlaceholder) {
+                    // For placeholder nodes, just update the nodeType locally
+                    if ('updatePlaceholderNodeType' in nodeManager) {
+                      (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
+                    }
+                  } else {
+                    // For real nodes, update node type with full persistence
+                    nodeManager.updateNodeType(node.id, e.detail.nodeType);
+                  }
+                }}
+                on:iconClick={handleIconClick}
+                on:taskStateChanged={(e) => {
+                  const { nodeId, state } = e.detail;
+                  const node = nodeManager.nodes.get(nodeId);
+                  if (node) {
+                    node.properties = { ...node.properties, taskState: state };
+                    // Trigger sync to persist the change
+                    nodeManager.updateNodeContent(nodeId, node.content);
+                  }
+                }}
+                on:combineWithPrevious={handleCombineWithPrevious}
+                on:deleteNode={handleDeleteNode}
+              />
+            {/key}
+          {:else}
+            <!-- Final fallback to BaseNode with key for re-rendering -->
+            {#key `${node.id}-${node.nodeType}`}
               <BaseNode
                 nodeId={node.id}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
                 children={node.children}
+                metadata={node.properties || {}}
+                editableConfig={{ allowMultiline: true }}
                 on:createNewNode={handleCreateNewNode}
                 on:indentNode={handleIndentNode}
                 on:outdentNode={handleOutdentNode}
@@ -1418,171 +1495,20 @@
                     nodeManager.updateNodeType(node.id, e.detail.nodeType);
                   }
                 }}
-                on:nodeTypeChanged={(
-                  e: CustomEvent<{
-                    nodeType: string;
-                    cleanedContent?: string;
-                    cursorPosition?: number;
-                  }>
-                ) => {
-                  const newNodeType = e.detail.nodeType;
-                  const cleanedContent = e.detail.cleanedContent;
-                  // Use cursor position from event (captured by TextareaController)
-                  const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                  // CRITICAL: Set editing state BEFORE updating node type
-                  // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
-
-                  // Update content if cleanedContent is provided (e.g., from contentTemplate)
-                  if (cleanedContent !== undefined) {
-                    nodeManager.updateNodeContent(node.id, cleanedContent);
+                on:iconClick={handleIconClick}
+                on:taskStateChanged={(e) => {
+                  const { nodeId, state } = e.detail;
+                  const node = nodeManager.nodes.get(nodeId);
+                  if (node) {
+                    node.properties = { ...node.properties, taskState: state };
+                    // Trigger sync to persist the change
+                    nodeManager.updateNodeContent(nodeId, node.content);
                   }
-
-                  // Update node type through proper API (triggers component re-render)
-                  nodeManager.updateNodeType(node.id, newNodeType);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
               />
             {/key}
-          {:else}
-            <!-- Use plugin registry for non-text node types with key for re-rendering -->
-            {#if node.nodeType in loadedNodes}
-              {#key node.id}
-                {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
-                <NodeComponent
-                  nodeId={node.id}
-                  nodeType={node.nodeType}
-                  autoFocus={node.autoFocus}
-                  content={node.content}
-                  children={node.children}
-                  metadata={node.properties || {}}
-                  editableConfig={{ allowMultiline: true }}
-                  on:createNewNode={handleCreateNewNode}
-                  on:indentNode={handleIndentNode}
-                  on:outdentNode={handleOutdentNode}
-                  on:navigateArrow={handleArrowNavigation}
-                  on:contentChanged={(e: CustomEvent<{ content: string }>) => {
-                    const content = e.detail.content;
-                    // Update node content (placeholder flag is handled automatically)
-                    nodeManager.updateNodeContent(node.id, content);
-                    // Focus management handled by FocusManager (single source of truth)
-                  }}
-                  on:nodeTypeChanged={(
-                    e: CustomEvent<{
-                      nodeType: string;
-                      cleanedContent?: string;
-                      cursorPosition?: number;
-                    }>
-                  ) => {
-                    const newNodeType = e.detail.nodeType;
-                    const cleanedContent = e.detail.cleanedContent;
-                    // Use cursor position from event (captured by TextareaController)
-                    const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                    // CRITICAL: Set editing state BEFORE updating node type
-                    // This ensures focus manager state is ready when the new component mounts
-                    focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
-
-                    // Update content if cleanedContent is provided (e.g., from contentTemplate)
-                    if (cleanedContent !== undefined) {
-                      nodeManager.updateNodeContent(node.id, cleanedContent);
-                    }
-
-                    // Update node type through proper API (triggers component re-render)
-                    nodeManager.updateNodeType(node.id, newNodeType);
-                  }}
-                  on:slashCommandSelected={(
-                    e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
-                  ) => {
-                    // Use cursor position from event (captured by TextareaController)
-                    const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                    // CRITICAL: Set editing state BEFORE updating node type
-                    // This ensures focus manager state is ready when the new component mounts
-                    focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
-
-                    if (node.isPlaceholder) {
-                      // For placeholder nodes, just update the nodeType locally
-                      if ('updatePlaceholderNodeType' in nodeManager) {
-                        (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
-                      }
-                    } else {
-                      // For real nodes, update node type with full persistence
-                      nodeManager.updateNodeType(node.id, e.detail.nodeType);
-                    }
-                  }}
-                  on:iconClick={handleIconClick}
-                  on:taskStateChanged={(e) => {
-                    const { nodeId, state } = e.detail;
-                    const node = nodeManager.nodes.get(nodeId);
-                    if (node) {
-                      node.properties = { ...node.properties, taskState: state };
-                      // Trigger sync to persist the change
-                      nodeManager.updateNodeContent(nodeId, node.content);
-                    }
-                  }}
-                  on:combineWithPrevious={handleCombineWithPrevious}
-                  on:deleteNode={handleDeleteNode}
-                />
-              {/key}
-            {:else}
-              <!-- Final fallback to BaseNode with key for re-rendering -->
-              {#key `${node.id}-${node.nodeType}`}
-                <BaseNode
-                  nodeId={node.id}
-                  nodeType={node.nodeType}
-                  autoFocus={node.autoFocus}
-                  content={node.content}
-                  children={node.children}
-                  metadata={node.properties || {}}
-                  editableConfig={{ allowMultiline: true }}
-                  on:createNewNode={handleCreateNewNode}
-                  on:indentNode={handleIndentNode}
-                  on:outdentNode={handleOutdentNode}
-                  on:navigateArrow={handleArrowNavigation}
-                  on:contentChanged={(e: CustomEvent<{ content: string }>) => {
-                    const content = e.detail.content;
-
-                    // Update node content (placeholder flag is handled automatically)
-                    nodeManager.updateNodeContent(node.id, content);
-                  }}
-                  on:slashCommandSelected={(
-                    e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
-                  ) => {
-                    // Use cursor position from event (captured by TextareaController)
-                    const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                    // CRITICAL: Set editing state BEFORE updating node type
-                    // This ensures focus manager state is ready when the new component mounts
-                    focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
-
-                    if (node.isPlaceholder) {
-                      // For placeholder nodes, just update the nodeType locally
-                      if ('updatePlaceholderNodeType' in nodeManager) {
-                        (nodeManager as any).updatePlaceholderNodeType(node.id, e.detail.nodeType);
-                      }
-                    } else {
-                      // For real nodes, update node type with full persistence
-                      nodeManager.updateNodeType(node.id, e.detail.nodeType);
-                    }
-                  }}
-                  on:iconClick={handleIconClick}
-                  on:taskStateChanged={(e) => {
-                    const { nodeId, state } = e.detail;
-                    const node = nodeManager.nodes.get(nodeId);
-                    if (node) {
-                      node.properties = { ...node.properties, taskState: state };
-                      // Trigger sync to persist the change
-                      nodeManager.updateNodeContent(nodeId, node.content);
-                    }
-                  }}
-                  on:combineWithPrevious={handleCombineWithPrevious}
-                  on:deleteNode={handleDeleteNode}
-                />
-              {/key}
-            {/if}
           {/if}
         </div>
       </div>
