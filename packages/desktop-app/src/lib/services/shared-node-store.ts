@@ -290,11 +290,20 @@ export class SharedNodeStore {
 
         // Skip persisting placeholder nodes - they exist in UI but not in database
         // Placeholders are nodes with only type-specific prefixes and no actual content
-        // When user types pattern shortcuts (e.g., "> " for quote), nodeType changes
-        // but node remains a placeholder until they add actual content
+        // EXCEPTION: For placeholders with nodeType changes, persist ONLY the nodeType (not content)
+        // This allows pattern detection (e.g., "> " → quote-block) to save the type
         const isPlaceholder = isPlaceholderNode(updatedNode);
+        const shouldPersistNodeTypeOnly = isPlaceholder && isNodeTypeChange;
 
-        if (shouldPersist && !isPlaceholder) {
+        // For placeholder nodeType changes, filter out content to avoid backend validation errors
+        let changesToPersist = changes;
+        if (shouldPersistNodeTypeOnly && 'content' in changes) {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { content, ...rest } = changes;
+          changesToPersist = rest;
+        }
+
+        if (shouldPersist && (!isPlaceholder || shouldPersistNodeTypeOnly)) {
           // Delegate to PersistenceCoordinator for coordinated persistence
           // Use debounced mode for content changes (typing), immediate for structural changes
           const dependencies: Array<string | (() => Promise<void>)> = [];
@@ -358,7 +367,7 @@ export class SharedNodeStore {
                   // The backend expects NodeUpdate which is a partial update of specific fields
                   // Convert nullable fields properly (undefined = don't update, null = set to null)
                   const updatePayload: Partial<Node> = {};
-                  for (const [key, value] of Object.entries(changes)) {
+                  for (const [key, value] of Object.entries(changesToPersist)) {
                     // @ts-expect-error - Dynamic key access is safe here for partial update
                     updatePayload[key] = value;
                   }
@@ -471,15 +480,16 @@ export class SharedNodeStore {
     }
 
     // Check if node is a placeholder (node with only type-specific prefix, no actual content)
-    const isPlaceholder = isPlaceholderNode(node) && source.type === 'viewer' && isNewNode;
+    const isPlaceholder = isPlaceholderNode(node);
+    const isPlaceholderFromViewer = isPlaceholder && source.type === 'viewer' && isNewNode;
 
     // Phase 2.4: Persist to database
     // IMPORTANT: For NEW nodes from viewer, persist immediately (including empty ones!)
     // For UPDATES from viewer, skip persistence - BaseNodeViewer handles with debouncing
     // This ensures createNode() persistence works while avoiding duplicate writes on updates
     //
-    // EXCEPTION: Placeholders (nodes with only prefixes) should NOT persist until user adds content
-    if (!skipPersistence && !isPlaceholder && source.type !== 'database') {
+    // EXCEPTION: Placeholders should persist nodeType but NOT content (to avoid backend validation errors)
+    if (!skipPersistence && !isPlaceholderFromViewer && source.type !== 'database') {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
       if (shouldPersist) {
@@ -522,6 +532,14 @@ export class SharedNodeStore {
           dependencies.push(node.beforeSiblingId);
         }
 
+        // For placeholders with specialized nodeType, filter out content to avoid backend validation
+        let nodeToPersist = node;
+        if (isPlaceholder && node.nodeType !== 'text') {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { content, ...nodeWithoutContent } = node;
+          nodeToPersist = nodeWithoutContent as Node;
+        }
+
         // Capture handle to catch cancellation errors
         const handle = PersistenceCoordinator.getInstance().persist(
           node.id,
@@ -530,9 +548,9 @@ export class SharedNodeStore {
               // Check if node has been persisted - use in-memory tracking to avoid database query
               const isPersistedToDatabase = this.persistedNodeIds.has(node.id);
               if (isPersistedToDatabase) {
-                await tauriNodeService.updateNode(node.id, node);
+                await tauriNodeService.updateNode(node.id, nodeToPersist);
               } else {
-                await tauriNodeService.createNode(node);
+                await tauriNodeService.createNode(nodeToPersist);
                 this.persistedNodeIds.add(node.id); // Track as persisted
               }
             } catch (dbError) {
