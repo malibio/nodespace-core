@@ -4,12 +4,19 @@
 //! Pure protocol implementation with no framework dependencies.
 
 use crate::mcp::handlers::nodes;
-use crate::mcp::types::{MCPError, MCPRequest, MCPResponse};
+use crate::mcp::types::{MCPError, MCPNotification, MCPRequest, MCPResponse};
 use crate::services::NodeService;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tracing::{debug, error, info, instrument, warn};
+
+/// Server state tracking initialization status
+struct ServerState {
+    /// Whether the client has completed the initialization handshake
+    initialized: Arc<AtomicBool>,
+}
 
 /// Callback type for handling successful responses
 ///
@@ -62,43 +69,52 @@ pub async fn run_mcp_server_with_callback(
     let mut writer = BufWriter::new(stdout);
     let mut lines = reader.lines();
 
+    // Initialize server state
+    let state = ServerState {
+        initialized: Arc::new(AtomicBool::new(false)),
+    };
+
     while let Some(line) = lines.next_line().await? {
-        debug!("📥 MCP request: {}", line);
+        debug!("📥 MCP message: {}", line);
 
-        // Parse JSON-RPC request
-        let request: MCPRequest = match serde_json::from_str(&line) {
-            Ok(req) => req,
-            Err(e) => {
-                warn!("❌ Failed to parse JSON-RPC request: {}", e);
-                let error_response = MCPResponse::error(
-                    0, // Unknown ID since parsing failed
-                    MCPError::parse_error(format!("Invalid JSON: {}", e)),
-                );
-                write_response(&mut writer, &error_response).await?;
-                continue;
+        // Try parsing as request first (has id field)
+        if let Ok(request) = serde_json::from_str::<MCPRequest>(&line) {
+            let request_id = request.id;
+            let method = request.method.clone();
+
+            // Handle request with state tracking
+            let response = handle_request(&node_service, &state, request).await;
+
+            // Invoke callback on successful response
+            if let Some(ref callback) = callback {
+                if let Some(ref result) = response.result {
+                    callback(&method, result);
+                }
             }
-        };
 
-        let request_id = request.id;
-        let method = request.method.clone();
+            debug!(
+                "📤 MCP response for method '{}' (id={})",
+                method, request_id
+            );
 
-        // Handle request
-        let response = handle_request(&node_service, request).await;
-
-        // Invoke callback on successful response
-        if let Some(ref callback) = callback {
-            if let Some(ref result) = response.result {
-                callback(&method, result);
-            }
+            // Write response
+            write_response(&mut writer, &response).await?;
+            continue;
         }
 
-        debug!(
-            "📤 MCP response for method '{}' (id={})",
-            method, request_id
-        );
+        // Try parsing as notification (no id field)
+        if let Ok(notification) = serde_json::from_str::<MCPNotification>(&line) {
+            handle_notification(&state, notification).await;
+            continue; // No response for notifications
+        }
 
-        // Write response
-        write_response(&mut writer, &response).await?;
+        // Neither request nor notification - parse error
+        warn!("❌ Invalid JSON-RPC message: {}", line);
+        let error_response = MCPResponse::error(
+            0,
+            MCPError::parse_error(format!("Invalid JSON-RPC message: {}", line)),
+        );
+        write_response(&mut writer, &error_response).await?;
     }
 
     info!("🔌 MCP stdio server stopped (stdin closed)");
@@ -106,9 +122,34 @@ pub async fn run_mcp_server_with_callback(
 }
 
 /// Handle a JSON-RPC request and return a response
-#[instrument(skip(service), fields(method = %request.method, id = %request.id))]
-async fn handle_request(service: &Arc<NodeService>, request: MCPRequest) -> MCPResponse {
+#[instrument(skip(service, state), fields(method = %request.method, id = %request.id))]
+async fn handle_request(
+    service: &Arc<NodeService>,
+    state: &ServerState,
+    request: MCPRequest,
+) -> MCPResponse {
+    // Check initialization state before processing operations
+    // Allow only 'initialize' and 'ping' methods before initialization is complete
+    if request.method != "initialize"
+        && request.method != "ping"
+        && !state.initialized.load(Ordering::SeqCst)
+    {
+        return MCPResponse::error(
+            request.id,
+            MCPError::invalid_request(
+                "Session not initialized. Send initialize request first.".to_string(),
+            ),
+        );
+    }
+
     let result = match request.method.as_str() {
+        // CRITICAL: Initialize must be first interaction (doesn't need NodeService)
+        "initialize" => crate::mcp::handlers::initialize::handle_initialize(request.params),
+
+        // Ping for connection health checks (doesn't need NodeService or initialization)
+        "ping" => Ok(json!({})),
+
+        // Normal node operations (require initialization to have completed first)
         "create_node" => nodes::handle_create_node(service, request.params).await,
         "get_node" => nodes::handle_get_node(service, request.params).await,
         "update_node" => nodes::handle_update_node(service, request.params).await,
@@ -138,6 +179,20 @@ async fn handle_request(service: &Arc<NodeService>, request: MCPRequest) -> MCPR
                 request.id, error.message, error.code
             );
             MCPResponse::error(request.id, error)
+        }
+    }
+}
+
+/// Handle a JSON-RPC notification (no response expected)
+#[instrument(skip(state), fields(method = %notification.method))]
+async fn handle_notification(state: &ServerState, notification: MCPNotification) {
+    match notification.method.as_str() {
+        "initialized" => {
+            state.initialized.store(true, Ordering::SeqCst);
+            info!("✅ MCP session initialized - ready for operations");
+        }
+        _ => {
+            debug!("Received notification: {}", notification.method);
         }
     }
 }
