@@ -561,7 +561,7 @@ async fn handle_request(
 #[instrument(skip(state), fields(method = %notification.method))]
 async fn handle_notification(state: &ServerState, notification: MCPNotification) {
     match notification.method.as_str() {
-        "initialized" => {
+        "initialized" | "notifications/initialized" => {
             state.initialized.store(true, Ordering::SeqCst);
             info!("✅ MCP session initialized - ready for operations");
         }
