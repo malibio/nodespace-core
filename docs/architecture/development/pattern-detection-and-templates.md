@@ -504,8 +504,203 @@ patternDetection: [{
 
 ---
 
+## Pattern System Unification (New in #317)
+
+### Overview of the New Pattern System
+
+Issue #317 introduced a unified pattern system that consolidates pattern handling across the application:
+
+1. **PatternTemplate** - Type-safe pattern definitions (replaces `patternDetection`)
+2. **PatternRegistry** - Singleton registry for all patterns in the system
+3. **PatternSplitter** - Unified interface for content splitting with intelligent strategy delegation
+
+### PatternTemplate Interface
+
+The new `PatternTemplate` interface provides type-safe pattern definitions with strategy-aware configuration:
+
+```typescript
+interface PatternTemplate {
+  regex: RegExp;                              // Pattern to match
+  nodeType: string;                           // Target node type
+  priority: number;                           // Detection priority
+  splittingStrategy: SplittingStrategy;       // 'prefix-inheritance' | 'simple-split'
+  prefixToInherit?: string;                   // Prefix for prefix-inheritance strategy
+  cursorPlacement: CursorPlacement;           // 'after-prefix' | 'start' | 'end'
+  extractMetadata?: (match: RegExpMatchArray) => Record<string, unknown>;
+  contentTemplate?: string;                   // Optional template for auto-completion
+}
+```
+
+### Migration Path: patternDetection → patternTemplate
+
+**Old System (patternDetection):**
+- Field: `config.patternDetection[]` (array of PatternDetectionConfig)
+- Used by: `PluginRegistry.detectPatternInContent()`
+- Scope: Plugin-level pattern detection only
+
+**New System (patternTemplate):**
+- Field: `config.patternTemplate` (single PatternTemplate)
+- Used by: `PatternRegistry` + `PatternSplitter` (system-wide)
+- Scope: Global pattern handling + content splitting
+
+### Core Plugins Updated
+
+All 5 core plugins now register PatternTemplate definitions:
+
+```typescript
+// Header Plugin
+patternTemplate: {
+  regex: /^(#{1,6})\s/,
+  nodeType: 'header',
+  priority: 10,
+  splittingStrategy: 'prefix-inheritance',
+  prefixToInherit: undefined,  // Extracted from regex
+  cursorPlacement: 'after-prefix'
+}
+
+// Task Plugin
+patternTemplate: {
+  regex: /^[-*+]?\s*\[\s*[xX\s]\s*\]\s/,
+  nodeType: 'task',
+  priority: 10,
+  splittingStrategy: 'simple-split',
+  cursorPlacement: 'start'
+}
+
+// Quote Block Plugin
+patternTemplate: {
+  regex: /^>\s/,
+  nodeType: 'quote-block',
+  priority: 10,
+  splittingStrategy: 'prefix-inheritance',
+  prefixToInherit: '> ',
+  cursorPlacement: 'after-prefix'
+}
+
+// Code Block Plugin
+patternTemplate: {
+  regex: /^```(\w+)?\n/,
+  nodeType: 'code-block',
+  priority: 10,
+  splittingStrategy: 'simple-split',
+  cursorPlacement: 'start',
+  contentTemplate: '```\n\n```'
+}
+
+// Ordered List Plugin
+patternTemplate: {
+  regex: /^1\.\s/,
+  nodeType: 'ordered-list',
+  priority: 10,
+  splittingStrategy: 'prefix-inheritance',
+  prefixToInherit: '1. ',
+  cursorPlacement: 'after-prefix'
+}
+```
+
+### Backward Compatibility
+
+During the transition (issue #317), both systems coexist:
+- **patternDetection** field is kept for backward compatibility
+- **patternTemplate** field is the new recommended approach
+- Both are registered and function independently
+
+Future major version will deprecate `patternDetection` entirely.
+
+### Splitting Strategy Architecture
+
+The PatternSplitter uses strategy pattern to handle different node type splitting behaviors:
+
+#### Prefix-Inheritance Strategy
+
+**Used for:** Headers, quotes, ordered lists (nodes with inherited prefixes on new lines)
+
+**Behavior:**
+- Cursor at/within prefix → Create empty node with prefix, preserve original
+- Cursor after prefix → Split and add prefix to new node
+
+**Example (Header):**
+```
+Before: "# My Header"  (cursor after "My ")
+After:
+  - beforeContent: "# My "
+  - afterContent: "# Header"
+  - newNodeCursorPosition: 2 (after "# ")
+```
+
+#### Simple-Split Strategy
+
+**Used for:** Text nodes, task nodes (nodes without special prefix handling)
+
+**Behavior:**
+- Split at cursor position
+- Preserve inline markdown formatting (bold, italic, code)
+- Close formatting in first part, open in second part
+
+**Example (Text with bold):**
+```
+Before: "Some **bold** text"  (cursor at position 8)
+After:
+  - beforeContent: "Some **b**"
+  - afterContent: "**old** text"
+  - newNodeCursorPosition: 2 (length of opening markers)
+```
+
+### PatternRegistry Singleton
+
+The `PatternRegistry.getInstance()` maintains a global registry of all patterns:
+
+```typescript
+// Register patterns from plugins
+const registry = PatternRegistry.getInstance();
+registry.register(headerPattern);
+registry.register(taskPattern);
+
+// Detect which pattern applies to content
+const detection = registry.detectPattern("# My Header");
+// Returns: { pattern, match, found: true }
+
+// Get patterns by node type
+const headerPattern = registry.getPattern('header');
+```
+
+### PatternSplitter Interface
+
+The `PatternSplitter` class provides unified content splitting:
+
+```typescript
+const splitter = new PatternSplitter(registry);
+
+// Split with pattern auto-detection
+const result = splitter.split("# My Header", 5);
+// Returns: { beforeContent, afterContent, newNodeCursorPosition }
+
+// Split with explicit node type
+const result = splitter.split("# My Header", 5, 'header');
+
+// Register custom splitting strategies
+splitter.registerStrategy('custom', new CustomStrategy());
+```
+
+### Usage in CreateNodeCommand
+
+Phase 5 will migrate `CreateNodeCommand` to use the new system:
+
+```typescript
+// Before: Used markdown-splitter.ts
+import { markdown Splitter } from '../../utils/markdown-splitter';
+
+// After: Use unified PatternSplitter
+import { patternSplitter } from '../../lib/patterns/splitter';
+
+const result = patternSplitter.split(content, cursorPosition, nodeType);
+```
+
+---
+
 ## Version History
 
 - **2025-01**: Added `contentTemplate` support to `PatternDetectionConfig`
 - **2025-01**: Documented unified template system for slash commands and pattern detection
 - **2025-01**: Added troubleshooting guide for common template issues
+- **2025-10** (Issue #317): Introduced PatternTemplate, PatternRegistry, and PatternSplitter for unified pattern system
