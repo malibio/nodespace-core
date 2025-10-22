@@ -504,8 +504,361 @@ patternDetection: [{
 
 ---
 
+## Pattern System Unification (New in #317)
+
+### Overview of the New Pattern System
+
+Issue #317 introduced a unified pattern system that consolidates pattern handling across the application:
+
+1. **PatternTemplate** - Type-safe pattern definitions (replaces `patternDetection`)
+2. **PatternRegistry** - Singleton registry for all patterns in the system
+3. **PatternSplitter** - Unified interface for content splitting with intelligent strategy delegation
+
+### Architecture Diagrams
+
+#### Component Interaction Diagram
+
+```mermaid
+graph TB
+    subgraph "Plugin System"
+        P1[Header Plugin]
+        P2[Task Plugin]
+        P3[Quote Plugin]
+        P4[Code Plugin]
+        P5[List Plugin]
+    end
+
+    subgraph "Pattern System Core"
+        REG[PatternRegistry<br/>Singleton]
+        SPLIT[PatternSplitter]
+
+        subgraph "Strategies"
+            S1[PrefixInheritance<br/>Strategy]
+            S2[SimpleSplit<br/>Strategy]
+        end
+    end
+
+    subgraph "Application"
+        CMD[CreateNodeCommand]
+        UI[User Types Enter]
+    end
+
+    P1 -->|register PatternTemplate| REG
+    P2 -->|register PatternTemplate| REG
+    P3 -->|register PatternTemplate| REG
+    P4 -->|register PatternTemplate| REG
+    P5 -->|register PatternTemplate| REG
+
+    UI -->|Enter pressed| CMD
+    CMD -->|split content| SPLIT
+    SPLIT -->|detect pattern| REG
+    SPLIT -->|delegate to| S1
+    SPLIT -->|delegate to| S2
+
+    REG -.->|pattern info| SPLIT
+    S1 -->|split result| CMD
+    S2 -->|split result| CMD
+
+    style REG fill:#e1f5ff
+    style SPLIT fill:#fff4e1
+    style CMD fill:#f0ffe1
+```
+
+#### Pattern Detection Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CreateNodeCommand
+    participant PatternSplitter
+    participant PatternRegistry
+    participant Strategy
+
+    User->>CreateNodeCommand: Press Enter
+    CreateNodeCommand->>PatternSplitter: split(content, cursorPos)
+
+    PatternSplitter->>PatternRegistry: detectPattern(content)
+    PatternRegistry->>PatternRegistry: Check patterns by priority
+    PatternRegistry-->>PatternSplitter: PatternDetectionResult
+
+    alt Pattern found
+        PatternSplitter->>PatternSplitter: Get strategy type<br/>(prefix-inheritance or simple-split)
+        PatternSplitter->>Strategy: split(content, pos, pattern)
+        Strategy-->>PatternSplitter: SplitResult
+    else No pattern found
+        PatternSplitter->>Strategy: Use SimpleSplit as fallback
+        Strategy-->>PatternSplitter: SplitResult
+    end
+
+    PatternSplitter-->>CreateNodeCommand: SplitResult
+    CreateNodeCommand->>CreateNodeCommand: Create new node with split content
+```
+
+#### Strategy Selection Decision Tree
+
+```mermaid
+graph TD
+    START[User presses Enter] --> DETECT{Pattern<br/>detected?}
+
+    DETECT -->|Yes| CHECK_STRATEGY{Which<br/>strategy?}
+    DETECT -->|No| FALLBACK[Use SimpleSplit<br/>as fallback]
+
+    CHECK_STRATEGY -->|prefix-inheritance| PREFIX[PrefixInheritanceStrategy]
+    CHECK_STRATEGY -->|simple-split| SIMPLE[SimpleSplitStrategy]
+
+    PREFIX --> PREFIX_CHECK{Cursor<br/>position?}
+    PREFIX_CHECK -->|At/within prefix| PREFIX_EMPTY[Create empty node<br/>with prefix]
+    PREFIX_CHECK -->|After prefix| PREFIX_SPLIT[Split + inherit<br/>prefix in new node]
+
+    SIMPLE --> SIMPLE_CHECK{Inline<br/>formatting?}
+    SIMPLE_CHECK -->|Yes| PRESERVE[Preserve formatting<br/>across split]
+    SIMPLE_CHECK -->|No| PLAIN[Plain split]
+
+    FALLBACK --> PLAIN
+
+    PREFIX_EMPTY --> RESULT[Return SplitResult]
+    PREFIX_SPLIT --> RESULT
+    PRESERVE --> RESULT
+    PLAIN --> RESULT
+
+    style DETECT fill:#ffe1e1
+    style CHECK_STRATEGY fill:#e1f5ff
+    style PREFIX fill:#fff4e1
+    style SIMPLE fill:#f0ffe1
+    style RESULT fill:#e1ffe1
+```
+
+#### Data Flow: Plugin Registration → Content Splitting
+
+```mermaid
+graph LR
+    subgraph "1. Plugin Registration"
+        PLG[Plugin defines<br/>PatternTemplate] -->|at startup| REG_CALL[registry.register]
+    end
+
+    subgraph "2. Pattern Registry"
+        REG_CALL --> STORE[Store in Map<br/>by nodeType]
+        STORE --> SORT[Sort by priority]
+    end
+
+    subgraph "3. User Interaction"
+        TYPE[User types<br/>'# Header'] --> ENTER[User presses<br/>Enter]
+    end
+
+    subgraph "4. Pattern Detection"
+        ENTER --> DET[registry.detectPattern]
+        DET --> ITER[Iterate patterns<br/>by priority]
+        ITER --> MATCH{Regex<br/>match?}
+        MATCH -->|Yes| FOUND[Return pattern +<br/>match result]
+        MATCH -->|No| NEXT[Try next pattern]
+        NEXT --> ITER
+    end
+
+    subgraph "5. Content Splitting"
+        FOUND --> SEL[Select strategy<br/>from pattern]
+        SEL --> EXEC[Execute strategy.split]
+        EXEC --> RES[Return SplitResult]
+    end
+
+    subgraph "6. Result Application"
+        RES --> NEW[Create new node<br/>with split content]
+        NEW --> CUR[Position cursor<br/>per cursorPlacement]
+    end
+
+    style PLG fill:#e1f5ff
+    style STORE fill:#fff4e1
+    style ENTER fill:#ffe1e1
+    style FOUND fill:#f0ffe1
+    style RES fill:#e1ffe1
+```
+
+### PatternTemplate Interface
+
+The new `PatternTemplate` interface provides type-safe pattern definitions with strategy-aware configuration:
+
+```typescript
+interface PatternTemplate {
+  regex: RegExp;                              // Pattern to match
+  nodeType: string;                           // Target node type
+  priority: number;                           // Detection priority
+  splittingStrategy: SplittingStrategy;       // 'prefix-inheritance' | 'simple-split'
+  prefixToInherit?: string;                   // Prefix for prefix-inheritance strategy
+  cursorPlacement: CursorPlacement;           // 'after-prefix' | 'start' | 'end'
+  extractMetadata?: (match: RegExpMatchArray) => Record<string, unknown>;
+  contentTemplate?: string;                   // Optional template for auto-completion
+}
+```
+
+### Migration Path: patternDetection → patternTemplate
+
+**Old System (patternDetection):**
+- Field: `config.patternDetection[]` (array of PatternDetectionConfig)
+- Used by: `PluginRegistry.detectPatternInContent()`
+- Scope: Plugin-level pattern detection only
+
+**New System (patternTemplate):**
+- Field: `config.patternTemplate` (single PatternTemplate)
+- Used by: `PatternRegistry` + `PatternSplitter` (system-wide)
+- Scope: Global pattern handling + content splitting
+
+### Core Plugins Updated
+
+All 5 core plugins now register PatternTemplate definitions:
+
+```typescript
+// Header Plugin
+patternTemplate: {
+  regex: /^(#{1,6})\s/,
+  nodeType: 'header',
+  priority: 10,
+  splittingStrategy: 'prefix-inheritance',
+  prefixToInherit: undefined,  // Extracted from regex
+  cursorPlacement: 'after-prefix'
+}
+
+// Task Plugin
+patternTemplate: {
+  regex: /^[-*+]?\s*\[\s*[xX\s]\s*\]\s/,
+  nodeType: 'task',
+  priority: 10,
+  splittingStrategy: 'simple-split',
+  cursorPlacement: 'start'
+}
+
+// Quote Block Plugin
+patternTemplate: {
+  regex: /^>\s/,
+  nodeType: 'quote-block',
+  priority: 10,
+  splittingStrategy: 'prefix-inheritance',
+  prefixToInherit: '> ',
+  cursorPlacement: 'after-prefix'
+}
+
+// Code Block Plugin
+patternTemplate: {
+  regex: /^```(\w+)?\n/,
+  nodeType: 'code-block',
+  priority: 10,
+  splittingStrategy: 'simple-split',
+  cursorPlacement: 'start',
+  contentTemplate: '```\n\n```'
+}
+
+// Ordered List Plugin
+patternTemplate: {
+  regex: /^1\.\s/,
+  nodeType: 'ordered-list',
+  priority: 10,
+  splittingStrategy: 'prefix-inheritance',
+  prefixToInherit: '1. ',
+  cursorPlacement: 'after-prefix'
+}
+```
+
+### Backward Compatibility
+
+During the transition (issue #317), both systems coexist:
+- **patternDetection** field is kept for backward compatibility
+- **patternTemplate** field is the new recommended approach
+- Both are registered and function independently
+
+Future major version will deprecate `patternDetection` entirely.
+
+### Splitting Strategy Architecture
+
+The PatternSplitter uses strategy pattern to handle different node type splitting behaviors:
+
+#### Prefix-Inheritance Strategy
+
+**Used for:** Headers, quotes, ordered lists (nodes with inherited prefixes on new lines)
+
+**Behavior:**
+- Cursor at/within prefix → Create empty node with prefix, preserve original
+- Cursor after prefix → Split and add prefix to new node
+
+**Example (Header):**
+```
+Before: "# My Header"  (cursor after "My ")
+After:
+  - beforeContent: "# My "
+  - afterContent: "# Header"
+  - newNodeCursorPosition: 2 (after "# ")
+```
+
+#### Simple-Split Strategy
+
+**Used for:** Text nodes, task nodes (nodes without special prefix handling)
+
+**Behavior:**
+- Split at cursor position
+- Preserve inline markdown formatting (bold, italic, code)
+- Close formatting in first part, open in second part
+
+**Example (Text with bold):**
+```
+Before: "Some **bold** text"  (cursor at position 8)
+After:
+  - beforeContent: "Some **b**"
+  - afterContent: "**old** text"
+  - newNodeCursorPosition: 2 (length of opening markers)
+```
+
+### PatternRegistry Singleton
+
+The `PatternRegistry.getInstance()` maintains a global registry of all patterns:
+
+```typescript
+// Register patterns from plugins
+const registry = PatternRegistry.getInstance();
+registry.register(headerPattern);
+registry.register(taskPattern);
+
+// Detect which pattern applies to content
+const detection = registry.detectPattern("# My Header");
+// Returns: { pattern, match, found: true }
+
+// Get patterns by node type
+const headerPattern = registry.getPattern('header');
+```
+
+### PatternSplitter Interface
+
+The `PatternSplitter` class provides unified content splitting:
+
+```typescript
+const splitter = new PatternSplitter(registry);
+
+// Split with pattern auto-detection
+const result = splitter.split("# My Header", 5);
+// Returns: { beforeContent, afterContent, newNodeCursorPosition }
+
+// Split with explicit node type
+const result = splitter.split("# My Header", 5, 'header');
+
+// Register custom splitting strategies
+splitter.registerStrategy('custom', new CustomStrategy());
+```
+
+### Usage in CreateNodeCommand
+
+Phase 5 will migrate `CreateNodeCommand` to use the new system:
+
+```typescript
+// Before: Used markdown-splitter.ts
+import { markdown Splitter } from '../../utils/markdown-splitter';
+
+// After: Use unified PatternSplitter
+import { patternSplitter } from '../../lib/patterns/splitter';
+
+const result = patternSplitter.split(content, cursorPosition, nodeType);
+```
+
+---
+
 ## Version History
 
 - **2025-01**: Added `contentTemplate` support to `PatternDetectionConfig`
 - **2025-01**: Documented unified template system for slash commands and pattern detection
 - **2025-01**: Added troubleshooting guide for common template issues
+- **2025-10** (Issue #317): Introduced PatternTemplate, PatternRegistry, and PatternSplitter for unified pattern system
