@@ -7,10 +7,6 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "mcp-server"
-path = "src/bin/mcp-server.rs"
-
 [dependencies]
 # Database - Using libsql for Turso embedded database
 libsql = { workspace = true }

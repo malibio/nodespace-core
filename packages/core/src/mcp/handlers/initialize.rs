@@ -6,8 +6,12 @@
 use crate::mcp::types::MCPError;
 use serde_json::{json, Value};
 
-/// MCP protocol version supported by this server
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Supported MCP protocol versions (for backward compatibility)
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    "2025-06-18", // Latest spec (future-proof)
+    "2025-03-26", // Streamable HTTP (current)
+    "2024-11-05", // HTTP+SSE (deprecated but supported)
+];
 
 /// Handle MCP initialize request
 ///
@@ -44,12 +48,10 @@ pub fn handle_initialize(params: Value) -> Result<Value, MCPError> {
     // Version negotiation: Check if we support client's version
     // MCP spec: Server should respond with same version if supported,
     // or suggest alternative version
-    if client_version != MCP_PROTOCOL_VERSION {
-        // For now, only support latest version
-        // Future: Could negotiate older versions
+    if !SUPPORTED_PROTOCOL_VERSIONS.contains(&client_version) {
         return Err(MCPError::invalid_request(format!(
-            "Unsupported protocol version: {}. Server supports: {}",
-            client_version, MCP_PROTOCOL_VERSION
+            "Unsupported protocol version: {}. Server supports: {:?}",
+            client_version, SUPPORTED_PROTOCOL_VERSIONS
         )));
     }
 
@@ -57,7 +59,7 @@ pub fn handle_initialize(params: Value) -> Result<Value, MCPError> {
     // Tools capability indicates support for tools/list and tools/call
     // Actual tool schemas are retrieved via tools/list method
     Ok(json!({
-        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "protocolVersion": client_version,  // Echo back client's version if supported
         "serverInfo": {
             "name": "nodespace-mcp-server",
             "version": env!("CARGO_PKG_VERSION")
