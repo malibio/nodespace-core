@@ -62,7 +62,8 @@ pub struct MCPNotification {
     /// Method name
     pub method: String,
 
-    /// Method parameters as JSON value
+    /// Method parameters as JSON value (optional for notifications)
+    #[serde(default)]
     pub params: Value,
 }
 
