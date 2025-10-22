@@ -330,7 +330,7 @@ describe('PatternSplitter Integration', () => {
   describe('Strategy Registration', () => {
     it('should allow registering custom strategies', () => {
       const customStrategy = {
-        split: (_content: string, _position: number, _pattern: any) => ({
+        split: (_content: string, _position: number, _pattern: unknown) => ({
           beforeContent: 'custom',
           afterContent: 'split',
           newNodeCursorPosition: 0
