@@ -328,10 +328,19 @@ async fn handle_streamable_http_request(
             method, request_id, accept
         );
 
-        // Determine response format based on Accept header
-        // If client accepts both JSON and SSE, prefer JSON for single requests
-        // SSE is only used if explicitly requested WITHOUT JSON fallback
-        let prefer_sse = accept.contains("text/event-stream") && !accept.contains("application/json");
+        // LIMITATION: Simple substring matching for Accept header.
+        // Does not parse q-values per RFC 7231. This works correctly for known MCP clients:
+        // - Claude Code sends: "application/json, text/event-stream" → chooses JSON ✓
+        // - SSE-only clients send: "text/event-stream" → chooses SSE ✓
+        // - Default (no header): defaults to JSON ✓
+        //
+        // Edge case not handled:
+        // - "application/json;q=0.1, text/event-stream;q=0.9" → would incorrectly choose JSON
+        //
+        // Future improvement: Use proper Accept header parsing library with q-value support.
+        // For now, this simple approach is sufficient for all known MCP client implementations.
+        let prefer_sse =
+            accept.contains("text/event-stream") && !accept.contains("application/json");
 
         if prefer_sse {
             // SSE streaming mode
