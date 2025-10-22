@@ -17,6 +17,7 @@ console.log(`\n📝 Logging all traffic...\n`);
 
 const server = Bun.serve({
   port: PROXY_PORT,
+  idleTimeout: 120, // 2 minutes idle timeout for SSE streams
   async fetch(req) {
     const url = new URL(req.url);
     console.log(`\n${'='.repeat(80)}`);
@@ -50,13 +51,22 @@ const server = Bun.serve({
 
         const { readable, writable } = new TransformStream({
           transform(chunk, controller) {
-            const text = new TextDecoder().decode(chunk);
-            console.log(`   📡 SSE: ${text}`);
-            controller.enqueue(chunk);
+            try {
+              const text = new TextDecoder().decode(chunk);
+              if (text.trim()) {
+                console.log(`   📡 SSE: ${text.trim()}`);
+              }
+              controller.enqueue(chunk);
+            } catch (err) {
+              console.error(`   ⚠️ SSE decode error:`, err);
+              controller.enqueue(chunk);
+            }
           }
         });
 
-        response.body.pipeTo(writable);
+        response.body.pipeTo(writable).catch(err => {
+          console.error(`   ⚠️ SSE stream error:`, err.message);
+        });
 
         return new Response(readable, {
           status: response.status,
