@@ -78,7 +78,7 @@ export class CreateNodeCommand implements KeyboardCommand {
       });
     } else {
       // Normal splitting behavior for middle/end positions
-      // Don't pass nodeType - let PatternSplitter auto-detect from content (like legacy markdown-splitter)
+      // Auto-detect pattern from content (preserves legacy behavior)
       const splitResult = patternSplitter.split(currentContent, cursorPosition);
 
       // NOTE: We don't update the element content here because:

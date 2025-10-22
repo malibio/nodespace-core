@@ -514,6 +514,164 @@ Issue #317 introduced a unified pattern system that consolidates pattern handlin
 2. **PatternRegistry** - Singleton registry for all patterns in the system
 3. **PatternSplitter** - Unified interface for content splitting with intelligent strategy delegation
 
+### Architecture Diagrams
+
+#### Component Interaction Diagram
+
+```mermaid
+graph TB
+    subgraph "Plugin System"
+        P1[Header Plugin]
+        P2[Task Plugin]
+        P3[Quote Plugin]
+        P4[Code Plugin]
+        P5[List Plugin]
+    end
+
+    subgraph "Pattern System Core"
+        REG[PatternRegistry<br/>Singleton]
+        SPLIT[PatternSplitter]
+
+        subgraph "Strategies"
+            S1[PrefixInheritance<br/>Strategy]
+            S2[SimpleSplit<br/>Strategy]
+        end
+    end
+
+    subgraph "Application"
+        CMD[CreateNodeCommand]
+        UI[User Types Enter]
+    end
+
+    P1 -->|register PatternTemplate| REG
+    P2 -->|register PatternTemplate| REG
+    P3 -->|register PatternTemplate| REG
+    P4 -->|register PatternTemplate| REG
+    P5 -->|register PatternTemplate| REG
+
+    UI -->|Enter pressed| CMD
+    CMD -->|split content| SPLIT
+    SPLIT -->|detect pattern| REG
+    SPLIT -->|delegate to| S1
+    SPLIT -->|delegate to| S2
+
+    REG -.->|pattern info| SPLIT
+    S1 -->|split result| CMD
+    S2 -->|split result| CMD
+
+    style REG fill:#e1f5ff
+    style SPLIT fill:#fff4e1
+    style CMD fill:#f0ffe1
+```
+
+#### Pattern Detection Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CreateNodeCommand
+    participant PatternSplitter
+    participant PatternRegistry
+    participant Strategy
+
+    User->>CreateNodeCommand: Press Enter
+    CreateNodeCommand->>PatternSplitter: split(content, cursorPos)
+
+    PatternSplitter->>PatternRegistry: detectPattern(content)
+    PatternRegistry->>PatternRegistry: Check patterns by priority
+    PatternRegistry-->>PatternSplitter: PatternDetectionResult
+
+    alt Pattern found
+        PatternSplitter->>PatternSplitter: Get strategy type<br/>(prefix-inheritance or simple-split)
+        PatternSplitter->>Strategy: split(content, pos, pattern)
+        Strategy-->>PatternSplitter: SplitResult
+    else No pattern found
+        PatternSplitter->>Strategy: Use SimpleSplit as fallback
+        Strategy-->>PatternSplitter: SplitResult
+    end
+
+    PatternSplitter-->>CreateNodeCommand: SplitResult
+    CreateNodeCommand->>CreateNodeCommand: Create new node with split content
+```
+
+#### Strategy Selection Decision Tree
+
+```mermaid
+graph TD
+    START[User presses Enter] --> DETECT{Pattern<br/>detected?}
+
+    DETECT -->|Yes| CHECK_STRATEGY{Which<br/>strategy?}
+    DETECT -->|No| FALLBACK[Use SimpleSplit<br/>as fallback]
+
+    CHECK_STRATEGY -->|prefix-inheritance| PREFIX[PrefixInheritanceStrategy]
+    CHECK_STRATEGY -->|simple-split| SIMPLE[SimpleSplitStrategy]
+
+    PREFIX --> PREFIX_CHECK{Cursor<br/>position?}
+    PREFIX_CHECK -->|At/within prefix| PREFIX_EMPTY[Create empty node<br/>with prefix]
+    PREFIX_CHECK -->|After prefix| PREFIX_SPLIT[Split + inherit<br/>prefix in new node]
+
+    SIMPLE --> SIMPLE_CHECK{Inline<br/>formatting?}
+    SIMPLE_CHECK -->|Yes| PRESERVE[Preserve formatting<br/>across split]
+    SIMPLE_CHECK -->|No| PLAIN[Plain split]
+
+    FALLBACK --> PLAIN
+
+    PREFIX_EMPTY --> RESULT[Return SplitResult]
+    PREFIX_SPLIT --> RESULT
+    PRESERVE --> RESULT
+    PLAIN --> RESULT
+
+    style DETECT fill:#ffe1e1
+    style CHECK_STRATEGY fill:#e1f5ff
+    style PREFIX fill:#fff4e1
+    style SIMPLE fill:#f0ffe1
+    style RESULT fill:#e1ffe1
+```
+
+#### Data Flow: Plugin Registration → Content Splitting
+
+```mermaid
+graph LR
+    subgraph "1. Plugin Registration"
+        PLG[Plugin defines<br/>PatternTemplate] -->|at startup| REG_CALL[registry.register]
+    end
+
+    subgraph "2. Pattern Registry"
+        REG_CALL --> STORE[Store in Map<br/>by nodeType]
+        STORE --> SORT[Sort by priority]
+    end
+
+    subgraph "3. User Interaction"
+        TYPE[User types<br/>'# Header'] --> ENTER[User presses<br/>Enter]
+    end
+
+    subgraph "4. Pattern Detection"
+        ENTER --> DET[registry.detectPattern]
+        DET --> ITER[Iterate patterns<br/>by priority]
+        ITER --> MATCH{Regex<br/>match?}
+        MATCH -->|Yes| FOUND[Return pattern +<br/>match result]
+        MATCH -->|No| NEXT[Try next pattern]
+        NEXT --> ITER
+    end
+
+    subgraph "5. Content Splitting"
+        FOUND --> SEL[Select strategy<br/>from pattern]
+        SEL --> EXEC[Execute strategy.split]
+        EXEC --> RES[Return SplitResult]
+    end
+
+    subgraph "6. Result Application"
+        RES --> NEW[Create new node<br/>with split content]
+        NEW --> CUR[Position cursor<br/>per cursorPlacement]
+    end
+
+    style PLG fill:#e1f5ff
+    style STORE fill:#fff4e1
+    style ENTER fill:#ffe1e1
+    style FOUND fill:#f0ffe1
+    style RES fill:#e1ffe1
+```
+
 ### PatternTemplate Interface
 
 The new `PatternTemplate` interface provides type-safe pattern definitions with strategy-aware configuration:

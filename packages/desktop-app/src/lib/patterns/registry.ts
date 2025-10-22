@@ -135,9 +135,22 @@ export class PatternRegistry {
   }
 
   /**
-   * Clear all patterns (mainly for testing)
+   * Clear all patterns (for testing only)
+   *
+   * @internal This method should only be used in test environments.
+   * Calling this in production will break pattern detection functionality.
+   *
+   * @throws {Error} If called in production environment
    */
   clear(): void {
+    // Guard against accidental production usage
+    if (import.meta.env.PROD) {
+      throw new Error(
+        'PatternRegistry.clear() is for testing only and cannot be called in production. ' +
+          'This would break pattern detection functionality.'
+      );
+    }
+
     this.patterns.clear();
     this.patternsByPriority = [];
   }
