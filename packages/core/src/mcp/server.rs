@@ -328,8 +328,12 @@ async fn handle_streamable_http_request(
             method, request_id, accept
         );
 
-        // For now, only support JSON responses (SSE streaming can be added later if needed)
-        if accept.contains("text/event-stream") {
+        // Determine response format based on Accept header
+        // If client accepts both JSON and SSE, prefer JSON for single requests
+        // SSE is only used if explicitly requested WITHOUT JSON fallback
+        let prefer_sse = accept.contains("text/event-stream") && !accept.contains("application/json");
+
+        if prefer_sse {
             // SSE streaming mode
             // For simplicity, we'll send a single SSE message with the response
             use axum::response::sse::{Event, KeepAlive, Sse};
