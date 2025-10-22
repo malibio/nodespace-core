@@ -200,10 +200,12 @@ async fn run_stdio_server(
     Ok(())
 }
 
-/// Run the MCP server over HTTP
+/// Run the MCP server over HTTP with SSE transport (2024-11-05 spec)
 ///
-/// Starts an HTTP server listening on the specified port that accepts
-/// JSON-RPC 2.0 requests via POST requests to /mcp endpoint.
+/// Implements the MCP HTTP+SSE transport:
+/// - SSE endpoint (GET /mcp) - Client connects, receives endpoint URI
+/// - POST endpoint (POST /mcp/message) - Client sends JSON-RPC messages
+///
 /// Also provides a /health endpoint for monitoring.
 #[instrument(skip(services, callback))]
 async fn run_http_server(
@@ -212,7 +214,7 @@ async fn run_http_server(
     callback: Option<ResponseCallback>,
 ) -> anyhow::Result<()> {
     info!(
-        "🔌 MCP HTTP server (GUI mode) starting on http://localhost:{}",
+        "🔌 MCP HTTP+SSE server (2024-11-05) starting on http://localhost:{}",
         port
     );
 
@@ -223,9 +225,10 @@ async fn run_http_server(
         initialized: Arc::new(AtomicBool::new(false)),
     });
 
-    // Create router with MCP handler and health check
+    // Create router with SSE endpoint, POST message endpoint, and health check
     let app = Router::new()
-        .route("/mcp", post(handle_http_mcp_request))
+        .route("/mcp", get(handle_sse_connection))
+        .route("/mcp/message", post(handle_http_mcp_request))
         .route("/health", get(handle_health_check))
         .layer(TraceLayer::new_for_http())
         .with_state((shared_services, shared_callback, shared_state));
@@ -234,17 +237,75 @@ async fn run_http_server(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
 
     info!(
-        "✅ MCP HTTP server (GUI mode) listening on http://localhost:{}",
+        "✅ MCP HTTP+SSE server (2024-11-05) listening on http://localhost:{}",
         port
     );
-    info!("   📍 MCP endpoint: http://localhost:{}/mcp", port);
+    info!("   📡 SSE endpoint: http://localhost:{}/mcp", port);
+    info!("   📬 POST endpoint: http://localhost:{}/mcp/message", port);
     info!("   🏥 Health check: http://localhost:{}/health", port);
 
     // Run the server
     axum::serve(listener, app).await?;
 
-    info!("🔌 MCP HTTP server (GUI mode) stopped");
+    info!("🔌 MCP HTTP+SSE server stopped");
     Ok(())
+}
+
+/// SSE connection endpoint (MCP 2024-11-05 HTTP+SSE transport)
+///
+/// When a client connects via SSE, this endpoint sends an `endpoint` event
+/// containing the URI where the client should POST JSON-RPC messages.
+///
+/// The SSE stream remains open for potential server-to-client notifications,
+/// though the current implementation focuses on client-initiated requests.
+async fn handle_sse_connection(
+    State((_, _, _)): State<(
+        Arc<McpServices>,
+        Option<ResponseCallback>,
+        Arc<ServerState>,
+    )>,
+) -> impl axum::response::IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use std::convert::Infallible;
+    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::StreamExt;
+
+    info!("📡 SSE client connected");
+
+    // Create a stream that sends the endpoint event immediately
+    let (tx, rx) = tokio::sync::broadcast::channel::<Result<Event, Infallible>>(10);
+
+    // Send the endpoint event as per MCP spec
+    let endpoint_data = json!({
+        "endpoint": "/mcp/message"
+    }).to_string();
+
+    // Spawn task to send the endpoint event
+    tokio::spawn(async move {
+        // Send the endpoint event using the SSE Event builder
+        let endpoint_event = Event::default()
+            .event("endpoint")
+            .data(endpoint_data);
+        let _ = tx.send(Ok(endpoint_event));
+
+        // Keep the channel alive for potential future server-to-client messages
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            // Send keepalive comment
+            let keepalive_event = Event::default().comment("keepalive");
+            if tx.send(Ok(keepalive_event)).is_err() {
+                break; // Client disconnected
+            }
+        }
+    });
+
+    // Convert broadcast receiver to stream
+    let stream = BroadcastStream::new(rx).filter_map(|result| match result {
+        Ok(event) => Some(event),
+        Err(_) => None,
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// Health check endpoint
@@ -254,7 +315,7 @@ async fn handle_health_check() -> Json<Value> {
     Json(json!({
         "status": "ok",
         "service": "NodeSpace MCP Server",
-        "transport": "http"
+        "transport": "http+sse"
     }))
 }
 
@@ -274,7 +335,7 @@ async fn handle_http_mcp_request(
     )>,
     Json(request): Json<MCPRequest>,
 ) -> Result<Json<MCPResponse>, StatusCode> {
-    debug!("📥 HTTP MCP request: {}", request.method);
+    info!("📥 HTTP MCP request: {} (id: {})", request.method, request.id);
 
     let request_id = request.id;
     let method = request.method.clone();
@@ -505,7 +566,7 @@ mod tests {
 
         assert_eq!(json["status"], "ok");
         assert_eq!(json["service"], "NodeSpace MCP Server");
-        assert_eq!(json["transport"], "http");
+        assert_eq!(json["transport"], "http+sse");
     }
 
     #[tokio::test]
