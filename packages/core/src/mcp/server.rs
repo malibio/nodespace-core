@@ -6,7 +6,6 @@
 //!
 //! Both transports share the same request handler logic and optional callbacks.
 
-use crate::mcp::handlers::nodes;
 use crate::mcp::types::{MCPError, MCPNotification, MCPRequest, MCPResponse};
 use crate::services::{NodeEmbeddingService, NodeService};
 use axum::{extract::State, http::StatusCode, routing::get, routing::post, Json, Router};
@@ -336,30 +335,11 @@ async fn handle_request(
         // Ping for connection health checks (doesn't need services or initialization)
         "ping" => Ok(json!({})),
 
-        // Normal node operations (require initialization to have completed first)
-        "create_node" => nodes::handle_create_node(&services.node_service, request.params).await,
-        "get_node" => nodes::handle_get_node(&services.node_service, request.params).await,
-        "update_node" => nodes::handle_update_node(&services.node_service, request.params).await,
-        "delete_node" => nodes::handle_delete_node(&services.node_service, request.params).await,
-        "query_nodes" => nodes::handle_query_nodes(&services.node_service, request.params).await,
-        "create_nodes_from_markdown" => {
-            crate::mcp::handlers::markdown::handle_create_nodes_from_markdown(
+        // MCP-compliant tool discovery and execution (per 2024-11-05 spec)
+        "tools/list" => crate::mcp::handlers::tools::handle_tools_list(request.params),
+        "tools/call" => {
+            crate::mcp::handlers::tools::handle_tools_call(
                 &services.node_service,
-                request.params,
-            )
-            .await
-        }
-        "get_markdown_from_node_id" => {
-            crate::mcp::handlers::markdown::handle_get_markdown_from_node_id(
-                &services.node_service,
-                request.params,
-            )
-            .await
-        }
-
-        // Search operations (require initialization)
-        "search_containers" => {
-            crate::mcp::handlers::search::handle_search_containers(
                 &services.embedding_service,
                 request.params,
             )
