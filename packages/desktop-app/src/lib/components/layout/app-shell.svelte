@@ -12,49 +12,36 @@
   import { pluginRegistry } from '$lib/plugins/index';
   import { isValidDateString } from '$lib/utils/date-formatting';
   import { SharedNodeStore } from '$lib/services/shared-node-store';
+  import { MCP_EVENTS } from '$lib/constants';
   import type { Node } from '$lib/types';
 
   // Constants
   const LOG_PREFIX = '[AppShell]';
 
-  // TypeScript compatibility for Tauri window check
+  /**
+   * Sets up MCP event listeners for real-time UI updates
+   *
+   * Listens to Tauri events emitted by the MCP server and updates the SharedNodeStore
+   * to trigger reactive UI updates across all components.
+   *
+   * @param sharedNodeStore - The shared node store instance to update
+   * @returns Cleanup function that removes all MCP event listeners
+   */
+  function setupMCPListeners(sharedNodeStore: SharedNodeStore): () => Promise<void> {
+    // Listen for node creation events from MCP
+    const unlistenNodeCreated = listen<{ node: Node }>(MCP_EVENTS.NODE_CREATED, (event) => {
+      console.log(`${LOG_PREFIX} [MCP] Node created:`, event.payload.node.id);
+      sharedNodeStore.setNode(
+        event.payload.node,
+        { type: 'mcp-server' },
+        false // Don't skip persistence - let store handle it
+      );
+    });
 
-  // Initialize theme system and menu event listeners
-  onMount(() => {
-    const cleanup = initializeTheme();
-
-    // Initialize the unified plugin registry with core plugins
-    registerCorePlugins(pluginRegistry);
-
-    // Listen for menu events from Tauri (only if running in Tauri environment)
-    let unlistenMenu: Promise<() => void> | null = null;
-    let unlistenNodeCreated: Promise<() => void> | null = null;
-    let unlistenNodeUpdated: Promise<() => void> | null = null;
-    let unlistenNodeDeleted: Promise<() => void> | null = null;
-
-    if (
-      typeof window !== 'undefined' &&
-      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-    ) {
-      unlistenMenu = listen('menu-toggle-sidebar', () => {
-        toggleSidebar();
-      });
-
-      // Listen for MCP server events for real-time UI updates
-      const sharedNodeStore = SharedNodeStore.getInstance();
-
-      // Listen for node creation events from MCP
-      unlistenNodeCreated = listen<{ node: Node }>('node-created', (event) => {
-        console.log(`${LOG_PREFIX} [MCP] Node created:`, event.payload.node.id);
-        sharedNodeStore.setNode(
-          event.payload.node,
-          { type: 'mcp-server' },
-          false // Don't skip persistence - let store handle it
-        );
-      });
-
-      // Listen for node update events from MCP (hybrid approach - fetch full node)
-      unlistenNodeUpdated = listen<{ node_id: string }>('node-updated', async (event) => {
+    // Listen for node update events from MCP (hybrid approach - fetch full node)
+    const unlistenNodeUpdated = listen<{ node_id: string }>(
+      MCP_EVENTS.NODE_UPDATED,
+      async (event) => {
         console.log(`${LOG_PREFIX} [MCP] Node updated:`, event.payload.node_id);
         try {
           const node = await invoke<Node>('get_node', { id: event.payload.node_id });
@@ -73,17 +60,50 @@
             error
           );
         }
+      }
+    );
+
+    // Listen for node deletion events from MCP
+    const unlistenNodeDeleted = listen<{ node_id: string }>(MCP_EVENTS.NODE_DELETED, (event) => {
+      console.log(`${LOG_PREFIX} [MCP] Node deleted:`, event.payload.node_id);
+      sharedNodeStore.deleteNode(
+        event.payload.node_id,
+        { type: 'mcp-server' },
+        false // Don't skip persistence - let store handle it
+      );
+    });
+
+    // Return cleanup function
+    return async () => {
+      (await unlistenNodeCreated)();
+      (await unlistenNodeUpdated)();
+      (await unlistenNodeDeleted)();
+    };
+  }
+
+  // TypeScript compatibility for Tauri window check
+
+  // Initialize theme system and menu event listeners
+  onMount(() => {
+    const cleanup = initializeTheme();
+
+    // Initialize the unified plugin registry with core plugins
+    registerCorePlugins(pluginRegistry);
+
+    // Listen for menu events from Tauri (only if running in Tauri environment)
+    let unlistenMenu: Promise<() => void> | null = null;
+    let cleanupMCP: (() => Promise<void>) | null = null;
+
+    if (
+      typeof window !== 'undefined' &&
+      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    ) {
+      unlistenMenu = listen('menu-toggle-sidebar', () => {
+        toggleSidebar();
       });
 
-      // Listen for node deletion events from MCP
-      unlistenNodeDeleted = listen<{ node_id: string }>('node-deleted', (event) => {
-        console.log(`${LOG_PREFIX} [MCP] Node deleted:`, event.payload.node_id);
-        sharedNodeStore.deleteNode(
-          event.payload.node_id,
-          { type: 'mcp-server' },
-          false // Don't skip persistence - let store handle it
-        );
-      });
+      // Set up MCP event listeners for real-time UI updates
+      cleanupMCP = setupMCPListeners(SharedNodeStore.getInstance());
     }
 
     // Global click handler for nodespace:// links
@@ -146,14 +166,8 @@
       if (unlistenMenu) {
         (await unlistenMenu)();
       }
-      if (unlistenNodeCreated) {
-        (await unlistenNodeCreated)();
-      }
-      if (unlistenNodeUpdated) {
-        (await unlistenNodeUpdated)();
-      }
-      if (unlistenNodeDeleted) {
-        (await unlistenNodeDeleted)();
+      if (cleanupMCP) {
+        await cleanupMCP();
       }
       // Cleanup click handler (must match capture phase flag)
       document.removeEventListener('click', handleLinkClick, true);

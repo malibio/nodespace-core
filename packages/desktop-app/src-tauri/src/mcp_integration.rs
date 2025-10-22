@@ -105,11 +105,11 @@ fn emit_event_for_method(app: &AppHandle, method: &str, result: &Value) {
                 for node_value in nodes {
                     match serde_json::from_value::<Node>(node_value.clone()) {
                         Ok(node) => {
-                            let event = NodeCreatedEvent { node: node.clone() };
+                            let event = NodeCreatedEvent { node };
                             if let Err(e) = app.emit("node-created", &event) {
                                 warn!(
                                     "Failed to emit node-created event for markdown import node {}: {}",
-                                    node.id, e
+                                    event.node.id, e
                                 );
                             }
                         }
