@@ -87,9 +87,7 @@
           <div class="px-2 py-2 text-sm text-muted-foreground">Loading backlinks...</div>
         {:else if error}
           <div class="px-2 py-2 text-sm text-destructive">{error}</div>
-        {:else if backlinks.length === 0}
-          <div class="px-2 py-2 text-sm text-muted-foreground">No pages mention this one yet.</div>
-        {:else}
+        {:else if backlinks.length > 0}
           <ul class="flex flex-col gap-1">
             {#each backlinks as backlink}
               <li>
