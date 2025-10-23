@@ -145,10 +145,8 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(node_service: NodeService) -> Self {
-        Self {
-            node_service: Arc::new(node_service),
-        }
+    pub fn new(node_service: Arc<NodeService>) -> Self {
+        Self { node_service }
     }
 
     // =========================================================================
@@ -841,7 +839,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = DatabaseService::new(db_path).await?;
         let node_service = NodeService::new(db)?;
-        let operations = NodeOperations::new(node_service);
+        let operations = NodeOperations::new(Arc::new(node_service));
         Ok((operations, temp_dir))
     }
 

@@ -6,7 +6,8 @@
 
 use crate::mcp::handlers::{markdown, nodes, search};
 use crate::mcp::types::MCPError;
-use crate::services::{NodeEmbeddingService, NodeService};
+use crate::operations::NodeOperations;
+use crate::services::NodeEmbeddingService;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -74,7 +75,7 @@ pub fn handle_tools_list(_params: Value) -> Result<Value, MCPError> {
 ///
 /// # Arguments
 ///
-/// * `node_service` - Arc reference to NodeService for node operations
+/// * `node_operations` - Arc reference to NodeOperations for node operations
 /// * `embedding_service` - Arc reference to NodeEmbeddingService for search
 /// * `params` - Request parameters containing `name` and `arguments`
 ///
@@ -82,7 +83,7 @@ pub fn handle_tools_list(_params: Value) -> Result<Value, MCPError> {
 ///
 /// Returns JSON result with content array and isError flag per MCP spec
 pub async fn handle_tools_call(
-    node_service: &Arc<NodeService>,
+    node_operations: &Arc<NodeOperations>,
     embedding_service: &Arc<NodeEmbeddingService>,
     params: Value,
 ) -> Result<Value, MCPError> {
@@ -96,16 +97,16 @@ pub async fn handle_tools_call(
 
     // Route to appropriate handler based on tool name
     let result = match tool_name {
-        "create_node" => nodes::handle_create_node(node_service, arguments).await,
-        "get_node" => nodes::handle_get_node(node_service, arguments).await,
-        "update_node" => nodes::handle_update_node(node_service, arguments).await,
-        "delete_node" => nodes::handle_delete_node(node_service, arguments).await,
-        "query_nodes" => nodes::handle_query_nodes(node_service, arguments).await,
+        "create_node" => nodes::handle_create_node(node_operations, arguments).await,
+        "get_node" => nodes::handle_get_node(node_operations, arguments).await,
+        "update_node" => nodes::handle_update_node(node_operations, arguments).await,
+        "delete_node" => nodes::handle_delete_node(node_operations, arguments).await,
+        "query_nodes" => nodes::handle_query_nodes(node_operations, arguments).await,
         "create_nodes_from_markdown" => {
-            markdown::handle_create_nodes_from_markdown(node_service, arguments).await
+            markdown::handle_create_nodes_from_markdown(node_operations, arguments).await
         }
         "get_markdown_from_node_id" => {
-            markdown::handle_get_markdown_from_node_id(node_service, arguments).await
+            markdown::handle_get_markdown_from_node_id(node_operations, arguments).await
         }
         "search_containers" => search::handle_search_containers(embedding_service, arguments).await,
         _ => {

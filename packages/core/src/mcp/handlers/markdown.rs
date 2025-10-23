@@ -24,7 +24,7 @@
 
 use crate::mcp::types::MCPError;
 use crate::models::Node;
-use crate::services::NodeService;
+use crate::operations::NodeOperations;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -157,7 +157,7 @@ impl ParserContext {
 
 /// Handle create_nodes_from_markdown MCP request
 pub async fn handle_create_nodes_from_markdown(
-    service: &Arc<NodeService>,
+    operations: &Arc<NodeOperations>,
     params: Value,
 ) -> Result<Value, MCPError> {
     let params: CreateNodesFromMarkdownParams = serde_json::from_value(params)
@@ -175,7 +175,7 @@ pub async fn handle_create_nodes_from_markdown(
     // Parse markdown and create nodes
     // The first element will become the container node
     let mut context = ParserContext::new_empty();
-    parse_markdown(&params.markdown_content, service, &mut context).await?;
+    parse_markdown(&params.markdown_content, operations, &mut context).await?;
 
     // Validate we didn't exceed max nodes
     if context.nodes.len() > MAX_NODES_PER_IMPORT {
@@ -208,7 +208,7 @@ pub async fn handle_create_nodes_from_markdown(
 /// # Arguments
 ///
 /// * `markdown` - The markdown content to parse
-/// * `service` - NodeService for creating nodes in the database
+/// * `operations` - NodeOperations for creating nodes in the database
 /// * `context` - Parser context tracking hierarchy and node state
 ///
 /// # Returns
@@ -222,7 +222,7 @@ pub async fn handle_create_nodes_from_markdown(
 /// - **List context takes precedence**: Items nested in lists use list parent, not heading parent
 async fn parse_markdown(
     markdown: &str,
-    service: &Arc<NodeService>,
+    operations: &Arc<NodeOperations>,
     context: &mut ParserContext,
 ) -> Result<(), MCPError> {
     // Enable GitHub Flavored Markdown extensions (tables, strikethrough, task lists, etc.)
@@ -269,7 +269,7 @@ async fn parse_markdown(
                             format!("{} {}", "#".repeat(heading_level), current_text.trim());
 
                         let node_id = create_node(
-                            service,
+                            operations,
                             "header",
                             &content,
                             context.current_parent_id(),
@@ -292,7 +292,7 @@ async fn parse_markdown(
                                 .unwrap_or(false)
                         {
                             let node_id = create_node(
-                                service,
+                                operations,
                                 "text",
                                 content,
                                 context.current_parent_id(),
@@ -314,7 +314,7 @@ async fn parse_markdown(
                         let content = format!("{}\n{}\n```", fence, current_text.trim_end());
 
                         let node_id = create_node(
-                            service,
+                            operations,
                             "code-block",
                             &content,
                             context.current_parent_id(),
@@ -337,7 +337,7 @@ async fn parse_markdown(
                                 .join("\n");
 
                             let node_id = create_node(
-                                service,
+                                operations,
                                 "quote-block",
                                 &content,
                                 context.current_parent_id(),
@@ -371,7 +371,7 @@ async fn parse_markdown(
                             };
 
                             let node_id = create_node(
-                                service,
+                                operations,
                                 node_type,
                                 &formatted_content,
                                 context.current_parent_id(),
@@ -433,9 +433,9 @@ async fn parse_markdown(
     Ok(())
 }
 
-/// Create a node via NodeService
+/// Create a node via NodeOperations
 async fn create_node(
-    service: &Arc<NodeService>,
+    operations: &Arc<NodeOperations>,
     node_type: &str,
     content: &str,
     parent_id: Option<String>,
@@ -443,48 +443,43 @@ async fn create_node(
     before_sibling_id: Option<String>,
     is_first_node: bool,
 ) -> Result<String, MCPError> {
-    let node = Node::new(
-        node_type.to_string(),
-        content.to_string(),
-        parent_id,
-        json!({}),
-    );
-
     // First node becomes the container (no container_node_id for itself)
     // All subsequent nodes belong to that container
-    let node = if is_first_node {
-        Node {
-            container_node_id: None, // First node IS the container
-            before_sibling_id,
-            ..node
-        }
+    let final_container_id = if is_first_node {
+        None // First node IS the container
     } else {
-        Node {
-            container_node_id,
-            before_sibling_id,
-            ..node
-        }
+        container_node_id
     };
 
-    // Create node and provide contextual error on failure
-    service.create_node(node).await.map_err(|e| {
-        // Create preview of content for error message (avoid multi-line content in error)
-        let content_preview: String = content
-            .chars()
-            .take(40)
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect();
-        let content_display = if content.len() > 40 {
-            format!("{}...", content_preview)
-        } else {
-            content_preview
-        };
+    // Create node via NodeOperations (enforces all business rules)
+    operations
+        .create_node(
+            node_type.to_string(),
+            content.to_string(),
+            parent_id,
+            final_container_id,
+            before_sibling_id,
+            json!({}),
+        )
+        .await
+        .map_err(|e| {
+            // Create preview of content for error message (avoid multi-line content in error)
+            let content_preview: String = content
+                .chars()
+                .take(40)
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            let content_display = if content.len() > 40 {
+                format!("{}...", content_preview)
+            } else {
+                content_preview
+            };
 
-        MCPError::node_creation_failed(format!(
-            "Failed to create {} node '{}': {}",
-            node_type, content_display, e
-        ))
-    })
+            MCPError::node_creation_failed(format!(
+                "Failed to create {} node '{}': {}",
+                node_type, content_display, e
+            ))
+        })
 }
 
 /// Convert HeadingLevel to usize (1-6)
@@ -543,7 +538,7 @@ fn default_max_depth() -> usize {
 /// - [ ] Review architecture
 /// ```
 pub async fn handle_get_markdown_from_node_id(
-    service: &Arc<NodeService>,
+    operations: &Arc<NodeOperations>,
     params: Value,
 ) -> Result<Value, MCPError> {
     // Parse parameters
@@ -551,7 +546,7 @@ pub async fn handle_get_markdown_from_node_id(
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // Fetch the root node first to validate it exists
-    let root_node = service
+    let root_node = operations
         .get_node(&params.node_id)
         .await
         .map_err(|e| MCPError::internal_error(format!("Failed to get node: {}", e)))?
@@ -563,7 +558,7 @@ pub async fn handle_get_markdown_from_node_id(
         .with_container_node_id(root_node.id.clone())
         .with_order_by(OrderBy::CreatedAsc);
 
-    let all_nodes = service
+    let all_nodes = operations
         .query_nodes(filter)
         .await
         .map_err(|e| MCPError::internal_error(format!("Failed to query container nodes: {}", e)))?;
