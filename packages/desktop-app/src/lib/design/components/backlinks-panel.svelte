@@ -10,7 +10,6 @@
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
   import { backendAdapter } from '$lib/services/backend-adapter';
-  import { sharedNodeStore } from '$lib/services/shared-node-store';
   import Icon, { type IconName } from '$lib/design/icons/icon.svelte';
   import { onMount } from 'svelte';
   import type { Node } from '$lib/types/node';
@@ -27,10 +26,12 @@
       // Get container IDs that mention this node
       const containerIds = await backendAdapter.getMentioningContainers(nodeId);
 
-      // Fetch full node data for each container
-      backlinks = containerIds
-        .map((id: string) => sharedNodeStore.getNode(id))
-        .filter((node: Node | undefined): node is Node => node !== undefined);
+      // Fetch full node data for each container explicitly
+      // (don't rely on cache - ensure we always have the latest data)
+      const nodes = await Promise.all(containerIds.map((id) => backendAdapter.getNode(id)));
+
+      // Filter out null values (nodes that no longer exist)
+      backlinks = nodes.filter((node): node is Node => node !== null);
     } catch (err) {
       console.error('Failed to load backlinks:', err);
       error = err instanceof Error ? err.message : 'Failed to load backlinks';
@@ -103,6 +104,8 @@
               </li>
             {/each}
           </ul>
+        {:else}
+          <div class="px-2 py-2 text-sm text-muted-foreground">No pages mention this one yet.</div>
         {/if}
       </div>
     </Collapsible.Content>
