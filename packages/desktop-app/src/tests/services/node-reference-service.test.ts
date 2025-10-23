@@ -120,32 +120,12 @@ describe('NodeReferenceService - @mention autocomplete filtering', () => {
       expect(results.every((n) => n.nodeType === 'task' || n.containerNodeId === null)).toBe(true);
     });
 
-    it('should work with empty query string', async () => {
-      const mockResults: Node[] = [
-        {
-          id: 'container-1',
-          nodeType: 'text',
-          content: 'Some container',
-          parentId: null,
-          containerNodeId: null,
-          beforeSiblingId: null,
-          createdAt: new Date().toISOString(),
-          modifiedAt: new Date().toISOString(),
-          properties: {}
-        }
-      ];
-
-      (mockDatabaseService.queryNodes as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
-
+    it('should return early for queries below minQueryLength', async () => {
+      // Empty query should return early without calling database
       const results = await service.searchNodes('');
 
-      expect(mockDatabaseService.queryNodes).toHaveBeenCalledWith({
-        contentContains: '',
-        nodeType: undefined,
-        includeContainersAndTasks: true,
-        limit: expect.any(Number)
-      });
-      expect(results).toHaveLength(1);
+      expect(mockDatabaseService.queryNodes).not.toHaveBeenCalled();
+      expect(results).toHaveLength(0);
     });
 
     it('should respect nodeType filter when provided', async () => {
