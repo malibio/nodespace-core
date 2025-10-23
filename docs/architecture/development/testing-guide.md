@@ -13,15 +13,41 @@
 # Rust backend tests
 cargo test
 
-# Frontend tests  
-bun run test
+# Frontend tests (in-memory mode - fast, recommended)
+bun run test              # Run all tests once
+bun run test:watch        # Watch mode for TDD
+
+# Frontend tests (database mode - full SQLite integration)
+bun run test:db           # Full integration tests
+bun run test:db:watch     # Watch mode with database
 
 # Frontend tests with coverage
 bun run test:coverage
 
-# All tests
+# All tests (backend + frontend)
 cargo test && bun run test
 ```
+
+### Test Execution Modes
+
+NodeSpace integration tests support two execution modes:
+
+**1. In-Memory Mode (Default - Recommended)**
+- **Speed**: 100x faster (~100-200ms per test file)
+- **Database**: No SQLite persistence
+- **Use Case**: Development, TDD, CI/CD
+- **Command**: `bun run test` or `bun run test:watch`
+
+**2. Database Mode (Full Integration)**
+- **Speed**: Slower (~10-15s per test file)
+- **Database**: Full SQLite persistence and validation
+- **Use Case**: Pre-merge validation, debugging database issues
+- **Command**: `bun run test:db` or `bun run test:db:watch`
+
+**When to use which mode:**
+- Use **in-memory mode** for daily development and TDD workflow
+- Use **database mode** before merging critical changes or when debugging database-specific issues
+- CI/CD pipelines use **in-memory mode** for speed
 
 ## Current Test Status (Updated 2025-01-16)
 
