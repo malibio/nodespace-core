@@ -870,7 +870,6 @@ mod tests {
         assert!(NodeOperations::is_container_type("date"));
     }
 
-
     #[test]
     fn test_is_container_type_text() {
         assert!(NodeOperations::is_container_type("text"));

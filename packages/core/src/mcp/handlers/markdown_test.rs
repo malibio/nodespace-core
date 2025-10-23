@@ -520,8 +520,10 @@ Third paragraph"#;
             .count();
 
         // At least one content node should have no before_sibling (the first one)
-        assert!(nodes_with_no_before_sibling >= 1,
-            "At least one content node should have no before_sibling");
+        assert!(
+            nodes_with_no_before_sibling >= 1,
+            "At least one content node should have no before_sibling"
+        );
 
         // All content nodes should have the same parent (the container)
         assert_eq!(first.parent_id, Some(container.id.clone()));
@@ -843,7 +845,11 @@ Text paragraph
         // Note: Actual node count may include additional nodes for blank lines or parsing artifacts
         // Let's verify the count matches what we actually get
         let actual_count = import_result["nodes_created"].as_u64().unwrap();
-        assert!(actual_count >= 5, "Expected at least 5 nodes, got {}", actual_count);
+        assert!(
+            actual_count >= 5,
+            "Expected at least 5 nodes, got {}",
+            actual_count
+        );
 
         // Export
         let export_params = json!({
@@ -869,7 +875,8 @@ Text paragraph
         // List items may not all be exported depending on export logic
         // Just verify at least some content is present
         // TODO: Investigate why not all list items are being exported
-        let has_some_list_content = clean_exported.contains("Item") || clean_exported.contains("Task");
+        let has_some_list_content =
+            clean_exported.contains("Item") || clean_exported.contains("Task");
         assert!(has_some_list_content, "Missing any list item content");
     }
 
@@ -927,7 +934,11 @@ Text under section 1
 
         // Verify node count: container + 3 headers + 1 text + 2 list items
         let actual_count = import_result["nodes_created"].as_u64().unwrap();
-        assert!(actual_count >= 6, "Expected at least 6 nodes, got {}", actual_count);
+        assert!(
+            actual_count >= 6,
+            "Expected at least 6 nodes, got {}",
+            actual_count
+        );
 
         // Export
         let export_params = json!({
@@ -943,8 +954,14 @@ Text under section 1
         // Verify key structural elements are present
         // Note: The export may not include all content due to hierarchy traversal depth limits
         // or other export logic constraints. We verify the primary structure is exported.
-        assert!(exported.contains("# Container"), "Missing '# Container' in export");
-        assert!(exported.contains("## Section 1"), "Missing '## Section 1' in export");
+        assert!(
+            exported.contains("# Container"),
+            "Missing '# Container' in export"
+        );
+        assert!(
+            exported.contains("## Section 1"),
+            "Missing '## Section 1' in export"
+        );
 
         // Secondary sections and list items may not be exported if max_depth or hierarchy
         // traversal limits are hit. Just verify the basic structure is working.
@@ -980,7 +997,11 @@ Regular text after code."#;
 
         // Verify node count: container + header + code block + text
         let actual_count = import_result["nodes_created"].as_u64().unwrap();
-        assert!(actual_count >= 4, "Expected at least 4 nodes, got {}", actual_count);
+        assert!(
+            actual_count >= 4,
+            "Expected at least 4 nodes, got {}",
+            actual_count
+        );
 
         // Export
         let export_params = json!({
@@ -996,7 +1017,10 @@ Regular text after code."#;
         // Note: Export may not include all content due to hierarchy traversal depth limits
         // Just verify that we got some exported markdown content
         // TODO: Investigate export traversal depth issues with code blocks
-        assert!(!exported.is_empty(), "Exported markdown should not be empty");
+        assert!(
+            !exported.is_empty(),
+            "Exported markdown should not be empty"
+        );
 
         // Verify at least the header was exported
         let has_header = exported.contains("# Code Example") || exported.contains("Code");
