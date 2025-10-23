@@ -268,17 +268,17 @@ fn get_tool_schemas() -> Value {
         },
         {
             "name": "create_nodes_from_markdown",
-            "description": "Parse markdown and create hierarchical nodes",
+            "description": "Parse markdown and create hierarchical nodes. The container_title determines the container strategy: (1) Date format 'YYYY-MM-DD' creates/uses a date container, or (2) Markdown text (e.g., '# My Document' or 'Project Notes') creates a text/header container node. IMPORTANT: The container_title creates a separate container node, and all nodes from markdown_content become children of this container. Do NOT repeat the container_title in markdown_content to avoid duplicate nodes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "markdown_content": {
                         "type": "string",
-                        "description": "Markdown content to parse"
+                        "description": "Markdown content to parse into nodes. These will become children of the container. Do NOT include the container_title text here to avoid duplication."
                     },
                     "container_title": {
                         "type": "string",
-                        "description": "Title for the container node"
+                        "description": "Container identifier (REQUIRED). Can be: (1) A date string in 'YYYY-MM-DD' format to use/create a date container, or (2) Markdown text (e.g., '# Project Alpha' or 'Meeting Notes') to create a text/header container. This creates a separate container node - do not repeat this text in markdown_content. The parsed container type must be text, header, or date - multi-line types (code-block, quote-block, ordered-list) cannot be containers."
                     }
                 },
                 "required": ["markdown_content", "container_title"]

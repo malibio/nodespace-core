@@ -50,6 +50,13 @@ pub enum NodeOperationError {
     #[error("Container node '{node_id}' of type '{node_type}' cannot have a before_sibling_id")]
     ContainerCannotHaveSibling { node_id: String, node_type: String },
 
+    /// Node type cannot be a container
+    ///
+    /// Only specific node types (date, text, header) can be containers.
+    /// Multi-line types (code-block, quote-block, ordered-list, task) cannot be containers.
+    #[error("Node '{node_id}' of type '{node_type}' cannot be a container. Only date, text, and header nodes can be containers.")]
+    InvalidContainerType { node_id: String, node_type: String },
+
     /// Non-container nodes must have a container_node_id
     ///
     /// Every non-container node must belong to exactly one container (date, topic, or project).
@@ -133,6 +140,11 @@ impl NodeOperationError {
     /// Create a ContainerCannotHaveSibling error
     pub fn container_cannot_have_sibling(node_id: String, node_type: String) -> Self {
         Self::ContainerCannotHaveSibling { node_id, node_type }
+    }
+
+    /// Create an InvalidContainerType error
+    pub fn invalid_container_type(node_id: String, node_type: String) -> Self {
+        Self::InvalidContainerType { node_id, node_type }
     }
 
     /// Create a NonContainerMustHaveContainer error

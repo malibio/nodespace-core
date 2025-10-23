@@ -179,14 +179,18 @@ impl NodeOperations {
     /// # let operations = NodeOperations::new(node_service);
     /// // These are internal examples for documentation
     /// // assert!(operations.is_container_type("date"));
-    /// // assert!(operations.is_container_type("topic"));
-    /// // assert!(operations.is_container_type("project"));
     /// // assert!(!operations.is_container_type("text"));
+    /// // assert!(!operations.is_container_type("task"));
     /// # Ok(())
     /// # }
     /// ```
     fn is_container_type(node_type: &str) -> bool {
-        matches!(node_type, "date" | "topic" | "project")
+        // Container nodes can be:
+        // - date: Auto-created date containers (virtual)
+        // - text: Simple text containers (e.g., document titles)
+        // - header: Header containers (e.g., "# Project Name")
+        // Multi-line types (code-block, quote-block, ordered-list) cannot be containers
+        matches!(node_type, "date" | "text" | "header")
     }
 
     /// Resolve container_node_id for non-container nodes
@@ -413,23 +417,21 @@ impl NodeOperations {
         before_sibling_id: Option<String>,
         properties: Value,
     ) -> Result<String, NodeOperationError> {
-        // Business Rule 1: Container type validation
-        let is_container = Self::is_container_type(&node_type);
+        // Business Rule 1: Determine if this node IS a container based on hierarchy fields
+        // A node is a container if it has NO parent and NO container
+        // (not just because its type CAN be a container)
+        let is_container_node = parent_id.is_none() && container_node_id.is_none();
 
-        let (final_parent_id, final_container_id, final_sibling_id) = if is_container {
-            // Container nodes MUST have all hierarchy fields as None
-            if parent_id.is_some() {
-                return Err(NodeOperationError::container_cannot_have_parent(
-                    content.clone(), // Use content as identifier before node is created
-                    node_type.clone(),
-                ));
-            }
-            if container_node_id.is_some() {
-                return Err(NodeOperationError::container_cannot_have_container(
+        let (final_parent_id, final_container_id, final_sibling_id) = if is_container_node {
+            // This node IS a container - validate that its type allows being a container
+            if !Self::is_container_type(&node_type) {
+                return Err(NodeOperationError::invalid_container_type(
                     content.clone(),
                     node_type.clone(),
                 ));
             }
+
+            // Container nodes MUST have before_sibling_id as None as well
             if before_sibling_id.is_some() {
                 return Err(NodeOperationError::container_cannot_have_sibling(
                     content.clone(),
@@ -868,19 +870,15 @@ mod tests {
         assert!(NodeOperations::is_container_type("date"));
     }
 
+
     #[test]
-    fn test_is_container_type_topic() {
-        assert!(NodeOperations::is_container_type("topic"));
+    fn test_is_container_type_text() {
+        assert!(NodeOperations::is_container_type("text"));
     }
 
     #[test]
-    fn test_is_container_type_project() {
-        assert!(NodeOperations::is_container_type("project"));
-    }
-
-    #[test]
-    fn test_is_container_type_text_is_not_container() {
-        assert!(!NodeOperations::is_container_type("text"));
+    fn test_is_container_type_header() {
+        assert!(NodeOperations::is_container_type("header"));
     }
 
     #[test]

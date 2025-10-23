@@ -39,7 +39,35 @@ const MAX_NODES_PER_IMPORT: usize = 1000;
 /// Parameters for create_nodes_from_markdown method
 #[derive(Debug, Deserialize)]
 pub struct CreateNodesFromMarkdownParams {
+    /// Markdown content to parse into child nodes.
+    ///
+    /// IMPORTANT: Do NOT include the container_title text in markdown_content
+    /// to avoid creating duplicate nodes. The container_title creates a separate
+    /// container node, and all markdown_content nodes become children of it.
+    ///
+    /// Example:
+    /// ```
+    /// // CORRECT ✅
+    /// container_title: "# Project Alpha"
+    /// markdown_content: "## Task 1\nDescription here"
+    /// // Creates: "# Project Alpha" (container) → "## Task 1" (child) → "Description" (child)
+    ///
+    /// // INCORRECT ❌
+    /// container_title: "# Project Alpha"
+    /// markdown_content: "# Project Alpha\n## Task 1\nDescription"
+    /// // Creates: "# Project Alpha" (container) → "# Project Alpha" (duplicate child!) → ...
+    /// ```
     pub markdown_content: String,
+
+    /// Title for the container node (REQUIRED).
+    ///
+    /// This creates a separate container node that all markdown_content nodes
+    /// will be children of. Can be:
+    /// - A date string (YYYY-MM-DD) to use/create a date container
+    /// - Markdown text (e.g., "# My Document" or "Project Notes") to create a text/header container
+    ///
+    /// The parsed container type must be text, header, or date.
+    /// Multi-line types (code-block, quote-block, ordered-list) cannot be containers.
     pub container_title: String,
 }
 
@@ -48,6 +76,16 @@ pub struct CreateNodesFromMarkdownParams {
 pub struct NodeMetadata {
     pub id: String,
     pub node_type: String,
+}
+
+/// Strategy for determining the container node
+#[derive(Debug, Clone)]
+enum ContainerStrategy {
+    /// Use a date node as the container (auto-created if needed)
+    DateContainer(String),
+    /// Parse container_title as markdown to create the container node
+    /// The parsed node type must be text or header (not multi-line types)
+    TitleAsContainer(String),
 }
 
 /// Tracks a node in the hierarchy during parsing
@@ -69,25 +107,34 @@ struct ParserContext {
     node_ids: Vec<String>,
     /// All created nodes with metadata (id + type)
     nodes: Vec<NodeMetadata>,
-    /// Container node ID (first node created becomes the container)
+    /// Container node ID (determined by strategy)
     container_node_id: Option<String>,
     /// Current list item counter for ordered lists (tracks the number prefix for ordered lists)
     ordered_list_counter: usize,
     /// Whether we're in an ordered list
     in_ordered_list: bool,
+    /// Whether the first node has been created (for tracking purposes)
+    first_node_created: bool,
 }
 
 impl ParserContext {
-    fn new_with_container(container_id: String) -> Self {
+    fn new_with_strategy(strategy: ContainerStrategy) -> Self {
+        // For DateContainer strategy, set container_node_id immediately
+        let container_node_id = match &strategy {
+            ContainerStrategy::DateContainer(date) => Some(date.clone()),
+            ContainerStrategy::TitleAsContainer(_) => None, // Will be set after parsing title
+        };
+
         Self {
             heading_stack: Vec::new(),
             list_stack: Vec::new(),
             last_sibling: None,
             node_ids: Vec::new(),
             nodes: Vec::new(),
-            container_node_id: Some(container_id),
+            container_node_id,
             ordered_list_counter: 0,
             in_ordered_list: false,
+            first_node_created: false,
         }
     }
 
@@ -158,41 +205,87 @@ pub async fn handle_create_nodes_from_markdown(
         )));
     }
 
-    // Create a container node first (topic type) to hold all imported markdown content
-    // NodeOperations requires all non-container nodes to have a container_node_id
-    // Using "topic" as the container type (registered in NodeBehaviorRegistry)
-    let container_node_id = operations
-        .create_node(
-            "topic".to_string(),
-            params.container_title.clone(),
-            None, // No parent (root node)
-            None, // Container nodes don't have container_node_id
-            None, // No sibling ordering
-            json!({"imported_from": "markdown"}),
-        )
-        .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to create container node: {}", e)))?;
+    // Determine container strategy based on container_title
+    let container_strategy = if is_date_format(&params.container_title) {
+        // container_title is a date → use date as container
+        ContainerStrategy::DateContainer(params.container_title.clone())
+    } else {
+        // container_title is markdown → parse it to create the container node
+        ContainerStrategy::TitleAsContainer(params.container_title.clone())
+    };
 
-    // Parse markdown and create nodes under the container
-    let mut context = ParserContext::new_with_container(container_node_id.clone());
+    let mut context = ParserContext::new_with_strategy(container_strategy.clone());
+
+    // For TitleAsContainer, parse the title first to create the container node
+    if let ContainerStrategy::TitleAsContainer(ref title) = container_strategy {
+        // Temporarily clear container_node_id so the container node itself is created as a container
+        // (with container_node_id = None, which is required for container nodes)
+        context.container_node_id = None;
+
+        parse_markdown(title, operations, &mut context).await?;
+
+        // Validate that exactly one node was created and it's a valid container type
+        if context.nodes.len() != 1 {
+            return Err(MCPError::invalid_params(format!(
+                "container_title must parse to exactly one node, got {}",
+                context.nodes.len()
+            )));
+        }
+
+        let container_node = &context.nodes[0];
+        if !is_valid_container_type(&container_node.node_type) {
+            return Err(MCPError::invalid_params(format!(
+                "container_title parsed to '{}' which cannot be a container. Only text, header, or date nodes can be containers.",
+                container_node.node_type
+            )));
+        }
+
+        // Set this node as the container for subsequent nodes
+        context.container_node_id = Some(container_node.id.clone());
+
+        // CRITICAL: Set the container as the initial parent for top-level nodes in markdown_content
+        // This makes the first heading in markdown_content a CHILD of the container, not a sibling
+        context.push_heading(container_node.id.clone(), 0);
+
+        context.first_node_created = true;
+    }
+
+    // Parse the main markdown content
     parse_markdown(&params.markdown_content, operations, &mut context).await?;
 
-    // Validate we didn't exceed max nodes (including container)
-    if context.nodes.len() + 1 > MAX_NODES_PER_IMPORT {
+    // Validate we didn't exceed max nodes
+    if context.nodes.len() > MAX_NODES_PER_IMPORT {
         return Err(MCPError::invalid_params(format!(
             "Import created {} nodes, exceeding maximum of {}",
-            context.nodes.len() + 1,
+            context.nodes.len(),
             MAX_NODES_PER_IMPORT
         )));
     }
 
+    let container_node_id = context
+        .container_node_id
+        .ok_or_else(|| MCPError::internal_error("No container node created".to_string()))?;
+
     Ok(json!({
         "success": true,
         "container_node_id": container_node_id,
-        "nodes_created": context.nodes.len() + 1, // Include container in count
+        "nodes_created": context.nodes.len(),
         "node_ids": context.node_ids,
         "nodes": context.nodes
     }))
+}
+
+/// Check if a string matches the date format YYYY-MM-DD
+fn is_date_format(s: &str) -> bool {
+    use chrono::NaiveDate;
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+}
+
+/// Check if a node type can be a container
+/// Only text, header, and date nodes can be containers (semantically meaningful)
+/// Multi-line nodes (code-block, quote-block, ordered-list) cannot be containers
+fn is_valid_container_type(node_type: &str) -> bool {
+    matches!(node_type, "text" | "header" | "date")
 }
 
 /// Parse markdown content and create nodes
