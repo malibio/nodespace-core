@@ -200,7 +200,60 @@ pub async fn create_entity_table(&self, schema: &EntitySchema) -> Result<(), Err
 
 ### 4. Service Layer
 
-**NodeService - Core Operations:**
+The service layer is organized in a two-tier architecture to enforce data integrity:
+
+#### NodeOperations - Business Logic Layer (NEW in Issue #332)
+
+Centralized business logic layer that enforces all data integrity rules:
+
+```rust
+pub struct NodeOperations {
+    node_service: Arc<NodeService>,
+}
+
+impl NodeOperations {
+    // CREATE Operations with full business rule enforcement
+    pub async fn create_node(
+        &self,
+        node_type: String,
+        content: String,
+        parent_id: Option<String>,
+        container_node_id: Option<String>,
+        before_sibling_id: Option<String>,
+        properties: Value,
+    ) -> Result<String, NodeOperationError>;
+
+    // READ Operations (delegation to NodeService)
+    pub async fn get_node(&self, id: &str) -> Result<Option<Node>, NodeOperationError>;
+    pub async fn query_nodes(&self, filter: NodeQueryFilter) -> Result<Vec<Node>, NodeOperationError>;
+
+    // UPDATE Operations with restrictions
+    pub async fn update_node(&self, node_id: &str, content: Option<String>, node_type: Option<String>, properties: Option<Value>) -> Result<(), NodeOperationError>;
+    pub async fn move_node(&self, node_id: &str, new_parent_id: Option<&str>) -> Result<(), NodeOperationError>;
+    pub async fn reorder_node(&self, node_id: &str, before_sibling_id: Option<&str>) -> Result<(), NodeOperationError>;
+
+    // DELETE Operations
+    pub async fn delete_node(&self, id: &str) -> Result<DeleteResult, NodeOperationError>;
+}
+```
+
+**Enforced Business Rules:**
+1. **Container Node Validation**: Container types (date, topic, project) force all hierarchy fields to None
+2. **Container Requirement**: Every non-container node MUST have container_node_id (inferred from parent if missing)
+3. **Sibling Position Calculation**: If before_sibling_id not provided, automatically calculate last sibling
+4. **Parent-Container Consistency**: Parent and child must be in same container
+5. **Update Restrictions**: Content updates cannot change hierarchy; use move_node() or reorder_node() explicitly
+
+**Integration Points:**
+- MCP handlers use NodeOperations (not NodeService directly)
+- Tauri commands use NodeOperations (not NodeService directly)
+- All node creation/modification routes through this layer
+- Database corruption prevention at application boundary
+
+#### NodeService - Database Layer
+
+Core database operations without business logic:
+
 ```rust
 pub struct NodeService {
     pool: SqlitePool,
@@ -209,7 +262,7 @@ pub struct NodeService {
 }
 
 impl NodeService {
-    // Basic CRUD
+    // Basic CRUD (called by NodeOperations)
     pub async fn create_node(&self, node: Node) -> Result<String, Error>;
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>, Error>;
     pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<(), Error>;
@@ -222,6 +275,29 @@ impl NodeService {
     // Search and AI
     pub async fn semantic_search(&self, query: &str, limit: usize) -> Result<Vec<Node>, Error>;
 }
+```
+
+**Layered Architecture:**
+```
+┌─────────────────────────────────────────┐
+│  MCP Handlers + Tauri Commands          │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  NodeOperations (Business Logic) ✅     │
+│  - Container validation                 │
+│  - Sibling position calculation         │
+│  - Parent-container consistency         │
+│  - Type-specific rules                  │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  NodeService (Database CRUD)            │
+│  - NodeBehavior validation              │
+│  - Database operations                  │
+└─────────────────────────────────────────┘
 ```
 
 ### 5. NLP Engine Integration
@@ -254,10 +330,18 @@ impl NodeSpaceNLP {
 // Thin command layer in packages/desktop-app/src-tauri/src/commands.rs
 #[tauri::command]
 pub async fn create_node(
-    service: State<'_, NodeService>,
-    node: Node
+    operations: State<'_, Arc<NodeOperations>>,
+    node_type: String,
+    content: String,
+    parent_id: Option<String>,
+    container_node_id: Option<String>,
+    before_sibling_id: Option<String>,
+    properties: serde_json::Value,
 ) -> Result<String, String> {
-    service.create_node(node).await.map_err(|e| e.to_string())
+    operations
+        .create_node(node_type, content, parent_id, container_node_id, before_sibling_id, properties)
+        .await
+        .map_err(|e| e.to_string())
 }
 ```
 
@@ -273,13 +357,26 @@ fn main() {
 
 // MCP communicates via JSON over stdio
 fn run_mcp_stdio_server() {
-    let service = create_node_service();
+    let node_service = create_node_service();
+    let node_operations = Arc::new(NodeOperations::new(Arc::new(node_service)));
 
     for line in stdin.lines() {
         let request: MCPRequest = serde_json::from_str(&line)?;
-        let response = handle_mcp_request(&service, request).await;
+        let response = handle_mcp_request(&node_operations, request).await;
         println!("{}", serde_json::to_string(&response)?);
     }
+}
+
+// All MCP handlers use NodeOperations to enforce business rules
+async fn handle_create_node(operations: Arc<NodeOperations>, params: CreateNodeParams) -> Result<String> {
+    operations.create_node(
+        params.node_type,
+        params.content,
+        params.parent_id,
+        params.container_node_id,
+        params.before_sibling_id,
+        params.properties,
+    ).await
 }
 ```
 
@@ -305,33 +402,74 @@ listen('node-changed', (event) => {
 
 ## Implementation Phases
 
-### Phase 1: Core Package Setup
+### Phase 1: Core Package Setup ✅
 1. Initialize Cargo workspace with packages/core
 2. Define Node model and data structures
 3. Implement NodeBehavior trait system
 4. Set up database connection with SQLx
 5. Create migration system
 
-### Phase 2: Node Types & Services
+### Phase 2: Node Types & Services ✅
 1. Implement built-in node behaviors
 2. Create NodeService with CRUD operations
 3. Add hierarchy management
 4. Implement mentions relation table
 5. Add schema service for dynamic entities
 
-### Phase 3: NLP Engine Package
+### Phase 3: NLP Engine Package ✅
 1. Initialize packages/nlp-engine
 2. Migrate embedding functionality
 3. Add intent classification
 4. Integrate llama.cpp for text generation
 
-### Phase 4: Integration
+### Phase 4: Integration ✅
 1. Create Tauri command layer
 2. Implement reactive state sync
 3. Add MCP stdio server support
 4. Integration tests and documentation
 
+### Phase 5: NodeOperations Business Logic Layer ✅ (Issue #332)
+1. Create NodeOperations struct and module
+2. Implement container validation rules
+3. Implement container inference from parent
+4. Implement sibling position calculation
+5. Implement parent-container consistency checks
+6. Add comprehensive unit tests (19 tests)
+7. Integrate into MCP handlers
+8. Integrate into Tauri initialization
+9. Update documentation
+
 ## Key Design Decisions
+
+### Why NodeOperations Separate from NodeService?
+- **Single Responsibility**: NodeService handles database CRUD, NodeOperations handles business rules
+- **Data Integrity**: Enforces rules at application boundary, preventing database corruption
+- **Shared Logic**: MCP handlers and Tauri commands use the same business logic
+- **Testing**: Business rules can be tested independently from database operations
+- **Clear Architecture**: Two-tier design makes responsibilities explicit
+
+### Why TypeScript Services Still Exist?
+TypeScript services (`NodeOperationsService`, `HierarchyService`) serve **different purposes** than Rust `NodeOperations`:
+
+**Rust NodeOperations (Business Rules):**
+- Container validation
+- Sibling position calculation
+- Parent-container consistency
+- Database integrity enforcement
+
+**TypeScript NodeOperationsService (Content Handling):**
+- Upsert semantics (create vs update logic)
+- Content extraction from various formats
+- Metadata merging strategies
+- Mentions bidirectional updates
+
+**TypeScript HierarchyService (Client-Side Performance):**
+- Map-based caching for UI performance
+- Depth calculations
+- Children/descendants queries
+- Sibling navigation
+
+These layers complement each other rather than duplicate functionality.
 
 ### Why Hybrid Package Structure?
 - **Database and business logic are tightly coupled**: NodeService directly uses SQLx queries
