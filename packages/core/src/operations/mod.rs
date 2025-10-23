@@ -73,8 +73,9 @@
 
 pub mod error;
 
-use crate::models::{DeleteResult, Node, NodeFilter};
+use crate::models::{DeleteResult, Node, NodeFilter, NodeUpdate};
 use crate::services::NodeService;
+use chrono::Utc;
 use error::NodeOperationError;
 use serde_json::Value;
 use std::sync::Arc;
@@ -151,6 +152,191 @@ impl NodeOperations {
     }
 
     // =========================================================================
+    // Private Helper Methods
+    // =========================================================================
+
+    /// Check if a node type is a container (date, topic, project)
+    ///
+    /// Container types define their own scope and cannot have parent/container/sibling.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_type` - The node type to check
+    ///
+    /// # Returns
+    ///
+    /// true if the node type is a container, false otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use nodespace_core::operations::NodeOperations;
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::DatabaseService;
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = DatabaseService::new(PathBuf::from("./test.db")).await?;
+    /// # let node_service = NodeService::new(db)?;
+    /// # let operations = NodeOperations::new(node_service);
+    /// // These are internal examples for documentation
+    /// // assert!(operations.is_container_type("date"));
+    /// // assert!(operations.is_container_type("topic"));
+    /// // assert!(operations.is_container_type("project"));
+    /// // assert!(!operations.is_container_type("text"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn is_container_type(node_type: &str) -> bool {
+        matches!(node_type, "date" | "topic" | "project")
+    }
+
+    /// Resolve container_node_id for non-container nodes
+    ///
+    /// Business Rule 2: Every non-container node MUST have a container_node_id.
+    /// If not provided explicitly, infer it from the parent.
+    ///
+    /// # Arguments
+    ///
+    /// * `container_node_id` - Explicitly provided container (may be None)
+    /// * `parent_id` - Parent node ID (may be None)
+    ///
+    /// # Returns
+    ///
+    /// The resolved container_node_id or an error if it cannot be determined
+    ///
+    /// # Errors
+    ///
+    /// - `NodeNotFound` if parent doesn't exist
+    /// - `NonContainerMustHaveContainer` if container cannot be resolved
+    async fn resolve_container(
+        &self,
+        node_id: &str,
+        node_type: &str,
+        container_node_id: Option<String>,
+        parent_id: Option<&str>,
+    ) -> Result<String, NodeOperationError> {
+        // If container is explicitly provided, use it
+        if let Some(container_id) = container_node_id {
+            return Ok(container_id);
+        }
+
+        // Otherwise, infer from parent
+        if let Some(parent_id) = parent_id {
+            let parent = self
+                .node_service
+                .get_node(parent_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
+
+            // Parent's container_node_id becomes child's container_node_id
+            if let Some(parent_container) = parent.container_node_id {
+                return Ok(parent_container);
+            }
+        }
+
+        // Cannot resolve container
+        Err(NodeOperationError::non_container_must_have_container(
+            node_id.to_string(),
+            node_type.to_string(),
+        ))
+    }
+
+    /// Calculate sibling position for a new/moved node
+    ///
+    /// Business Rule 3: If before_sibling_id is not provided, place the node
+    /// as the last sibling automatically.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - Parent node ID (may be None for root nodes)
+    /// * `before_sibling_id` - Explicitly provided sibling position (may be None)
+    ///
+    /// # Returns
+    ///
+    /// The calculated before_sibling_id (None means last position)
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidSiblingChain` if before_sibling_id is invalid
+    /// - `NodeNotFound` if before_sibling doesn't exist
+    async fn calculate_sibling_position(
+        &self,
+        parent_id: Option<&str>,
+        before_sibling_id: Option<String>,
+    ) -> Result<Option<String>, NodeOperationError> {
+        // If explicitly provided, validate it exists
+        if let Some(ref sibling_id) = before_sibling_id {
+            let sibling = self
+                .node_service
+                .get_node(sibling_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(sibling_id.to_string()))?;
+
+            // Verify sibling has same parent
+            if sibling.parent_id.as_deref() != parent_id {
+                return Err(NodeOperationError::invalid_sibling_chain(format!(
+                    "Sibling '{}' has different parent than the node being created/moved",
+                    sibling_id
+                )));
+            }
+
+            return Ok(before_sibling_id);
+        }
+
+        // No explicit sibling provided - place as last sibling (None)
+        Ok(None)
+    }
+
+    /// Validate parent-container consistency
+    ///
+    /// Business Rule 4: Parent and child must be in the same container.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - Parent node ID (may be None)
+    /// * `container_node_id` - Container node ID for the child
+    ///
+    /// # Errors
+    ///
+    /// - `ParentContainerMismatch` if parent and child have different containers
+    /// - `NodeNotFound` if parent doesn't exist
+    async fn validate_parent_container_consistency(
+        &self,
+        parent_id: Option<&str>,
+        container_node_id: &str,
+    ) -> Result<(), NodeOperationError> {
+        if let Some(parent_id) = parent_id {
+            let parent = self
+                .node_service
+                .get_node(parent_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
+
+            // Parent must have same container
+            if let Some(parent_container) = parent.container_node_id {
+                if parent_container != container_node_id {
+                    return Err(NodeOperationError::parent_container_mismatch(
+                        parent_container,
+                        container_node_id.to_string(),
+                    ));
+                }
+            } else {
+                // Parent has no container - this is invalid unless parent is a container itself
+                // (in which case parent_id would be the container_node_id)
+                if parent_id != container_node_id {
+                    return Err(NodeOperationError::parent_container_mismatch(
+                        "None".to_string(),
+                        container_node_id.to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
     // CREATE Operations
     // =========================================================================
 
@@ -220,19 +406,84 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::unused_async)]
     pub async fn create_node(
         &self,
-        _node_type: String,
-        _content: String,
-        _parent_id: Option<String>,
-        _container_node_id: Option<String>,
-        _before_sibling_id: Option<String>,
-        _properties: Value,
+        node_type: String,
+        content: String,
+        parent_id: Option<String>,
+        container_node_id: Option<String>,
+        before_sibling_id: Option<String>,
+        properties: Value,
     ) -> Result<String, NodeOperationError> {
-        // Implementation will be added in Phase 4
-        // For now, this is a placeholder to allow the module to compile
-        todo!("Implementation in Phase 4")
+        // Business Rule 1: Container type validation
+        let is_container = Self::is_container_type(&node_type);
+
+        let (final_parent_id, final_container_id, final_sibling_id) = if is_container {
+            // Container nodes MUST have all hierarchy fields as None
+            if parent_id.is_some() {
+                return Err(NodeOperationError::container_cannot_have_parent(
+                    content.clone(), // Use content as identifier before node is created
+                    node_type.clone(),
+                ));
+            }
+            if container_node_id.is_some() {
+                return Err(NodeOperationError::container_cannot_have_container(
+                    content.clone(),
+                    node_type.clone(),
+                ));
+            }
+            if before_sibling_id.is_some() {
+                return Err(NodeOperationError::container_cannot_have_sibling(
+                    content.clone(),
+                    node_type.clone(),
+                ));
+            }
+
+            (None, None, None)
+        } else {
+            // Non-container nodes: apply business rules 2-4
+
+            // Business Rule 2: Resolve container_node_id (with parent inference)
+            let resolved_container = self
+                .resolve_container(
+                    &content, // Use content as temporary identifier
+                    &node_type,
+                    container_node_id,
+                    parent_id.as_deref(),
+                )
+                .await?;
+
+            // Business Rule 4: Validate parent-container consistency
+            self.validate_parent_container_consistency(parent_id.as_deref(), &resolved_container)
+                .await?;
+
+            // Business Rule 3: Calculate sibling position
+            let calculated_sibling = self
+                .calculate_sibling_position(parent_id.as_deref(), before_sibling_id)
+                .await?;
+
+            (parent_id, Some(resolved_container), calculated_sibling)
+        };
+
+        // Create the node using NodeService
+        let node = Node {
+            id: uuid::Uuid::new_v4().to_string(),
+            node_type,
+            content,
+            parent_id: final_parent_id,
+            container_node_id: final_container_id,
+            before_sibling_id: final_sibling_id,
+            properties,
+            mentions: vec![],
+            mentioned_by: vec![],
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            embedding_vector: None,
+        };
+
+        let created_id = self.node_service.create_node(node).await?;
+
+        Ok(created_id)
     }
 
     // =========================================================================
@@ -347,16 +598,40 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::unused_async)]
     pub async fn update_node(
         &self,
-        _node_id: &str,
-        _content: Option<String>,
-        _node_type: Option<String>,
-        _properties: Option<Value>,
+        node_id: &str,
+        content: Option<String>,
+        node_type: Option<String>,
+        properties: Option<Value>,
     ) -> Result<(), NodeOperationError> {
-        // Implementation will be added in Phase 4
-        todo!("Implementation in Phase 4")
+        // Business Rule 5: Content updates cannot change hierarchy
+        // This method only updates content, node_type, and properties
+        // Use move_node() or reorder_node() for hierarchy changes
+
+        // Verify node exists
+        let _node = self
+            .node_service
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+        // Create NodeUpdate with only content/type/properties (no hierarchy changes)
+        let mut update = NodeUpdate::new();
+        if let Some(c) = content {
+            update = update.with_content(c);
+        }
+        if let Some(t) = node_type {
+            update = update.with_node_type(t);
+        }
+        if let Some(p) = properties {
+            update = update.with_properties(p);
+        }
+
+        // Update using NodeService (hierarchy fields are not touched)
+        self.node_service.update_node(node_id, update).await?;
+
+        Ok(())
     }
 
     /// Move a node to a new parent
@@ -391,14 +666,60 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::unused_async)]
     pub async fn move_node(
         &self,
-        _node_id: &str,
-        _new_parent_id: Option<&str>,
+        node_id: &str,
+        new_parent_id: Option<&str>,
     ) -> Result<(), NodeOperationError> {
-        // Implementation will be added in Phase 4
-        todo!("Implementation in Phase 4")
+        // Get current node
+        let node = self
+            .node_service
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+        // Container nodes cannot be moved (they have no parent/container)
+        if Self::is_container_type(&node.node_type) {
+            return Err(NodeOperationError::invalid_operation(format!(
+                "Container node '{}' cannot be moved",
+                node_id
+            )));
+        }
+
+        // Resolve new container from new parent (if parent exists)
+        let new_container = if let Some(parent_id) = new_parent_id {
+            let parent = self
+                .node_service
+                .get_node(parent_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
+
+            parent.container_node_id.ok_or_else(|| {
+                NodeOperationError::invalid_operation("Parent has no container_node_id".to_string())
+            })?
+        } else {
+            // Moving to root - node must have explicit container
+            node.container_node_id.ok_or_else(|| {
+                NodeOperationError::non_container_must_have_container(
+                    node_id.to_string(),
+                    node.node_type.clone(),
+                )
+            })?
+        };
+
+        // Validate parent-container consistency
+        self.validate_parent_container_consistency(new_parent_id, &new_container)
+            .await?;
+
+        // Create NodeUpdate with new parent and container
+        let mut update = NodeUpdate::new();
+        update.parent_id = Some(new_parent_id.map(String::from));
+        update.container_node_id = Some(Some(new_container));
+
+        // Update node with new parent and container
+        self.node_service.update_node(node_id, update).await?;
+
+        Ok(())
     }
 
     /// Reorder a node within its siblings
@@ -431,14 +752,42 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::unused_async)]
     pub async fn reorder_node(
         &self,
-        _node_id: &str,
-        _before_sibling_id: Option<&str>,
+        node_id: &str,
+        before_sibling_id: Option<&str>,
     ) -> Result<(), NodeOperationError> {
-        // Implementation will be added in Phase 4
-        todo!("Implementation in Phase 4")
+        // Get current node
+        let node = self
+            .node_service
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+        // Container nodes cannot be reordered (they have no siblings)
+        if Self::is_container_type(&node.node_type) {
+            return Err(NodeOperationError::invalid_operation(format!(
+                "Container node '{}' cannot be reordered",
+                node_id
+            )));
+        }
+
+        // Validate sibling position
+        let new_sibling = self
+            .calculate_sibling_position(
+                node.parent_id.as_deref(),
+                before_sibling_id.map(String::from),
+            )
+            .await?;
+
+        // Create NodeUpdate with new sibling position
+        let mut update = NodeUpdate::new();
+        update.before_sibling_id = Some(new_sibling);
+
+        // Update node with new sibling position
+        self.node_service.update_node(node_id, update).await?;
+
+        Ok(())
     }
 
     // =========================================================================
@@ -512,5 +861,40 @@ mod tests {
         // No assertion needed - just verifying clone compiles and works
     }
 
-    // Additional tests will be added in Phase 4 when CRUD operations are implemented
+    // =========================================================================
+    // Phase 2: Container Type Detection Tests
+    // =========================================================================
+
+    #[test]
+    fn test_is_container_type_date() {
+        assert!(NodeOperations::is_container_type("date"));
+    }
+
+    #[test]
+    fn test_is_container_type_topic() {
+        assert!(NodeOperations::is_container_type("topic"));
+    }
+
+    #[test]
+    fn test_is_container_type_project() {
+        assert!(NodeOperations::is_container_type("project"));
+    }
+
+    #[test]
+    fn test_is_container_type_text_is_not_container() {
+        assert!(!NodeOperations::is_container_type("text"));
+    }
+
+    #[test]
+    fn test_is_container_type_task_is_not_container() {
+        assert!(!NodeOperations::is_container_type("task"));
+    }
+
+    #[test]
+    fn test_is_container_type_unknown_is_not_container() {
+        assert!(!NodeOperations::is_container_type("unknown"));
+        assert!(!NodeOperations::is_container_type("custom-type"));
+    }
+
+    // Additional tests will be added in Phase 3-4 when business rules and CRUD operations are implemented
 }
