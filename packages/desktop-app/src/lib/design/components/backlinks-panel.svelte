@@ -1,24 +1,17 @@
 <!--
   BacklinksPanel - Collapsible panel showing container-level backlinks
 
-  Features:
-  - Displays containers that mention the current node
-  - Collapsible accordion-style design (matches Schema-Driven Property Forms)
-  - Automatic deduplication (multiple mentions from same container shown once)
-  - Navigation via nodespace:// links (handled by global app-shell handler)
-  - Loading, empty, and error states
-
-  Design:
-  - Uses bits-ui Collapsible component
-  - Chevron on right (rotates 180° when open)
-  - Shows count badge in trigger
-  - Card-style list of backlink containers
+  Design matches Schema-Driven Property Forms:
+  - Simple collapsible trigger with count and chevron
+  - List of node links with icons (like node tree, but without children)
+  - Clean, minimal styling
 -->
 
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store';
+  import Icon, { type IconName } from '$lib/design/icons/icon.svelte';
   import { onMount } from 'svelte';
   import type { Node } from '$lib/types/node';
 
@@ -27,7 +20,7 @@
   let backlinks = $state<Node[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
-  let isOpen = $state(true);
+  let isOpen = $state(false);
 
   onMount(async () => {
     try {
@@ -46,29 +39,37 @@
     }
   });
 
-  function getPreviewText(content: string): string {
-    // Extract first 100 chars, strip markdown formatting
-    return content
-      .replace(/\[@[^\]]+\]\([^)]+\)/g, '') // Remove mention links
-      .replace(/[#*_`]/g, '') // Remove basic markdown
-      .trim()
-      .substring(0, 100);
+  function getNodeIcon(nodeType: string): IconName {
+    const iconMap: Record<string, IconName> = {
+      date: 'calendar',
+      task: 'circle',
+      text: 'text',
+      'ai-chat': 'aiSquare'
+    };
+    return iconMap[nodeType] || 'text';
   }
 </script>
 
-<div class="backlinks-panel">
+<!-- Add top border and spacing to separate from children section -->
+<div class="border-t pt-2" data-collapsible-root="">
   <Collapsible.Root bind:open={isOpen}>
-    <Collapsible.Trigger>
-      <div class="backlinks-trigger">
-        <div class="backlinks-header">
-          <span class="backlinks-title">Mentioned by</span>
-          {#if !loading && backlinks.length > 0}
-            <span class="backlinks-count">{backlinks.length}</span>
-          {/if}
-        </div>
+    <Collapsible.Trigger
+      class="flex w-full items-center justify-between py-3 font-medium transition-all hover:opacity-80"
+    >
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-muted-foreground">
+          Mentioned by: ({loading ? '...' : backlinks.length}
+          {backlinks.length === 1 ? 'node' : 'nodes'})
+        </span>
+      </div>
 
-        <!-- Chevron on right -->
-        <svg class="chevron-icon" class:rotate-180={isOpen} viewBox="0 0 16 16" fill="none">
+      <div class="flex items-center gap-2">
+        <svg
+          viewBox="0 0 16 16"
+          fill="none"
+          class="h-4 w-4 text-muted-foreground transition-transform duration-200"
+          class:rotate-180={isOpen}
+        >
           <path
             d="M4 6l4 4 4-4"
             stroke="currentColor"
@@ -80,155 +81,36 @@
       </div>
     </Collapsible.Trigger>
 
-    <Collapsible.Content>
-      <div class="backlinks-content">
-        {#if loading}
-          <div class="backlinks-loading">Loading backlinks...</div>
-        {:else if error}
-          <div class="backlinks-error">{error}</div>
-        {:else if backlinks.length === 0}
-          <div class="backlinks-empty">No pages mention this one yet.</div>
-        {:else}
-          <ul class="backlinks-list">
-            {#each backlinks as backlink}
-              <li class="backlink-item">
-                <!-- Uses nodespace:// protocol, handled by app-shell.svelte global handler -->
-                <a href="nodespace://{backlink.id}" class="backlink-link">
-                  <div class="backlink-type">{backlink.nodeType}</div>
-                  <div class="backlink-preview">
-                    {getPreviewText(backlink.content)}
-                  </div>
-                </a>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
+    <Collapsible.Content class="pb-4">
+      {#if loading}
+        <div class="px-2 py-2 text-sm text-muted-foreground">Loading backlinks...</div>
+      {:else if error}
+        <div class="px-2 py-2 text-sm text-destructive">{error}</div>
+      {:else if backlinks.length === 0}
+        <div class="px-2 py-2 text-sm text-muted-foreground">No pages mention this one yet.</div>
+      {:else}
+        <ul class="flex flex-col gap-1">
+          {#each backlinks as backlink}
+            <li>
+              <a
+                href="nodespace://{backlink.id}"
+                class="flex items-center gap-2 px-2 py-1.5 text-sm no-underline"
+              >
+                <Icon name={getNodeIcon(backlink.nodeType)} size={16} />
+                <span class="flex-1 truncate">
+                  {backlink.content || backlink.id}
+                </span>
+              </a>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </Collapsible.Content>
   </Collapsible.Root>
 </div>
 
 <style>
-  .backlinks-panel {
-    border-top: 1px solid hsl(var(--border));
-    padding-top: var(--spacing-md);
-    margin-top: var(--spacing-lg);
-  }
-
-  .backlinks-trigger {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--spacing-sm) 0;
-    font-weight: 500;
-    transition: opacity 0.15s ease;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: hsl(var(--foreground));
-  }
-
-  .backlinks-trigger:hover {
-    opacity: 0.8;
-  }
-
-  .backlinks-header {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-  }
-
-  .backlinks-title {
-    font-size: var(--font-size-md);
-    font-weight: 600;
-    color: hsl(var(--foreground));
-  }
-
-  .backlinks-count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 1.5rem;
-    height: 1.5rem;
-    padding: 0 var(--spacing-xs);
-    font-size: var(--font-size-xs);
-    font-weight: 500;
-    color: hsl(var(--muted-foreground));
-    background: hsl(var(--muted));
-    border: 1px solid hsl(var(--border));
-    border-radius: 9999px;
-  }
-
-  .chevron-icon {
-    width: 1rem;
-    height: 1rem;
-    color: hsl(var(--muted-foreground));
-    transition: transform 0.2s ease;
-  }
-
-  .chevron-icon.rotate-180 {
+  .rotate-180 {
     transform: rotate(180deg);
-  }
-
-  .backlinks-content {
-    padding-bottom: var(--spacing-md);
-  }
-
-  .backlinks-loading,
-  .backlinks-empty,
-  .backlinks-error {
-    padding: var(--spacing-sm);
-    color: hsl(var(--muted-foreground));
-    font-size: var(--font-size-sm);
-  }
-
-  .backlinks-error {
-    color: hsl(var(--destructive));
-  }
-
-  .backlinks-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-xs);
-  }
-
-  .backlink-item {
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-
-  .backlink-link {
-    display: block;
-    padding: var(--spacing-sm);
-    background: hsl(var(--background));
-    border: 1px solid hsl(var(--border));
-    border-radius: var(--radius-sm);
-    text-decoration: none;
-    color: hsl(var(--foreground));
-    transition: all 0.15s ease;
-  }
-
-  .backlink-link:hover {
-    background: hsl(var(--accent));
-    border-color: hsl(var(--accent-foreground) / 0.2);
-  }
-
-  .backlink-type {
-    font-size: var(--font-size-xs);
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: hsl(var(--muted-foreground));
-    margin-bottom: var(--spacing-xs);
-  }
-
-  .backlink-preview {
-    font-size: var(--font-size-sm);
-    color: hsl(var(--foreground));
-    line-height: 1.4;
   }
 </style>
