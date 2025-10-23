@@ -231,9 +231,14 @@ impl NodeOperations {
                 .await?
                 .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
 
-            // Parent's container_node_id becomes child's container_node_id
+            // If parent has a container, use it
             if let Some(parent_container) = parent.container_node_id {
                 return Ok(parent_container);
+            }
+
+            // If parent IS a container (container_node_id = None), use parent as container
+            if parent.is_root() {
+                return Ok(parent_id.to_string());
             }
         }
 
@@ -446,7 +451,7 @@ impl NodeOperations {
             // Business Rule 2: Resolve container_node_id (with parent inference)
             let resolved_container = self
                 .resolve_container(
-                    &content, // Use content as temporary identifier
+                    &content, // Passed for error context only (node ID not yet assigned)
                     &node_type,
                     container_node_id,
                     parent_id.as_deref(),
@@ -466,8 +471,15 @@ impl NodeOperations {
         };
 
         // Create the node using NodeService
+        // Special case: date nodes use their content (YYYY-MM-DD) as the ID
+        let node_id = if node_type == "date" {
+            content.clone()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+
         let node = Node {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: node_id,
             node_type,
             content,
             parent_id: final_parent_id,
@@ -678,10 +690,11 @@ impl NodeOperations {
             .await?
             .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
 
-        // Container nodes cannot be moved (they have no parent/container)
-        if Self::is_container_type(&node.node_type) {
+        // Container nodes cannot be moved (they are root nodes with no parent/container)
+        // Check actual container status, not just type
+        if node.is_root() {
             return Err(NodeOperationError::invalid_operation(format!(
-                "Container node '{}' cannot be moved",
+                "Container node '{}' cannot be moved (it's a root node)",
                 node_id
             )));
         }
@@ -695,7 +708,10 @@ impl NodeOperations {
                 .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
 
             parent.container_node_id.ok_or_else(|| {
-                NodeOperationError::invalid_operation("Parent has no container_node_id".to_string())
+                NodeOperationError::invalid_operation(format!(
+                    "Parent '{}' has no container_node_id (parent should be in a container or be a container itself)",
+                    parent_id
+                ))
             })?
         } else {
             // Moving to root - node must have explicit container
@@ -764,10 +780,11 @@ impl NodeOperations {
             .await?
             .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
 
-        // Container nodes cannot be reordered (they have no siblings)
-        if Self::is_container_type(&node.node_type) {
+        // Container nodes cannot be reordered (they are root nodes with no siblings)
+        // Check actual container status, not just type
+        if node.is_root() {
             return Err(NodeOperationError::invalid_operation(format!(
-                "Container node '{}' cannot be reordered",
+                "Container node '{}' cannot be reordered (it's a root node with no siblings)",
                 node_id
             )));
         }
@@ -832,6 +849,7 @@ impl NodeOperations {
 mod tests {
     use super::*;
     use crate::db::DatabaseService;
+    use serde_json::json;
     use tempfile::TempDir;
 
     /// Helper to create a test database and NodeOperations instance
@@ -891,5 +909,199 @@ mod tests {
         assert!(!NodeOperations::is_container_type("custom-type"));
     }
 
-    // Additional tests will be added in Phase 3-4 when business rules and CRUD operations are implemented
+    // =========================================================================
+    // Critical Integration Tests for Business Rules
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_container_inference_from_parent() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a date container
+        let date_id = operations
+            .create_node(
+                "date".to_string(),
+                "2025-01-03".to_string(),
+                None,
+                None,
+                None,
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Create a child WITHOUT container_node_id - should infer from parent
+        let child_id = operations
+            .create_node(
+                "text".to_string(),
+                "Child content".to_string(),
+                Some(date_id.clone()),
+                None, // No container_node_id provided
+                None,
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Verify container was inferred from parent
+        let child = operations.get_node(&child_id).await.unwrap().unwrap();
+        assert_eq!(
+            child.container_node_id,
+            Some(date_id.clone()),
+            "Container should be inferred from parent"
+        );
+        assert_eq!(
+            child.parent_id,
+            Some(date_id),
+            "Parent should be set correctly"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parent_container_mismatch_error() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create two separate date containers
+        let date1 = operations
+            .create_node(
+                "date".to_string(),
+                "2025-01-03".to_string(),
+                None,
+                None,
+                None,
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        let date2 = operations
+            .create_node(
+                "date".to_string(),
+                "2025-01-04".to_string(),
+                None,
+                None,
+                None,
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Create a parent in date1 container
+        let parent = operations
+            .create_node(
+                "text".to_string(),
+                "Parent in date1".to_string(),
+                None,
+                Some(date1.clone()),
+                None,
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Try to create child with different container than parent - should fail
+        let result = operations
+            .create_node(
+                "text".to_string(),
+                "Child in date2".to_string(),
+                Some(parent.clone()),
+                Some(date2.clone()), // Different container!
+                None,
+                json!({}),
+            )
+            .await;
+
+        // Verify error is ParentContainerMismatch
+        assert!(
+            result.is_err(),
+            "Should error when parent and child have different containers"
+        );
+        let error = result.unwrap_err();
+        assert!(
+            matches!(error, NodeOperationError::ParentContainerMismatch { .. }),
+            "Error should be ParentContainerMismatch, got: {:?}",
+            error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sibling_chain_ordering() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create date container
+        let date = operations
+            .create_node(
+                "date".to_string(),
+                "2025-01-03".to_string(),
+                None,
+                None,
+                None,
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Create first node (will be last in chain since no before_sibling_id)
+        let first = operations
+            .create_node(
+                "text".to_string(),
+                "First".to_string(),
+                None,
+                Some(date.clone()),
+                None, // No before_sibling_id = goes to end
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Create second node (also goes to end, after first)
+        let second = operations
+            .create_node(
+                "text".to_string(),
+                "Second".to_string(),
+                None,
+                Some(date.clone()),
+                None, // No before_sibling_id = goes to end
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Create third node BEFORE second (so ordering becomes: first → third → second)
+        let third = operations
+            .create_node(
+                "text".to_string(),
+                "Third".to_string(),
+                None,
+                Some(date.clone()),
+                Some(second.clone()), // Insert before second
+                json!({}),
+            )
+            .await
+            .unwrap();
+
+        // Verify ordering
+        let first_node = operations.get_node(&first).await.unwrap().unwrap();
+        let second_node = operations.get_node(&second).await.unwrap().unwrap();
+        let third_node = operations.get_node(&third).await.unwrap().unwrap();
+
+        // first has no before_sibling_id (it's first in chain)
+        assert_eq!(
+            first_node.before_sibling_id, None,
+            "First node should have no before_sibling_id"
+        );
+
+        // third comes before second
+        assert_eq!(
+            third_node.before_sibling_id,
+            Some(second.clone()),
+            "Third node should come before second"
+        );
+
+        // second should still have no before_sibling_id (it's at the end)
+        assert_eq!(
+            second_node.before_sibling_id, None,
+            "Second node should have no before_sibling_id (end of chain)"
+        );
+    }
 }
