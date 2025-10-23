@@ -2127,6 +2127,75 @@ impl NodeService {
 
         Ok(mentioned_by)
     }
+
+    /// Get container nodes of nodes that mention the target node (backlinks at container level).
+    ///
+    /// This resolves incoming mentions to their container nodes and deduplicates.
+    ///
+    /// # Container Resolution Logic
+    /// - For task and ai-chat nodes: Uses the node's own ID (they are their own containers)
+    /// - For other nodes: Uses their container_node_id (or the node ID itself if it's a root)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use nodespace_core::services::node_service::NodeService;
+    /// # use nodespace_core::services::database::DatabaseService;
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = DatabaseService::new(PathBuf::from("./test.db")).await?;
+    /// # let service = NodeService::new(db)?;
+    /// // If nodes A and B (both children of Container X) mention target node,
+    /// // returns ['container-x-id'] (deduplicated)
+    /// let containers = service.get_mentioning_containers("target-node-id").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_mentioning_containers(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<String>, NodeServiceError> {
+        let conn = self.db.connect()?;
+
+        let query = "
+            SELECT DISTINCT
+                CASE
+                    WHEN n.node_type IN ('task', 'ai-chat') THEN n.id
+                    ELSE COALESCE(n.container_node_id, n.id)
+                END as container_id
+            FROM node_mentions nm
+            JOIN nodes n ON nm.node_id = n.id
+            WHERE nm.mentions_node_id = ?
+        ";
+
+        let mut stmt = conn.prepare(query).await.map_err(|e| {
+            NodeServiceError::query_failed(format!(
+                "Failed to prepare mentioning_containers query: {}",
+                e
+            ))
+        })?;
+
+        let mut rows = stmt.query([node_id]).await.map_err(|e| {
+            NodeServiceError::query_failed(format!(
+                "Failed to execute mentioning_containers query: {}",
+                e
+            ))
+        })?;
+
+        let mut containers = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+        {
+            let container_id: String = row
+                .get(0)
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            containers.push(container_id);
+        }
+
+        Ok(containers)
+    }
 }
 
 #[cfg(test)]
