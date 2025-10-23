@@ -1095,6 +1095,13 @@ impl NodeService {
         // This is especially important for queries that might run concurrently with deletes
         let conn = self.db.connect_with_timeout().await?;
 
+        // Generate filter clause for container/task filtering if requested
+        let container_task_filter = if query.include_containers_and_tasks.unwrap_or(false) {
+            " AND (n.node_type = 'task' OR n.container_node_id IS NULL)"
+        } else {
+            ""
+        };
+
         // Priority 1: Query by ID (exact match)
         if let Some(ref id) = query.id {
             if let Some(node) = self.get_node(id).await? {
@@ -1117,8 +1124,8 @@ impl NodeService {
                 "SELECT n.id, n.node_type, n.content, n.parent_id, n.container_node_id, n.before_sibling_id, n.created_at, n.modified_at, n.properties, n.embedding_vector
                  FROM nodes n
                  INNER JOIN node_mentions nm ON n.id = nm.node_id
-                 WHERE nm.mentions_node_id = ?{}",
-                limit_clause
+                 WHERE nm.mentions_node_id = ?{}{}",
+                container_task_filter, limit_clause
             );
 
             let mut stmt = conn.prepare(&sql_query).await.map_err(|e| {
@@ -1163,13 +1170,17 @@ impl NodeService {
                 .map(|l| format!(" LIMIT {}", l))
                 .unwrap_or_default();
 
+            // Generate additional WHERE clause for container/task filtering
+            // Note: Replace 'n.' with nothing since this query doesn't use table alias
+            let container_task_filter_no_alias = container_task_filter.replace("n.", "");
+
             // Determine SQL query based on whether node_type is specified
             let mut rows = if let Some(ref node_type) = query.node_type {
                 // Case 1: Filter by both content and node_type
                 let sql = format!(
                     "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
-                     FROM nodes WHERE content LIKE ? AND node_type = ?{}",
-                    limit_clause
+                     FROM nodes WHERE content LIKE ? AND node_type = ?{}{}",
+                    container_task_filter_no_alias, limit_clause
                 );
 
                 let mut stmt = conn.prepare(&sql).await.map_err(|e| {
@@ -1191,8 +1202,8 @@ impl NodeService {
                 // Case 2: Filter by content only
                 let sql = format!(
                     "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
-                     FROM nodes WHERE content LIKE ?{}",
-                    limit_clause
+                     FROM nodes WHERE content LIKE ?{}{}",
+                    container_task_filter_no_alias, limit_clause
                 );
 
                 let mut stmt = conn.prepare(&sql).await.map_err(|e| {
@@ -1235,10 +1246,13 @@ impl NodeService {
                 .map(|l| format!(" LIMIT {}", l))
                 .unwrap_or_default();
 
+            // Generate additional WHERE clause for container/task filtering (without table alias)
+            let container_task_filter_no_alias = container_task_filter.replace("n.", "");
+
             let sql_query = format!(
                 "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
-                 FROM nodes WHERE node_type = ?{}",
-                limit_clause
+                 FROM nodes WHERE node_type = ?{}{}",
+                container_task_filter_no_alias, limit_clause
             );
 
             let mut stmt = conn.prepare(&sql_query).await.map_err(|e| {

@@ -866,6 +866,12 @@ pub struct NodeQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_type: Option<String>,
 
+    /// Filter to only include task nodes and container nodes (container_node_id IS NULL)
+    /// When true, results are limited to: (node_type = 'task' OR container_node_id IS NULL)
+    /// This is useful for @mention autocomplete which should only show referenceable nodes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_containers_and_tasks: Option<bool>,
+
     /// Limit number of results
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
