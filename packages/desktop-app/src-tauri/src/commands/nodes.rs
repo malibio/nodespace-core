@@ -299,15 +299,26 @@ pub async fn get_node(
 #[tauri::command]
 pub async fn update_node(
     operations: State<'_, NodeOperations>,
+    service: State<'_, NodeService>,
     id: String,
     update: NodeUpdate,
 ) -> Result<(), CommandError> {
-    // NodeOperations.update_node only handles content/type/properties
-    // For hierarchy changes, use move_node() or reorder_node()
-    operations
-        .update_node(&id, update.content, update.node_type, update.properties)
-        .await
-        .map_err(Into::into)
+    // Check if this update includes hierarchy changes
+    let has_hierarchy_changes = update.parent_id.is_some()
+        || update.container_node_id.is_some()
+        || update.before_sibling_id.is_some();
+
+    if has_hierarchy_changes {
+        // Hierarchy changes must go through NodeService directly for now
+        // TODO: Implement proper move_node/reorder_node support in frontend
+        service.update_node(&id, update).await.map_err(Into::into)
+    } else {
+        // Pure content/type/properties updates use NodeOperations
+        operations
+            .update_node(&id, update.content, update.node_type, update.properties)
+            .await
+            .map_err(Into::into)
+    }
 }
 
 /// Delete a node by ID
