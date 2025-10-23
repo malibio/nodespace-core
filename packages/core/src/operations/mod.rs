@@ -73,10 +73,12 @@
 
 pub mod error;
 
+// Re-export error type for convenience
+pub use error::NodeOperationError;
+
 use crate::models::{DeleteResult, Node, NodeFilter, NodeUpdate};
 use crate::services::NodeService;
 use chrono::Utc;
-use error::NodeOperationError;
 use serde_json::Value;
 use std::sync::Arc;
 
