@@ -51,7 +51,7 @@
 </script>
 
 <!-- Add top border and spacing to separate from children section -->
-<div class="border-t pt-2" data-collapsible-root="">
+<div class="border-t pt-2 mt-4">
   <Collapsible.Root bind:open={isOpen}>
     <Collapsible.Trigger
       class="flex w-full items-center justify-between py-3 font-medium transition-all hover:opacity-80"
@@ -81,30 +81,32 @@
       </div>
     </Collapsible.Trigger>
 
-    <Collapsible.Content class="pb-4">
-      {#if loading}
-        <div class="px-2 py-2 text-sm text-muted-foreground">Loading backlinks...</div>
-      {:else if error}
-        <div class="px-2 py-2 text-sm text-destructive">{error}</div>
-      {:else if backlinks.length === 0}
-        <div class="px-2 py-2 text-sm text-muted-foreground">No pages mention this one yet.</div>
-      {:else}
-        <ul class="flex flex-col gap-1">
-          {#each backlinks as backlink}
-            <li>
-              <a
-                href="nodespace://{backlink.id}"
-                class="flex items-center gap-2 px-2 py-1.5 text-sm no-underline"
-              >
-                <Icon name={getNodeIcon(backlink.nodeType)} size={16} />
-                <span class="flex-1 truncate">
-                  {backlink.content || backlink.id}
-                </span>
-              </a>
-            </li>
-          {/each}
-        </ul>
-      {/if}
+    <Collapsible.Content>
+      <div class="pb-4">
+        {#if loading}
+          <div class="px-2 py-2 text-sm text-muted-foreground">Loading backlinks...</div>
+        {:else if error}
+          <div class="px-2 py-2 text-sm text-destructive">{error}</div>
+        {:else if backlinks.length === 0}
+          <div class="px-2 py-2 text-sm text-muted-foreground">No pages mention this one yet.</div>
+        {:else}
+          <ul class="flex flex-col gap-1">
+            {#each backlinks as backlink}
+              <li>
+                <a
+                  href="nodespace://{backlink.id}"
+                  class="flex items-center gap-2 px-2 py-1.5 text-sm no-underline"
+                >
+                  <Icon name={getNodeIcon(backlink.nodeType)} size={16} />
+                  <span class="flex-1 truncate">
+                    {backlink.content || backlink.id}
+                  </span>
+                </a>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
     </Collapsible.Content>
   </Collapsible.Root>
 </div>
@@ -112,5 +114,12 @@
 <style>
   .rotate-180 {
     transform: rotate(180deg);
+  }
+
+  /* Reset button styles to match demo */
+  :global([data-collapsible-trigger]) {
+    background: none;
+    border: none;
+    cursor: pointer;
   }
 </style>

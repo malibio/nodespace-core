@@ -16,7 +16,6 @@
 
 <script lang="ts">
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
-  import BacklinksPanel from '$lib/design/components/backlinks-panel.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { getDateTabTitle } from '$lib/stores/navigation.js';
   import { parseDateString, formatDateISO, normalizeDate } from '$lib/utils/date-formatting';
@@ -133,9 +132,6 @@
       </div>
     {/snippet}
   </BaseNodeViewer>
-
-  <!-- Backlinks Panel - below hierarchical content -->
-  <BacklinksPanel nodeId={currentDateId} />
 </div>
 
 <style>
