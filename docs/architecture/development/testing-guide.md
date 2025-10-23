@@ -49,6 +49,16 @@ NodeSpace integration tests support two execution modes:
 - Use **database mode** before merging critical changes or when debugging database-specific issues
 - CI/CD pipelines use **in-memory mode** for speed
 
+**Database cleanup behavior:**
+- **In-memory mode**: No database files created, no cleanup needed
+- **Database mode**: Each test creates a temporary SQLite database file
+  - Automatically cleaned up in `afterEach` hooks
+  - Test database files use pattern: `/tmp/nodespace-test-{testName}-{random}.db`
+  - Cleanup is automatic and handled by `cleanupDatabaseIfNeeded()` utility
+- **Mixed test runs**: Running `bun run test` followed by `bun run test:db` is safe
+  - Each mode creates separate files (or no files for in-memory)
+  - No interference between modes
+
 ## Current Test Status (Updated 2025-01-16)
 
 **Frontend Tests**: 377 passing, 2 skipped, 3 intermittent failures
