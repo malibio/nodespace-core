@@ -866,9 +866,24 @@ pub struct NodeQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_type: Option<String>,
 
-    /// Filter to only include task nodes and container nodes (container_node_id IS NULL)
-    /// When true, results are limited to: (node_type = 'task' OR container_node_id IS NULL)
-    /// This is useful for @mention autocomplete which should only show referenceable nodes
+    /// Filter to only include referenceable nodes for @mention autocomplete.
+    ///
+    /// When `true`, applies SQL filter: `(node_type = 'task' OR container_node_id IS NULL)`
+    ///
+    /// This includes:
+    /// - **Task nodes**: `WHERE node_type = 'task'` (tasks are always referenceable)
+    /// - **Container/root nodes**: `WHERE container_node_id IS NULL` (top-level documents)
+    ///
+    /// This excludes:
+    /// - Text child nodes (e.g., paragraphs within a document)
+    /// - Other non-task children that shouldn't appear in @mention suggestions
+    ///
+    /// # Use Case
+    /// Primarily used by @mention autocomplete to show only nodes that make sense
+    /// to reference (containers and tasks), not individual content fragments.
+    ///
+    /// # Default
+    /// When `None`, defaults to `false` (no filtering applied).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_containers_and_tasks: Option<bool>,
 

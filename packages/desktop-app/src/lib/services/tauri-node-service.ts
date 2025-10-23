@@ -236,6 +236,22 @@ export class TauriNodeService {
     mentionedBy?: string;
     contentContains?: string;
     nodeType?: string;
+    /**
+     * Filter to only include referenceable nodes (task nodes and container nodes).
+     *
+     * When `true`, applies backend filter: `(node_type = 'task' OR container_node_id IS NULL)`
+     *
+     * **Includes:**
+     * - Task nodes (all tasks, regardless of hierarchy)
+     * - Container/root nodes (top-level documents with no parent)
+     *
+     * **Excludes:**
+     * - Text child nodes and other non-referenceable content fragments
+     *
+     * **Primary use case:** @mention autocomplete to show only nodes users should reference.
+     *
+     * @default false
+     */
     includeContainersAndTasks?: boolean;
     limit?: number;
   }): Promise<Node[]> {
