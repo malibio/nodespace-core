@@ -884,6 +884,11 @@ pub struct NodeQuery {
     ///
     /// # Default
     /// When `None`, defaults to `false` (no filtering applied).
+    ///
+    /// # Note on Interaction with `node_type`
+    /// When combined with `node_type: Some("task")`, the filter becomes redundant
+    /// since tasks are always included. However, this is harmless and maintains consistent
+    /// query behavior across all parameter combinations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_containers_and_tasks: Option<bool>,
 

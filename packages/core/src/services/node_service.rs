@@ -1328,6 +1328,9 @@ impl NodeService {
                 .map(|l| format!(" LIMIT {}", l))
                 .unwrap_or_default();
 
+            // WHERE 1=1 is a SQL idiom for dynamic WHERE clauses - it's always true,
+            // allowing the filter to be appended via AND clause. This is clearer than
+            // conditional WHERE clause generation and maintains consistent query structure.
             let sql_query = format!(
                 "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
                  FROM nodes WHERE 1=1{}{}",
@@ -2834,6 +2837,17 @@ mod tests {
     /// These tests verify the filter that restricts query results to only
     /// task nodes and container nodes (nodes with no parent), excluding
     /// regular text children and other non-referenceable content.
+    ///
+    /// # Test Organization
+    ///
+    /// - `basic_filter()` - Core filter behavior (includes/excludes correct nodes)
+    /// - `content_contains_with_filter()` - Filter + full-text search integration
+    /// - `mentioned_by_with_filter()` - Filter + mention query integration
+    /// - `node_type_with_filter()` - Filter + type query interaction (edge case: tasks always included)
+    /// - `default_behavior()` - Verifies filter defaults to false (no filtering)
+    ///
+    /// All tests use unique content markers (e.g., "UniqueBasicFilter") to prevent
+    /// cross-test contamination and ensure proper test isolation.
     mod container_task_filter_tests {
         use super::*;
 
