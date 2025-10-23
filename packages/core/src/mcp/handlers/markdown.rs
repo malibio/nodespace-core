@@ -75,22 +75,19 @@ struct ParserContext {
     ordered_list_counter: usize,
     /// Whether we're in an ordered list
     in_ordered_list: bool,
-    /// Whether the first node has been created (becomes the container)
-    first_node_created: bool,
 }
 
 impl ParserContext {
-    fn new_empty() -> Self {
+    fn new_with_container(container_id: String) -> Self {
         Self {
             heading_stack: Vec::new(),
             list_stack: Vec::new(),
             last_sibling: None,
             node_ids: Vec::new(),
             nodes: Vec::new(),
-            container_node_id: None,
+            container_node_id: Some(container_id),
             ordered_list_counter: 0,
             in_ordered_list: false,
-            first_node_created: false,
         }
     }
 
@@ -135,23 +132,12 @@ impl ParserContext {
 
     /// Track a node for sibling ordering
     fn track_node(&mut self, node_id: String, node_type: String) {
-        // If this is the first node, it becomes the container
-        if !self.first_node_created {
-            self.container_node_id = Some(node_id.clone());
-            self.first_node_created = true;
-        }
-
         self.last_sibling = Some(node_id.clone());
         self.node_ids.push(node_id.clone());
         self.nodes.push(NodeMetadata {
             id: node_id,
             node_type,
         });
-    }
-
-    /// Check if this is the first node being created
-    fn is_first_node(&self) -> bool {
-        !self.first_node_created
     }
 }
 
@@ -172,29 +158,38 @@ pub async fn handle_create_nodes_from_markdown(
         )));
     }
 
-    // Parse markdown and create nodes
-    // The first element will become the container node
-    let mut context = ParserContext::new_empty();
+    // Create a container node first (topic type) to hold all imported markdown content
+    // NodeOperations requires all non-container nodes to have a container_node_id
+    // Using "topic" as the container type (registered in NodeBehaviorRegistry)
+    let container_node_id = operations
+        .create_node(
+            "topic".to_string(),
+            params.container_title.clone(),
+            None, // No parent (root node)
+            None, // Container nodes don't have container_node_id
+            None, // No sibling ordering
+            json!({"imported_from": "markdown"}),
+        )
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to create container node: {}", e)))?;
+
+    // Parse markdown and create nodes under the container
+    let mut context = ParserContext::new_with_container(container_node_id.clone());
     parse_markdown(&params.markdown_content, operations, &mut context).await?;
 
-    // Validate we didn't exceed max nodes
-    if context.nodes.len() > MAX_NODES_PER_IMPORT {
+    // Validate we didn't exceed max nodes (including container)
+    if context.nodes.len() + 1 > MAX_NODES_PER_IMPORT {
         return Err(MCPError::invalid_params(format!(
             "Import created {} nodes, exceeding maximum of {}",
-            context.nodes.len(),
+            context.nodes.len() + 1,
             MAX_NODES_PER_IMPORT
         )));
     }
 
-    // Get the container node ID (first created node)
-    let container_node_id = context
-        .container_node_id
-        .ok_or_else(|| MCPError::internal_error("No container node created".to_string()))?;
-
     Ok(json!({
         "success": true,
         "container_node_id": container_node_id,
-        "nodes_created": context.nodes.len(),
+        "nodes_created": context.nodes.len() + 1, // Include container in count
         "node_ids": context.node_ids,
         "nodes": context.nodes
     }))
@@ -274,8 +269,7 @@ async fn parse_markdown(
                             &content,
                             context.current_parent_id(),
                             context.container_node_id.clone(),
-                            context.last_sibling.clone(),
-                            context.is_first_node(),
+                            None, // Let NodeOperations calculate sibling position
                         )
                         .await?;
 
@@ -297,8 +291,7 @@ async fn parse_markdown(
                                 content,
                                 context.current_parent_id(),
                                 context.container_node_id.clone(),
-                                context.last_sibling.clone(),
-                                context.is_first_node(),
+                                None, // Let NodeOperations calculate sibling position
                             )
                             .await?;
                             context.track_node(node_id, "text".to_string());
@@ -319,8 +312,7 @@ async fn parse_markdown(
                             &content,
                             context.current_parent_id(),
                             context.container_node_id.clone(),
-                            context.last_sibling.clone(),
-                            context.is_first_node(),
+                            None, // Let NodeOperations calculate sibling position
                         )
                         .await?;
                         context.track_node(node_id, "code-block".to_string());
@@ -342,8 +334,7 @@ async fn parse_markdown(
                                 &content,
                                 context.current_parent_id(),
                                 context.container_node_id.clone(),
-                                context.last_sibling.clone(),
-                                context.is_first_node(),
+                                None, // Let NodeOperations calculate sibling position
                             )
                             .await?;
                             context.track_node(node_id, "quote-block".to_string());
@@ -376,8 +367,7 @@ async fn parse_markdown(
                                 &formatted_content,
                                 context.current_parent_id(),
                                 context.container_node_id.clone(),
-                                context.last_sibling.clone(),
-                                context.is_first_node(),
+                                None, // Let NodeOperations calculate sibling position
                             )
                             .await?;
 
@@ -441,23 +431,15 @@ async fn create_node(
     parent_id: Option<String>,
     container_node_id: Option<String>,
     before_sibling_id: Option<String>,
-    is_first_node: bool,
 ) -> Result<String, MCPError> {
-    // First node becomes the container (no container_node_id for itself)
-    // All subsequent nodes belong to that container
-    let final_container_id = if is_first_node {
-        None // First node IS the container
-    } else {
-        container_node_id
-    };
-
     // Create node via NodeOperations (enforces all business rules)
+    // Container node ID is provided from the pre-created container
     operations
         .create_node(
             node_type.to_string(),
             content.to_string(),
             parent_id,
-            final_container_id,
+            container_node_id,
             before_sibling_id,
             json!({}),
         )

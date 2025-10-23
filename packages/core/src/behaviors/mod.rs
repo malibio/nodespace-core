@@ -748,10 +748,70 @@ impl NodeBehavior for DateNodeBehavior {
     }
 }
 
+/// Behavior for Topic nodes (container type for organizing related content)
+///
+/// Topics serve as containers for grouping related nodes (similar to folders or projects).
+/// They have minimal validation and are designed to be simple organizational containers.
+///
+/// # Container Properties
+/// - **Type Name**: "topic"
+/// - **Children**: Allowed (can contain any node types)
+/// - **Markdown Support**: No
+/// - **Validation**: Content must not be empty
+///
+/// # Examples
+///
+/// ```rust
+/// use nodespace_core::behaviors::{NodeBehavior, TopicNodeBehavior};
+/// use nodespace_core::models::Node;
+/// use serde_json::json;
+///
+/// let behavior = TopicNodeBehavior;
+/// let node = Node::new(
+///     "topic".to_string(),
+///     "My Project".to_string(),
+///     None,
+///     json!({}),
+/// );
+/// assert!(behavior.validate(&node).is_ok());
+/// ```
+pub struct TopicNodeBehavior;
+
+impl NodeBehavior for TopicNodeBehavior {
+    fn type_name(&self) -> &'static str {
+        "topic"
+    }
+
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        // Topics just need non-empty content for the title/name
+        if node.content.trim().is_empty() {
+            return Err(NodeValidationError::MissingField(
+                "Topic nodes must have a title/name".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn can_have_children(&self) -> bool {
+        true // Topics are containers that can hold any content
+    }
+
+    fn supports_markdown(&self) -> bool {
+        false // Topics are simple organizational containers
+    }
+
+    fn default_metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "description": "",
+            "tags": []
+        })
+    }
+}
+
 /// Registry for managing node behaviors
 ///
 /// The registry provides thread-safe storage and retrieval of node behaviors.
-/// Built-in behaviors (text, task, date) are registered automatically.
+/// Built-in behaviors (text, task, date, topic) are registered automatically.
 ///
 /// # Thread Safety
 ///
@@ -826,6 +886,7 @@ impl NodeBehaviorRegistry {
         registry.register(Arc::new(QuoteBlockNodeBehavior));
         registry.register(Arc::new(OrderedListNodeBehavior));
         registry.register(Arc::new(DateNodeBehavior));
+        registry.register(Arc::new(TopicNodeBehavior));
 
         registry
     }
