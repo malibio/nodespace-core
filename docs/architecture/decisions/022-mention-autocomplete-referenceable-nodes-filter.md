@@ -142,9 +142,90 @@ If filtering requirements expand beyond the current use case, consider:
 
 However, implement only when actual requirements emerge (avoid speculative complexity).
 
+## Container-Level Backlinks (Extension - 2025-10-23)
+
+### Context
+
+When displaying backlinks (which nodes mention this node), we need to decide the granularity: show individual mentioning nodes or their containers?
+
+### Decision
+
+**Backlinks are resolved and displayed at the container level, not individual node level.**
+
+### Rationale
+
+**Consistency with Mention System:**
+- The @mention autocomplete already filters to only show container nodes (+ exceptions like task/ai-chat)
+- When users create a mention, they're always linking to a container node, never to individual child text nodes
+- This creates a natural symmetry: "You can only mention containers" → "Backlinks show which containers mention you"
+
+**User Mental Model:**
+- Users think in terms of "pages" or "documents" (containers), not individual paragraphs
+- Question: "Which pages mention this?" not "Which paragraphs mention this?"
+- Aligns with tools like Roam Research and Obsidian which show page-level backlinks
+
+**Deduplication:**
+- Multiple child nodes within the same container may mention the same target
+- Without container-level resolution, you'd see duplicate entries: "Text Node A" and "Text Node C" both from the same page
+- Container-level view shows each page once, regardless of how many mentions it contains
+
+**Implementation:**
+- New backend method: `get_mentioning_containers(node_id)` in NodeService
+- Exposed via Tauri command: `get_mentioning_containers`
+- Frontend adapter: `getMentioningContainers(nodeId)`
+- Query logic:
+  ```sql
+  SELECT DISTINCT
+    CASE
+      WHEN n.node_type IN ('task', 'ai-chat') THEN n.id
+      ELSE COALESCE(n.container_node_id, n.id)
+    END as container_id
+  FROM node_mentions nm
+  JOIN nodes n ON nm.node_id = n.id
+  WHERE nm.mentions_node_id = ?
+  ```
+
+**Exceptions:**
+- Task nodes are treated as their own containers (they show up directly)
+- AI-chat nodes are treated as their own containers
+- Future node types may be added to exception list as needed
+
+### Example
+
+```
+Date 2025-01-15 (container, id: date-1)
+  ├─ Text Node A: "See [@2025-01-20](nodespace://date-2)"
+  └─ Text Node C: "Also [@2025-01-20](nodespace://date-2)"
+
+Date 2025-01-20 (container, id: date-2)
+  └─ Text Node B
+
+Backlinks displayed on date-2:
+  - "2025-01-15" (shown once, not "Node A" and "Node C" separately)
+```
+
+### Consequences
+
+**Positive:**
+- Cleaner backlinks UI (no duplicates from same container)
+- Matches user mental model and expectations
+- Consistent with mention creation flow
+- Efficient: Single JOIN query with deduplication at database level
+
+**Negative:**
+- Can't see which specific child nodes within a container mention the target (loss of granularity)
+- Future enhancement needed if users want to see mention context within containers
+
+**Future Considerations:**
+- May add "click to expand" to show individual mentioning nodes within a container
+- May show context (surrounding text) of mentions within container
+- May add "scroll to mention" functionality when navigating to container
+
 ## References
 
 - PR: Mention autocomplete filter implementation
 - Code Review: `pragmatic-code-reviewer` comprehensive analysis
 - Implementation: `packages/core/src/services/node_service.rs:1104-1114`
 - Tests: `packages/core/src/services/node_service.rs:2828-3104`
+- Issue #318: Backlinks UI Panel implementation
+- Issue #336: @mention autocomplete with referenceable nodes filter
