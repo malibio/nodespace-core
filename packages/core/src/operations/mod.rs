@@ -817,6 +817,30 @@ impl NodeOperations {
             )));
         }
 
+        // Fix sibling chain BEFORE reordering (maintain chain integrity)
+        if let Some(parent_id) = &node.parent_id {
+            // Find all siblings (nodes with same parent)
+            let siblings = self
+                .node_service
+                .query_nodes(NodeFilter::new().with_parent_id(parent_id.clone()))
+                .await?;
+
+            // Find the node that points to this one (next sibling in chain)
+            if let Some(next_sibling) = siblings
+                .iter()
+                .find(|n| n.before_sibling_id.as_deref() == Some(node_id))
+            {
+                // Update next sibling to skip over the moved node
+                // This maintains the chain: if A → B → C and we move B, we update C to point to A
+                let mut fix_update = NodeUpdate::new();
+                fix_update.before_sibling_id = Some(node.before_sibling_id.clone());
+
+                self.node_service
+                    .update_node(&next_sibling.id, fix_update)
+                    .await?;
+            }
+        }
+
         // Validate sibling position
         let new_sibling = self
             .calculate_sibling_position(
