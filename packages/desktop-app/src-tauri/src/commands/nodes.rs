@@ -299,26 +299,15 @@ pub async fn get_node(
 #[tauri::command]
 pub async fn update_node(
     operations: State<'_, NodeOperations>,
-    service: State<'_, NodeService>,
     id: String,
     update: NodeUpdate,
 ) -> Result<(), CommandError> {
-    // Check if this update includes hierarchy changes
-    let has_hierarchy_changes = update.parent_id.is_some()
-        || update.container_node_id.is_some()
-        || update.before_sibling_id.is_some();
-
-    if has_hierarchy_changes {
-        // Hierarchy changes must go through NodeService directly for now
-        // TODO: Implement proper move_node/reorder_node support in frontend
-        service.update_node(&id, update).await.map_err(Into::into)
-    } else {
-        // Pure content/type/properties updates use NodeOperations
-        operations
-            .update_node(&id, update.content, update.node_type, update.properties)
-            .await
-            .map_err(Into::into)
-    }
+    // NodeOperations.update_node only handles content/type/properties
+    // For hierarchy changes, use move_node() or reorder_node()
+    operations
+        .update_node(&id, update.content, update.node_type, update.properties)
+        .await
+        .map_err(Into::into)
 }
 
 /// Delete a node by ID
@@ -354,6 +343,79 @@ pub async fn delete_node(
     id: String,
 ) -> Result<nodespace_core::models::DeleteResult, CommandError> {
     operations.delete_node(&id).await.map_err(Into::into)
+}
+
+/// Move a node to a new parent
+///
+/// Uses NodeOperations to enforce business rules for hierarchy changes.
+/// Validates parent-container consistency and updates container_node_id.
+///
+/// # Arguments
+/// * `operations` - NodeOperations instance from Tauri state
+/// * `node_id` - ID of the node to move
+/// * `new_parent_id` - Optional new parent ID (None makes it a root node)
+///
+/// # Returns
+/// * `Ok(())` - Node moved successfully
+/// * `Err(CommandError)` - Error if move validation fails
+///
+/// # Errors
+/// Returns error if:
+/// - Node doesn't exist
+/// - New parent doesn't exist
+/// - Container node cannot be moved (containers must remain at root)
+/// - Parent-container consistency check fails
+///
+/// # Example Frontend Usage
+/// ```typescript
+/// await invoke('move_node', { nodeId: 'node-123', newParentId: 'parent-456' });
+/// ```
+#[tauri::command]
+pub async fn move_node(
+    operations: State<'_, NodeOperations>,
+    node_id: String,
+    new_parent_id: Option<String>,
+) -> Result<(), CommandError> {
+    operations
+        .move_node(&node_id, new_parent_id.as_deref())
+        .await
+        .map_err(Into::into)
+}
+
+/// Reorder a node by changing its sibling position
+///
+/// Uses NodeOperations to calculate sibling positions and validate ordering.
+///
+/// # Arguments
+/// * `operations` - NodeOperations instance from Tauri state
+/// * `node_id` - ID of the node to reorder
+/// * `before_sibling_id` - Optional ID of sibling to place before (None = last position)
+///
+/// # Returns
+/// * `Ok(())` - Node reordered successfully
+/// * `Err(CommandError)` - Error if reorder validation fails
+///
+/// # Errors
+/// Returns error if:
+/// - Node doesn't exist
+/// - before_sibling_id node doesn't exist
+/// - Sibling is not in the same parent
+/// - Container node cannot be reordered
+///
+/// # Example Frontend Usage
+/// ```typescript
+/// await invoke('reorder_node', { nodeId: 'node-123', beforeSiblingId: 'sibling-456' });
+/// ```
+#[tauri::command]
+pub async fn reorder_node(
+    operations: State<'_, NodeOperations>,
+    node_id: String,
+    before_sibling_id: Option<String>,
+) -> Result<(), CommandError> {
+    operations
+        .reorder_node(&node_id, before_sibling_id.as_deref())
+        .await
+        .map_err(Into::into)
 }
 
 /// Get child nodes of a parent node
