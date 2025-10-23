@@ -569,6 +569,23 @@ pub async fn query_nodes_simple(
 ///   beforeSiblingId: null
 /// });
 /// ```
+///
+/// # Architecture Note: NodeOperations Bypass
+///
+/// ⚠️ **IMPORTANT**: This command uses `NodeService` directly instead of `NodeOperations`.
+///
+/// **Why the bypass?**
+/// - This is a specialized **transactional upsert** that combines "ensure parent exists" + "upsert node"
+/// - The transaction must complete atomically to prevent database locking issues during auto-save
+/// - NodeOperations enforces business rules but doesn't support transactional parent creation yet
+///
+/// **Safety measures:**
+/// - Still validates node type via `validate_node_type()`
+/// - Limited to specific auto-save use case (frontend debounced typing)
+/// - All other node operations (`create_node`, `update_node`, `move_node`, `reorder_node`) use NodeOperations
+///
+/// **Future improvement**: Consider adding `NodeOperations::upsert_node_with_parent()` method
+/// to enforce business rules within the transaction semantics (tracked in follow-up issue).
 #[tauri::command]
 pub async fn save_node_with_parent(
     service: State<'_, NodeService>,
@@ -581,7 +598,7 @@ pub async fn save_node_with_parent(
 ) -> Result<(), CommandError> {
     validate_node_type(&node_type)?;
 
-    // Use single-transaction upsert method
+    // Use single-transaction upsert method (bypasses NodeOperations for transactional reasons)
     service
         .upsert_node_with_parent(
             &node_id,

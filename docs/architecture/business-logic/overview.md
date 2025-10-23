@@ -449,7 +449,7 @@ listen('node-changed', (event) => {
 - **Clear Architecture**: Two-tier design makes responsibilities explicit
 
 ### Why TypeScript Services Still Exist?
-TypeScript services (`NodeOperationsService`, `HierarchyService`) serve **different purposes** than Rust `NodeOperations`:
+TypeScript services (`HierarchyService`, `NodeReferenceService`) serve **different purposes** than Rust `NodeOperations`:
 
 **Rust NodeOperations (Business Rules):**
 - Container validation
@@ -457,19 +457,18 @@ TypeScript services (`NodeOperationsService`, `HierarchyService`) serve **differ
 - Parent-container consistency
 - Database integrity enforcement
 
-**TypeScript NodeOperationsService (Content Handling):**
-- Upsert semantics (create vs update logic)
-- Content extraction from various formats
-- Metadata merging strategies
-- Mentions bidirectional updates
-
 **TypeScript HierarchyService (Client-Side Performance):**
 - Map-based caching for UI performance
 - Depth calculations
 - Children/descendants queries
 - Sibling navigation
 
-These layers complement each other rather than duplicate functionality.
+**TypeScript NodeReferenceService (Reference Management):**
+- Mention detection and extraction
+- Bidirectional reference updates
+- Content-based mention tracking
+
+**Note**: The previous `NodeOperationsService` (682 lines of duplicate business logic) was removed in Issue #332. All business rules are now centralized in Rust `NodeOperations`, with TypeScript services focusing on complementary functionality like caching and reference management.
 
 ### Why Hybrid Package Structure?
 - **Database and business logic are tightly coupled**: NodeService directly uses SQLx queries

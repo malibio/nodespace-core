@@ -180,14 +180,18 @@ impl NodeOperations {
     /// # let node_service = NodeService::new(db)?;
     /// # let operations = NodeOperations::new(node_service);
     /// // These are internal examples for documentation
-    /// // assert!(operations.is_container_type("date"));
-    /// // assert!(!operations.is_container_type("text"));
-    /// // assert!(!operations.is_container_type("task"));
+    /// // assert!(operations.can_be_container_type("date"));
+    /// // assert!(operations.can_be_container_type("text"));
+    /// // assert!(!operations.can_be_container_type("task"));
     /// # Ok(())
     /// # }
     /// ```
-    fn is_container_type(node_type: &str) -> bool {
-        // Container nodes can be:
+    fn can_be_container_type(node_type: &str) -> bool {
+        // Check if a node type is ALLOWED to be a container.
+        // This does NOT mean the node IS a container - that depends on hierarchy fields
+        // (a node IS a container if parent_id=None AND container_node_id=None).
+        //
+        // Container-capable types:
         // - date: Auto-created date containers (virtual)
         // - text: Simple text containers (e.g., document titles)
         // - header: Header containers (e.g., "# Project Name")
@@ -415,6 +419,28 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Date Node Special Case
+    ///
+    /// Date nodes use their content (YYYY-MM-DD format) as their ID instead of
+    /// generating a UUID. This enables deterministic "get-or-create" semantics
+    /// for daily notes.
+    ///
+    /// ```rust,no_run
+    /// # use nodespace_core::NodeOperations;
+    /// # use std::sync::Arc;
+    /// # use serde_json::json;
+    /// # async fn example(operations: Arc<NodeOperations>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let date_id = operations.create_node(
+    ///     "date".to_string(),
+    ///     "2025-10-23".to_string(),  // This becomes the ID
+    ///     None, None, None, json!({})
+    /// ).await?;
+    ///
+    /// assert_eq!(date_id, "2025-10-23");  // ID matches content
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn create_node(
         &self,
         node_type: String,
@@ -431,7 +457,7 @@ impl NodeOperations {
 
         let (final_parent_id, final_container_id, final_sibling_id) = if is_container_node {
             // This node IS a container - validate that its type allows being a container
-            if !Self::is_container_type(&node_type) {
+            if !Self::can_be_container_type(&node_type) {
                 return Err(NodeOperationError::invalid_container_type(
                     content.clone(),
                     node_type.clone(),
@@ -886,29 +912,29 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_is_container_type_date() {
-        assert!(NodeOperations::is_container_type("date"));
+    fn test_can_be_container_type_date() {
+        assert!(NodeOperations::can_be_container_type("date"));
     }
 
     #[test]
-    fn test_is_container_type_text() {
-        assert!(NodeOperations::is_container_type("text"));
+    fn test_can_be_container_type_text() {
+        assert!(NodeOperations::can_be_container_type("text"));
     }
 
     #[test]
-    fn test_is_container_type_header() {
-        assert!(NodeOperations::is_container_type("header"));
+    fn test_can_be_container_type_header() {
+        assert!(NodeOperations::can_be_container_type("header"));
     }
 
     #[test]
-    fn test_is_container_type_task_is_not_container() {
-        assert!(!NodeOperations::is_container_type("task"));
+    fn test_can_be_container_type_task_is_not_container() {
+        assert!(!NodeOperations::can_be_container_type("task"));
     }
 
     #[test]
-    fn test_is_container_type_unknown_is_not_container() {
-        assert!(!NodeOperations::is_container_type("unknown"));
-        assert!(!NodeOperations::is_container_type("custom-type"));
+    fn test_can_be_container_type_unknown_is_not_container() {
+        assert!(!NodeOperations::can_be_container_type("unknown"));
+        assert!(!NodeOperations::can_be_container_type("custom-type"));
     }
 
     // =========================================================================
