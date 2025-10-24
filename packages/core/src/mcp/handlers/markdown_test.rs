@@ -88,6 +88,259 @@ Text under second H2"#;
     }
 
     #[tokio::test]
+    async fn test_same_level_headers_are_siblings() {
+        let (operations, _temp_dir) = setup_test_service().await;
+
+        // Test case from issue #350: Multiple H2s should be siblings, not nested
+        let markdown = r#"# Main Title
+## First H2
+Some content under first H2
+## Second H2
+Content under second H2
+## Third H2
+### H3 under Third H2
+Content under H3"#;
+
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "# Container H1"
+        });
+
+        let result = handle_create_nodes_from_markdown(&operations, params)
+            .await
+            .unwrap();
+
+        assert_eq!(result["success"], true);
+
+        let node_ids = result["node_ids"].as_array().unwrap();
+
+        // Get all nodes
+        let container_h1 = operations
+            .get_node(node_ids[0].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let main_title = operations
+            .get_node(node_ids[1].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let first_h2 = operations
+            .get_node(node_ids[2].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let text1 = operations
+            .get_node(node_ids[3].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let second_h2 = operations
+            .get_node(node_ids[4].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let text2 = operations
+            .get_node(node_ids[5].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let third_h2 = operations
+            .get_node(node_ids[6].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h3 = operations
+            .get_node(node_ids[7].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let text3 = operations
+            .get_node(node_ids[8].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify hierarchy structure
+        assert_eq!(container_h1.content, "# Container H1");
+        assert!(container_h1.is_root(), "Container should be root");
+
+        // Main Title (H1) should be child of container
+        assert_eq!(main_title.content, "# Main Title");
+        assert_eq!(
+            main_title.parent_id,
+            Some(container_h1.id.clone()),
+            "H1 should be child of container"
+        );
+
+        // CRITICAL: All three H2s should be children of Main Title H1, NOT nested under each other
+        assert_eq!(first_h2.content, "## First H2");
+        assert_eq!(
+            first_h2.parent_id,
+            Some(main_title.id.clone()),
+            "First H2 should be child of H1, not nested"
+        );
+
+        assert_eq!(second_h2.content, "## Second H2");
+        assert_eq!(
+            second_h2.parent_id,
+            Some(main_title.id.clone()),
+            "Second H2 should be child of H1 (sibling of First H2), not child of First H2"
+        );
+
+        assert_eq!(third_h2.content, "## Third H2");
+        assert_eq!(
+            third_h2.parent_id,
+            Some(main_title.id.clone()),
+            "Third H2 should be child of H1 (sibling of other H2s), not child of Second H2"
+        );
+
+        // Text nodes should be children of their respective H2s
+        assert_eq!(
+            text1.parent_id,
+            Some(first_h2.id.clone()),
+            "Text should be child of its H2"
+        );
+        assert_eq!(
+            text2.parent_id,
+            Some(second_h2.id.clone()),
+            "Text should be child of its H2"
+        );
+
+        // H3 should be child of Third H2
+        assert_eq!(h3.content, "### H3 under Third H2");
+        assert_eq!(
+            h3.parent_id,
+            Some(third_h2.id.clone()),
+            "H3 should be child of its parent H2"
+        );
+
+        // Text under H3 should be child of H3
+        assert_eq!(
+            text3.parent_id,
+            Some(h3.id.clone()),
+            "Text should be child of H3"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_complex_heading_transitions() {
+        let (operations, _temp_dir) = setup_test_service().await;
+
+        // Test various heading level transitions
+        let markdown = r#"# H1
+## H2-A
+### H3 under H2-A
+## H2-B (back to H2 after H3)
+#### H4 (skip H3)
+## H2-C (back to H2 after H4)
+# Another H1
+## H2 under second H1"#;
+
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "Complex Test"
+        });
+
+        let result = handle_create_nodes_from_markdown(&operations, params)
+            .await
+            .unwrap();
+
+        let node_ids = result["node_ids"].as_array().unwrap();
+
+        // Get nodes we need to verify
+        let container = operations
+            .get_node(node_ids[0].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h1_first = operations
+            .get_node(node_ids[1].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h2_a = operations
+            .get_node(node_ids[2].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h3 = operations
+            .get_node(node_ids[3].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h2_b = operations
+            .get_node(node_ids[4].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h4 = operations
+            .get_node(node_ids[5].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h2_c = operations
+            .get_node(node_ids[6].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h1_second = operations
+            .get_node(node_ids[7].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let h2_under_second = operations
+            .get_node(node_ids[8].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify complex hierarchy
+        assert_eq!(
+            h1_first.parent_id,
+            Some(container.id.clone()),
+            "First H1 child of container"
+        );
+        assert_eq!(
+            h2_a.parent_id,
+            Some(h1_first.id.clone()),
+            "H2-A child of H1"
+        );
+        assert_eq!(h3.parent_id, Some(h2_a.id.clone()), "H3 child of H2-A");
+
+        // CRITICAL: H2-B should be sibling of H2-A (both children of H1), not child of H3
+        assert_eq!(
+            h2_b.parent_id,
+            Some(h1_first.id.clone()),
+            "H2-B should be child of H1 (sibling of H2-A), not child of H3"
+        );
+
+        // H4 should be child of H2-B (even though H3 was skipped)
+        assert_eq!(h4.parent_id, Some(h2_b.id.clone()), "H4 child of H2-B");
+
+        // CRITICAL: H2-C should be sibling of H2-A and H2-B, not child of H4
+        assert_eq!(
+            h2_c.parent_id,
+            Some(h1_first.id.clone()),
+            "H2-C should be child of H1 (sibling of other H2s), not child of H4"
+        );
+
+        // Second H1 should be child of container (sibling of first H1)
+        assert_eq!(
+            h1_second.parent_id,
+            Some(container.id.clone()),
+            "Second H1 should be child of container (sibling of first H1)"
+        );
+
+        // H2 under second H1 should be child of second H1
+        assert_eq!(
+            h2_under_second.parent_id,
+            Some(h1_second.id.clone()),
+            "H2 should be child of second H1"
+        );
+    }
+
+    #[tokio::test]
     async fn test_content_preservation() {
         let (operations, _temp_dir) = setup_test_service().await;
 

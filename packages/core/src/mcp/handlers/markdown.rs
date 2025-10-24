@@ -152,9 +152,10 @@ impl ParserContext {
         None
     }
 
-    /// Update heading hierarchy when encountering a new heading
-    fn push_heading(&mut self, node_id: String, level: usize) {
-        // Pop headings at same or lower level
+    /// Pop headings at same or higher level to prepare for a new heading
+    /// This must be called BEFORE creating the heading node to get the correct parent
+    fn pop_headings_for_level(&mut self, level: usize) {
+        // Pop headings at same or higher level
         while let Some(top) = self.heading_stack.last() {
             if top.level >= level {
                 self.heading_stack.pop();
@@ -162,7 +163,10 @@ impl ParserContext {
                 break;
             }
         }
+    }
 
+    /// Add a heading to the hierarchy stack after it's been created
+    fn push_heading(&mut self, node_id: String, level: usize) {
         self.heading_stack.push(HierarchyNode { node_id, level });
         self.last_sibling = None; // Reset sibling tracking at new heading level
     }
@@ -355,6 +359,10 @@ async fn parse_markdown(
                         let heading_level = heading_level_to_usize(level);
                         let content =
                             format!("{} {}", "#".repeat(heading_level), current_text.trim());
+
+                        // CRITICAL FIX: Pop same-or-higher level headings BEFORE getting parent
+                        // This ensures same-level headers become siblings, not nested children
+                        context.pop_headings_for_level(heading_level);
 
                         let node_id = create_node(
                             operations,
