@@ -25,7 +25,6 @@
 use crate::mcp::types::MCPError;
 use crate::models::Node;
 use crate::operations::{CreateNodeParams, NodeOperations};
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -109,10 +108,6 @@ struct ParserContext {
     nodes: Vec<NodeMetadata>,
     /// Container node ID (determined by strategy)
     container_node_id: Option<String>,
-    /// Current list item counter for ordered lists (tracks the number prefix for ordered lists)
-    ordered_list_counter: usize,
-    /// Whether we're in an ordered list
-    in_ordered_list: bool,
     /// Whether the first node has been created (for tracking purposes)
     first_node_created: bool,
 }
@@ -132,8 +127,6 @@ impl ParserContext {
             node_ids: Vec::new(),
             nodes: Vec::new(),
             container_node_id,
-            ordered_list_counter: 0,
-            in_ordered_list: false,
             first_node_created: false,
         }
     }
@@ -169,16 +162,6 @@ impl ParserContext {
     fn push_heading(&mut self, node_id: String, level: usize) {
         self.heading_stack.push(HierarchyNode { node_id, level });
         self.last_sibling = None; // Reset sibling tracking at new heading level
-    }
-
-    /// Push a list level onto the stack
-    fn push_list(&mut self, node_id: String, level: usize) {
-        self.list_stack.push(HierarchyNode { node_id, level });
-    }
-
-    /// Pop a list level from the stack
-    fn pop_list(&mut self) {
-        self.list_stack.pop();
     }
 
     /// Track a node for sibling ordering
@@ -294,8 +277,8 @@ fn is_valid_container_type(node_type: &str) -> bool {
 
 /// Parse markdown content and create nodes
 ///
-/// This function processes markdown using pulldown-cmark's event stream parser
-/// and creates hierarchical NodeSpace nodes with proper parent-child relationships.
+/// This function processes markdown line-by-line, preserving inline formatting
+/// and using indentation + heading levels to determine hierarchy.
 ///
 /// # Arguments
 ///
@@ -307,218 +290,153 @@ fn is_valid_container_type(node_type: &str) -> bool {
 ///
 /// Returns `Ok(())` on success, or an `MCPError` if node creation fails.
 ///
-/// # Hierarchy Tracking
+/// # Hierarchy Rules
 ///
-/// - **Heading hierarchy**: h1 → h2 → h3 tracked via heading_stack
-/// - **List hierarchy**: Indentation levels tracked via list_stack
-/// - **List context takes precedence**: Items nested in lists use list parent, not heading parent
+/// 1. **Heading hierarchy by level**: H1 → H2 → H3, same-level headers are siblings
+/// 2. **Content below headings are children**: Non-heading content becomes child of nearest heading above
+/// 3. **Indentation hints (optional)**: Tab/space count before `-` indicates depth
+/// 4. **Inline syntax preserved**: `**bold**`, `*italic*`, etc. kept intact
 async fn parse_markdown(
     markdown: &str,
     operations: &Arc<NodeOperations>,
     context: &mut ParserContext,
 ) -> Result<(), MCPError> {
-    // Enable GitHub Flavored Markdown extensions (tables, strikethrough, task lists, etc.)
-    let mut options = pulldown_cmark::Options::empty();
-    options.insert(pulldown_cmark::Options::ENABLE_TABLES);
-    options.insert(pulldown_cmark::Options::ENABLE_STRIKETHROUGH);
-    options.insert(pulldown_cmark::Options::ENABLE_TASKLISTS);
+    // Track previous sibling for before_sibling_id chain
+    let mut last_sibling_at_parent: std::collections::HashMap<Option<String>, String> =
+        std::collections::HashMap::new();
 
-    let parser = Parser::new_ext(markdown, options);
+    // Track indentation-based hierarchy (node_id, indent_level)
+    let mut indent_stack: Vec<(String, usize)> = Vec::new();
 
-    let mut current_text = String::new();
-    let mut current_tag: Option<Tag> = None;
-    let mut code_lang = String::new();
-    let mut in_task_item = false;
-    let mut task_state = String::new();
+    // Process markdown line by line
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut i = 0;
 
-    for event in parser {
-        match event {
-            Event::Start(tag) => {
-                current_tag = Some(tag.clone());
-                current_text.clear();
+    while i < lines.len() {
+        let line = lines[i];
 
-                match tag {
-                    Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(lang)) => {
-                        code_lang = lang.to_string();
-                    }
-                    Tag::List(first_number) => {
-                        if let Some(num) = first_number {
-                            context.in_ordered_list = true;
-                            context.ordered_list_counter = num as usize;
-                        } else {
-                            context.in_ordered_list = false;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            Event::End(tag_end) => {
-                match tag_end {
-                    TagEnd::Heading(level) => {
-                        let heading_level = heading_level_to_usize(level);
-                        let content =
-                            format!("{} {}", "#".repeat(heading_level), current_text.trim());
-
-                        // CRITICAL FIX: Pop same-or-higher level headings BEFORE getting parent
-                        // This ensures same-level headers become siblings, not nested children
-                        context.pop_headings_for_level(heading_level);
-
-                        let node_id = create_node(
-                            operations,
-                            "header",
-                            &content,
-                            context.current_parent_id(),
-                            context.container_node_id.clone(),
-                            None, // Let NodeOperations calculate sibling position
-                        )
-                        .await?;
-
-                        context.push_heading(node_id.clone(), heading_level);
-                        context.track_node(node_id, "header".to_string());
-                    }
-
-                    TagEnd::Paragraph => {
-                        let content = current_text.trim();
-                        if !content.is_empty()
-                            && current_tag
-                                .as_ref()
-                                .map(|t| !matches!(t, Tag::Item))
-                                .unwrap_or(false)
-                        {
-                            let node_id = create_node(
-                                operations,
-                                "text",
-                                content,
-                                context.current_parent_id(),
-                                context.container_node_id.clone(),
-                                None, // Let NodeOperations calculate sibling position
-                            )
-                            .await?;
-                            context.track_node(node_id, "text".to_string());
-                        }
-                    }
-
-                    TagEnd::CodeBlock => {
-                        let fence = if code_lang.is_empty() {
-                            "```".to_string()
-                        } else {
-                            format!("```{}", code_lang)
-                        };
-                        let content = format!("{}\n{}\n```", fence, current_text.trim_end());
-
-                        let node_id = create_node(
-                            operations,
-                            "code-block",
-                            &content,
-                            context.current_parent_id(),
-                            context.container_node_id.clone(),
-                            None, // Let NodeOperations calculate sibling position
-                        )
-                        .await?;
-                        context.track_node(node_id, "code-block".to_string());
-                        code_lang.clear();
-                    }
-
-                    TagEnd::BlockQuote => {
-                        if !current_text.is_empty() {
-                            let lines: Vec<&str> = current_text.lines().collect();
-                            let content = lines
-                                .iter()
-                                .map(|line| format!("> {}", line.trim()))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-
-                            let node_id = create_node(
-                                operations,
-                                "quote-block",
-                                &content,
-                                context.current_parent_id(),
-                                context.container_node_id.clone(),
-                                None, // Let NodeOperations calculate sibling position
-                            )
-                            .await?;
-                            context.track_node(node_id, "quote-block".to_string());
-                        }
-                    }
-
-                    TagEnd::Item => {
-                        let content = current_text.trim();
-                        if !content.is_empty() {
-                            // Determine node type and format content
-                            let (node_type, formatted_content) = if in_task_item {
-                                // Task node with checkbox
-                                ("task", format!("- {} {}", task_state, content))
-                            } else if context.in_ordered_list {
-                                // Ordered list item with number prefix
-                                // The counter tracks the sequence (1., 2., 3., etc.) and increments
-                                // after each item to maintain proper markdown numbering
-                                let formatted =
-                                    format!("{}. {}", context.ordered_list_counter, content);
-                                context.ordered_list_counter += 1;
-                                ("ordered-list", formatted)
-                            } else {
-                                // Regular unordered list item
-                                ("text", format!("- {}", content))
-                            };
-
-                            let node_id = create_node(
-                                operations,
-                                node_type,
-                                &formatted_content,
-                                context.current_parent_id(),
-                                context.container_node_id.clone(),
-                                None, // Let NodeOperations calculate sibling position
-                            )
-                            .await?;
-
-                            // Update list hierarchy based on indentation level
-                            let list_level = context.list_stack.len();
-                            context.push_list(node_id.clone(), list_level);
-                            context.track_node(node_id, node_type.to_string());
-
-                            in_task_item = false;
-                            task_state.clear();
-                        }
-                    }
-
-                    TagEnd::List(_) => {
-                        context.pop_list();
-                        context.in_ordered_list = false;
-                        context.ordered_list_counter = 0;
-                    }
-
-                    _ => {}
-                }
-
-                current_tag = None;
-            }
-
-            Event::Text(text) => {
-                current_text.push_str(&text);
-            }
-
-            Event::Code(code) => {
-                current_text.push('`');
-                current_text.push_str(&code);
-                current_text.push('`');
-            }
-
-            Event::TaskListMarker(checked) => {
-                in_task_item = true;
-                task_state = if checked {
-                    "[x]".to_string()
-                } else {
-                    "[ ]".to_string()
-                };
-            }
-
-            Event::SoftBreak | Event::HardBreak => {
-                current_text.push('\n');
-            }
-
-            _ => {}
+        // Skip empty lines
+        if line.trim().is_empty() {
+            i += 1;
+            continue;
         }
+
+        // Detect indentation level (count leading tabs/spaces before '- ')
+        let indent_chars: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+        let indent_level = indent_chars.chars().filter(|c| *c == '\t').count()
+            + indent_chars.chars().filter(|c| *c == ' ').count() / 2; // 2 spaces = 1 level
+
+        // Strip leading whitespace and optional '- ' marker, but preserve all other markdown
+        let trimmed = line.trim_start();
+        let content_line = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+
+        // Detect node type and extract content with inline markdown preserved
+        let (node_type, content, heading_level) = if content_line.starts_with('#') {
+            // Header: count # symbols for level
+            let level = content_line.chars().take_while(|c| *c == '#').count();
+            // Verify it's actually a header (has space after #'s)
+            if content_line.chars().nth(level) == Some(' ') {
+                ("header", content_line.to_string(), Some(level))
+            } else {
+                // Not a header, just text starting with #
+                ("text", content_line.to_string(), None)
+            }
+        } else if content_line.starts_with("- [x] ") || content_line.starts_with("- [ ] ") {
+            // Task node
+            ("task", content_line.to_string(), None)
+        } else if content_line.starts_with("```") {
+            // Code block - collect until closing ```
+            let mut code_lines = vec![content_line];
+            i += 1;
+            while i < lines.len() {
+                let code_line = lines[i];
+                code_lines.push(code_line.trim_start());
+                if code_line.trim_start().starts_with("```") {
+                    break;
+                }
+                i += 1;
+            }
+            let code_content = code_lines.join("\n");
+            ("code-block", code_content, None)
+        } else if content_line.starts_with("> ") {
+            // Quote block - collect consecutive quote lines
+            let mut quote_lines = vec![content_line];
+            while i + 1 < lines.len() && lines[i + 1].trim_start().starts_with("> ") {
+                i += 1;
+                quote_lines.push(lines[i].trim_start());
+            }
+            let quote_content = quote_lines.join("\n");
+            ("quote-block", quote_content, None)
+        } else if let Some(num_end) = content_line.find(". ") {
+            // Check if it starts with a number (ordered list)
+            if content_line[..num_end].chars().all(|c| c.is_ascii_digit()) {
+                ("ordered-list", content_line.to_string(), None)
+            } else {
+                // Regular text with inline markdown preserved
+                ("text", content_line.to_string(), None)
+            }
+        } else {
+            // Regular text with inline markdown preserved
+            ("text", content_line.to_string(), None)
+        };
+
+        // Pop indent stack for items at same or lower indentation
+        while let Some((_, stack_indent)) = indent_stack.last() {
+            if *stack_indent >= indent_level {
+                indent_stack.pop();
+            } else {
+                break;
+            }
+        }
+
+        // Determine parent based on heading hierarchy + indentation
+        let parent_id = if let Some(h_level) = heading_level {
+            // For headers: pop same-or-higher level headers, then get parent
+            context.pop_headings_for_level(h_level);
+            // Use indentation parent if available, otherwise heading parent
+            indent_stack
+                .last()
+                .map(|(id, _)| id.clone())
+                .or_else(|| context.current_parent_id())
+        } else {
+            // For non-headers: prefer indentation parent, fallback to heading parent
+            indent_stack
+                .last()
+                .map(|(id, _)| id.clone())
+                .or_else(|| context.current_parent_id())
+        };
+
+        // Get before_sibling_id from the chain
+        let before_sibling_id = last_sibling_at_parent.get(&parent_id).cloned();
+
+        // Create the node
+        let node_id = create_node(
+            operations,
+            node_type,
+            &content,
+            parent_id.clone(),
+            context.container_node_id.clone(),
+            before_sibling_id,
+        )
+        .await?;
+
+        // Update heading stack if this was a header
+        if let Some(h_level) = heading_level {
+            context.push_heading(node_id.clone(), h_level);
+        }
+
+        // Push to indent stack if this line had indentation
+        if indent_level > 0 {
+            indent_stack.push((node_id.clone(), indent_level));
+        }
+
+        // Track this node as the last sibling at this parent level
+        last_sibling_at_parent.insert(parent_id, node_id.clone());
+
+        // Track node in context
+        context.track_node(node_id, node_type.to_string());
+
+        i += 1;
     }
 
     Ok(())
@@ -564,18 +482,6 @@ async fn create_node(
                 node_type, content_display, e
             ))
         })
-}
-
-/// Convert HeadingLevel to usize (1-6)
-fn heading_level_to_usize(level: HeadingLevel) -> usize {
-    match level {
-        HeadingLevel::H1 => 1,
-        HeadingLevel::H2 => 2,
-        HeadingLevel::H3 => 3,
-        HeadingLevel::H4 => 4,
-        HeadingLevel::H5 => 5,
-        HeadingLevel::H6 => 6,
-    }
 }
 
 // ============================================================================
