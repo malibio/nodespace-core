@@ -1226,6 +1226,143 @@ Text under section 1
     }
 
     #[tokio::test]
+    async fn test_bullet_with_link() {
+        let (operations, _temp_dir) = setup_test_service().await;
+
+        let markdown = r#"Text paragraph
+- [Click here](https://example.com)
+- Regular bullet"#;
+
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "# Container"
+        });
+
+        let result = handle_create_nodes_from_markdown(&operations, params)
+            .await
+            .unwrap();
+
+        assert_eq!(result["success"], true);
+
+        let nodes = result["nodes"].as_array().unwrap();
+
+        // Container + text paragraph + link (stored as text) + bullet
+        assert_eq!(nodes.len(), 4);
+
+        // Link should be stored as text (not incorrectly identified as a bullet)
+        // The "- [link](url)" format should be preserved with the "- " prefix
+        let link_node = operations
+            .get_node(nodes[2]["id"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(link_node.node_type, "text");
+        assert!(link_node.content.contains("[Click here]"));
+        // Verify the link preserved the "- " prefix (it wasn't treated as a bullet)
+        assert!(link_node.content.starts_with("- ["));
+
+        // Regular bullet should have "- " stripped
+        let bullet_node = operations
+            .get_node(nodes[3]["id"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bullet_node.node_type, "text");
+        assert_eq!(bullet_node.content, "Regular bullet");
+
+        // Verify bullet is child of text paragraph (or link node, depending on parser logic)
+        // The key is that it's NOT a root node and the "- " prefix was stripped
+        let text_paragraph = operations
+            .get_node(nodes[1]["id"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The bullet should be a child of either the text paragraph or the link node
+        // (depending on which comes last in last_text_node tracking)
+        assert!(
+            bullet_node.parent_id.is_some(),
+            "Bullet should have a parent"
+        );
+        // Verify it's either child of text paragraph or link node
+        let is_child_of_text_or_link = bullet_node.parent_id == Some(text_paragraph.id.clone())
+            || bullet_node.parent_id == Some(link_node.id.clone());
+        assert!(
+            is_child_of_text_or_link,
+            "Bullet should be child of text paragraph or link node"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ordered_list_false_positive() {
+        let (operations, _temp_dir) = setup_test_service().await;
+
+        // This should be ONE text node, not broken into ordered list
+        let markdown = "This is step 1. The next step is step 2.";
+
+        let params = json!({
+            "markdown_content": markdown,
+            "container_title": "# Container"
+        });
+
+        let result = handle_create_nodes_from_markdown(&operations, params)
+            .await
+            .unwrap();
+
+        let nodes = result["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2); // Container + text (not broken into list)
+
+        let text_node = operations
+            .get_node(nodes[1]["id"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(text_node.node_type, "text");
+        assert_eq!(text_node.content, markdown);
+    }
+
+    #[tokio::test]
+    async fn test_bullet_roundtrip() {
+        let (operations, _temp_dir) = setup_test_service().await;
+
+        // Import
+        let import_params = json!({
+            "markdown_content": "Text paragraph\n- Bullet 1\n- Bullet 2",
+            "container_title": "# Header"
+        });
+
+        let import_result = handle_create_nodes_from_markdown(&operations, import_params)
+            .await
+            .unwrap();
+
+        let container_id = import_result["container_node_id"].as_str().unwrap();
+
+        // Export
+        let export_params = json!({
+            "node_id": container_id,
+            "include_children": true
+        });
+
+        let export_result = handle_get_markdown_from_node_id(&operations, export_params)
+            .await
+            .unwrap();
+
+        let exported = export_result["markdown"].as_str().unwrap();
+
+        // Remove HTML comments for comparison
+        let cleaned: String = exported
+            .lines()
+            .filter(|line| !line.trim().starts_with("<!--"))
+            .collect::<Vec<&str>>()
+            .join("\n");
+
+        // Should match original structure (bullets should have "- " prefix)
+        assert!(cleaned.contains("- Bullet 1"));
+        assert!(cleaned.contains("- Bullet 2"));
+    }
+
+    #[tokio::test]
     async fn test_get_markdown_with_code_blocks() {
         let (operations, _temp_dir) = setup_test_service().await;
 

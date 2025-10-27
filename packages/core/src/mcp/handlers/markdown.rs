@@ -30,6 +30,10 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// Maximum markdown content size (1MB) to prevent resource exhaustion
+///
+/// **Rationale:** Prevents DoS attacks from malicious AI agents attempting to import
+/// extremely large markdown files. 1MB is sufficient for typical documents (100-1000 nodes)
+/// while protecting against memory exhaustion. Most markdown notes are < 100KB.
 const MAX_MARKDOWN_SIZE: usize = 1_000_000;
 
 /// Maximum number of nodes that can be created in a single import
@@ -275,6 +279,108 @@ fn is_valid_container_type(node_type: &str) -> bool {
     matches!(node_type, "text" | "header" | "date")
 }
 
+/// Detect if a line is a markdown heading
+///
+/// Returns the heading level (1-6) if the line is a valid heading, None otherwise.
+/// Valid headings have 1-6 '#' symbols followed by a space.
+///
+/// # Examples
+/// ```
+/// # use nodespace_core::mcp::handlers::markdown::detect_heading;
+/// assert_eq!(detect_heading("# Title"), Some(1));
+/// assert_eq!(detect_heading("### Subtitle"), Some(3));
+/// assert_eq!(detect_heading("#NoSpace"), None);  // Not a heading
+/// ```
+fn detect_heading(line: &str) -> Option<usize> {
+    if !line.starts_with('#') {
+        return None;
+    }
+
+    let level = line.chars().take_while(|c| *c == '#').count();
+
+    // Verify it's actually a header (has space after #'s)
+    if line.chars().nth(level) == Some(' ') && level <= 6 {
+        Some(level)
+    } else {
+        None
+    }
+}
+
+/// Check if a line is a task (checked or unchecked)
+///
+/// Tasks are lines starting with "- [ ] " (unchecked) or "- [x] " (checked).
+fn is_task_line(line: &str) -> bool {
+    line.starts_with("- [ ] ") || line.starts_with("- [x] ")
+}
+
+/// Check if a line is a bullet list item (not a task or link)
+///
+/// Bullets start with "- " but are not tasks ("- [ ]") or links ("- [text](url)").
+fn is_bullet_line(line: &str) -> bool {
+    if !line.starts_with("- ") {
+        return false;
+    }
+
+    // Exclude tasks
+    if is_task_line(line) {
+        return false;
+    }
+
+    // Exclude markdown links: "- [text](url)"
+    if line.starts_with("- [") && line.contains("](") {
+        return false;
+    }
+
+    true
+}
+
+/// Calculate indentation level from leading whitespace
+///
+/// Counts leading tabs (1 tab = 4 spaces) and spaces.
+/// Only counts actual indentation characters (tabs and spaces), not all whitespace.
+///
+/// # Examples
+/// ```
+/// # use nodespace_core::mcp::handlers::markdown::calculate_indent;
+/// assert_eq!(calculate_indent("    text"), 4);   // 4 spaces
+/// assert_eq!(calculate_indent("\ttext"), 4);     // 1 tab = 4 spaces
+/// assert_eq!(calculate_indent("  - item"), 2);  // 2 spaces
+/// ```
+fn calculate_indent(line: &str) -> usize {
+    let indent_chars: String = line
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t') // Only tabs and spaces
+        .collect();
+
+    indent_chars.chars().filter(|c| *c == '\t').count() * 4
+        + indent_chars.chars().filter(|c| *c == ' ').count()
+}
+
+/// Check if a line starts an ordered list
+///
+/// Returns the position after the number and period if this is an ordered list item.
+/// Valid ordered lists: "1. Item", "42. Item", etc.
+/// Invalid: "sentence 1. next" (period too far from start)
+///
+/// # Examples
+/// ```
+/// # use nodespace_core::mcp::handlers::markdown::detect_ordered_list;
+/// assert_eq!(detect_ordered_list("1. Item"), Some(1));
+/// assert_eq!(detect_ordered_list("42. Item"), Some(2));
+/// assert_eq!(detect_ordered_list("This is 1. Not a list"), None);
+/// ```
+fn detect_ordered_list(line: &str) -> Option<usize> {
+    if let Some(num_end) = line.find(". ") {
+        // Check that it starts with digit(s) and is reasonably positioned
+        if line[..num_end].chars().all(|c| c.is_ascii_digit()) && num_end > 0 && num_end < 5
+        // Reasonable list number (1-9999)
+        {
+            return Some(num_end);
+        }
+    }
+    None
+}
+
 /// Parse markdown content and create nodes
 ///
 /// This function processes markdown line-by-line, preserving inline formatting
@@ -327,64 +433,53 @@ async fn parse_markdown(
 
         let line = lines[i];
 
-        // Detect indentation level - count ALL leading spaces + tabs (1 tab = 4 spaces)
-        let indent_chars: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-        let indent_level = indent_chars.chars().filter(|c| *c == '\t').count() * 4
-            + indent_chars.chars().filter(|c| *c == ' ').count();
+        // Detect indentation level using helper function
+        let indent_level = calculate_indent(line);
 
         // Strip leading whitespace
         let trimmed = line.trim_start();
 
-        // Check if this is a bullet list item (not a task)
-        // Tasks are "- [ ]" or "- [x]", bullets with links are "- [text](url)"
-        let is_task = trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ");
-        let is_bullet = trimmed.starts_with("- ") && !is_task;
+        // Check if this is a bullet list item (not a task or link) using helper functions
+        let is_bullet = is_bullet_line(trimmed);
         let content_line = if is_bullet {
-            trimmed.strip_prefix("- ").unwrap()
+            trimmed
+                .strip_prefix("- ")
+                .expect("is_bullet_line guarantees '- ' prefix exists")
         } else {
             trimmed
         };
 
         // Detect node type and extract content with inline markdown preserved
-        let (node_type, content, heading_level, is_multiline) = if content_line.starts_with('#') {
-            // Header: count # symbols for level
-            let level = content_line.chars().take_while(|c| *c == '#').count();
-            // Verify it's actually a header (has space after #'s)
-            if content_line.chars().nth(level) == Some(' ') {
+        let (node_type, content, heading_level, is_multiline) =
+            if let Some(level) = detect_heading(content_line) {
                 ("header", content_line.to_string(), Some(level), false)
-            } else {
-                // Not a header, just text starting with #
-                ("text", content_line.to_string(), None, false)
-            }
-        } else if content_line.starts_with("- [x] ") || content_line.starts_with("- [ ] ") {
-            // Task node
-            ("task", content_line.to_string(), None, false)
-        } else if content_line.starts_with("```") {
-            // Code block - collect until closing ```
-            let mut code_lines = vec![content_line];
-            i += 1;
-            while i < lines.len() {
-                let code_line = lines[i];
-                code_lines.push(code_line.trim_start());
-                if code_line.trim_start().starts_with("```") {
-                    break;
+            } else if is_task_line(content_line) {
+                // Task node
+                ("task", content_line.to_string(), None, false)
+            } else if content_line.starts_with("```") {
+                // Code block - collect until closing ```
+                let mut code_lines = vec![content_line];
+                i += 1;
+                while i < lines.len() {
+                    let code_line = lines[i];
+                    code_lines.push(code_line.trim_start());
+                    if code_line.trim_start().starts_with("```") {
+                        break;
+                    }
+                    i += 1;
                 }
-                i += 1;
-            }
-            let code_content = code_lines.join("\n");
-            ("code-block", code_content, None, true)
-        } else if content_line.starts_with("> ") {
-            // Quote block - collect consecutive quote lines
-            let mut quote_lines = vec![content_line];
-            while i + 1 < lines.len() && lines[i + 1].trim_start().starts_with("> ") {
-                i += 1;
-                quote_lines.push(lines[i].trim_start());
-            }
-            let quote_content = quote_lines.join("\n");
-            ("quote-block", quote_content, None, true)
-        } else if let Some(num_end) = content_line.find(". ") {
-            // Check if it starts with a number (ordered list)
-            if content_line[..num_end].chars().all(|c| c.is_ascii_digit()) {
+                let code_content = code_lines.join("\n");
+                ("code-block", code_content, None, true)
+            } else if content_line.starts_with("> ") {
+                // Quote block - collect consecutive quote lines
+                let mut quote_lines = vec![content_line];
+                while i + 1 < lines.len() && lines[i + 1].trim_start().starts_with("> ") {
+                    i += 1;
+                    quote_lines.push(lines[i].trim_start());
+                }
+                let quote_content = quote_lines.join("\n");
+                ("quote-block", quote_content, None, true)
+            } else if let Some(num_end) = detect_ordered_list(content_line) {
                 // Collect consecutive numbered items into single ordered-list node
                 // Each line should start with "1. " as per requirement
                 let first_item_content = &content_line[num_end + 2..]; // Skip "N. "
@@ -397,18 +492,11 @@ async fn parse_markdown(
                         continue;
                     }
                     let next_line = lines[j].trim_start();
-                    if let Some(next_num_end) = next_line.find(". ") {
-                        if next_line[..next_num_end]
-                            .chars()
-                            .all(|c| c.is_ascii_digit())
-                        {
-                            i = j;
-                            let item_content = &next_line[next_num_end + 2..]; // Skip "N. "
-                            list_items.push(format!("1. {}", item_content));
-                            j += 1;
-                        } else {
-                            break;
-                        }
+                    if let Some(next_num_end) = detect_ordered_list(next_line) {
+                        i = j;
+                        let item_content = &next_line[next_num_end + 2..]; // Skip "N. "
+                        list_items.push(format!("1. {}", item_content));
+                        j += 1;
                     } else {
                         break;
                     }
@@ -416,56 +504,50 @@ async fn parse_markdown(
                 let list_content = list_items.join("\n");
                 ("ordered-list", list_content, None, true)
             } else {
-                // Regular text with inline markdown preserved
-                ("text", content_line.to_string(), None, false)
-            }
-        } else {
-            // Text paragraph - collect consecutive lines with NO empty lines between them
-            let mut text_lines = vec![content_line];
+                // Text paragraph - collect consecutive lines with NO empty lines between them
+                let mut text_lines = vec![content_line];
 
-            // Look ahead for more text lines (only merge if NO empty lines)
-            let mut j = i + 1;
-            while j < lines.len() {
-                // Check for empty lines
-                let mut empty_count = 0;
-                while j < lines.len() && lines[j].trim().is_empty() {
-                    empty_count += 1;
-                    j += 1;
-                }
+                // Look ahead for more text lines (only merge if NO empty lines)
+                let mut j = i + 1;
+                while j < lines.len() {
+                    // Check for empty lines
+                    let mut empty_count = 0;
+                    while j < lines.len() && lines[j].trim().is_empty() {
+                        empty_count += 1;
+                        j += 1;
+                    }
 
-                if empty_count >= 1 || j >= lines.len() {
-                    // Any empty line or end - stop paragraph
-                    break;
-                }
-
-                if j < lines.len() {
-                    let next_line = lines[j].trim_start();
-
-                    // Check if next line is special syntax (stop paragraph)
-                    let is_special = next_line.starts_with('#')
-                        || next_line.starts_with("- ")
-                        || next_line.starts_with("```")
-                        || next_line.starts_with("> ")
-                        || next_line.find(". ").is_some_and(|pos| {
-                            next_line[..pos].chars().all(|c| c.is_ascii_digit())
-                        });
-
-                    if is_special {
+                    if empty_count >= 1 || j >= lines.len() {
+                        // Any empty line or end - stop paragraph
                         break;
                     }
 
-                    // Add to paragraph (no empty lines between)
-                    text_lines.push(next_line);
-                    i = j;
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
+                    if j < lines.len() {
+                        let next_line = lines[j].trim_start();
 
-            let text_content = text_lines.join("\n");
-            ("text", text_content, None, text_lines.len() > 1)
-        };
+                        // Check if next line is special syntax (stop paragraph)
+                        let is_special = detect_heading(next_line).is_some()
+                            || next_line.starts_with("- ")
+                            || next_line.starts_with("```")
+                            || next_line.starts_with("> ")
+                            || detect_ordered_list(next_line).is_some();
+
+                        if is_special {
+                            break;
+                        }
+
+                        // Add to paragraph (no empty lines between)
+                        text_lines.push(next_line);
+                        i = j;
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                let text_content = text_lines.join("\n");
+                ("text", text_content, None, text_lines.len() > 1)
+            };
 
         // Pop indent stack for items at same or lower indentation
         while let Some((_, stack_indent)) = indent_stack.last() {
