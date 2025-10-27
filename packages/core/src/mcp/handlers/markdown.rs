@@ -517,7 +517,8 @@ async fn parse_markdown(
         }
 
         // Track last text node for bullet/ordered-list hierarchy
-        if node_type == "text" && !is_multiline {
+        // Only NON-BULLET text nodes should update last_text_node
+        if node_type == "text" && !is_multiline && !is_bullet {
             last_text_node = Some((node_id.clone(), indent_level));
         } else if node_type != "text" {
             // Non-text node breaks the text context for bullets/lists
