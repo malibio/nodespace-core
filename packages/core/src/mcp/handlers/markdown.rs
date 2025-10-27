@@ -469,25 +469,15 @@ async fn parse_markdown(
 
         // Determine parent based on bullet/ordered-list rules, heading hierarchy, and indentation
         let parent_id = if (is_bullet || node_type == "ordered-list") && !is_multiline {
-            // Bullet or ordered-list - should be child of preceding text paragraph if:
-            // 1. There's a recent text node
-            // 2. The list has more or same indentation (lists typically follow their parent text)
-            if let Some((text_id, text_indent)) = &last_text_node {
-                if indent_level >= *text_indent {
-                    Some(text_id.clone())
-                } else {
-                    // Less indentation - use normal parent logic
-                    indent_stack
-                        .last()
-                        .map(|(id, _)| id.clone())
-                        .or_else(|| context.current_parent_id())
-                }
+            // Bullet or ordered-list - should be child of preceding text paragraph
+            // All bullets at same level are siblings under that text parent
+            // IMPORTANT: Ignore indent_stack for bullets to prevent sequential nesting
+            if let Some((text_id, _text_indent)) = &last_text_node {
+                // All bullets become children of the last text node (they'll be siblings via before_sibling_id)
+                Some(text_id.clone())
             } else {
-                // No recent text node - use normal parent logic
-                indent_stack
-                    .last()
-                    .map(|(id, _)| id.clone())
-                    .or_else(|| context.current_parent_id())
+                // No recent text node - use heading parent
+                context.current_parent_id()
             }
         } else if let Some(h_level) = heading_level {
             // For headers: pop same-or-higher level headers, then get parent
