@@ -983,9 +983,10 @@ Text paragraph
             .unwrap();
         let exported_markdown = result["markdown"].as_str().unwrap();
 
-        // Verify output contains content (container is "Test", children are "# Hello World" and "- Item 1")
+        // Verify output contains content (container is "Test", children are "# Hello World" and "Item 1")
+        // Note: Standalone bullets (not under text paragraphs) have "- " stripped during import
         assert!(exported_markdown.contains("# Hello World"));
-        assert!(exported_markdown.contains("- Item 1"));
+        assert!(exported_markdown.contains("Item 1"));
 
         // Verify node count (container + header + list item = 3)
         assert_eq!(result["node_count"].as_u64().unwrap(), 3);

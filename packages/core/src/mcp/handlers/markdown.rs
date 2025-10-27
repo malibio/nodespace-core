@@ -335,9 +335,13 @@ async fn parse_markdown(
         // Strip leading whitespace
         let trimmed = line.trim_start();
 
-        // Check if this is a bullet list item (but keep the "- " in content for export)
+        // Check if this is a bullet list item
         let is_bullet = trimmed.starts_with("- ") && !trimmed.starts_with("- [");
-        let content_line = trimmed; // Don't strip "- " - keep it in content
+        let content_line = if is_bullet {
+            trimmed.strip_prefix("- ").unwrap()
+        } else {
+            trimmed
+        };
 
         // Detect node type and extract content with inline markdown preserved
         let (node_type, content, heading_level, is_multiline) = if content_line.starts_with('#') {
@@ -730,8 +734,28 @@ fn export_node_hierarchy(
     // Add minimal metadata comment (just ID)
     output.push_str(&format!("<!-- {} -->\n", node.id));
 
-    // Add content (prefixes like "- " are preserved in content during import)
-    output.push_str(&node.content);
+    // Add content with proper formatting
+    // Bullets are text nodes that are children of other text nodes - add "- " prefix
+    let formatted_content = if node.node_type == "text" {
+        if let Some(parent_id) = &node.parent_id {
+            let is_bullet = nodes_map
+                .get(parent_id)
+                .map(|parent| parent.node_type == "text")
+                .unwrap_or(false);
+
+            if is_bullet {
+                format!("- {}", node.content)
+            } else {
+                node.content.clone()
+            }
+        } else {
+            node.content.clone()
+        }
+    } else {
+        node.content.clone()
+    };
+
+    output.push_str(&formatted_content);
     output.push_str("\n\n");
 
     // Recursively export children (if enabled)
