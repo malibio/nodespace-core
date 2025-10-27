@@ -335,8 +335,10 @@ async fn parse_markdown(
         // Strip leading whitespace
         let trimmed = line.trim_start();
 
-        // Check if this is a bullet list item
-        let is_bullet = trimmed.starts_with("- ") && !trimmed.starts_with("- [");
+        // Check if this is a bullet list item (not a task)
+        // Tasks are "- [ ]" or "- [x]", bullets with links are "- [text](url)"
+        let is_task = trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ");
+        let is_bullet = trimmed.starts_with("- ") && !is_task;
         let content_line = if is_bullet {
             trimmed.strip_prefix("- ").unwrap()
         } else {
@@ -475,15 +477,35 @@ async fn parse_markdown(
         }
 
         // Determine parent based on bullet/ordered-list rules, heading hierarchy, and indentation
-        let parent_id = if (is_bullet || node_type == "ordered-list") && !is_multiline {
-            // Bullet or ordered-list - should be child of preceding text paragraph
-            // All bullets at same level are siblings under that text parent
-            // IMPORTANT: Ignore indent_stack for bullets to prevent sequential nesting
-            if let Some((text_id, _text_indent)) = &last_text_node {
-                // All bullets become children of the last text node (they'll be siblings via before_sibling_id)
+        let parent_id = if is_bullet && !is_multiline {
+            // Bullets - should be children of preceding text paragraph OR indented under previous bullet
+            // Check indent_stack first for indented bullets (child of previous bullet)
+            // Then check last_text_node for bullets at base level (child of text paragraph)
+            if indent_level > 0 {
+                // Indented bullet - check if there's a parent at lower indent
+                indent_stack
+                    .last()
+                    .map(|(id, _)| id.clone())
+                    .or_else(|| {
+                        // No indent parent, try text paragraph
+                        last_text_node.as_ref().map(|(text_id, _)| text_id.clone())
+                    })
+                    .or_else(|| context.current_parent_id())
+            } else {
+                // Non-indented bullet - child of text paragraph
+                if let Some((text_id, _)) = &last_text_node {
+                    Some(text_id.clone())
+                } else {
+                    context.current_parent_id()
+                }
+            }
+        } else if node_type == "ordered-list" {
+            // Ordered lists - should be children of preceding header or text node
+            // Check if there's a recent text node first
+            if let Some((text_id, _)) = &last_text_node {
                 Some(text_id.clone())
             } else {
-                // No recent text node - use heading parent
+                // No text node - use heading parent
                 context.current_parent_id()
             }
         } else if let Some(h_level) = heading_level {
@@ -529,8 +551,10 @@ async fn parse_markdown(
             last_text_node = None;
         }
 
-        // Push to indent stack if this line had indentation or is not a header
+        // Push to indent stack if this line had indentation
         // Headers use heading_stack for hierarchy, not indent_stack
+        // Bullets at base level (indent 0) should not be in stack to prevent sibling nesting
+        // But indented bullets (indent > 0) should be in stack for nested bullet hierarchy
         if indent_level > 0 && heading_level.is_none() {
             indent_stack.push((node_id.clone(), indent_level));
         }
