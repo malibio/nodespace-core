@@ -308,42 +308,55 @@ async fn parse_markdown(
     // Track indentation-based hierarchy (node_id, indent_level)
     let mut indent_stack: Vec<(String, usize)> = Vec::new();
 
-    // Process markdown line by line
+    // Track the last text paragraph for bullet/ordered-list hierarchy
+    let mut last_text_node: Option<(String, usize)> = None; // (node_id, indent_level)
+
+    // Process markdown line by line, collecting text paragraphs
     let lines: Vec<&str> = markdown.lines().collect();
     let mut i = 0;
 
     while i < lines.len() {
-        let line = lines[i];
-
-        // Skip empty lines
-        if line.trim().is_empty() {
+        // Count consecutive empty lines (for paragraph separation)
+        while i < lines.len() && lines[i].trim().is_empty() {
             i += 1;
-            continue;
         }
 
-        // Detect indentation level (count leading tabs/spaces before '- ')
-        let indent_chars: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-        let indent_level = indent_chars.chars().filter(|c| *c == '\t').count()
-            + indent_chars.chars().filter(|c| *c == ' ').count() / 2; // 2 spaces = 1 level
+        if i >= lines.len() {
+            break;
+        }
 
-        // Strip leading whitespace and optional '- ' marker, but preserve all other markdown
+        let line = lines[i];
+
+        // Detect indentation level - count ALL leading spaces + tabs (1 tab = 4 spaces)
+        let indent_chars: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+        let indent_level = indent_chars.chars().filter(|c| *c == '\t').count() * 4
+            + indent_chars.chars().filter(|c| *c == ' ').count();
+
+        // Strip leading whitespace
         let trimmed = line.trim_start();
-        let content_line = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+
+        // Check if this is a bullet list item
+        let is_bullet = trimmed.starts_with("- ") && !trimmed.starts_with("- [");
+        let content_line = if is_bullet {
+            trimmed.strip_prefix("- ").unwrap()
+        } else {
+            trimmed
+        };
 
         // Detect node type and extract content with inline markdown preserved
-        let (node_type, content, heading_level) = if content_line.starts_with('#') {
+        let (node_type, content, heading_level, is_multiline) = if content_line.starts_with('#') {
             // Header: count # symbols for level
             let level = content_line.chars().take_while(|c| *c == '#').count();
             // Verify it's actually a header (has space after #'s)
             if content_line.chars().nth(level) == Some(' ') {
-                ("header", content_line.to_string(), Some(level))
+                ("header", content_line.to_string(), Some(level), false)
             } else {
                 // Not a header, just text starting with #
-                ("text", content_line.to_string(), None)
+                ("text", content_line.to_string(), None, false)
             }
         } else if content_line.starts_with("- [x] ") || content_line.starts_with("- [ ] ") {
             // Task node
-            ("task", content_line.to_string(), None)
+            ("task", content_line.to_string(), None, false)
         } else if content_line.starts_with("```") {
             // Code block - collect until closing ```
             let mut code_lines = vec![content_line];
@@ -357,7 +370,7 @@ async fn parse_markdown(
                 i += 1;
             }
             let code_content = code_lines.join("\n");
-            ("code-block", code_content, None)
+            ("code-block", code_content, None, true)
         } else if content_line.starts_with("> ") {
             // Quote block - collect consecutive quote lines
             let mut quote_lines = vec![content_line];
@@ -366,18 +379,87 @@ async fn parse_markdown(
                 quote_lines.push(lines[i].trim_start());
             }
             let quote_content = quote_lines.join("\n");
-            ("quote-block", quote_content, None)
+            ("quote-block", quote_content, None, true)
         } else if let Some(num_end) = content_line.find(". ") {
             // Check if it starts with a number (ordered list)
             if content_line[..num_end].chars().all(|c| c.is_ascii_digit()) {
-                ("ordered-list", content_line.to_string(), None)
+                // Collect consecutive numbered items into single ordered-list node
+                let mut list_items = vec![content_line];
+                let mut j = i + 1;
+                // Skip empty lines within the list
+                while j < lines.len() {
+                    if lines[j].trim().is_empty() {
+                        j += 1;
+                        continue;
+                    }
+                    let next_line = lines[j].trim_start();
+                    if let Some(next_num_end) = next_line.find(". ") {
+                        if next_line[..next_num_end]
+                            .chars()
+                            .all(|c| c.is_ascii_digit())
+                        {
+                            i = j;
+                            list_items.push(next_line);
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                let list_content = list_items.join("\n");
+                ("ordered-list", list_content, None, true)
             } else {
                 // Regular text with inline markdown preserved
-                ("text", content_line.to_string(), None)
+                ("text", content_line.to_string(), None, false)
             }
         } else {
-            // Regular text with inline markdown preserved
-            ("text", content_line.to_string(), None)
+            // Text paragraph - collect consecutive lines with NO empty lines between them
+            let mut text_lines = vec![content_line];
+
+            // Look ahead for more text lines (only merge if NO empty lines)
+            let mut j = i + 1;
+            while j < lines.len() {
+                // Check for empty lines
+                let mut empty_count = 0;
+                while j < lines.len() && lines[j].trim().is_empty() {
+                    empty_count += 1;
+                    j += 1;
+                }
+
+                if empty_count >= 1 || j >= lines.len() {
+                    // Any empty line or end - stop paragraph
+                    break;
+                }
+
+                if j < lines.len() {
+                    let next_line = lines[j].trim_start();
+
+                    // Check if next line is special syntax (stop paragraph)
+                    let is_special = next_line.starts_with('#')
+                        || next_line.starts_with("- ")
+                        || next_line.starts_with("```")
+                        || next_line.starts_with("> ")
+                        || next_line.find(". ").is_some_and(|pos| {
+                            next_line[..pos].chars().all(|c| c.is_ascii_digit())
+                        });
+
+                    if is_special {
+                        break;
+                    }
+
+                    // Add to paragraph (no empty lines between)
+                    text_lines.push(next_line);
+                    i = j;
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let text_content = text_lines.join("\n");
+            ("text", text_content, None, text_lines.len() > 1)
         };
 
         // Pop indent stack for items at same or lower indentation
@@ -389,11 +471,31 @@ async fn parse_markdown(
             }
         }
 
-        // Determine parent based on heading hierarchy + indentation
-        let parent_id = if let Some(h_level) = heading_level {
+        // Determine parent based on bullet/ordered-list rules, heading hierarchy, and indentation
+        let parent_id = if (is_bullet || node_type == "ordered-list") && !is_multiline {
+            // Bullet or ordered-list - should be child of preceding text paragraph if:
+            // 1. There's a recent text node
+            // 2. The list has more or same indentation (lists typically follow their parent text)
+            if let Some((text_id, text_indent)) = &last_text_node {
+                if indent_level >= *text_indent {
+                    Some(text_id.clone())
+                } else {
+                    // Less indentation - use normal parent logic
+                    indent_stack
+                        .last()
+                        .map(|(id, _)| id.clone())
+                        .or_else(|| context.current_parent_id())
+                }
+            } else {
+                // No recent text node - use normal parent logic
+                indent_stack
+                    .last()
+                    .map(|(id, _)| id.clone())
+                    .or_else(|| context.current_parent_id())
+            }
+        } else if let Some(h_level) = heading_level {
             // For headers: pop same-or-higher level headers, then get parent
             context.pop_headings_for_level(h_level);
-            // Use indentation parent if available, otherwise heading parent
             indent_stack
                 .last()
                 .map(|(id, _)| id.clone())
@@ -425,8 +527,17 @@ async fn parse_markdown(
             context.push_heading(node_id.clone(), h_level);
         }
 
-        // Push to indent stack if this line had indentation
-        if indent_level > 0 {
+        // Track last text node for bullet/ordered-list hierarchy
+        if node_type == "text" && !is_multiline {
+            last_text_node = Some((node_id.clone(), indent_level));
+        } else if node_type != "text" {
+            // Non-text node breaks the text context for bullets/lists
+            last_text_node = None;
+        }
+
+        // Push to indent stack if this line had indentation or is not a header
+        // Headers use heading_stack for hierarchy, not indent_stack
+        if indent_level > 0 && heading_level.is_none() {
             indent_stack.push((node_id.clone(), indent_level));
         }
 

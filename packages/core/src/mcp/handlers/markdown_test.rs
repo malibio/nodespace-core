@@ -571,9 +571,9 @@ Regular paragraph text."#;
 
         assert_eq!(result["success"], true);
 
-        // Container from container_title + 3 headers + 2 tasks + code block + quote + 2 text nodes (quote content + paragraph)
-        // Note: Quote content appears as text before being wrapped in quote-block
-        assert_eq!(result["nodes_created"], 10);
+        // Container from container_title + 3 headers + 2 tasks + code block + quote + 1 text node (paragraph)
+        // Note: Quote is a single quote-block node (old parser created duplicates)
+        assert_eq!(result["nodes_created"], 9);
     }
 
     #[tokio::test]
