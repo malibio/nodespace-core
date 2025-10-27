@@ -380,7 +380,9 @@ async fn parse_markdown(
             // Check if it starts with a number (ordered list)
             if content_line[..num_end].chars().all(|c| c.is_ascii_digit()) {
                 // Collect consecutive numbered items into single ordered-list node
-                let mut list_items = vec![content_line];
+                // Each line should start with "1. " as per requirement
+                let first_item_content = &content_line[num_end + 2..]; // Skip "N. "
+                let mut list_items = vec![format!("1. {}", first_item_content)];
                 let mut j = i + 1;
                 // Skip empty lines within the list
                 while j < lines.len() {
@@ -395,7 +397,8 @@ async fn parse_markdown(
                             .all(|c| c.is_ascii_digit())
                         {
                             i = j;
-                            list_items.push(next_line);
+                            let item_content = &next_line[next_num_end + 2..]; // Skip "N. "
+                            list_items.push(format!("1. {}", item_content));
                             j += 1;
                         } else {
                             break;
