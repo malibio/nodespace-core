@@ -551,11 +551,10 @@ async fn parse_markdown(
             last_text_node = None;
         }
 
-        // Push to indent stack if this line had indentation
+        // Push to indent stack if this line had indentation OR is a bullet (for nested bullets)
         // Headers use heading_stack for hierarchy, not indent_stack
-        // Bullets at base level (indent 0) should not be in stack to prevent sibling nesting
-        // But indented bullets (indent > 0) should be in stack for nested bullet hierarchy
-        if indent_level > 0 && heading_level.is_none() {
+        // Bullets need to be in stack so indented bullets can find them as parents
+        if heading_level.is_none() && (indent_level > 0 || is_bullet) {
             indent_stack.push((node_id.clone(), indent_level));
         }
 
