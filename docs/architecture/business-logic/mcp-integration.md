@@ -826,13 +826,39 @@ This separation ensures:
 - Test with simple MCP client
 
 ### Phase 2: Markdown Node Creation
-- Add `pulldown-cmark` dependency
+- ~~Add `pulldown-cmark` dependency~~ → **Custom line-by-line parser** (see architecture decision below)
 - Implement markdown parser with hierarchy tracking
 - Create `create_nodes_from_markdown` handler
 - Handle heading hierarchy (h1 → h2 → h3)
 - Handle list nesting (indentation-based)
 - Test with sample markdown documents
 - Claude Code integration testing
+
+**Markdown Parser Architecture Decision:**
+
+NodeSpace uses a **custom line-by-line markdown parser** instead of pulldown-cmark for specific architectural reasons:
+
+1. **Inline formatting preservation**: Stores `**bold**` and `*italic*` syntax intact (not stripped), allowing users to edit markdown directly in the outliner
+2. **Hierarchical node creation**: Designed specifically for parent-child-sibling database relationships, not HTML rendering
+3. **Round-trip fidelity**: Import → export preserves original markdown formatting exactly
+4. **Explicit sibling ordering**: Maintains `before_sibling_id` chains that pulldown-cmark's event stream doesn't provide
+
+The custom parser is ~100 lines with helper functions and handles:
+- Headers (#, ##, ###)
+- Tasks (- [ ], - [x])
+- Bullets (- item) with correct hierarchy
+- Ordered lists (1., 2., 3.)
+- Code blocks (```)
+- Quote blocks (>)
+- Text paragraphs with inline markdown
+
+**Known limitations** (acceptable for v1, can add incrementally):
+- No escaped character support (`\*`)
+- No link references (`[text][ref]`)
+- No inline HTML (`<strong>`)
+- Basic markdown only (sufficient for note-taking use case)
+
+See `/packages/core/src/mcp/handlers/markdown.rs` for implementation details.
 
 ### Phase 3: Advanced Features (Future)
 - Natural language query processing
