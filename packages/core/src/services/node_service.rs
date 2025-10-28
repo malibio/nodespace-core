@@ -384,9 +384,12 @@ impl NodeService {
             .as_deref()
             .filter(|id| *id != ROOT_CONTAINER_ID);
 
-        // Mark topic/container nodes as stale for initial embedding generation
+        // Mark container nodes as stale for initial embedding generation
+        // Container nodes are identified by container_node_id being NULL
         // This ensures new containers will be picked up by the background embedding processor
-        if node.node_type == "topic" {
+        let is_container = container_node_id_value.is_none();
+
+        if is_container {
             conn.execute(
                 "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector, embedding_stale, last_content_update)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)",
@@ -707,8 +710,11 @@ impl NodeService {
         let properties_json = serde_json::to_string(&updated.properties)
             .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
 
-        // If content changed and this is a topic node, mark as stale
-        if content_changed && updated.node_type == "topic" {
+        // Determine if this node is a container (container_node_id IS NULL)
+        let is_container = updated.container_node_id.is_none();
+
+        // If content changed and this is a container node, mark as stale
+        if content_changed && is_container {
             conn.execute(
                 "UPDATE nodes SET node_type = ?, content = ?, parent_id = ?, container_node_id = ?, before_sibling_id = ?, modified_at = CURRENT_TIMESTAMP, properties = ?, embedding_vector = ?, embedding_stale = TRUE, last_content_update = CURRENT_TIMESTAMP WHERE id = ?",
                 (
@@ -740,6 +746,19 @@ impl NodeService {
             )
             .await
             .map_err(|e| NodeServiceError::query_failed(format!("Failed to update node: {}", e)))?;
+        }
+
+        // If content changed in a child node, mark the parent container as stale too
+        // This ensures container embeddings stay fresh when children are modified
+        if content_changed && !is_container {
+            if let Some(ref container_id) = updated.container_node_id {
+                conn.execute(
+                    "UPDATE nodes SET embedding_stale = TRUE, last_content_update = CURRENT_TIMESTAMP WHERE id = ?",
+                    [container_id.as_str()],
+                )
+                .await
+                .map_err(|e| NodeServiceError::query_failed(format!("Failed to mark parent container as stale: {}", e)))?;
+            }
         }
 
         // Sync mentions if content changed
