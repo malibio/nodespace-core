@@ -384,22 +384,43 @@ impl NodeService {
             .as_deref()
             .filter(|id| *id != ROOT_CONTAINER_ID);
 
-        conn.execute(
-            "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                node.id.as_str(),
-                node.node_type.as_str(),
-                node.content.as_str(),
-                node.parent_id.as_deref(),
-                container_node_id_value,
-                node.before_sibling_id.as_deref(),
-                properties_json.as_str(),
-                node.embedding_vector.as_deref(),
-            ),
-        )
-        .await
-        .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
+        // Mark topic/container nodes as stale for initial embedding generation
+        // This ensures new containers will be picked up by the background embedding processor
+        if node.node_type == "topic" {
+            conn.execute(
+                "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector, embedding_stale, last_content_update)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)",
+                (
+                    node.id.as_str(),
+                    node.node_type.as_str(),
+                    node.content.as_str(),
+                    node.parent_id.as_deref(),
+                    container_node_id_value,
+                    node.before_sibling_id.as_deref(),
+                    properties_json.as_str(),
+                    node.embedding_vector.as_deref(),
+                ),
+            )
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
+        } else {
+            conn.execute(
+                "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    node.id.as_str(),
+                    node.node_type.as_str(),
+                    node.content.as_str(),
+                    node.parent_id.as_deref(),
+                    container_node_id_value,
+                    node.before_sibling_id.as_deref(),
+                    properties_json.as_str(),
+                    node.embedding_vector.as_deref(),
+                ),
+            )
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
+        }
 
         Ok(node.id)
     }
