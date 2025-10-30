@@ -24,8 +24,12 @@
 //! # Implementation Status
 //!
 //! **NOTE**: This module contains placeholder implementations because the NodeEmbeddingService
-//! is not yet integrated into AppState. All endpoints return NOT_IMPLEMENTED errors with
+//! is not yet integrated into AppState. Most endpoints return NOT_IMPLEMENTED errors with
 //! clear messages indicating what needs to be added.
+//!
+//! **EXCEPTION**: The `POST /api/embeddings/batch` endpoint has a working stub implementation
+//! that validates node existence and returns proper success/failure counts. This allows
+//! frontend tests to verify the interface while the full embedding service is being developed.
 //!
 //! **TODO for Phase 3 completion**:
 //! 1. Add `embedding_service: Arc<NodeEmbeddingService>` to AppState in mod.rs
@@ -273,19 +277,22 @@ async fn batch_generate_embeddings(
     }
 
     // Stub implementation: Check which containers exist and return appropriate results
-    let node_service = {
-        let lock = state.node_service.read().map_err(|e| {
+    let node_service = state
+        .node_service
+        .read()
+        .map_err(|e| {
             HttpError::new(
                 format!("Failed to acquire node service read lock: {}", e),
                 "LOCK_ERROR",
             )
-        })?;
-        Arc::clone(&*lock)
-    };
+        })?
+        .clone();
 
     let mut success_count = 0;
     let mut failed_embeddings = Vec::new();
 
+    // TODO: For real implementation, process container_ids in parallel using futures::future::join_all
+    // to improve batch operation performance. Sequential processing is acceptable for this stub.
     for container_id in payload.container_ids {
         // Check if node exists
         match node_service.get_node(&container_id).await {
@@ -312,8 +319,8 @@ async fn batch_generate_embeddings(
         }
     }
 
-    tracing::debug!(
-        "Batch embedding (stub): {} succeeded, {} failed",
+    tracing::info!(
+        "Batch embedding (STUB): {} succeeded, {} failed (using node existence check, not actual embeddings)",
         success_count,
         failed_embeddings.len()
     );
