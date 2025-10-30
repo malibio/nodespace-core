@@ -257,10 +257,11 @@ mod tests {
             let row = rows.next().await.unwrap().unwrap();
             let embedding: Option<Vec<u8>> = row.get(0).unwrap();
             embedding
-        }; // Connection dropped here
+        }; // Drop connection to commit transaction and ensure data visibility
 
         // Update content with semantically different text
         {
+            // Fresh connection for the update operation
             let conn = db.connect_with_timeout().await.unwrap();
             conn.execute(
                 "UPDATE nodes SET content = ? WHERE id = ?",
@@ -268,13 +269,14 @@ mod tests {
             )
             .await
             .unwrap();
-        } // Connection dropped here to ensure update is committed
+        } // Drop connection to commit transaction
 
         // Re-embed directly
         service.embed_container(&container_id).await.unwrap();
 
         // Get updated embedding
         let updated_embedding = {
+            // Fresh connection ensures we see the committed content update
             let conn = db.connect_with_timeout().await.unwrap();
             let mut stmt = conn
                 .prepare("SELECT embedding_vector FROM nodes WHERE id = ?")
