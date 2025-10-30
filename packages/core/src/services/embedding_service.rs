@@ -675,7 +675,7 @@ impl NodeEmbeddingService {
         conn.execute(
             "UPDATE nodes SET
                 embedding_vector = ?,
-                properties = json_set(properties, '$.embedding_metadata', ?),
+                properties = json_set(properties, '$.embedding_metadata', json(?)),
                 modified_at = CURRENT_TIMESTAMP
              WHERE id = ?",
             params![blob, metadata.to_string(), node_id],

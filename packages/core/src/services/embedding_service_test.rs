@@ -244,40 +244,50 @@ mod tests {
         service.embed_container(&container_id).await.unwrap();
 
         // Get initial embedding
-        let conn = db.connect_with_timeout().await.unwrap();
-        let mut stmt = conn
-            .prepare("SELECT embedding_vector FROM nodes WHERE id = ?")
-            .await
-            .unwrap();
-        let mut rows = stmt
-            .query(libsql::params![container_id.clone()])
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        let initial_embedding: Option<Vec<u8>> = row.get(0).unwrap();
+        let initial_embedding = {
+            let conn = db.connect_with_timeout().await.unwrap();
+            let mut stmt = conn
+                .prepare("SELECT embedding_vector FROM nodes WHERE id = ?")
+                .await
+                .unwrap();
+            let mut rows = stmt
+                .query(libsql::params![container_id.clone()])
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let embedding: Option<Vec<u8>> = row.get(0).unwrap();
+            embedding
+        }; // Connection dropped here
 
         // Update content with semantically different text
-        conn.execute(
-            "UPDATE nodes SET content = ? WHERE id = ?",
-            libsql::params!["Cooking recipes involve techniques for preparing delicious meals using various ingredients and kitchen tools.", container_id.clone()],
-        )
-        .await
-        .unwrap();
+        {
+            let conn = db.connect_with_timeout().await.unwrap();
+            conn.execute(
+                "UPDATE nodes SET content = ? WHERE id = ?",
+                libsql::params!["Cooking recipes involve techniques for preparing delicious meals using various ingredients and kitchen tools.", container_id.clone()],
+            )
+            .await
+            .unwrap();
+        } // Connection dropped here to ensure update is committed
 
         // Re-embed directly
         service.embed_container(&container_id).await.unwrap();
 
         // Get updated embedding
-        let mut stmt = conn
-            .prepare("SELECT embedding_vector FROM nodes WHERE id = ?")
-            .await
-            .unwrap();
-        let mut rows = stmt
-            .query(libsql::params![container_id.clone()])
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        let updated_embedding: Option<Vec<u8>> = row.get(0).unwrap();
+        let updated_embedding = {
+            let conn = db.connect_with_timeout().await.unwrap();
+            let mut stmt = conn
+                .prepare("SELECT embedding_vector FROM nodes WHERE id = ?")
+                .await
+                .unwrap();
+            let mut rows = stmt
+                .query(libsql::params![container_id.clone()])
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let embedding: Option<Vec<u8>> = row.get(0).unwrap();
+            embedding
+        };
 
         // Embeddings should be different (content changed)
         assert!(initial_embedding.is_some());
