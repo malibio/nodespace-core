@@ -31,6 +31,13 @@
 //! that validates node existence and returns proper success/failure counts. This allows
 //! frontend tests to verify the interface while the full embedding service is being developed.
 //!
+//! **When to Use Stub vs Real Implementation**:
+//! - **Stub** (current batch endpoint): Use when testing API interfaces and error handling without
+//!   requiring actual embedding generation. Suitable for integration tests that verify request/response
+//!   contracts and error paths.
+//! - **Real Implementation** (future): Required for end-to-end tests that validate embedding quality,
+//!   semantic search accuracy, or production deployments. Needs NodeEmbeddingService integrated into AppState.
+//!
 //! **TODO for Phase 3 completion**:
 //! 1. Add `embedding_service: Arc<NodeEmbeddingService>` to AppState in mod.rs
 //! 2. Replace placeholder handlers with actual service calls

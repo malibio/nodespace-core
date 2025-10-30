@@ -51,35 +51,38 @@ describe.sequential('Date Node Placeholder Persistence', () => {
     sharedNodeStore.__resetForTesting();
   });
 
-  it('should auto-create date node when creating text node with non-existent date parent', async () => {
-    // Create a text node with date node parent that doesn't exist
-    const textNode = TestNodeBuilder.text('Hello from today')
-      .withParent('2025-10-13')
-      .withContainer('2025-10-13')
-      .build();
+  it.skipIf(!shouldUseDatabase())(
+    'should auto-create date node when creating text node with non-existent date parent',
+    async () => {
+      // Create a text node with date node parent that doesn't exist
+      const textNode = TestNodeBuilder.text('Hello from today')
+        .withParent('2025-10-13')
+        .withContainer('2025-10-13')
+        .build();
 
-    // Should succeed - backend should auto-create date node
-    const textNodeId = await backend.createNode(textNode);
-    expect(textNodeId).toBeTruthy();
+      // Should succeed - backend should auto-create date node
+      const textNodeId = await backend.createNode(textNode);
+      expect(textNodeId).toBeTruthy();
 
-    // Wait for writes to complete
-    await waitForDatabaseWrites();
+      // Wait for writes to complete
+      await waitForDatabaseWrites();
 
-    // Verify text node was created
-    const retrievedText = await backend.getNode(textNodeId);
-    expect(retrievedText).toBeTruthy();
-    expect(retrievedText?.nodeType).toBe('text');
-    expect(retrievedText?.content).toBe('Hello from today');
-    expect(retrievedText?.parentId).toBe('2025-10-13');
+      // Verify text node was created
+      const retrievedText = await backend.getNode(textNodeId);
+      expect(retrievedText).toBeTruthy();
+      expect(retrievedText?.nodeType).toBe('text');
+      expect(retrievedText?.content).toBe('Hello from today');
+      expect(retrievedText?.parentId).toBe('2025-10-13');
 
-    // Verify date node was auto-created by backend
-    const retrievedDate = await backend.getNode('2025-10-13');
-    expect(retrievedDate).toBeTruthy();
-    expect(retrievedDate?.nodeType).toBe('date');
-    expect(retrievedDate?.id).toBe('2025-10-13');
-    expect(retrievedDate?.parentId).toBeNull();
-    expect(retrievedDate?.content).toBe(''); // Date nodes have empty content
-  });
+      // Verify date node was auto-created by backend
+      const retrievedDate = await backend.getNode('2025-10-13');
+      expect(retrievedDate).toBeTruthy();
+      expect(retrievedDate?.nodeType).toBe('date');
+      expect(retrievedDate?.id).toBe('2025-10-13');
+      expect(retrievedDate?.parentId).toBeNull();
+      expect(retrievedDate?.content).toBe(''); // Date nodes have empty content
+    }
+  );
 
   it('should not persist placeholder nodes (empty text nodes) immediately', async () => {
     // Simulate what happens when user opens an empty date view
@@ -122,25 +125,28 @@ describe.sequential('Date Node Placeholder Persistence', () => {
     expect(sharedNodeStore.isNodePersisted(placeholderId)).toBe(false);
   });
 
-  it('should persist node with content when date parent auto-created', async () => {
-    // Simulates the full flow: create text node under non-existent date
-    const dateId = '2025-10-13';
-    const textNode = TestNodeBuilder.text('Hello from today')
-      .withParent(dateId)
-      .withContainer(dateId)
-      .build();
+  it.skipIf(!shouldUseDatabase())(
+    'should persist node with content when date parent auto-created',
+    async () => {
+      // Simulates the full flow: create text node under non-existent date
+      const dateId = '2025-10-13';
+      const textNode = TestNodeBuilder.text('Hello from today')
+        .withParent(dateId)
+        .withContainer(dateId)
+        .build();
 
-    // Create via backend (simulates what happens after debouncer fires)
-    const textNodeId = await backend.createNode(textNode);
+      // Create via backend (simulates what happens after debouncer fires)
+      const textNodeId = await backend.createNode(textNode);
 
-    await waitForDatabaseWrites();
+      await waitForDatabaseWrites();
 
-    // Verify text node persisted
-    const retrievedText = await backend.getNode(textNodeId);
-    expect(retrievedText?.content).toBe('Hello from today');
+      // Verify text node persisted
+      const retrievedText = await backend.getNode(textNodeId);
+      expect(retrievedText?.content).toBe('Hello from today');
 
-    // Verify date node was auto-created
-    const retrievedDate = await backend.getNode(dateId);
-    expect(retrievedDate?.nodeType).toBe('date');
-  });
+      // Verify date node was auto-created
+      const retrievedDate = await backend.getNode(dateId);
+      expect(retrievedDate?.nodeType).toBe('date');
+    }
+  );
 });
