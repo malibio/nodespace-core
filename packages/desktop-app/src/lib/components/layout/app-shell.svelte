@@ -147,13 +147,26 @@
       }
 
       // Check for Cmd+Click (Mac) or Ctrl+Click (Windows/Linux)
-      const openInNewTab = event.metaKey || event.ctrlKey;
+      const modifierPressed = event.metaKey || event.ctrlKey;
+      const shiftPressed = event.shiftKey;
+
+      // Determine navigation action:
+      // - Cmd+Shift+Click: Open in other pane
+      // - Cmd+Click: Open in new tab (same pane)
+      // - Click: Navigate in current tab
+      const openInOtherPane = modifierPressed && shiftPressed;
+      const openInNewTab = modifierPressed && !shiftPressed;
 
       // Phase 2-3: Actually navigate using NavigationService (lazy import)
       (async () => {
         const { getNavigationService } = await import('$lib/services/navigation-service');
         const navService = getNavigationService();
-        navService.navigateToNode(nodeId, openInNewTab);
+
+        if (openInOtherPane) {
+          navService.navigateToNodeInOtherPane(nodeId);
+        } else {
+          navService.navigateToNode(nodeId, openInNewTab);
+        }
       })();
     };
 
