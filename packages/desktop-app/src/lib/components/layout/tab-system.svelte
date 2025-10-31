@@ -230,7 +230,6 @@
     text-overflow: ellipsis;
     min-width: 0;
     flex: 1;
-    padding-right: 12px; /* Reserve minimal space for close button */
   }
 
   /* Close button - positioned in upper right corner of tab */
