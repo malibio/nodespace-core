@@ -151,11 +151,16 @@
       const shiftPressed = event.shiftKey;
 
       // Determine navigation action:
-      // - Cmd+Shift+Click: Open in other pane
+      // - Cmd+Shift+Click: Open in other pane (don't navigate current)
       // - Cmd+Click: Open in new tab (same pane)
       // - Click: Navigate in current tab
       const openInOtherPane = modifierPressed && shiftPressed;
       const openInNewTab = modifierPressed && !shiftPressed;
+
+      // Prevent default navigation for modifier key combinations
+      if (modifierPressed) {
+        event.preventDefault();
+      }
 
       // Phase 2-3: Actually navigate using NavigationService (lazy import)
       (async () => {
