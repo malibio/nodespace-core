@@ -12,6 +12,13 @@
   - Tab switching: Click to activate tabs
   - Keyboard navigation: Arrow keys, Enter/Space
   - Accessibility: ARIA labels, proper focus management
+
+  Close Button Design:
+  - Size: 16×16px button with 12×12px CSS-only X icon
+  - Position: 4px from top-right corner of each tab
+  - Interaction: Hidden by default, fades in on tab hover (opacity: 0.6), full opacity on direct hover
+  - Line weight: 1.5px for optimal visibility on all displays
+  - Keyboard accessible: Tab key navigation with focus indicators
   
   Integration:
   - Uses navigation store (tabState, setActiveTab, closeTab)
@@ -96,7 +103,6 @@
             class="tab-close-btn"
             aria-label="Close tab: {tab.title}"
             title="Close tab"
-            tabindex="-1"
             on:click={(e) => handleCloseTab(e, tab.id)}
           >
             <span class="close-icon"></span>
@@ -235,31 +241,29 @@
   /* Close button - positioned in upper right corner of tab */
   .tab-close-btn {
     position: absolute;
-    top: 2px;
-    right: 2px;
+    top: 4px; /* Comfortable distance from top edge */
+    right: 4px; /* Comfortable distance from right edge */
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 12px;
-    height: 12px;
+    width: 16px; /* Sufficient hit area for mouse and touch input */
+    height: 16px; /* Sufficient hit area for mouse and touch input */
     padding: 0;
     background: none;
     border: none;
     color: hsl(var(--muted-foreground));
     cursor: pointer;
-    opacity: 0; /* Hidden by default */
-    transition:
-      opacity 0.15s ease-in-out,
-      color 0.15s ease-in-out;
-    border-radius: 2px;
+    opacity: 0; /* Hidden by default, shown on tab hover */
+    transition: opacity 0.15s ease-in-out;
+    border-radius: 2px; /* Subtle rounding to soften corners */
   }
 
   /* CSS-only close icon (X shape using pseudo-elements) */
   .close-icon {
     position: relative;
     display: block;
-    width: 8px;
-    height: 8px;
+    width: 12px; /* Icon size with 75% fill ratio (12px in 16px button) */
+    height: 12px; /* Icon size with 75% fill ratio (12px in 16px button) */
   }
 
   .close-icon::before,
@@ -269,9 +273,8 @@
     top: 50%;
     left: 0;
     width: 100%;
-    height: 1px;
+    height: 1.5px; /* Optimal line thickness for visibility across all displays */
     background-color: currentColor;
-    transition: background-color 0.15s ease-in-out;
   }
 
   .close-icon::before {
