@@ -969,6 +969,116 @@ fn count_nodes_in_markdown(markdown: &str) -> usize {
     markdown.matches("<!--").count()
 }
 
+// ============================================================================
+// Bulk Container Update (update_container_from_markdown)
+// ============================================================================
+
+/// Parameters for update_container_from_markdown method
+#[derive(Debug, Deserialize)]
+pub struct UpdateContainerFromMarkdownParams {
+    /// Container node ID to update
+    pub container_id: String,
+    /// New markdown content (replaces all children)
+    pub markdown: String,
+}
+
+/// Replace container's children with nodes parsed from markdown
+///
+/// Similar to create_nodes_from_markdown but operates on an existing container.
+/// Deletes all existing children and creates new hierarchy from markdown.
+///
+/// This enables "GitHub-style" bulk updates where AI edits markdown freely
+/// and replaces the entire structure at once.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// let params = json!({
+///     "container_id": "container-123",
+///     "markdown": "# Updated Plan\n- New task 1\n- New task 2"
+/// });
+/// let result = handle_update_container_from_markdown(&operations, params).await?;
+/// // Old children deleted, new structure created
+/// ```
+pub async fn handle_update_container_from_markdown(
+    operations: &Arc<NodeOperations>,
+    params: Value,
+) -> Result<Value, MCPError> {
+    // Parse parameters
+    let params: UpdateContainerFromMarkdownParams = serde_json::from_value(params)
+        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+
+    // Validate markdown content size
+    if params.markdown.len() > MAX_MARKDOWN_SIZE {
+        return Err(MCPError::invalid_params(format!(
+            "Markdown content exceeds maximum size of {} bytes (got {} bytes)",
+            MAX_MARKDOWN_SIZE,
+            params.markdown.len()
+        )));
+    }
+
+    // Validate container exists
+    let container = operations
+        .get_node(&params.container_id)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to get container: {}", e)))?
+        .ok_or_else(|| MCPError::node_not_found(&params.container_id))?;
+
+    // Get all existing children (use query with parent_id filter)
+    use crate::models::{NodeFilter, OrderBy};
+    let filter = NodeFilter::new()
+        .with_parent_id(params.container_id.clone())
+        .with_order_by(OrderBy::CreatedAsc);
+
+    let existing_children = operations
+        .query_nodes(filter)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
+
+    // Delete all existing children (recursively)
+    let mut deleted_count = 0;
+    for child in existing_children {
+        match operations.delete_node(&child.id).await {
+            Ok(_) => deleted_count += 1,
+            Err(e) => {
+                tracing::warn!("Failed to delete child node {}: {}", child.id, e);
+            }
+        }
+    }
+
+    // Create parser context with container already set
+    // Use TitleAsContainer strategy with the existing container's content
+    let container_strategy = ContainerStrategy::TitleAsContainer(container.content.clone());
+    let mut context = ParserContext::new_with_strategy(container_strategy);
+
+    // Manually set container_node_id to the existing container
+    context.container_node_id = Some(params.container_id.clone());
+
+    // Set up initial heading stack with container as root (level 0)
+    // This makes all parsed nodes children of the container
+    context.push_heading(params.container_id.clone(), 0);
+    context.first_node_created = true;
+
+    // Parse the new markdown content and create nodes
+    parse_markdown(&params.markdown, operations, &mut context).await?;
+
+    // Validate we didn't exceed max nodes
+    if context.nodes.len() > MAX_NODES_PER_IMPORT {
+        return Err(MCPError::invalid_params(format!(
+            "Import created {} nodes, exceeding maximum of {}",
+            context.nodes.len(),
+            MAX_NODES_PER_IMPORT
+        )));
+    }
+
+    Ok(json!({
+        "container_id": params.container_id,
+        "nodes_deleted": deleted_count,
+        "nodes_created": context.nodes.len(),
+        "nodes": context.nodes
+    }))
+}
+
 // Include tests
 #[cfg(test)]
 #[path = "markdown_test.rs"]
