@@ -3,7 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import NavigationSidebar from './navigation-sidebar.svelte';
-  import TabSystem from './tab-system.svelte';
+  import PaneManager from './pane-manager.svelte';
   import ThemeProvider from '$lib/design/components/theme-provider.svelte';
   import NodeServiceContext from '$lib/contexts/node-service-context.svelte';
   import { initializeTheme } from '$lib/design/theme';
@@ -207,14 +207,16 @@
       <!-- Navigation Sidebar -->
       <NavigationSidebar />
 
-      <!-- Tab System - positioned to span both tabs and content grid areas -->
-      <div class="tab-system-wrapper">
-        <TabSystem let:activeTab>
-          <!-- Main Content Area -->
-          <main class="main-content">
-            <slot {activeTab} />
-          </main>
-        </TabSystem>
+      <!-- Pane Manager - positioned to span both tabs and content grid areas -->
+      <div class="pane-manager-wrapper">
+        <PaneManager>
+          {#snippet children({ activeTab })}
+            <!-- Main Content Area -->
+            <main class="main-content">
+              <slot {activeTab} />
+            </main>
+          {/snippet}
+        </PaneManager>
       </div>
     </div>
   </NodeServiceContext>
@@ -239,8 +241,8 @@
     grid-area: sidebar;
   }
 
-  /* Tab System Wrapper - spans both tabs and content areas */
-  .tab-system-wrapper {
+  /* Pane Manager Wrapper - spans both tabs and content areas */
+  .pane-manager-wrapper {
     grid-column: 2;
     grid-row: 1 / span 2;
     display: flex;

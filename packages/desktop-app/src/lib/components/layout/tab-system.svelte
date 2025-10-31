@@ -34,6 +34,31 @@
 <script lang="ts">
   import { tabState, setActiveTab, closeTab } from '$lib/stores/navigation.js';
   import { cn } from '$lib/utils.js';
+  import type { Tab, Pane } from '$lib/stores/navigation.js';
+  import type { Snippet } from 'svelte';
+
+  // Props - when used inside PaneManager
+  let {
+    tabs = undefined,
+    activeTabId = undefined,
+    pane = undefined,
+    children
+  }: {
+    tabs?: Tab[];
+    activeTabId?: string;
+    pane?: Pane;
+    children?: Snippet<[{ activeTab: Tab | undefined }]>;
+  } = $props();
+
+  // Fallback to global state when not pane-specific (backwards compatibility)
+  const displayTabs = $derived(tabs || $tabState.tabs);
+  const currentActiveTabId = $derived(
+    activeTabId || $tabState.activeTabIds[$tabState.activePaneId]
+  );
+  const currentPaneId = $derived(pane?.id || $tabState.activePaneId);
+
+  // Check if close button should be disabled (last tab in last pane)
+  const isCloseDisabled = $derived(displayTabs.length === 1 && $tabState.panes.length === 1);
 
   // Truncate title to specified length with ellipsis
   function truncateTitle(title: string, maxLength: number = 25): string {
@@ -42,27 +67,26 @@
 
   // Handle tab click to switch active tab
   function handleTabClick(tabId: string): void {
-    setActiveTab(tabId);
+    setActiveTab(tabId, currentPaneId);
   }
 
   // Handle keyboard navigation for accessibility
   function handleTabKeydown(event: KeyboardEvent, tabId: string): void {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      setActiveTab(tabId);
+      setActiveTab(tabId, currentPaneId);
     } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
       event.preventDefault();
-      const tabs = $tabState.tabs;
-      const currentIndex = tabs.findIndex((tab) => tab.id === tabId);
+      const currentIndex = displayTabs.findIndex((tab) => tab.id === tabId);
 
       let nextIndex: number;
       if (event.key === 'ArrowRight') {
-        nextIndex = currentIndex === tabs.length - 1 ? 0 : currentIndex + 1;
+        nextIndex = currentIndex === displayTabs.length - 1 ? 0 : currentIndex + 1;
       } else {
-        nextIndex = currentIndex === 0 ? tabs.length - 1 : currentIndex - 1;
+        nextIndex = currentIndex === 0 ? displayTabs.length - 1 : currentIndex - 1;
       }
 
-      setActiveTab(tabs[nextIndex].id);
+      setActiveTab(displayTabs[nextIndex].id, currentPaneId);
     }
   }
 
@@ -70,60 +94,64 @@
   function handleCloseTab(event: MouseEvent, tabId: string): void {
     event.stopPropagation(); // Prevent tab activation
 
-    const tab = $tabState.tabs.find((t) => t.id === tabId);
+    // Cannot close last tab in last pane
+    if (isCloseDisabled) {
+      return;
+    }
+
+    const tab = displayTabs.find((t) => t.id === tabId);
     if (tab && tab.closeable) {
       closeTab(tabId);
     }
   }
 
-  // Get active tab for slot prop (from the active pane)
-  $: activeTab = $tabState.tabs.find(
-    (tab) => tab.id === $tabState.activeTabIds[$tabState.activePaneId]
-  );
+  // Get active tab for slot prop
+  const activeTab = $derived(displayTabs.find((tab) => tab.id === currentActiveTabId));
 </script>
 
-<!-- Tab bar - only shown when there are multiple tabs -->
-{#if $tabState.tabs.length > 1}
-  <div class="tab-bar" role="tablist" aria-label="Content tabs">
-    {#each $tabState.tabs as tab (tab.id)}
-      {@const isActive = tab.id === $tabState.activeTabIds[$tabState.activePaneId]}
-      <div
-        class={cn('tab-item', isActive && 'tab-item--active')}
-        role="tab"
-        tabindex={isActive ? 0 : -1}
-        aria-selected={isActive}
-        aria-controls={`tab-panel-${tab.id}`}
-        on:click={() => handleTabClick(tab.id)}
-        on:keydown={(event) => handleTabKeydown(event, tab.id)}
-      >
-        <span class="tab-title" title={tab.title}>
-          {truncateTitle(tab.title)}
-        </span>
+<!-- Tab bar - always shown (even with 1 tab for pane system) -->
+<div class="tab-bar" role="tablist" aria-label="Content tabs">
+  {#each displayTabs as tab (tab.id)}
+    {@const isActive = tab.id === currentActiveTabId}
+    <div
+      class={cn('tab-item', isActive && 'tab-item--active')}
+      role="tab"
+      tabindex={isActive ? 0 : -1}
+      aria-selected={isActive}
+      aria-controls={`tab-panel-${tab.id}`}
+      onclick={() => handleTabClick(tab.id)}
+      onkeydown={(event) => handleTabKeydown(event, tab.id)}
+    >
+      <span class="tab-title" title={tab.title}>
+        {truncateTitle(tab.title)}
+      </span>
 
-        <!-- Close button - only for closeable tabs -->
-        {#if tab.closeable}
-          <button
-            class="tab-close-btn"
-            aria-label="Close tab: {tab.title}"
-            title="Close tab"
-            on:click={(e) => handleCloseTab(e, tab.id)}
-          >
-            <span class="close-icon"></span>
-          </button>
-        {/if}
-      </div>
-    {/each}
-  </div>
-{/if}
+      <!-- Close button - only for closeable tabs -->
+      {#if tab.closeable}
+        <button
+          class={cn('tab-close-btn', isCloseDisabled && 'tab-close-btn--disabled')}
+          aria-label="Close tab: {tab.title}"
+          title={isCloseDisabled ? 'Cannot close last tab' : 'Close tab'}
+          disabled={isCloseDisabled}
+          onclick={(e) => handleCloseTab(e, tab.id)}
+        >
+          <span class="close-icon"></span>
+        </button>
+      {/if}
+    </div>
+  {/each}
+</div>
 
 <!-- Tab content area -->
 <div
   class="tab-content"
   role="tabpanel"
-  id={`tab-panel-${$tabState.activeTabIds[$tabState.activePaneId]}`}
-  aria-labelledby={`tab-${$tabState.activeTabIds[$tabState.activePaneId]}`}
+  id={`tab-panel-${currentActiveTabId}`}
+  aria-labelledby={`tab-${currentActiveTabId}`}
 >
-  <slot {activeTab} />
+  {#if children}
+    {@render children({ activeTab })}
+  {/if}
 </div>
 
 <style>
@@ -303,6 +331,13 @@
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
     opacity: 1;
+  }
+
+  /* Disabled close button (last tab in last pane) */
+  .tab-close-btn--disabled {
+    opacity: 0.3 !important;
+    cursor: not-allowed !important;
+    pointer-events: none;
   }
 
   .tab-content {
