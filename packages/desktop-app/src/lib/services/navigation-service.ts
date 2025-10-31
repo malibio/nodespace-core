@@ -147,7 +147,7 @@ export class NavigationService {
     const currentState = get(tabState);
 
     if (openInNewTab) {
-      // Cmd+Click: Always create new tab
+      // Cmd+Click: Always create new tab in the active pane
       const newTab = {
         id: uuidv4(),
         title: target.title,
@@ -156,7 +156,8 @@ export class NavigationService {
           nodeId: target.nodeId,
           nodeType: target.nodeType
         },
-        closeable: true
+        closeable: true,
+        paneId: currentState.activePaneId
       };
 
       addTab(newTab);
@@ -165,7 +166,7 @@ export class NavigationService {
 
     // Regular click: Navigate within current tab
     // Update the active tab's content to show the clicked node
-    const activeTabId = currentState.activeTabId;
+    const activeTabId = currentState.activeTabIds[currentState.activePaneId];
 
     updateTabContent(activeTabId, {
       nodeId: target.nodeId,

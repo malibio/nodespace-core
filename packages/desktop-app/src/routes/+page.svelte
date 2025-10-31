@@ -6,7 +6,7 @@
 
   // Derive tab state using Svelte 5 $derived
   const tabs = $derived($tabState.tabs);
-  const activeTabId = $derived($tabState.activeTabId);
+  const activeTabId = $derived($tabState.activeTabIds[$tabState.activePaneId]);
   const activeTab = $derived(tabs.find((t) => t.id === activeTabId));
 
   // Track loaded viewer components by nodeType

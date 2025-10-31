@@ -76,19 +76,22 @@
     }
   }
 
-  // Get active tab for slot prop
-  $: activeTab = $tabState.tabs.find((tab) => tab.id === $tabState.activeTabId);
+  // Get active tab for slot prop (from the active pane)
+  $: activeTab = $tabState.tabs.find(
+    (tab) => tab.id === $tabState.activeTabIds[$tabState.activePaneId]
+  );
 </script>
 
 <!-- Tab bar - only shown when there are multiple tabs -->
 {#if $tabState.tabs.length > 1}
   <div class="tab-bar" role="tablist" aria-label="Content tabs">
     {#each $tabState.tabs as tab (tab.id)}
+      {@const isActive = tab.id === $tabState.activeTabIds[$tabState.activePaneId]}
       <div
-        class={cn('tab-item', tab.id === $tabState.activeTabId && 'tab-item--active')}
+        class={cn('tab-item', isActive && 'tab-item--active')}
         role="tab"
-        tabindex={tab.id === $tabState.activeTabId ? 0 : -1}
-        aria-selected={tab.id === $tabState.activeTabId}
+        tabindex={isActive ? 0 : -1}
+        aria-selected={isActive}
         aria-controls={`tab-panel-${tab.id}`}
         on:click={() => handleTabClick(tab.id)}
         on:keydown={(event) => handleTabKeydown(event, tab.id)}
@@ -117,8 +120,8 @@
 <div
   class="tab-content"
   role="tabpanel"
-  id={`tab-panel-${$tabState.activeTabId}`}
-  aria-labelledby={`tab-${$tabState.activeTabId}`}
+  id={`tab-panel-${$tabState.activeTabIds[$tabState.activePaneId]}`}
+  aria-labelledby={`tab-${$tabState.activeTabIds[$tabState.activePaneId]}`}
 >
   <slot {activeTab} />
 </div>
