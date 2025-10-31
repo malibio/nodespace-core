@@ -25,7 +25,7 @@
   </TabSystem>
 -->
 <script lang="ts">
-  import { tabState, setActiveTab } from '$lib/stores/navigation.js';
+  import { tabState, setActiveTab, closeTab } from '$lib/stores/navigation.js';
   import { cn } from '$lib/utils.js';
 
   // Truncate title to specified length with ellipsis
@@ -59,6 +59,16 @@
     }
   }
 
+  // Handle close button click
+  function handleCloseTab(event: MouseEvent, tabId: string): void {
+    event.stopPropagation(); // Prevent tab activation
+
+    const tab = $tabState.tabs.find((t) => t.id === tabId);
+    if (tab && tab.closeable) {
+      closeTab(tabId);
+    }
+  }
+
   // Get active tab for slot prop
   $: activeTab = $tabState.tabs.find((tab) => tab.id === $tabState.activeTabId);
 </script>
@@ -79,6 +89,19 @@
         <span class="tab-title" title={tab.title}>
           {truncateTitle(tab.title)}
         </span>
+
+        <!-- Close button - only for closeable tabs -->
+        {#if tab.closeable}
+          <button
+            class="tab-close-btn"
+            aria-label="Close tab: {tab.title}"
+            title="Close tab"
+            tabindex="-1"
+            on:click={(e) => handleCloseTab(e, tab.id)}
+          >
+            <span class="close-icon"></span>
+          </button>
+        {/if}
       </div>
     {/each}
   </div>
@@ -207,6 +230,73 @@
     text-overflow: ellipsis;
     min-width: 0;
     flex: 1;
+  }
+
+  /* Close button - positioned in upper right corner of tab */
+  .tab-close-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+    opacity: 0; /* Hidden by default */
+    transition:
+      opacity 0.15s ease-in-out,
+      color 0.15s ease-in-out;
+    border-radius: 2px;
+  }
+
+  /* CSS-only close icon (X shape using pseudo-elements) */
+  .close-icon {
+    position: relative;
+    display: block;
+    width: 12px;
+    height: 12px;
+  }
+
+  .close-icon::before,
+  .close-icon::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 100%;
+    height: 1.5px;
+    background-color: currentColor;
+    transition: background-color 0.15s ease-in-out;
+  }
+
+  .close-icon::before {
+    transform: translateY(-50%) rotate(45deg);
+  }
+
+  .close-icon::after {
+    transform: translateY(-50%) rotate(-45deg);
+  }
+
+  /* Show close button when hovering over the tab */
+  .tab-item:hover .tab-close-btn {
+    opacity: 0.6;
+  }
+
+  /* Increase opacity when hovering directly over close button */
+  .tab-close-btn:hover {
+    opacity: 1 !important;
+    color: hsl(var(--foreground));
+  }
+
+  .tab-close-btn:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    opacity: 1;
   }
 
   .tab-content {
