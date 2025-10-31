@@ -113,15 +113,17 @@
       class={cn('pane', pane.id === $tabState.activePaneId && 'pane--active')}
       style="width: {pane.width}%"
       data-pane-id={pane.id}
+      onclick={() => setActivePane(pane.id)}
+      onkeydown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          setActivePane(pane.id);
+        }
+      }}
+      role="button"
+      aria-label="Activate Pane {index + 1}"
+      tabindex="0"
     >
-      <!-- Clickable overlay to activate pane -->
-      <button
-        class="pane-activator"
-        onclick={() => setActivePane(pane.id)}
-        aria-label="Activate Pane {index + 1}"
-        type="button"
-      ></button>
-
       <!-- Each pane gets its own TabSystem -->
       <TabSystem tabs={getTabsForPane(pane.id)} {activeTabId} {pane}>
         {#snippet children({ activeTab: tabForPane })}
@@ -173,22 +175,6 @@
   .pane--active {
     /* Subtle highlight to show which pane is active */
     box-shadow: inset 0 0 0 1px hsl(var(--ring) / 0.2);
-  }
-
-  /* Invisible button overlay to activate pane when clicked */
-  .pane-activator {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: transparent;
-    border: none;
-    padding: 0;
-    cursor: default;
-    z-index: 0;
-    /* Allow clicks to pass through to child elements */
-    pointer-events: none;
   }
 
   /* Resize handle */

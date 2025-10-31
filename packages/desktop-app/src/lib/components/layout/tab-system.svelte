@@ -14,10 +14,10 @@
   - Accessibility: ARIA labels, proper focus management
 
   Close Button Design:
-  - Size: 16×16px button with 12×12px CSS-only X icon
-  - Position: 4px from top-right corner of each tab
+  - Size: 12×12px button with 8×8px CSS-only X icon (compact, subtle appearance)
+  - Position: 2px from top-right corner of each tab (close to corner)
   - Interaction: Hidden by default, fades in on tab hover (opacity: 0.6), full opacity on direct hover
-  - Line weight: 1.5px for optimal visibility on all displays
+  - Line weight: 1px for crisp, delicate appearance
   - Keyboard accessible: Tab key navigation with focus indicators
   
   Integration:
@@ -272,13 +272,13 @@
   /* Close button - positioned in upper right corner of tab */
   .tab-close-btn {
     position: absolute;
-    top: 4px; /* Comfortable distance from top edge */
-    right: 4px; /* Comfortable distance from right edge */
+    top: 2px; /* Close to corner for compact appearance */
+    right: 2px; /* Close to corner for compact appearance */
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px; /* Sufficient hit area for mouse and touch input */
-    height: 16px; /* Sufficient hit area for mouse and touch input */
+    width: 12px; /* Compact size to minimize visual intrusion */
+    height: 12px; /* Compact size to minimize visual intrusion */
     padding: 0;
     background: none;
     border: none;
@@ -293,8 +293,8 @@
   .close-icon {
     position: relative;
     display: block;
-    width: 12px; /* Icon size with 75% fill ratio (12px in 16px button) */
-    height: 12px; /* Icon size with 75% fill ratio (12px in 16px button) */
+    width: 8px; /* Small icon (67% fill ratio in 12px button) for subtle appearance */
+    height: 8px; /* Small icon (67% fill ratio in 12px button) for subtle appearance */
   }
 
   .close-icon::before,
@@ -304,7 +304,7 @@
     top: 50%;
     left: 0;
     width: 100%;
-    height: 1.5px; /* Optimal line thickness for visibility across all displays */
+    height: 1px; /* Thin line for crisp, delicate appearance */
     background-color: currentColor;
   }
 

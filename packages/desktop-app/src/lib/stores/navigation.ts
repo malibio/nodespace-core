@@ -46,7 +46,7 @@ const initialTabState: TabState = {
         nodeId: getTodayDateId(),
         nodeType: 'date'
       },
-      closeable: false,
+      closeable: true,
       paneId: DEFAULT_PANE_ID
     }
   ],
@@ -77,7 +77,7 @@ export function resetTabState() {
           nodeId: getTodayDateId(),
           nodeType: 'date'
         },
-        closeable: false,
+        closeable: true,
         paneId: DEFAULT_PANE_ID
       }
     ],
