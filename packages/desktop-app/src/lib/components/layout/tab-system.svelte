@@ -230,7 +230,7 @@
     text-overflow: ellipsis;
     min-width: 0;
     flex: 1;
-    padding-right: 18px; /* Reserve space for close button */
+    padding-right: 12px; /* Reserve minimal space for close button */
   }
 
   /* Close button - positioned in upper right corner of tab */
@@ -241,8 +241,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     padding: 0;
     background: none;
     border: none;
@@ -259,8 +259,8 @@
   .close-icon {
     position: relative;
     display: block;
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
 
   .close-icon::before,
@@ -270,7 +270,7 @@
     top: 50%;
     left: 0;
     width: 100%;
-    height: 1.2px;
+    height: 1px;
     background-color: currentColor;
     transition: background-color 0.15s ease-in-out;
   }
