@@ -138,7 +138,8 @@ mod tests {
 mod integration_tests {
     use crate::mcp::handlers::nodes::{
         handle_get_child_at_index, handle_get_children, handle_get_node_tree,
-        handle_insert_child_at_index, handle_move_child_to_index,
+        handle_get_nodes_batch, handle_insert_child_at_index, handle_move_child_to_index,
+        handle_update_nodes_batch,
     };
     use crate::operations::{CreateNodeParams, NodeOperations};
     use crate::{DatabaseService, NodeService};
@@ -609,5 +610,319 @@ mod integration_tests {
         });
         let result_valid = handle_get_node_tree(&operations, params_valid).await;
         assert!(result_valid.is_ok());
+    }
+
+    // =========================================================================
+    // Batch Operations Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_get_nodes_batch_success() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create test nodes
+        let node1 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Node 1".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node2 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Node 2".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node3 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Node 3".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Batch get
+        let params = json!({
+            "node_ids": [node1, node2, node3]
+        });
+
+        let result = handle_get_nodes_batch(&operations, params)
+            .await
+            .unwrap();
+
+        assert_eq!(result["count"].as_u64().unwrap(), 3);
+        assert_eq!(result["not_found"].as_array().unwrap().len(), 0);
+
+        let nodes = result["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_nodes_batch_with_not_found() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        let node1 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Node 1".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Include non-existent IDs
+        let params = json!({
+            "node_ids": [node1, "does-not-exist", "also-missing"]
+        });
+
+        let result = handle_get_nodes_batch(&operations, params)
+            .await
+            .unwrap();
+
+        assert_eq!(result["count"].as_u64().unwrap(), 1); // Only 1 found
+        assert_eq!(result["not_found"].as_array().unwrap().len(), 2); // 2 missing
+
+        let not_found = result["not_found"].as_array().unwrap();
+        assert!(not_found.contains(&json!("does-not-exist")));
+        assert!(not_found.contains(&json!("also-missing")));
+    }
+
+    #[tokio::test]
+    async fn test_get_nodes_batch_empty_input() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        let params = json!({
+            "node_ids": []
+        });
+
+        let result = handle_get_nodes_batch(&operations, params).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.message.contains("cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_get_nodes_batch_exceeds_limit() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create array with 101 IDs (exceeds limit of 100)
+        let node_ids: Vec<String> = (0..101).map(|i| format!("node-{}", i)).collect();
+
+        let params = json!({
+            "node_ids": node_ids
+        });
+
+        let result = handle_get_nodes_batch(&operations, params).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.message.contains("Maximum 100"));
+    }
+
+    #[tokio::test]
+    async fn test_update_nodes_batch_success() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a container first
+        let container = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "# Task List".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node1 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "- [ ] Task 1".to_string(),
+                parent_id: Some(container.clone()),
+                container_node_id: Some(container.clone()),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node2 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "- [ ] Task 2".to_string(),
+                parent_id: Some(container.clone()),
+                container_node_id: Some(container),
+                before_sibling_id: Some(node1.clone()),
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Batch update
+        let params = json!({
+            "updates": [
+                { "id": node1, "content": "- [x] Task 1" },
+                { "id": node2, "content": "- [x] Task 2" }
+            ]
+        });
+
+        let result = handle_update_nodes_batch(&operations, params)
+            .await
+            .unwrap();
+
+        assert_eq!(result["count"].as_u64().unwrap(), 2);
+        assert_eq!(result["failed"].as_array().unwrap().len(), 0);
+
+        // Verify updates
+        let updated1 = operations.get_node(&node1).await.unwrap().unwrap();
+        assert_eq!(updated1.content, "- [x] Task 1");
+
+        let updated2 = operations.get_node(&node2).await.unwrap().unwrap();
+        assert_eq!(updated2.content, "- [x] Task 2");
+    }
+
+    #[tokio::test]
+    async fn test_update_nodes_batch_partial_failure() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        let node1 = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Node 1".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Mix valid and invalid updates
+        let params = json!({
+            "updates": [
+                { "id": node1, "content": "Updated Node 1" },
+                { "id": "nonexistent", "content": "Should fail" }
+            ]
+        });
+
+        let result = handle_update_nodes_batch(&operations, params)
+            .await
+            .unwrap();
+
+        // Should have 1 success and 1 failure
+        assert_eq!(result["count"].as_u64().unwrap(), 1);
+        let updated = result["updated"].as_array().unwrap();
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0], node1);
+
+        let failed = result["failed"].as_array().unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0]["id"], "nonexistent");
+    }
+
+    #[tokio::test]
+    async fn test_update_nodes_batch_empty_input() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        let params = json!({
+            "updates": []
+        });
+
+        let result = handle_update_nodes_batch(&operations, params).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.message.contains("cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_update_nodes_batch_exceeds_limit() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create array with 101 updates (exceeds limit of 100)
+        let updates: Vec<serde_json::Value> = (0..101)
+            .map(|i| {
+                json!({
+                    "id": format!("node-{}", i),
+                    "content": "updated"
+                })
+            })
+            .collect();
+
+        let params = json!({
+            "updates": updates
+        });
+
+        let result = handle_update_nodes_batch(&operations, params).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.message.contains("Maximum 100"));
+    }
+
+    #[tokio::test]
+    async fn test_update_nodes_batch_with_properties() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        let node = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Test".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({"priority": "low"}),
+            })
+            .await
+            .unwrap();
+
+        // Update properties only
+        let params = json!({
+            "updates": [
+                { "id": node, "properties": { "priority": "high", "status": "urgent" } }
+            ]
+        });
+
+        let result = handle_update_nodes_batch(&operations, params)
+            .await
+            .unwrap();
+
+        assert_eq!(result["count"].as_u64().unwrap(), 1);
+
+        // Verify property update
+        let updated = operations.get_node(&node).await.unwrap().unwrap();
+        assert_eq!(updated.properties["priority"], "high");
+        assert_eq!(updated.properties["status"], "urgent");
     }
 }
