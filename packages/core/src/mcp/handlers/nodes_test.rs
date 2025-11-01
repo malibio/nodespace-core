@@ -616,6 +616,7 @@ mod integration_tests {
     // Batch Operations Tests
     // =========================================================================
 
+    /// Verifies successful batch retrieval of multiple nodes
     #[tokio::test]
     async fn test_get_nodes_batch_success() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -665,9 +666,7 @@ mod integration_tests {
             "node_ids": [node1, node2, node3]
         });
 
-        let result = handle_get_nodes_batch(&operations, params)
-            .await
-            .unwrap();
+        let result = handle_get_nodes_batch(&operations, params).await.unwrap();
 
         assert_eq!(result["count"].as_u64().unwrap(), 3);
         assert_eq!(result["not_found"].as_array().unwrap().len(), 0);
@@ -676,6 +675,7 @@ mod integration_tests {
         assert_eq!(nodes.len(), 3);
     }
 
+    /// Verifies get_nodes_batch returns partial results when some nodes don't exist
     #[tokio::test]
     async fn test_get_nodes_batch_with_not_found() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -698,9 +698,7 @@ mod integration_tests {
             "node_ids": [node1, "does-not-exist", "also-missing"]
         });
 
-        let result = handle_get_nodes_batch(&operations, params)
-            .await
-            .unwrap();
+        let result = handle_get_nodes_batch(&operations, params).await.unwrap();
 
         assert_eq!(result["count"].as_u64().unwrap(), 1); // Only 1 found
         assert_eq!(result["not_found"].as_array().unwrap().len(), 2); // 2 missing
@@ -710,6 +708,7 @@ mod integration_tests {
         assert!(not_found.contains(&json!("also-missing")));
     }
 
+    /// Verifies validation rejects empty node_ids array
     #[tokio::test]
     async fn test_get_nodes_batch_empty_input() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -725,6 +724,7 @@ mod integration_tests {
         assert!(error.message.contains("cannot be empty"));
     }
 
+    /// Verifies batch size limit enforcement (max 100 nodes)
     #[tokio::test]
     async fn test_get_nodes_batch_exceeds_limit() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -740,9 +740,10 @@ mod integration_tests {
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.message.contains("Maximum 100"));
+        assert!(error.message.contains("exceeds maximum of 100"));
     }
 
+    /// Verifies successful batch update of multiple nodes
     #[tokio::test]
     async fn test_update_nodes_batch_success() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -810,6 +811,7 @@ mod integration_tests {
         assert_eq!(updated2.content, "- [x] Task 2");
     }
 
+    /// Verifies partial success handling with detailed failure reporting
     #[tokio::test]
     async fn test_update_nodes_batch_partial_failure() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -850,6 +852,7 @@ mod integration_tests {
         assert_eq!(failed[0]["id"], "nonexistent");
     }
 
+    /// Verifies validation rejects empty updates array
     #[tokio::test]
     async fn test_update_nodes_batch_empty_input() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -865,6 +868,7 @@ mod integration_tests {
         assert!(error.message.contains("cannot be empty"));
     }
 
+    /// Verifies batch size limit enforcement (max 100 updates)
     #[tokio::test]
     async fn test_update_nodes_batch_exceeds_limit() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -887,9 +891,10 @@ mod integration_tests {
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.message.contains("Maximum 100"));
+        assert!(error.message.contains("exceeds maximum of 100"));
     }
 
+    /// Verifies property-only updates without content changes
     #[tokio::test]
     async fn test_update_nodes_batch_with_properties() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
@@ -924,5 +929,162 @@ mod integration_tests {
         let updated = operations.get_node(&node).await.unwrap().unwrap();
         assert_eq!(updated.properties["priority"], "high");
         assert_eq!(updated.properties["status"], "urgent");
+    }
+
+    // =========================================================================
+    // Performance Benchmarks
+    // =========================================================================
+
+    /// Benchmark: Verifies batch retrieval is significantly faster than sequential calls
+    ///
+    /// This test quantifies the performance improvement of get_nodes_batch vs
+    /// multiple individual get_node calls. Expected improvement: at least 2x faster.
+    #[tokio::test]
+    #[ignore] // Run explicitly with: cargo test benchmark_get_nodes_batch -- --ignored --nocapture
+    async fn benchmark_get_nodes_batch() {
+        use std::time::Instant;
+
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create 50 test nodes
+        let mut node_ids = Vec::new();
+        for i in 0..50 {
+            let node = operations
+                .create_node(CreateNodeParams {
+                    id: None,
+                    node_type: "text".to_string(),
+                    content: format!("Node {}", i),
+                    parent_id: None,
+                    container_node_id: None,
+                    before_sibling_id: None,
+                    properties: json!({}),
+                })
+                .await
+                .unwrap();
+            node_ids.push(node);
+        }
+
+        // Benchmark: Sequential individual calls
+        let start_sequential = Instant::now();
+        for node_id in &node_ids {
+            let _node = operations.get_node(node_id).await.unwrap();
+        }
+        let duration_sequential = start_sequential.elapsed();
+
+        // Benchmark: Single batch call
+        let start_batch = Instant::now();
+        let params = json!({
+            "node_ids": node_ids
+        });
+        let _result = handle_get_nodes_batch(&operations, params).await.unwrap();
+        let duration_batch = start_batch.elapsed();
+
+        println!("Sequential (50 calls): {:?}", duration_sequential);
+        println!("Batch (1 call):        {:?}", duration_batch);
+        println!(
+            "Speedup:               {:.2}x",
+            duration_sequential.as_secs_f64() / duration_batch.as_secs_f64()
+        );
+
+        // Assert batch is at least 2x faster
+        assert!(
+            duration_batch.as_millis() * 2 < duration_sequential.as_millis(),
+            "Batch should be at least 2x faster than sequential"
+        );
+    }
+
+    /// Benchmark: Verifies batch update is significantly faster than sequential calls
+    ///
+    /// This test quantifies the performance improvement of update_nodes_batch vs
+    /// multiple individual update_node calls. Expected improvement: at least 2x faster.
+    #[tokio::test]
+    #[ignore] // Run explicitly with: cargo test benchmark_update_nodes_batch -- --ignored --nocapture
+    async fn benchmark_update_nodes_batch() {
+        use std::time::Instant;
+
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a container
+        let container = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "# Benchmark Container".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Create 50 test nodes
+        let mut node_ids = Vec::new();
+        for i in 0..50 {
+            let node = operations
+                .create_node(CreateNodeParams {
+                    id: None,
+                    node_type: "task".to_string(),
+                    content: format!("- [ ] Task {}", i),
+                    parent_id: Some(container.clone()),
+                    container_node_id: Some(container.clone()),
+                    before_sibling_id: None,
+                    properties: json!({}),
+                })
+                .await
+                .unwrap();
+            node_ids.push(node);
+        }
+
+        // Benchmark: Sequential individual updates
+        let start_sequential = Instant::now();
+        for node_id in &node_ids {
+            operations
+                .update_node(node_id, Some("- [x] Updated task".to_string()), None, None)
+                .await
+                .unwrap();
+        }
+        let duration_sequential = start_sequential.elapsed();
+
+        // Reset nodes back to unchecked for fair comparison
+        for node_id in &node_ids {
+            operations
+                .update_node(node_id, Some("- [ ] Task".to_string()), None, None)
+                .await
+                .unwrap();
+        }
+
+        // Benchmark: Single batch update
+        let start_batch = Instant::now();
+        let updates: Vec<serde_json::Value> = node_ids
+            .iter()
+            .map(|id| {
+                json!({
+                    "id": id,
+                    "content": "- [x] Updated task"
+                })
+            })
+            .collect();
+
+        let params = json!({
+            "updates": updates
+        });
+        let _result = handle_update_nodes_batch(&operations, params)
+            .await
+            .unwrap();
+        let duration_batch = start_batch.elapsed();
+
+        println!("Sequential (50 calls): {:?}", duration_sequential);
+        println!("Batch (1 call):        {:?}", duration_batch);
+        println!(
+            "Speedup:               {:.2}x",
+            duration_sequential.as_secs_f64() / duration_batch.as_secs_f64()
+        );
+
+        // Assert batch is at least 2x faster
+        assert!(
+            duration_batch.as_millis() * 2 < duration_sequential.as_millis(),
+            "Batch should be at least 2x faster than sequential"
+        );
     }
 }

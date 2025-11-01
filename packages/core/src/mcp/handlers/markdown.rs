@@ -135,6 +135,44 @@ impl ParserContext {
         }
     }
 
+    /// Create a parser context for an existing container
+    ///
+    /// This is a convenience constructor for update_container_from_markdown
+    /// that properly initializes the parser state for adding children to an
+    /// existing container node. It sets up the heading stack and parser flags
+    /// to treat the existing container as the root of the hierarchy.
+    ///
+    /// # Arguments
+    ///
+    /// * `container_id` - ID of the existing container node
+    /// * `container_content` - Content of the existing container (typically the title)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let context = ParserContext::new_for_existing_container(
+    ///     "container-123".to_string(),
+    ///     "# Project Plan".to_string()
+    /// );
+    /// // Context is ready to parse markdown and create children under container-123
+    /// ```
+    fn new_for_existing_container(container_id: String, container_content: String) -> Self {
+        let mut context =
+            Self::new_with_strategy(ContainerStrategy::TitleAsContainer(container_content));
+
+        // Set container_node_id to the existing container
+        context.container_node_id = Some(container_id.clone());
+
+        // Set up initial heading stack with container as root (level 0)
+        // This makes all parsed nodes children of the container
+        context.push_heading(container_id, 0);
+
+        // Mark that we already have a container (skip title parsing)
+        context.first_node_created = true;
+
+        context
+    }
+
     /// Get current parent ID based on hierarchy context
     fn current_parent_id(&self) -> Option<String> {
         // List context takes precedence over heading context
@@ -990,6 +1028,22 @@ pub struct UpdateContainerFromMarkdownParams {
 /// This enables "GitHub-style" bulk updates where AI edits markdown freely
 /// and replaces the entire structure at once.
 ///
+/// # Transaction Semantics
+///
+/// **Important**: This operation is NOT atomic. It performs two sequential phases:
+/// 1. Delete all existing children (with individual delete operations)
+/// 2. Create new nodes from markdown (with individual create operations)
+///
+/// If phase 2 fails (e.g., markdown parsing error, resource limits), the container
+/// will be left in an inconsistent state with old children deleted but new children
+/// not fully created. This is acceptable for AI-driven workflows where:
+/// - AI agents can retry the entire operation if it fails
+/// - Partial state is better than blocking on transaction complexity
+/// - The container itself remains valid (only children are affected)
+///
+/// **For production use**: Consider implementing transaction support if atomicity
+/// guarantees are required for your use case.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -999,6 +1053,7 @@ pub struct UpdateContainerFromMarkdownParams {
 /// });
 /// let result = handle_update_container_from_markdown(&operations, params).await?;
 /// // Old children deleted, new structure created
+/// // Returns deletion_failures if any deletes failed
 /// ```
 pub async fn handle_update_container_from_markdown(
     operations: &Arc<NodeOperations>,
@@ -1037,27 +1092,26 @@ pub async fn handle_update_container_from_markdown(
 
     // Delete all existing children (recursively)
     let mut deleted_count = 0;
+    let mut deletion_failures = Vec::new();
     for child in existing_children {
         match operations.delete_node(&child.id).await {
             Ok(_) => deleted_count += 1,
             Err(e) => {
                 tracing::warn!("Failed to delete child node {}: {}", child.id, e);
+                deletion_failures.push(json!({
+                    "node_id": child.id,
+                    "error": e.to_string()
+                }));
             }
         }
     }
 
-    // Create parser context with container already set
-    // Use TitleAsContainer strategy with the existing container's content
-    let container_strategy = ContainerStrategy::TitleAsContainer(container.content.clone());
-    let mut context = ParserContext::new_with_strategy(container_strategy);
-
-    // Manually set container_node_id to the existing container
-    context.container_node_id = Some(params.container_id.clone());
-
-    // Set up initial heading stack with container as root (level 0)
-    // This makes all parsed nodes children of the container
-    context.push_heading(params.container_id.clone(), 0);
-    context.first_node_created = true;
+    // Create parser context for the existing container
+    // This properly initializes the parser state to treat the container as root
+    let mut context = ParserContext::new_for_existing_container(
+        params.container_id.clone(),
+        container.content.clone(),
+    );
 
     // Parse the new markdown content and create nodes
     parse_markdown(&params.markdown, operations, &mut context).await?;
@@ -1074,6 +1128,7 @@ pub async fn handle_update_container_from_markdown(
     Ok(json!({
         "container_id": params.container_id,
         "nodes_deleted": deleted_count,
+        "deletion_failures": deletion_failures,
         "nodes_created": context.nodes.len(),
         "nodes": context.nodes
     }))

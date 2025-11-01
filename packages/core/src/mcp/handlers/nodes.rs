@@ -770,9 +770,10 @@ pub async fn handle_get_nodes_batch(
     }
 
     if params.node_ids.len() > 100 {
-        return Err(MCPError::invalid_params(
-            "Maximum 100 nodes per batch request".to_string(),
-        ));
+        return Err(MCPError::invalid_params(format!(
+            "Batch size exceeds maximum of 100 nodes (got {} nodes)",
+            params.node_ids.len()
+        )));
     }
 
     // Fetch all nodes
@@ -862,9 +863,10 @@ pub async fn handle_update_nodes_batch(
     }
 
     if params.updates.len() > 100 {
-        return Err(MCPError::invalid_params(
-            "Maximum 100 updates per batch request".to_string(),
-        ));
+        return Err(MCPError::invalid_params(format!(
+            "Batch size exceeds maximum of 100 updates (got {} updates)",
+            params.updates.len()
+        )));
     }
 
     // Apply all updates
