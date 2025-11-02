@@ -781,9 +781,9 @@ impl NodeEmbeddingService {
             NodeServiceError::QueryFailed(format!("Failed to get before_sibling_id: {}", e))
         })?;
 
-        let version: i64 = row.get(6).map_err(|e| {
-            NodeServiceError::QueryFailed(format!("Failed to get version: {}", e))
-        })?;
+        let version: i64 = row
+            .get(6)
+            .map_err(|e| NodeServiceError::QueryFailed(format!("Failed to get version: {}", e)))?;
 
         let created_at_str: String = row.get(7).map_err(|e| {
             NodeServiceError::QueryFailed(format!("Failed to get created_at: {}", e))

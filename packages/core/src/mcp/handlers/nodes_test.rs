@@ -1046,8 +1046,15 @@ mod integration_tests {
         // Benchmark: Sequential individual updates
         let start_sequential = Instant::now();
         for node_id in &node_ids {
+            let node = operations.get_node(node_id).await.unwrap().unwrap();
             operations
-                .update_node(node_id, Some("- [x] Updated task".to_string()), None, None)
+                .update_node(
+                    node_id,
+                    node.version,
+                    Some("- [x] Updated task".to_string()),
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
         }
@@ -1055,8 +1062,15 @@ mod integration_tests {
 
         // Reset nodes back to unchecked for fair comparison
         for node_id in &node_ids {
+            let node = operations.get_node(node_id).await.unwrap().unwrap();
             operations
-                .update_node(node_id, Some("- [ ] Task".to_string()), None, None)
+                .update_node(
+                    node_id,
+                    node.version,
+                    Some("- [ ] Task".to_string()),
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
         }

@@ -305,10 +305,32 @@ pub async fn update_node(
     id: String,
     update: NodeUpdate,
 ) -> Result<(), CommandError> {
+    // TODO(Phase 4 #333): Add version parameter from frontend
+    // For now, fetch current version (temporary - has race condition window)
+    let node = operations
+        .get_node(&id)
+        .await
+        .map_err(|e| CommandError {
+            message: format!("Failed to fetch node: {}", e),
+            code: "NODE_FETCH_ERROR".to_string(),
+            details: None,
+        })?
+        .ok_or_else(|| CommandError {
+            message: format!("Node {} not found", id),
+            code: "NODE_NOT_FOUND".to_string(),
+            details: None,
+        })?;
+
     // NodeOperations.update_node only handles content/type/properties
     // For hierarchy changes, use move_node() or reorder_node()
     operations
-        .update_node(&id, update.content, update.node_type, update.properties)
+        .update_node(
+            &id,
+            node.version,
+            update.content,
+            update.node_type,
+            update.properties,
+        )
         .await
         .map_err(Into::into)
 }
@@ -345,7 +367,26 @@ pub async fn delete_node(
     operations: State<'_, NodeOperations>,
     id: String,
 ) -> Result<nodespace_core::models::DeleteResult, CommandError> {
-    operations.delete_node(&id).await.map_err(Into::into)
+    // TODO(Phase 4 #333): Add version parameter from frontend
+    // For now, fetch current version (temporary - has race condition window)
+    let node = operations
+        .get_node(&id)
+        .await
+        .map_err(|e| CommandError {
+            message: format!("Failed to fetch node: {}", e),
+            code: "NODE_FETCH_ERROR".to_string(),
+            details: None,
+        })?
+        .ok_or_else(|| CommandError {
+            message: format!("Node {} not found", id),
+            code: "NODE_NOT_FOUND".to_string(),
+            details: None,
+        })?;
+
+    operations
+        .delete_node(&id, node.version)
+        .await
+        .map_err(Into::into)
 }
 
 /// Move a node to a new parent
@@ -379,8 +420,24 @@ pub async fn move_node(
     node_id: String,
     new_parent_id: Option<String>,
 ) -> Result<(), CommandError> {
+    // TODO(Phase 4 #333): Add version parameter from frontend
+    // For now, fetch current version (temporary - has race condition window)
+    let node = operations
+        .get_node(&node_id)
+        .await
+        .map_err(|e| CommandError {
+            message: format!("Failed to fetch node: {}", e),
+            code: "NODE_FETCH_ERROR".to_string(),
+            details: None,
+        })?
+        .ok_or_else(|| CommandError {
+            message: format!("Node {} not found", node_id),
+            code: "NODE_NOT_FOUND".to_string(),
+            details: None,
+        })?;
+
     operations
-        .move_node(&node_id, new_parent_id.as_deref())
+        .move_node(&node_id, node.version, new_parent_id.as_deref())
         .await
         .map_err(Into::into)
 }
@@ -415,8 +472,24 @@ pub async fn reorder_node(
     node_id: String,
     before_sibling_id: Option<String>,
 ) -> Result<(), CommandError> {
+    // TODO(Phase 4 #333): Add version parameter from frontend
+    // For now, fetch current version (temporary - has race condition window)
+    let node = operations
+        .get_node(&node_id)
+        .await
+        .map_err(|e| CommandError {
+            message: format!("Failed to fetch node: {}", e),
+            code: "NODE_FETCH_ERROR".to_string(),
+            details: None,
+        })?
+        .ok_or_else(|| CommandError {
+            message: format!("Node {} not found", node_id),
+            code: "NODE_NOT_FOUND".to_string(),
+            details: None,
+        })?;
+
     operations
-        .reorder_node(&node_id, before_sibling_id.as_deref())
+        .reorder_node(&node_id, node.version, before_sibling_id.as_deref())
         .await
         .map_err(Into::into)
 }

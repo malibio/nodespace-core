@@ -1091,10 +1091,12 @@ pub async fn handle_update_container_from_markdown(
         .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
 
     // Delete all existing children (recursively)
+    // TODO(Phase 4): Add version parameter to delete operations
     let mut deleted_count = 0;
     let mut deletion_failures = Vec::new();
     for child in existing_children {
-        match operations.delete_node(&child.id).await {
+        // Note: child.version is already available from existing_children query
+        match operations.delete_node(&child.id, child.version).await {
             Ok(_) => deleted_count += 1,
             Err(e) => {
                 tracing::warn!("Failed to delete child node {}: {}", child.id, e);

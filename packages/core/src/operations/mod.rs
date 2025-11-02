@@ -808,6 +808,7 @@ impl NodeOperations {
     pub async fn update_node(
         &self,
         node_id: &str,
+        expected_version: i64,
         content: Option<String>,
         node_type: Option<String>,
         properties: Option<Value>,
@@ -817,8 +818,6 @@ impl NodeOperations {
         // Use move_node() or reorder_node() for hierarchy changes
 
         // Create NodeUpdate with only content/type/properties (no hierarchy changes)
-        // Note: NodeService.update_node() will validate that the node exists,
-        // so we don't need a redundant check here (avoids race condition window)
         let mut update = NodeUpdate::new();
         if let Some(c) = content {
             update = update.with_content(c);
@@ -830,8 +829,27 @@ impl NodeOperations {
             update = update.with_properties(p);
         }
 
-        // Update using NodeService (hierarchy fields are not touched)
-        self.node_service.update_node(node_id, update).await?;
+        // Update with version check (optimistic concurrency control)
+        let rows_affected = self
+            .node_service
+            .update_with_version_check(node_id, expected_version, update)
+            .await?;
+
+        // If version mismatch, fetch current state and return conflict error
+        if rows_affected == 0 {
+            let current = self
+                .node_service
+                .get_node(node_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+            return Err(NodeOperationError::version_conflict(
+                node_id.to_string(),
+                expected_version,
+                current.version,
+                current,
+            ));
+        }
 
         Ok(())
     }
@@ -871,6 +889,7 @@ impl NodeOperations {
     pub async fn move_node(
         &self,
         node_id: &str,
+        expected_version: i64,
         new_parent_id: Option<&str>,
     ) -> Result<(), NodeOperationError> {
         // Get current node
@@ -922,8 +941,27 @@ impl NodeOperations {
         update.parent_id = Some(new_parent_id.map(String::from));
         update.container_node_id = Some(Some(new_container));
 
-        // Update node with new parent and container
-        self.node_service.update_node(node_id, update).await?;
+        // Update with version check (optimistic concurrency control)
+        let rows_affected = self
+            .node_service
+            .update_with_version_check(node_id, expected_version, update)
+            .await?;
+
+        // If version mismatch, fetch current state and return conflict error
+        if rows_affected == 0 {
+            let current = self
+                .node_service
+                .get_node(node_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+            return Err(NodeOperationError::version_conflict(
+                node_id.to_string(),
+                expected_version,
+                current.version,
+                current,
+            ));
+        }
 
         Ok(())
     }
@@ -961,6 +999,7 @@ impl NodeOperations {
     pub async fn reorder_node(
         &self,
         node_id: &str,
+        expected_version: i64,
         before_sibling_id: Option<&str>,
     ) -> Result<(), NodeOperationError> {
         // Get current node
@@ -980,6 +1019,8 @@ impl NodeOperations {
         }
 
         // Fix sibling chain BEFORE reordering (maintain chain integrity)
+        // Note: This next_sibling update doesn't need version checking since we're just
+        // fixing the chain, not responding to user intent on that specific node
         if let Some(parent_id) = &node.parent_id {
             // Find all siblings (nodes with same parent)
             let siblings = self
@@ -1015,8 +1056,27 @@ impl NodeOperations {
         let mut update = NodeUpdate::new();
         update.before_sibling_id = Some(new_sibling);
 
-        // Update node with new sibling position
-        self.node_service.update_node(node_id, update).await?;
+        // Update with version check (optimistic concurrency control)
+        let rows_affected = self
+            .node_service
+            .update_with_version_check(node_id, expected_version, update)
+            .await?;
+
+        // If version mismatch, fetch current state and return conflict error
+        if rows_affected == 0 {
+            let current = self
+                .node_service
+                .get_node(node_id)
+                .await?
+                .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+            return Err(NodeOperationError::version_conflict(
+                node_id.to_string(),
+                expected_version,
+                current.version,
+                current,
+            ));
+        }
 
         Ok(())
     }
@@ -1072,7 +1132,11 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn delete_node(&self, node_id: &str) -> Result<DeleteResult, NodeOperationError> {
+    pub async fn delete_node(
+        &self,
+        node_id: &str,
+        expected_version: i64,
+    ) -> Result<DeleteResult, NodeOperationError> {
         // 1. Get the node being deleted (if it exists)
         let node = match self.node_service.get_node(node_id).await? {
             Some(n) => n,
@@ -1083,6 +1147,8 @@ impl NodeOperations {
         };
 
         // 2. Fix sibling chain BEFORE deletion (only if node has a parent)
+        // Note: This next_sibling update doesn't need version checking since we're just
+        // fixing the chain, not responding to user intent on that specific node
         if let Some(parent_id) = &node.parent_id {
             // Find all siblings (nodes with same parent)
             let siblings = self
@@ -1106,8 +1172,35 @@ impl NodeOperations {
             }
         }
 
-        // 3. Now safe to delete (children cascade via DB foreign key)
-        Ok(self.node_service.delete_node(node_id).await?)
+        // 3. Delete with version check (optimistic concurrency control)
+        let rows_affected = self
+            .node_service
+            .delete_with_version_check(node_id, expected_version)
+            .await?;
+
+        // If version mismatch (rows_affected = 0), check if node still exists
+        if rows_affected == 0 {
+            // Node might have been deleted or modified by another client
+            match self.node_service.get_node(node_id).await? {
+                Some(current) => {
+                    // Node exists but version mismatch - return conflict error
+                    return Err(NodeOperationError::version_conflict(
+                        node_id.to_string(),
+                        expected_version,
+                        current.version,
+                        current,
+                    ));
+                }
+                None => {
+                    // Node was already deleted by another client
+                    // This is OK - idempotent delete
+                    return Ok(DeleteResult { existed: false });
+                }
+            }
+        }
+
+        // 4. Deletion succeeded
+        Ok(DeleteResult { existed: true })
     }
 }
 
@@ -1452,7 +1545,7 @@ mod tests {
         assert_eq!(c.before_sibling_id, None);
 
         // Delete B (middle node)
-        let result = operations.delete_node(&node_b).await.unwrap();
+        let result = operations.delete_node(&node_b, b.version).await.unwrap();
         assert!(result.existed);
 
         // Verify B is deleted
@@ -1512,7 +1605,11 @@ mod tests {
             .unwrap();
 
         // Delete first node
-        let result = operations.delete_node(&first).await.unwrap();
+        let first_node = operations.get_node(&first).await.unwrap().unwrap();
+        let result = operations
+            .delete_node(&first, first_node.version)
+            .await
+            .unwrap();
         assert!(result.existed);
 
         // Verify second node still exists with correct chain
@@ -1566,7 +1663,11 @@ mod tests {
             .unwrap();
 
         // Delete last node
-        let result = operations.delete_node(&last).await.unwrap();
+        let last_node = operations.get_node(&last).await.unwrap().unwrap();
+        let result = operations
+            .delete_node(&last, last_node.version)
+            .await
+            .unwrap();
         assert!(result.existed);
 
         // Verify first node still exists unchanged
@@ -1634,7 +1735,11 @@ mod tests {
             .unwrap();
 
         // Delete parent (should cascade delete child and fix sibling chain)
-        let result = operations.delete_node(&parent).await.unwrap();
+        let parent_node = operations.get_node(&parent).await.unwrap().unwrap();
+        let result = operations
+            .delete_node(&parent, parent_node.version)
+            .await
+            .unwrap();
         assert!(result.existed);
 
         // Verify parent and child are deleted
@@ -1651,7 +1756,8 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Try to delete a node that doesn't exist
-        let result = operations.delete_node("nonexistent-id").await.unwrap();
+        // For nonexistent node, any version will work (will return existed=false immediately)
+        let result = operations.delete_node("nonexistent-id", 1).await.unwrap();
         assert!(!result.existed);
     }
 
@@ -1836,5 +1942,386 @@ mod tests {
         // Verify node exists
         let node = operations.get_node(&node_id).await.unwrap();
         assert!(node.is_some(), "Node with auto-generated ID should exist");
+    }
+
+    // =========================================================================
+    // Optimistic Concurrency Control (OCC) Tests - Issue #333
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_concurrent_update_version_conflict() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a test node (version=1)
+        let node_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("test-node".to_string()),
+                node_type: "text".to_string(),
+                content: "Original content".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Simulate two concurrent clients reading the same version
+        let node1 = operations.get_node(&node_id).await.unwrap().unwrap();
+        let node2 = operations.get_node(&node_id).await.unwrap().unwrap();
+
+        assert_eq!(node1.version, 1, "Initial version should be 1");
+        assert_eq!(node2.version, 1, "Both clients see version 1");
+
+        // Client 1 updates successfully (version 1 → 2)
+        operations
+            .update_node(
+                &node_id,
+                node1.version,
+                Some("Client 1 content".to_string()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Verify version incremented
+        let updated = operations.get_node(&node_id).await.unwrap().unwrap();
+        assert_eq!(updated.version, 2, "Version should increment to 2");
+        assert_eq!(updated.content, "Client 1 content");
+
+        // Client 2 tries to update with stale version (still thinks version=1)
+        let result = operations
+            .update_node(
+                &node_id,
+                node2.version, // Still 1, but actual is now 2
+                Some("Client 2 content".to_string()),
+                None,
+                None,
+            )
+            .await;
+
+        // Should fail with VersionConflict
+        assert!(
+            matches!(result, Err(NodeOperationError::VersionConflict { .. })),
+            "Should get VersionConflict error"
+        );
+
+        // Verify content wasn't overwritten
+        let final_node = operations.get_node(&node_id).await.unwrap().unwrap();
+        assert_eq!(final_node.content, "Client 1 content");
+        assert_eq!(final_node.version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_move_version_conflict() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create container
+        let container_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("container".to_string()),
+                node_type: "date".to_string(),
+                content: "2025-01-03".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Create two parent nodes in the container
+        let parent1_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("parent1".to_string()),
+                node_type: "text".to_string(),
+                content: "Parent 1".to_string(),
+                parent_id: None,
+                container_node_id: Some(container_id.clone()),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let parent2_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("parent2".to_string()),
+                node_type: "text".to_string(),
+                content: "Parent 2".to_string(),
+                parent_id: None,
+                container_node_id: Some(container_id.clone()),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Create child node under parent1
+        let child_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("child".to_string()),
+                node_type: "text".to_string(),
+                content: "Child node".to_string(),
+                parent_id: Some(parent1_id.clone()),
+                container_node_id: Some(container_id.clone()),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Two clients read the child node
+        let child1 = operations.get_node(&child_id).await.unwrap().unwrap();
+        let child2 = operations.get_node(&child_id).await.unwrap().unwrap();
+
+        // Client 1 moves child to parent2
+        operations
+            .move_node(&child_id, child1.version, Some(&parent2_id))
+            .await
+            .unwrap();
+
+        // Client 2 tries to move with stale version
+        let result = operations
+            .move_node(&child_id, child2.version, Some(&parent1_id))
+            .await;
+
+        assert!(
+            matches!(result, Err(NodeOperationError::VersionConflict { .. })),
+            "Should get VersionConflict on concurrent move"
+        );
+
+        // Verify first move succeeded
+        let final_child = operations.get_node(&child_id).await.unwrap().unwrap();
+        assert_eq!(final_child.parent_id, Some(parent2_id));
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_reorder_version_conflict() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create container
+        let container_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("container".to_string()),
+                node_type: "date".to_string(),
+                content: "2025-01-03".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Create parent node
+        let parent_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("parent".to_string()),
+                node_type: "text".to_string(),
+                content: "Parent".to_string(),
+                parent_id: None,
+                container_node_id: Some(container_id.clone()),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Create three sibling nodes: A → B → C
+        let node_a = operations
+            .create_node(CreateNodeParams {
+                id: Some("node-a".to_string()),
+                node_type: "text".to_string(),
+                content: "Node A".to_string(),
+                parent_id: Some(parent_id.clone()),
+                container_node_id: Some(container_id.clone()),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node_b = operations
+            .create_node(CreateNodeParams {
+                id: Some("node-b".to_string()),
+                node_type: "text".to_string(),
+                content: "Node B".to_string(),
+                parent_id: Some(parent_id.clone()),
+                container_node_id: Some(container_id),
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Two clients read node B
+        let b1 = operations.get_node(&node_b).await.unwrap().unwrap();
+        let b2 = operations.get_node(&node_b).await.unwrap().unwrap();
+
+        // Client 1 reorders B before A
+        operations
+            .reorder_node(&node_b, b1.version, Some(&node_a))
+            .await
+            .unwrap();
+
+        // Client 2 tries to reorder B with stale version
+        let result = operations
+            .reorder_node(&node_b, b2.version, None) // Move to end
+            .await;
+
+        assert!(
+            matches!(result, Err(NodeOperationError::VersionConflict { .. })),
+            "Should get VersionConflict on concurrent reorder"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_delete_version_conflict() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a test node
+        let node_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("test-node".to_string()),
+                node_type: "text".to_string(),
+                content: "Test content".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Two clients read the node
+        let node1 = operations.get_node(&node_id).await.unwrap().unwrap();
+        let node2 = operations.get_node(&node_id).await.unwrap().unwrap();
+
+        // Client 1 updates the node (version 1 → 2)
+        operations
+            .update_node(
+                &node_id,
+                node1.version,
+                Some("Updated content".to_string()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Client 2 tries to delete with stale version
+        let result = operations.delete_node(&node_id, node2.version).await;
+
+        assert!(
+            matches!(result, Err(NodeOperationError::VersionConflict { .. })),
+            "Should get VersionConflict when deleting with stale version"
+        );
+
+        // Verify node still exists
+        let final_node = operations.get_node(&node_id).await.unwrap();
+        assert!(final_node.is_some(), "Node should still exist");
+        assert_eq!(final_node.unwrap().content, "Updated content");
+    }
+
+    #[tokio::test]
+    async fn test_delete_already_deleted_node_is_idempotent() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a test node
+        let node_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("test-node".to_string()),
+                node_type: "text".to_string(),
+                content: "Test content".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node = operations.get_node(&node_id).await.unwrap().unwrap();
+
+        // Client 1 deletes successfully
+        let result1 = operations
+            .delete_node(&node_id, node.version)
+            .await
+            .unwrap();
+        assert!(result1.existed, "First delete should report existed=true");
+
+        // Client 2 tries to delete the same node (already deleted)
+        // Should succeed (idempotent) but report existed=false
+        let result2 = operations
+            .delete_node(&node_id, node.version)
+            .await
+            .unwrap();
+        assert!(
+            !result2.existed,
+            "Second delete should report existed=false (idempotent)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_version_conflict_includes_current_state() {
+        let (operations, _temp_dir) = setup_test_operations().await.unwrap();
+
+        // Create a test node
+        let node_id = operations
+            .create_node(CreateNodeParams {
+                id: Some("test-node".to_string()),
+                node_type: "text".to_string(),
+                content: "Original".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let node = operations.get_node(&node_id).await.unwrap().unwrap();
+
+        // Update to version 2
+        operations
+            .update_node(
+                &node_id,
+                node.version,
+                Some("Updated".to_string()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Try to update with stale version
+        let result = operations
+            .update_node(
+                &node_id,
+                node.version, // Still 1
+                Some("Conflicting".to_string()),
+                None,
+                None,
+            )
+            .await;
+
+        // Verify error includes current state for merge
+        match result {
+            Err(NodeOperationError::VersionConflict {
+                node_id: err_node_id,
+                expected_version,
+                actual_version,
+                current_node,
+            }) => {
+                assert_eq!(err_node_id, "test-node");
+                assert_eq!(expected_version, 1);
+                assert_eq!(actual_version, 2);
+                assert_eq!(current_node.content, "Updated");
+                assert_eq!(current_node.version, 2);
+            }
+            _ => panic!("Expected VersionConflict error"),
+        }
     }
 }

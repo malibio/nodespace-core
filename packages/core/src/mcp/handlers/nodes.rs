@@ -217,6 +217,14 @@ pub async fn handle_update_node(
     let params: UpdateNodeParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
+    // TODO(Phase 4): Add version parameter to MCP request params for proper OCC
+    // For now, fetch current version (temporary - has race condition window)
+    let node = operations
+        .get_node(&params.node_id)
+        .await
+        .map_err(|e| MCPError::node_not_found(&format!("Node not found: {}", e)))?
+        .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+
     // Update node via NodeOperations (enforces Rule 5: content updates only, no hierarchy changes)
     //
     // MCP update_node intentionally restricts certain fields for data integrity:
@@ -229,6 +237,7 @@ pub async fn handle_update_node(
     operations
         .update_node(
             &params.node_id,
+            node.version, // TODO(Phase 4): Get from request params instead
             params.content,
             params.node_type,
             params.properties,
@@ -250,9 +259,17 @@ pub async fn handle_delete_node(
     let params: DeleteNodeParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
+    // TODO(Phase 4): Add version parameter to MCP request params for proper OCC
+    // For now, fetch current version (temporary - has race condition window)
+    let node = operations
+        .get_node(&params.node_id)
+        .await
+        .map_err(|e| MCPError::node_not_found(&format!("Node not found: {}", e)))?
+        .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+
     // Delete node via NodeOperations
     let result = operations
-        .delete_node(&params.node_id)
+        .delete_node(&params.node_id, node.version) // TODO(Phase 4): Get from request params instead
         .await
         .map_err(|e| MCPError::node_delete_failed(format!("Failed to delete node: {}", e)))?;
 
@@ -585,9 +602,16 @@ pub async fn handle_insert_child_at_index(
         // Update it to point to the new node
         let node_to_update_id = &children_info[params.index].node_id;
 
+        // TODO(Phase 4): Get version from the node being reordered
+        let node_to_update = operations
+            .get_node(node_to_update_id)
+            .await
+            .map_err(|e| MCPError::node_not_found(&format!("Node not found: {}", e)))?
+            .ok_or_else(|| MCPError::node_not_found(node_to_update_id))?;
+
         // Use reorder_node to update the old node's before_sibling_id to point to new node
         operations
-            .reorder_node(node_to_update_id, Some(&node_id))
+            .reorder_node(node_to_update_id, node_to_update.version, Some(&node_id))
             .await
             .map_err(|e| {
                 MCPError::node_update_failed(format!("Failed to fix sibling chain: {}", e))
@@ -643,9 +667,16 @@ pub async fn handle_move_child_to_index(
         Some(siblings[params.index - 1].node_id.clone())
     };
 
+    // TODO(Phase 4): Get version from MCP request params
+    let node = operations
+        .get_node(&params.node_id)
+        .await
+        .map_err(|e| MCPError::node_not_found(&format!("Node not found: {}", e)))?
+        .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+
     // 4. Use reorder_node operation (which now handles sibling chain integrity)
     operations
-        .reorder_node(&params.node_id, before_sibling_id.as_deref())
+        .reorder_node(&params.node_id, node.version, before_sibling_id.as_deref())
         .await
         .map_err(|e| MCPError::node_update_failed(format!("Failed to reorder node: {}", e)))?;
 
@@ -874,10 +905,32 @@ pub async fn handle_update_nodes_batch(
     let mut failed: Vec<BatchUpdateFailure> = Vec::new();
 
     for update in params.updates {
+        // TODO(Phase 4): Get version from batch update params
+        let node = match operations.get_node(&update.id).await {
+            Ok(Some(n)) => n,
+            Ok(None) => {
+                tracing::warn!("Node {} not found in batch update", update.id);
+                failed.push(BatchUpdateFailure {
+                    id: update.id,
+                    error: "Node not found".to_string(),
+                });
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch node {}: {}", update.id, e);
+                failed.push(BatchUpdateFailure {
+                    id: update.id,
+                    error: format!("Failed to fetch node: {}", e),
+                });
+                continue;
+            }
+        };
+
         // Apply update via NodeOperations (enforces all business rules)
         match operations
             .update_node(
                 &update.id,
+                node.version, // TODO(Phase 4): Get from batch update params instead
                 update.content,
                 update.node_type,
                 update.properties,
