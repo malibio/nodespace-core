@@ -7,7 +7,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, getContext } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
   import { pluginRegistry } from '$lib/components/viewers/index';
@@ -21,16 +21,17 @@
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
 
+  // Get paneId from context (set by PaneContent)
+  const paneId = getContext<string>('paneId') ?? 'default';
+
   // Props
   let {
     header,
     nodeId = null,
-    paneId = 'default',
     onTitleChange
   }: {
     header?: Snippet;
     nodeId?: string | null;
-    paneId?: string;
     onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void; // In type for interface, not used by BaseNodeViewer
   } = $props();
@@ -729,7 +730,7 @@
   function requestNodeFocus(nodeId: string, position: number) {
     // Use FocusManager as single source of truth for focus management
     // This replaces the old DOM-based focus approach
-    focusManager.setEditingNode(nodeId, position);
+    focusManager.setEditingNode(nodeId, position, paneId);
 
     // Force textarea update to ensure merged content is visible immediately
     // Especially important for Safari which doesn't always reactive-update properly
@@ -910,7 +911,7 @@
 
     // Set cursor position using FocusManager (single source of truth)
     if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
-      focusManager.setEditingNode(newNodeId, newNodeCursorPosition);
+      focusManager.setEditingNode(newNodeId, newNodeCursorPosition, paneId);
     }
 
     // Handle focus direction based on focusOriginalNode parameter
@@ -1437,7 +1438,6 @@
               {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
               <NodeComponent
                 nodeId={node.id}
-                {paneId}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
@@ -1468,7 +1468,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   // ATOMIC UPDATE: Use batch to ensure content + nodeType persist together
                   // This prevents race conditions where content persists before nodeType changes
@@ -1495,7 +1495,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   if (node.isPlaceholder) {
                     // For placeholder nodes, just update the nodeType locally
@@ -1526,7 +1526,6 @@
             {#key `${node.id}-${node.nodeType}`}
               <BaseNode
                 nodeId={node.id}
-                {paneId}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
@@ -1551,7 +1550,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   if (node.isPlaceholder) {
                     // For placeholder nodes, just update the nodeType locally

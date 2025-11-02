@@ -118,8 +118,9 @@ export const focusManager = {
   /**
    * Focus a node with default cursor positioning (beginning of first line, skip syntax)
    */
-  focusNode(nodeId: string): void {
+  focusNode(nodeId: string, paneId: string = 'default'): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _cursorPosition = { type: 'default', skipSyntax: true };
     // Clear legacy state
     _pendingCursorPosition = null;
@@ -130,8 +131,9 @@ export const focusManager = {
   /**
    * Focus a node at a specific absolute cursor position
    */
-  focusNodeAtPosition(nodeId: string, position: number): void {
+  focusNodeAtPosition(nodeId: string, position: number, paneId: string = 'default'): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _cursorPosition = { type: 'absolute', position };
     // Keep legacy state in sync during migration
     _pendingCursorPosition = position;
@@ -142,8 +144,14 @@ export const focusManager = {
   /**
    * Focus a node at a specific line (beginning, optionally skip syntax)
    */
-  focusNodeAtLine(nodeId: string, line: number = 0, skipSyntax: boolean = true): void {
+  focusNodeAtLine(
+    nodeId: string,
+    line: number = 0,
+    skipSyntax: boolean = true,
+    paneId: string = 'default'
+  ): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _cursorPosition = { type: 'line-column', line, skipSyntax };
     // Clear legacy state
     _pendingCursorPosition = null;
@@ -154,8 +162,14 @@ export const focusManager = {
   /**
    * Focus a node from arrow navigation with pixel-accurate horizontal alignment
    */
-  focusNodeFromArrowNav(nodeId: string, direction: 'up' | 'down', pixelOffset: number): void {
+  focusNodeFromArrowNav(
+    nodeId: string,
+    direction: 'up' | 'down',
+    pixelOffset: number,
+    paneId: string = 'default'
+  ): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _cursorPosition = { type: 'arrow-navigation', direction, pixelOffset };
     // Keep legacy state in sync during migration
     _pendingCursorPosition = null;
@@ -222,8 +236,9 @@ export const focusManager = {
    * Focus a node from node type conversion with cursor preservation
    * Integrates into unified cursor positioning system
    */
-  focusNodeFromTypeConversion(nodeId: string, position: number): void {
+  focusNodeFromTypeConversion(nodeId: string, position: number, paneId: string = 'default'): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _cursorPosition = { type: 'node-type-conversion', position };
     // Keep legacy state in sync during migration
     _pendingCursorPosition = null;
@@ -266,9 +281,11 @@ export const focusManager = {
   setEditingNodeFromArrowNavigation(
     nodeId: string,
     direction: 'up' | 'down',
-    pixelOffset: number
+    pixelOffset: number,
+    paneId: string = 'default'
   ): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _pendingCursorPosition = null;
     _arrowNavDirection = direction;
     _arrowNavPixelOffset = pixelOffset;
@@ -284,8 +301,13 @@ export const focusManager = {
    * @param nodeId - The node to edit
    * @param cursorPosition - Cursor position to restore after conversion
    */
-  setEditingNodeFromTypeConversion(nodeId: string, cursorPosition: number): void {
+  setEditingNodeFromTypeConversion(
+    nodeId: string,
+    cursorPosition: number,
+    paneId: string = 'default'
+  ): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _pendingCursorPosition = null; // Clear pending position
     _arrowNavDirection = null; // Clear arrow navigation
     _arrowNavPixelOffset = null;

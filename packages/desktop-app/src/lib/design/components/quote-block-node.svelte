@@ -17,8 +17,11 @@
 -->
 
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, getContext } from 'svelte';
   import BaseNode from './base-node.svelte';
+
+  // Get paneId from context (set by PaneContent)
+  const paneId = getContext<string>('paneId') ?? 'default';
 
   // Props using Svelte 5 runes mode - same interface as BaseNode
   let {
@@ -112,7 +115,7 @@
     // If we have a pending cursor adjustment (from Shift+Enter), apply it
     if (pendingCursorAdjustment !== null) {
       import('$lib/services/focus-manager.svelte').then(({ focusManager }) => {
-        focusManager.focusNodeAtPosition(nodeId, pendingCursorAdjustment!);
+        focusManager.focusNodeAtPosition(nodeId, pendingCursorAdjustment!, paneId);
         pendingCursorAdjustment = null; // Clear after use
       });
     }

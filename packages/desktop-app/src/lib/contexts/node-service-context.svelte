@@ -51,6 +51,9 @@
   import { ContentProcessor } from '$lib/services/content-processor';
   import { focusManager } from '$lib/services/focus-manager.svelte';
 
+  // Get paneId from context (set by PaneContent)
+  const paneId = getContext<string>('paneId') ?? 'default';
+
   // Props
   let {
     children
@@ -85,7 +88,7 @@
         focusRequested: (nodeId: string, position?: number) => {
           // Use FocusManager as single source of truth for focus management
           // This replaces the old DOM-based contenteditable selector approach
-          focusManager.setEditingNode(nodeId, position);
+          focusManager.setEditingNode(nodeId, position, paneId);
         },
         hierarchyChanged: () => {
           // Hierarchy change handling logic here if needed

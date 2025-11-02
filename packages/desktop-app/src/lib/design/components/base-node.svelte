@@ -24,7 +24,7 @@
 -->
 
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, untrack, tick } from 'svelte';
+  import { createEventDispatcher, onDestroy, untrack, tick, getContext } from 'svelte';
   // import { type NodeType } from '$lib/design/icons'; // Unused but preserved for future use
 
   import {
@@ -54,7 +54,6 @@
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
   let {
     nodeId,
-    paneId = 'default',
     nodeType = $bindable('text'),
     autoFocus = false,
     content = $bindable(''),
@@ -64,7 +63,6 @@
     metadata = {}
   }: {
     nodeId: string;
-    paneId?: string;
     nodeType?: string;
     autoFocus?: boolean;
     content?: string;
@@ -73,6 +71,10 @@
     editableConfig?: TextareaControllerConfig;
     metadata?: Record<string, unknown>;
   } = $props();
+
+  // Get paneId from Svelte context (set by PaneContent)
+  // Falls back to 'default' for backward compatibility (single-pane mode)
+  const paneId = getContext<string>('paneId') ?? 'default';
 
   // isEditing is now derived from FocusManager (single source of truth)
   // This replaces the old bindable prop approach
@@ -915,7 +917,7 @@
         );
 
         // Set focus with cursor position via FocusManager
-        focusManager.focusNodeAtPosition(nodeId, editPosition);
+        focusManager.focusNodeAtPosition(nodeId, editPosition, paneId);
       }}
       onkeydown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {

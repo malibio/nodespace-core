@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { setContext } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import { tabState, updateTabTitle, updateTabContent } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
@@ -6,6 +7,10 @@
 
   // ✅ Receive the PANE as a prop - each pane instance gets its own pane object
   let { pane }: { pane: Pane } = $props();
+
+  // Set paneId in context so all descendant components can access it
+  // This avoids prop threading through all component layers
+  setContext('paneId', pane.id);
 
   // Derive tab state using Svelte 5 $derived
   // KEY FIX: Use pane.id instead of global $tabState.activePaneId
@@ -43,7 +48,6 @@
   {#key `${pane.id}-${content.nodeId}`}
     <ViewerComponent
       nodeId={content.nodeId}
-      paneId={pane.id}
       onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
       onNodeIdChange={(newNodeId: string) =>
         updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType })}
