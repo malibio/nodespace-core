@@ -1091,7 +1091,6 @@ pub async fn handle_update_container_from_markdown(
         .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
 
     // Delete all existing children (recursively)
-    // TODO(Phase 4): Add version parameter to delete operations
     let mut deleted_count = 0;
     let mut deletion_failures = Vec::new();
     for child in existing_children {
