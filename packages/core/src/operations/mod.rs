@@ -679,6 +679,7 @@ impl NodeOperations {
             parent_id: final_parent_id,
             container_node_id: final_container_id,
             before_sibling_id: final_sibling_id,
+            version: 1,
             properties: params.properties,
             mentions: vec![],
             mentioned_by: vec![],

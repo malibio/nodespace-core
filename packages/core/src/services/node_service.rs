@@ -363,6 +363,7 @@ impl NodeService {
                         parent_id: None,
                         container_node_id: None,
                         before_sibling_id: None,
+                        version: 1,
                         properties: serde_json::Value::Object(serde_json::Map::new()),
                         mentions: vec![],
                         mentioned_by: vec![],
@@ -375,8 +376,8 @@ impl NodeService {
                     let conn = self.db.connect_with_timeout().await?;
                     let properties_json = "{}";
                     conn.execute(
-                        "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, properties, embedding_vector)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO nodes (id, node_type, content, parent_id, container_node_id, before_sibling_id, version, properties, embedding_vector)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             date_node.id.as_str(),
                             date_node.node_type.as_str(),
@@ -384,6 +385,7 @@ impl NodeService {
                             date_node.parent_id.as_deref(),
                             date_node.container_node_id.as_deref(),
                             date_node.before_sibling_id.as_deref(),
+                            date_node.version,
                             properties_json,
                             date_node.embedding_vector.as_deref(),
                         ),
@@ -1308,7 +1310,7 @@ impl NodeService {
                 .unwrap_or_default();
 
             let query = format!(
-                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes WHERE node_type = ?{}{}",
+                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector FROM nodes WHERE node_type = ?{}{}",
                 order_clause, limit_clause
             );
 
@@ -1346,7 +1348,7 @@ impl NodeService {
                 .unwrap_or_default();
 
             let query = format!(
-                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes WHERE parent_id = ?{}{}",
+                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector FROM nodes WHERE parent_id = ?{}{}",
                 order_clause, limit_clause
             );
 
@@ -1384,7 +1386,7 @@ impl NodeService {
                 .unwrap_or_default();
 
             let query = format!(
-                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes WHERE container_node_id = ?{}{}",
+                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector FROM nodes WHERE container_node_id = ?{}{}",
                 order_clause, limit_clause
             );
 
@@ -1426,7 +1428,7 @@ impl NodeService {
             .unwrap_or_default();
 
         let query = format!(
-            "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector FROM nodes{}{}",
+            "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector FROM nodes{}{}",
             order_clause, limit_clause
         );
 
@@ -1624,7 +1626,7 @@ impl NodeService {
             let mut rows = if let Some(ref node_type) = query.node_type {
                 // Case 1: Filter by both content and node_type
                 let sql = format!(
-                    "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                    "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector
                      FROM nodes WHERE content LIKE ? AND node_type = ?{}{}",
                     container_task_filter, limit_clause
                 );
@@ -1647,7 +1649,7 @@ impl NodeService {
             } else {
                 // Case 2: Filter by content only
                 let sql = format!(
-                    "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                    "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector
                      FROM nodes WHERE content LIKE ?{}{}",
                     container_task_filter, limit_clause
                 );
@@ -1696,7 +1698,7 @@ impl NodeService {
             let container_task_filter = Self::build_container_task_filter(filter_enabled, None);
 
             let sql_query = format!(
-                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector
                  FROM nodes WHERE node_type = ?{}{}",
                 container_task_filter, limit_clause
             );
@@ -1734,7 +1736,7 @@ impl NodeService {
             // allowing the filter to be appended via AND clause. This is clearer than
             // conditional WHERE clause generation and maintains consistent query structure.
             let sql_query = format!(
-                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, created_at, modified_at, properties, embedding_vector
+                "SELECT id, node_type, content, parent_id, container_node_id, before_sibling_id, version, created_at, modified_at, properties, embedding_vector
                  FROM nodes WHERE 1=1{}{}",
                 container_task_filter, limit_clause
             );
@@ -2216,17 +2218,20 @@ impl NodeService {
         let before_sibling_id: Option<String> = row
             .get(5)
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let created_at: String = row
+        let version: i64 = row
             .get(6)
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let modified_at: String = row
+        let created_at: String = row
             .get(7)
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let properties_json: String = row
+        let modified_at: String = row
             .get(8)
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        let embedding_vector: Option<Vec<u8>> = row
+        let properties_json: String = row
             .get(9)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let embedding_vector: Option<Vec<u8>> = row
+            .get(10)
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         let properties: serde_json::Value =
@@ -2256,6 +2261,7 @@ impl NodeService {
             parent_id,
             container_node_id,
             before_sibling_id,
+            version,
             created_at,
             modified_at,
             properties,
