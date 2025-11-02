@@ -30,13 +30,10 @@
 <script lang="ts">
   import { tabState, setActivePane, resizePane } from '$lib/stores/navigation.js';
   import TabSystem from './tab-system.svelte';
+  import PaneContent from './pane-content.svelte';
   import { cn } from '$lib/utils.js';
-  import type { Tab } from '$lib/stores/navigation.js';
-  import type { Snippet } from 'svelte';
 
-  // Props
-  // eslint-disable-next-line no-unused-vars
-  let { children }: { children?: Snippet<[{ activeTab: Tab | undefined }]> } = $props();
+  // Props - no longer need children snippet, we render PaneContent directly
 
   // Resize state
   let resizing = $state(false);
@@ -126,11 +123,10 @@
     >
       <!-- Each pane gets its own TabSystem -->
       <TabSystem tabs={getTabsForPane(pane.id)} {activeTabId} {pane}>
-        {#snippet children({ activeTab: tabForPane })}
-          <!-- Render content for this pane -->
-          {#if children}
-            {@render children({ activeTab: tabForPane })}
-          {/if}
+        {#snippet children({ activeTab: _tabForPane })}
+          <!-- Render PaneContent directly - it receives the pane and derives its own activeTab -->
+          <!-- Note: _tabForPane is unused here because PaneContent derives activeTab from pane.id -->
+          <PaneContent {pane} />
         {/snippet}
       </TabSystem>
     </div>

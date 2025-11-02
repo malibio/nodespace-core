@@ -227,14 +227,8 @@
 
       <!-- Pane Manager - positioned to span both tabs and content grid areas -->
       <div class="pane-manager-wrapper">
-        <PaneManager>
-          {#snippet children({ activeTab })}
-            <!-- Main Content Area -->
-            <main class="main-content">
-              <slot {activeTab} />
-            </main>
-          {/snippet}
-        </PaneManager>
+        <!-- PaneManager now renders content directly via PaneContent components -->
+        <PaneManager />
       </div>
     </div>
   </NodeServiceContext>
@@ -269,18 +263,6 @@
     position: relative;
   }
 
-  /* Main content area */
-  .main-content {
-    overflow: hidden; /* Don't scroll here - let child components handle it */
-    position: relative;
-    background: hsl(var(--content-background));
-    transition: margin-left 0.3s ease;
-    flex: 1;
-    min-height: 0; /* Critical for flex children to scroll properly */
-    display: flex;
-    flex-direction: column;
-  }
-
   /* Responsive behavior for smaller screens */
   @media (max-width: 768px) {
     .app-shell {
@@ -303,15 +285,5 @@
     /* Ensure focus indicators are visible */
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
-  }
-
-  /* Prevent content shift during sidebar transitions */
-  .main-content {
-    will-change: margin-left;
-  }
-
-  /* Handle content overflow properly */
-  .main-content > :global(*) {
-    max-width: 100%;
   }
 </style>
