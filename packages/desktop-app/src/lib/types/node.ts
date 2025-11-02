@@ -53,6 +53,9 @@ export interface Node {
   /** Last modification timestamp (ISO 8601) - backend auto-updates this */
   modifiedAt: string;
 
+  /** Optimistic concurrency control version number - backend increments this */
+  version: number;
+
   /** All entity-specific fields (Pure JSON schema) */
   properties: Record<string, unknown>;
 
