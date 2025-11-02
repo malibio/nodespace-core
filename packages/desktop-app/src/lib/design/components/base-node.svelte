@@ -54,6 +54,7 @@
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
   let {
     nodeId,
+    paneId = 'default',
     nodeType = $bindable('text'),
     autoFocus = false,
     content = $bindable(''),
@@ -63,6 +64,7 @@
     metadata = {}
   }: {
     nodeId: string;
+    paneId?: string;
     nodeType?: string;
     autoFocus?: boolean;
     content?: string;
@@ -74,7 +76,10 @@
 
   // isEditing is now derived from FocusManager (single source of truth)
   // This replaces the old bindable prop approach
-  let isEditing = $derived(focusManager.editingNodeId === nodeId);
+  // CRITICAL: Check both nodeId AND paneId to support same node in multiple panes
+  let isEditing = $derived(
+    focusManager.editingNodeId === nodeId && focusManager.editingPaneId === paneId
+  );
 
   // Derive cursor positioning data for the action (reactive architecture)
   // Only provide cursor data when this node is actively being edited
@@ -435,7 +440,7 @@
 
     // Re-enter edit mode if we've lost focus (shouldn't happen with preventDefault, but safety check)
     if (!isEditing && textareaElement) {
-      focusManager.setEditingNode(nodeId);
+      focusManager.setEditingNode(nodeId, undefined, paneId);
       await tick();
     }
 
@@ -553,7 +558,7 @@
       // Only update if this node isn't already set as editing
       // (Don't overwrite arrow navigation context set by setEditingNodeFromArrowNavigation)
       if (focusManager.editingNodeId !== nodeId) {
-        focusManager.setEditingNode(nodeId);
+        focusManager.setEditingNode(nodeId, undefined, paneId);
       }
 
       // CRITICAL: Clear node type conversion flag after successful focus
@@ -867,7 +872,7 @@
       bind:this={textareaElement}
       use:positionCursor={{ data: cursorPositionData, controller }}
       class="node__content node__content--textarea"
-      id="textarea-{nodeId}"
+      id="textarea-{paneId}-{nodeId}"
       rows="1"
       tabindex="0"
     ></textarea>
@@ -875,7 +880,7 @@
     <div
       bind:this={viewElement}
       class="node__content node__content--view"
-      id="view-{nodeId}"
+      id="view-{paneId}-{nodeId}"
       tabindex="0"
       onclick={(e) => {
         // Capture click coordinates
@@ -915,7 +920,7 @@
       onkeydown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           // Use FocusManager instead of directly setting isEditing
-          focusManager.setEditingNode(nodeId);
+          focusManager.setEditingNode(nodeId, undefined, paneId);
           setTimeout(() => controller?.focus(), 0);
         }
       }}

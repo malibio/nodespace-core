@@ -72,6 +72,10 @@ export interface FocusState {
 // Single source of truth for which node is being edited
 let _editingNodeId = $state<string | null>(null);
 
+// Track which pane the editing node belongs to (for split-pane support)
+// When the same node is displayed in multiple panes, only one pane can edit at a time
+let _editingPaneId = $state<string>('default');
+
 // Unified cursor position state (replaces multiple separate state variables)
 let _cursorPosition = $state<CursorPosition | null>(null);
 
@@ -91,6 +95,13 @@ export const focusManager = {
    */
   get editingNodeId(): string | null {
     return _editingNodeId;
+  },
+
+  /**
+   * Public reactive getter for editing pane ID
+   */
+  get editingPaneId(): string {
+    return _editingPaneId;
   },
 
   /**
@@ -226,9 +237,11 @@ export const focusManager = {
    * @deprecated Use focusNode, focusNodeAtPosition, or focusNodeAtLine instead
    * @param nodeId - The node to edit, or null to clear editing state
    * @param cursorPosition - Optional cursor position for precise positioning
+   * @param paneId - The pane ID where the node is being edited (for split-pane support)
    */
-  setEditingNode(nodeId: string | null, cursorPosition?: number): void {
+  setEditingNode(nodeId: string | null, cursorPosition?: number, paneId: string = 'default'): void {
     _editingNodeId = nodeId;
+    _editingPaneId = paneId;
     _pendingCursorPosition = cursorPosition ?? null;
     _arrowNavDirection = null;
     _arrowNavPixelOffset = null;

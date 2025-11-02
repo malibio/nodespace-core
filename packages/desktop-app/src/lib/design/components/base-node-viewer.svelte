@@ -25,10 +25,12 @@
   let {
     header,
     nodeId = null,
+    paneId = 'default',
     onTitleChange
   }: {
     header?: Snippet;
     nodeId?: string | null;
+    paneId?: string;
     onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void; // In type for interface, not used by BaseNodeViewer
   } = $props();
@@ -1435,6 +1437,7 @@
               {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
               <NodeComponent
                 nodeId={node.id}
+                {paneId}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
@@ -1523,6 +1526,7 @@
             {#key `${node.id}-${node.nodeType}`}
               <BaseNode
                 nodeId={node.id}
+                {paneId}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
