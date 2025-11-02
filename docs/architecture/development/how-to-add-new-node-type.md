@@ -6,6 +6,16 @@ This guide provides a **complete checklist** for adding a new node type to NodeS
 
 **Use this checklist for EVERY new node type to ensure nothing is missed.**
 
+### Schema Management Note
+
+When creating schemas for new node types, follow the [Schema Management Implementation Guide](./schema-management-implementation-guide.md) for:
+- Setting appropriate **protection levels** (core/user/system) for fields
+- Using **extensible enums** where users might extend values
+- **Versioning schemas** starting at version 1
+- Documenting **migration strategy** upfront for future schema changes
+
+This ensures your node type's schema can evolve safely over time.
+
 ---
 
 ## Complete Implementation Checklist
