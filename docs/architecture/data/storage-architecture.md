@@ -444,12 +444,25 @@ impl NodeStorage for TursoWithReplica { /* embedded + cloud sync */ }
 
 ## Migration Considerations
 
+### Schema Evolution
+
+NodeSpace handles schema changes through lazy migration to preserve the Pure JSON architecture. See [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) for complete details on:
+
+- **Version tracking** on node instances (`_schema_version` field)
+- **Migration registry** for schema transform functions
+- **Protection level enforcement** (core/user/system fields)
+- **Lazy migration strategy** - nodes upgrade on first access
+- **Breaking vs. additive changes** - how to handle each type
+
+This approach enables controlled schema evolution without ALTER TABLE operations, maintaining the desktop-safe architecture while allowing schemas to evolve over time.
+
 ### Phase 1: Current (Single User, Local)
 - Turso embedded storage (Pure JSON schema)
 - Svelte stores for UI reactivity
 - Simple CRUD operations with JSON path indexes
 - Rule-based index management
 - No ALTER TABLE migrations
+- Schema versioning with lazy migration support
 
 ### Phase 2: Add Sync Infrastructure (Multi-User - Premium Tier)
 - Enable Turso embedded replicas

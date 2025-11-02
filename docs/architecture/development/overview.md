@@ -117,6 +117,7 @@ Enable parallel work by mocking dependencies initially, then replacing with real
 5. **UI-First Development**: Build interfaces before backend integration
 6. **Vertical Slicing**: Complete features end-to-end rather than horizontal layers
 7. **Forward-Facing Fixes**: Root cause solutions rather than temporary workarounds
+8. **Schema Management**: Use SchemaService API for all schema modifications (see [Schema Management Guide](./schema-management-implementation-guide.md))
 
 ## ⚠️ Critical Requirements
 
