@@ -279,7 +279,7 @@ impl MCPError {
         Self {
             code: VERSION_CONFLICT,
             message: format!(
-                "Version conflict: expected v{} but current is v{}",
+                "version conflict: expected v{} but current is v{}",
                 expected_version, actual_version
             ),
             data: Some(json!({

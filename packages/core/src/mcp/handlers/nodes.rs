@@ -258,7 +258,7 @@ pub async fn handle_update_node(
     // - embedding_vector: Embeddings are auto-generated from content via background jobs
     //
     // Use MCP only for content/property updates. Use separate operations for structural changes.
-    operations
+    let updated_node = operations
         .update_node(
             &params.node_id,
             params.version,
@@ -271,6 +271,7 @@ pub async fn handle_update_node(
 
     Ok(json!({
         "node_id": params.node_id,
+        "version": updated_node.version,
         "success": true
     }))
 }

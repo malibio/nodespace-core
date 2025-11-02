@@ -814,7 +814,7 @@ impl NodeOperations {
         content: Option<String>,
         node_type: Option<String>,
         properties: Option<Value>,
-    ) -> Result<(), NodeOperationError> {
+    ) -> Result<Node, NodeOperationError> {
         // Business Rule 5: Content updates cannot change hierarchy
         // This method only updates content, node_type, and properties
         // Use move_node() or reorder_node() for hierarchy changes
@@ -853,7 +853,14 @@ impl NodeOperations {
             ));
         }
 
-        Ok(())
+        // Fetch and return the updated node with its new version
+        let updated_node = self
+            .node_service
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
+
+        Ok(updated_node)
     }
 
     /// Move a node to a new parent
