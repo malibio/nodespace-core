@@ -73,9 +73,11 @@
 //! ```
 
 pub mod error;
+pub mod sibling_queue;
 
-// Re-export error type for convenience
+// Re-export types for convenience
 pub use error::NodeOperationError;
+pub use sibling_queue::SiblingOperationQueue;
 
 use crate::models::{DeleteResult, Node, NodeFilter, NodeUpdate};
 use crate::services::NodeService;
