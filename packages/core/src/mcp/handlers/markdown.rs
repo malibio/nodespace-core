@@ -760,19 +760,19 @@ fn default_max_depth() -> usize {
 
 /// Export node hierarchy as markdown with minimal metadata
 ///
-/// Returns clean markdown with HTML comments containing only node IDs.
-/// This format is optimized for AI reading and understanding.
+/// Returns clean markdown with HTML comments containing node IDs and versions.
+/// The version enables optimistic concurrency control when AI agents update nodes.
 ///
 /// # Example Output
 ///
 /// ```markdown
-/// <!-- container-abc123 -->
+/// <!-- container-abc123 v1 -->
 /// # Project Plan
 ///
-/// <!-- header-def456 -->
+/// <!-- header-def456 v1 -->
 /// ## Phase 1
 ///
-/// <!-- task-ghi789 -->
+/// <!-- task-ghi789 v2 -->
 /// - [ ] Review architecture
 /// ```
 pub async fn handle_get_markdown_from_node_id(
@@ -813,8 +813,8 @@ pub async fn handle_get_markdown_from_node_id(
     // Build markdown by traversing hierarchy in memory
     let mut markdown = String::new();
 
-    // Export the container node itself
-    markdown.push_str(&format!("<!-- {} -->\n", root_node.id));
+    // Export the container node itself with version for OCC
+    markdown.push_str(&format!("<!-- {} v{} -->\n", root_node.id, root_node.version));
     markdown.push_str(&root_node.content);
     markdown.push_str("\n\n");
 
@@ -874,8 +874,8 @@ fn export_node_hierarchy(
         return Ok(());
     }
 
-    // Add minimal metadata comment (just ID)
-    output.push_str(&format!("<!-- {} -->\n", node.id));
+    // Add minimal metadata comment with ID and version for OCC
+    output.push_str(&format!("<!-- {} v{} -->\n", node.id, node.version));
 
     // Add content with proper formatting
     // Bullets are text nodes that are children of other text nodes - add "- " prefix
