@@ -67,7 +67,9 @@ pub struct GetNodeParams {
 pub struct UpdateNodeParams {
     pub node_id: String,
     /// Expected version for optimistic concurrency control
-    pub version: i64,
+    /// If not provided, will fetch current version (optimistic: assumes no conflict)
+    #[serde(default)]
+    pub version: Option<i64>,
     #[serde(default)]
     pub node_type: Option<String>,
     #[serde(default)]
@@ -81,7 +83,9 @@ pub struct UpdateNodeParams {
 pub struct DeleteNodeParams {
     pub node_id: String,
     /// Expected version for optimistic concurrency control
-    pub version: i64,
+    /// If not provided, will fetch current version (optimistic: assumes no conflict)
+    #[serde(default)]
+    pub version: Option<i64>,
 }
 
 /// Parameters for query_nodes method
@@ -258,10 +262,24 @@ pub async fn handle_update_node(
     // - embedding_vector: Embeddings are auto-generated from content via background jobs
     //
     // Use MCP only for content/property updates. Use separate operations for structural changes.
+
+    // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
+    let version = match params.version {
+        Some(v) => v,
+        None => {
+            let current_node = operations
+                .get_node(&params.node_id)
+                .await
+                .map_err(operation_error_to_mcp)?
+                .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+            current_node.version
+        }
+    };
+
     let updated_node = operations
         .update_node(
             &params.node_id,
-            params.version,
+            version,
             params.content,
             params.node_type,
             params.properties,
@@ -285,8 +303,22 @@ pub async fn handle_delete_node(
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // Delete node via NodeOperations
+
+    // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
+    let version = match params.version {
+        Some(v) => v,
+        None => {
+            let current_node = operations
+                .get_node(&params.node_id)
+                .await
+                .map_err(operation_error_to_mcp)?
+                .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+            current_node.version
+        }
+    };
+
     let result = operations
-        .delete_node(&params.node_id, params.version)
+        .delete_node(&params.node_id, version)
         .await
         .map_err(operation_error_to_mcp)?;
 
@@ -848,7 +880,9 @@ pub struct BatchUpdateItem {
     /// Node ID to update
     pub id: String,
     /// Expected version for optimistic concurrency control
-    pub version: i64,
+    /// If not provided, will fetch current version (optimistic: assumes no conflict)
+    #[serde(default)]
+    pub version: Option<i64>,
     /// Optional updated content
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -916,11 +950,37 @@ pub async fn handle_update_nodes_batch(
     let mut failed: Vec<BatchUpdateFailure> = Vec::new();
 
     for update in params.updates {
+        // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
+        let version = match update.version {
+            Some(v) => v,
+            None => {
+                match operations.get_node(&update.id).await {
+                    Ok(Some(node)) => node.version,
+                    Ok(None) => {
+                        failed.push(BatchUpdateFailure {
+                            id: update.id.clone(),
+                            error: format!("Node '{}' does not exist", update.id),
+                        });
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch node {} for version: {}", update.id, e);
+                        let mcp_error = operation_error_to_mcp(e);
+                        failed.push(BatchUpdateFailure {
+                            id: update.id,
+                            error: mcp_error.message,
+                        });
+                        continue;
+                    }
+                }
+            }
+        };
+
         // Apply update via NodeOperations (enforces all business rules)
         match operations
             .update_node(
                 &update.id,
-                update.version,
+                version,
                 update.content,
                 update.node_type,
                 update.properties,

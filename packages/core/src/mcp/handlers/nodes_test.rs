@@ -435,7 +435,7 @@ mod occ_tests {
         assert_eq!(updated.properties["priority"], "high");
     }
 
-    /// Verifies missing version parameter in update request
+    /// Verifies update succeeds without version parameter (auto-fetches current version)
     #[tokio::test]
     async fn test_update_without_version_parameter() {
         let (operations, _temp) = setup_test_operations().await.unwrap();
@@ -453,7 +453,7 @@ mod occ_tests {
             .await
             .unwrap();
 
-        // Try to update without version parameter
+        // Update without version parameter - should auto-fetch current version
         let params = json!({
             "node_id": node_id,
             "content": "Updated without version"
@@ -461,10 +461,17 @@ mod occ_tests {
 
         let result = handle_update_node(&operations, params).await;
 
-        // Should fail with invalid params error
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(error.message.contains("version"));
+        // Should succeed and return new version
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response["node_id"], node_id);
+        assert_eq!(response["version"], 2); // Version incremented from 1 to 2
+        assert_eq!(response["success"], true);
+
+        // Verify content was actually updated
+        let node = operations.get_node(&node_id).await.unwrap().unwrap();
+        assert_eq!(node.content, "Updated without version");
+        assert_eq!(node.version, 2);
     }
 }
 
