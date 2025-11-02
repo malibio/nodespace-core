@@ -112,7 +112,9 @@
       data-pane-id={pane.id}
       onclick={() => setActivePane(pane.id)}
       onkeydown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
+        // Only handle keyboard activation when the pane container itself is focused
+        // Don't intercept keys when child elements (textareas, inputs) are focused
+        if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
           e.preventDefault();
           setActivePane(pane.id);
         }

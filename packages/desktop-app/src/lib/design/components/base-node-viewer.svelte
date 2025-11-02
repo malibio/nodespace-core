@@ -66,7 +66,7 @@
 
   // Set view context, load children, and initialize header content when nodeId changes
   $effect(() => {
-    nodeManager.setViewParentId(nodeId);
+    // Removed setViewParentId - now pass nodeId directly to visibleNodes()
 
     if (nodeId) {
       loadChildrenForParent(nodeId);
@@ -237,7 +237,7 @@
       resolvePhase = resolve;
     });
 
-    const nodes = nodeManager.visibleNodes;
+    const nodes = nodeManager.visibleNodes(nodeId);
 
     for (const node of nodes) {
       // Skip placeholder nodes
@@ -312,7 +312,7 @@
   $effect(() => {
     if (!nodeId) return;
 
-    const currentNodeIds = new Set(nodeManager.visibleNodes.map((n) => n.id));
+    const currentNodeIds = new Set(nodeManager.visibleNodes(nodeId).map((n) => n.id));
 
     // Skip the first run (when previousNodeIds is empty)
     if (previousNodeIds.size > 0) {
@@ -462,7 +462,7 @@
   $effect.pre(() => {
     if (!nodeId) return;
 
-    const visibleNodes = nodeManager.visibleNodes;
+    const visibleNodes = nodeManager.visibleNodes(nodeId);
 
     // Collect all structural changes first
     const updates: Array<{
@@ -696,7 +696,7 @@
       }
 
       // Check if node is a placeholder by looking at visibleNodes which includes UI state
-      const visibleNode = nodeManager.visibleNodes.find((n) => n.id === childNodeId);
+      const visibleNode = nodeManager.visibleNodes(nodeId).find((n) => n.id === childNodeId);
       const isPlaceholder = visibleNode?.isPlaceholder || false;
 
       // Skip placeholder nodes - they should not be persisted yet
@@ -1141,11 +1141,11 @@
       pixelOffset: number;
     }>
   ) {
-    const { nodeId, direction, pixelOffset } = event.detail;
+    const { nodeId: eventNodeId, direction, pixelOffset } = event.detail;
 
     // Get visible nodes from NodeManager
-    const currentVisibleNodes = nodeManager.visibleNodes;
-    const currentIndex = currentVisibleNodes.findIndex((n) => n.id === nodeId);
+    const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+    const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
     if (currentIndex === -1) return;
 
@@ -1176,16 +1176,16 @@
     event: CustomEvent<{ nodeId: string; currentContent: string }>
   ) {
     try {
-      const { nodeId } = event.detail;
+      const { nodeId: eventNodeId } = event.detail;
 
       // Validate node exists before combining
-      if (!nodeManager.nodes.has(nodeId)) {
-        console.error('Cannot combine non-existent node:', nodeId);
+      if (!nodeManager.nodes.has(eventNodeId)) {
+        console.error('Cannot combine non-existent node:', eventNodeId);
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes;
-      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === nodeId);
+      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) {
         return; // No previous node to combine with
@@ -1208,7 +1208,7 @@
       const cursorPositionAfterMerge = previousNode.content.length;
 
       // Always use combineNodes (handles both empty and non-empty nodes with proper child promotion)
-      nodeManager.combineNodes(nodeId, previousNode.id);
+      nodeManager.combineNodes(eventNodeId, previousNode.id);
 
       // Always request focus at the merge point (end of original previous node content)
       // Use setTimeout to ensure DOM has updated after the merge operation
@@ -1227,16 +1227,16 @@
   // Handle deleting empty node (Backspace at start of empty node)
   async function handleDeleteNode(event: CustomEvent<{ nodeId: string }>) {
     try {
-      const { nodeId } = event.detail;
+      const { nodeId: eventNodeId } = event.detail;
 
       // Validate node exists before deletion
-      if (!nodeManager.nodes.has(nodeId)) {
-        console.error('Cannot delete non-existent node:', nodeId);
+      if (!nodeManager.nodes.has(eventNodeId)) {
+        console.error('Cannot delete non-existent node:', eventNodeId);
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes;
-      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === nodeId);
+      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) return; // No previous node to focus
 
@@ -1257,7 +1257,7 @@
       }
 
       // Use combineNodes even for empty nodes (handles child promotion properly)
-      nodeManager.combineNodes(nodeId, previousNode.id);
+      nodeManager.combineNodes(eventNodeId, previousNode.id);
       requestNodeFocus(previousNode.id, previousNode.content.length);
     } catch (error) {
       console.error('Error during node deletion:', error);
@@ -1286,7 +1286,7 @@
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
   const minDepth = $derived(() => {
-    const nodes = nodeManager.visibleNodes;
+    const nodes = nodeManager.visibleNodes(nodeId);
     if (nodes.length === 0) return 0;
     return Math.min(...nodes.map((n) => n.depth || 0));
   });
@@ -1336,7 +1336,7 @@
 
   // Reactively load components when node types change
   $effect(() => {
-    const visibleNodes = nodeManager.visibleNodes;
+    const visibleNodes = nodeManager.visibleNodes(nodeId);
 
     // Collect all unique node types
     const nodeTypes = new Set(visibleNodes.map((node) => node.nodeType));
@@ -1400,7 +1400,7 @@
 
   <!-- Scrollable Node Content Area (children structure) -->
   <div class="node-content-area">
-    {#each nodeManager.visibleNodes as node (node.id)}
+    {#each nodeManager.visibleNodes(nodeId) as node (node.id)}
       {@const relativeDepth = (node.depth || 0) - minDepth()}
       <div
         class="node-container"

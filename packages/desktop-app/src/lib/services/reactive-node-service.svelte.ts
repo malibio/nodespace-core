@@ -57,9 +57,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   let _rootNodeIds = $state<string[]>([]);
   const _activeNodeId = $state<string | undefined>(undefined);
 
-  // View context: which parent are we viewing? (null = viewing global roots)
-  let _viewParentId = $state<string | null>(null);
-
   // Manual reactivity trigger - incremented when SharedNodeStore updates
   let _updateTrigger = $state(0);
 
@@ -288,28 +285,35 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return result;
   }
 
-  // REACTIVITY FIX: Properly reactive visibleNodes computation using $derived.by
-  const _visibleNodes = $derived.by(() => {
-    // Track SharedNodeStore updates via _updateTrigger
-    void _updateTrigger;
-    void _rootNodeIds;
-    void _viewParentId;
+  /**
+   * Computes visible nodes for a specific parent ID
+   * @param viewParentId - The parent node ID to get children for (null = root nodes)
+   * @returns Sorted, hierarchical array of visible nodes
+   */
+  function getVisibleNodesForParent(viewParentId: string | null): (Node & {
+    depth: number;
+    children: string[];
+    expanded: boolean;
+    autoFocus: boolean;
+    inheritHeaderLevel: number;
+    isPlaceholder: boolean;
+  })[] {
+    void _updateTrigger; // Still track updates for reactivity
+    void _rootNodeIds; // Track root node changes
 
-    // Determine which nodes are "roots" for this view
-    // If viewParentId is set, roots are nodes with parent_id === viewParentId
-    // If viewParentId is null, roots are nodes with no parent_id
     let viewRoots: string[];
-    if (_viewParentId !== null) {
+    if (viewParentId !== null) {
       // Get children from SharedNodeStore
-      const childIds = sharedNodeStore.getNodesForParent(_viewParentId).map((n) => n.id);
+      // NOTE: Parent may not exist yet (e.g., virtual date nodes) - this is OK
+      const childIds = sharedNodeStore.getNodesForParent(viewParentId).map((n) => n.id);
       // Sort children according to beforeSiblingId linked list
-      viewRoots = sortChildrenByBeforeSiblingId(childIds, _viewParentId);
+      viewRoots = sortChildrenByBeforeSiblingId(childIds, viewParentId);
     } else {
       viewRoots = _rootNodeIds;
     }
 
     return getVisibleNodesRecursive(viewRoots);
-  });
+  }
 
   function findNode(nodeId: string): Node | null {
     return sharedNodeStore.getNode(nodeId) || null;
@@ -1559,11 +1563,20 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     get activeNodeId() {
       return _activeNodeId;
     },
-    get visibleNodes() {
-      return _visibleNodes;
-    },
-    get viewParentId() {
-      return _viewParentId;
+    /**
+     * Get visible nodes for a specific parent
+     * @param parentId - Parent node ID (null for root-level nodes)
+     * @returns Array of visible nodes sorted by visual hierarchy
+     */
+    visibleNodes(parentId: string | null): (Node & {
+      depth: number;
+      children: string[];
+      expanded: boolean;
+      autoFocus: boolean;
+      inheritHeaderLevel: number;
+      isPlaceholder: boolean;
+    })[] {
+      return getVisibleNodesForParent(parentId);
     },
     get _updateTrigger() {
       return _updateTrigger;
@@ -1571,11 +1584,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Direct access to UI state for computed properties
     getUIState(nodeId: string) {
       return _uiState[nodeId];
-    },
-
-    // View context control
-    setViewParentId(parentId: string | null) {
-      _viewParentId = parentId;
     },
 
     // Node operations
