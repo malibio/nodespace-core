@@ -59,9 +59,15 @@ export class ConflictResolver {
     // Strategy 1: Non-overlapping changes (safest auto-merge)
     // Example: You changed properties, they changed content
     if (!this.hasOverlappingChanges(yourChanges, currentNode, expectedVersion)) {
+      const mergedProperties = this.deepMergeProperties(
+        currentNode.properties,
+        yourChanges.properties
+      );
       const mergedNode: Node = {
         ...currentNode,
         ...yourChanges,
+        // Deep merge properties to prevent data loss (must be explicit for type safety)
+        properties: mergedProperties ?? {},
         // Always use current version + 1 for next attempt
         version: currentNode.version
       };
@@ -229,6 +235,75 @@ export class ConflictResolver {
       yourChangesDescription,
       currentChangesDescription
     };
+  }
+
+  /**
+   * Deep merge properties objects to prevent data loss
+   *
+   * Recursively merges two properties objects, with yourProperties taking
+   * precedence for conflicting keys.
+   *
+   * Example:
+   * Current: { status: "done", priority: "high" }
+   * Yours: { assignee: "alice" }
+   * Result: { status: "done", priority: "high", assignee: "alice" }
+   *
+   * @param currentProperties - Properties from current node
+   * @param yourProperties - Properties you're trying to set
+   * @returns Deeply merged properties object
+   */
+  private static deepMergeProperties(
+    currentProperties: Record<string, unknown> | undefined,
+    yourProperties: Record<string, unknown> | undefined
+  ): Record<string, unknown> | undefined {
+    // If neither has properties, return undefined
+    if (!currentProperties && !yourProperties) {
+      return undefined;
+    }
+
+    // If only one has properties, return that one
+    if (!currentProperties) {
+      return yourProperties;
+    }
+    if (!yourProperties) {
+      return currentProperties;
+    }
+
+    // Deep merge both objects
+    const merged: Record<string, unknown> = { ...currentProperties };
+
+    for (const key in yourProperties) {
+      const yourValue = yourProperties[key];
+      const currentValue = merged[key];
+
+      // If both values are objects (and not arrays/null), recursively merge
+      if (this.isPlainObject(yourValue) && this.isPlainObject(currentValue)) {
+        merged[key] = this.deepMergeProperties(
+          currentValue as Record<string, unknown>,
+          yourValue as Record<string, unknown>
+        );
+      } else {
+        // Otherwise, your value takes precedence
+        merged[key] = yourValue;
+      }
+    }
+
+    return merged;
+  }
+
+  /**
+   * Check if a value is a plain object (not array, null, Date, etc.)
+   *
+   * @param value - Value to check
+   * @returns True if value is a plain object
+   */
+  private static isPlainObject(value: unknown): boolean {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Object.prototype
+    );
   }
 }
 
