@@ -26,7 +26,12 @@ fn operation_error_to_mcp(error: NodeOperationError) -> MCPError {
         } => {
             // current_node is already available in the error as Box<Node>
             let current_node_value = serde_json::to_value(&*current_node).ok();
-            MCPError::version_conflict(node_id, expected_version, actual_version, current_node_value)
+            MCPError::version_conflict(
+                node_id,
+                expected_version,
+                actual_version,
+                current_node_value,
+            )
         }
         NodeOperationError::NodeNotFound { node_id } => MCPError::node_not_found(&node_id),
         NodeOperationError::InvalidOperation { reason } => MCPError::validation_error(reason),
@@ -729,7 +734,11 @@ pub async fn handle_move_child_to_index(
 
     // 4. Use reorder_node operation (which now handles sibling chain integrity)
     operations
-        .reorder_node(&params.node_id, params.version, before_sibling_id.as_deref())
+        .reorder_node(
+            &params.node_id,
+            params.version,
+            before_sibling_id.as_deref(),
+        )
         .await
         .map_err(operation_error_to_mcp)?;
 

@@ -136,7 +136,7 @@ mod tests {
 
 #[cfg(test)]
 mod occ_tests {
-    use crate::mcp::handlers::nodes::{handle_update_node, handle_delete_node};
+    use crate::mcp::handlers::nodes::{handle_delete_node, handle_update_node};
     use crate::mcp::types::VERSION_CONFLICT;
     use crate::operations::{CreateNodeParams, NodeOperations};
     use crate::{DatabaseService, NodeService};
@@ -331,7 +331,9 @@ mod occ_tests {
             "version": 1,
             "content": "Modified"
         });
-        handle_update_node(&operations, update_params).await.unwrap();
+        handle_update_node(&operations, update_params)
+            .await
+            .unwrap();
 
         // Try to delete with stale version (should fail)
         let delete_params = json!({
@@ -638,8 +640,11 @@ mod integration_tests {
             .unwrap();
 
         // Move first node (A) to index 999 (should append at end)
+        // Get node A to fetch its current version for OCC
+        let node_a_data = operations.get_node(&node_a).await.unwrap().unwrap();
         let params = json!({
             "node_id": node_a,
+            "version": node_a_data.version,
             "index": 999
         });
 

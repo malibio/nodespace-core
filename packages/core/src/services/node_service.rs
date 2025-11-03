@@ -1820,7 +1820,7 @@ impl NodeService {
 
             // Query node_mentions table to find nodes that reference the target
             let sql_query = format!(
-                "SELECT n.id, n.node_type, n.content, n.parent_id, n.container_node_id, n.before_sibling_id, n.created_at, n.modified_at, n.properties, n.embedding_vector
+                "SELECT n.id, n.node_type, n.content, n.parent_id, n.container_node_id, n.before_sibling_id, n.version, n.created_at, n.modified_at, n.properties, n.embedding_vector
                  FROM nodes n
                  INNER JOIN node_mentions nm ON n.id = nm.node_id
                  WHERE nm.mentions_node_id = ?{}{}",

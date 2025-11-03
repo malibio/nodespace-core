@@ -193,7 +193,7 @@ mod tests {
         // Create parent container (date node ID is auto-generated from content)
         let parent_id = operations
             .create_node(CreateNodeParams {
-                id: None,  // Auto-generated as "2025-01-01" from content
+                id: None, // Auto-generated as "2025-01-01" from content
                 node_type: "date".to_string(),
                 content: "2025-01-01".to_string(),
                 parent_id: None,
@@ -258,7 +258,7 @@ mod tests {
         // Create parent container (date node ID is auto-generated from content)
         let parent_id = operations
             .create_node(CreateNodeParams {
-                id: None,  // Auto-generated as "2025-01-01" from content
+                id: None, // Auto-generated as "2025-01-01" from content
                 node_type: "date".to_string(),
                 content: "2025-01-01".to_string(),
                 parent_id: None,
@@ -313,7 +313,7 @@ mod tests {
         // Create parent container (date node ID is auto-generated from content)
         let parent_id = operations
             .create_node(CreateNodeParams {
-                id: None,  // Auto-generated as "2025-01-01" from content
+                id: None, // Auto-generated as "2025-01-01" from content
                 node_type: "date".to_string(),
                 content: "2025-01-01".to_string(),
                 parent_id: None,
@@ -361,7 +361,7 @@ mod tests {
         // Create parent container (date node ID is auto-generated from content)
         let parent_id = operations
             .create_node(CreateNodeParams {
-                id: None,  // Auto-generated as "2025-01-01" from content
+                id: None, // Auto-generated as "2025-01-01" from content
                 node_type: "date".to_string(),
                 content: "2025-01-01".to_string(),
                 parent_id: None,
@@ -461,7 +461,7 @@ mod tests {
         // Create parent container (date node ID is auto-generated from content)
         let parent_id = operations
             .create_node(CreateNodeParams {
-                id: None,  // Auto-generated as "2025-01-01" from content
+                id: None, // Auto-generated as "2025-01-01" from content
                 node_type: "date".to_string(),
                 content: "2025-01-01".to_string(),
                 parent_id: None,

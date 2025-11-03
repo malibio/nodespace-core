@@ -698,7 +698,7 @@ impl NodeEmbeddingService {
         let mut stmt = conn
             .prepare(
                 "SELECT id, node_type, content, parent_id, container_node_id,
-                    before_sibling_id, created_at, modified_at, properties, embedding_vector
+                    before_sibling_id, version, created_at, modified_at, properties, embedding_vector
              FROM nodes WHERE id = ?",
             )
             .await

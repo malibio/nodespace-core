@@ -814,7 +814,10 @@ pub async fn handle_get_markdown_from_node_id(
     let mut markdown = String::new();
 
     // Export the container node itself with version for OCC
-    markdown.push_str(&format!("<!-- {} v{} -->\n", root_node.id, root_node.version));
+    markdown.push_str(&format!(
+        "<!-- {} v{} -->\n",
+        root_node.id, root_node.version
+    ));
     markdown.push_str(&root_node.content);
     markdown.push_str("\n\n");
 
