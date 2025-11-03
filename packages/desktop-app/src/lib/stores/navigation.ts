@@ -67,32 +67,39 @@ const initialTabState: TabState = {
 
 export const tabState = writable<TabState>(initialTabState);
 
+// Track initialization state to prevent overwriting loaded state
+let isInitialized = false;
+
 // Subscribe to state changes and persist automatically
 tabState.subscribe((state) => {
-  TabPersistenceService.save(state);
+  // Only persist after initialization to avoid overwriting loaded state
+  if (isInitialized) {
+    TabPersistenceService.save(state);
+  }
 });
 
 /**
  * Load persisted tab state from storage
  * Should be called once on application startup
- * @returns True if state was loaded successfully
+ * @returns True if state was loaded successfully, false if no saved state exists or loading failed
  */
 export function loadPersistedState(): boolean {
   const persisted = TabPersistenceService.load();
 
-  if (!persisted) {
-    return false;
+  if (persisted) {
+    // Restore the state
+    tabState.set({
+      tabs: persisted.tabs,
+      panes: persisted.panes,
+      activePaneId: persisted.activePaneId,
+      activeTabIds: persisted.activeTabIds
+    });
   }
 
-  // Restore the state
-  tabState.set({
-    tabs: persisted.tabs,
-    panes: persisted.panes,
-    activePaneId: persisted.activePaneId,
-    activeTabIds: persisted.activeTabIds
-  });
+  // Enable persistence after load attempt (whether successful or not)
+  isInitialized = true;
 
-  return true;
+  return !!persisted;
 }
 
 // Test utility to reset store to initial state

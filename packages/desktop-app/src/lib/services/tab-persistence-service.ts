@@ -11,7 +11,7 @@ import type { TabState } from '$lib/stores/navigation';
  * Persisted tab state structure with versioning for future migrations
  */
 export interface PersistedTabState {
-  version: 1;
+  version: number;
   tabs: TabState['tabs'];
   panes: TabState['panes'];
   activePaneId: string;
@@ -22,10 +22,35 @@ export interface PersistedTabState {
  * Service for persisting and loading tab state
  */
 export class TabPersistenceService {
-  private static STORAGE_KEY = 'nodespace:tab-state';
+  private static readonly LOG_PREFIX = '[TabPersistence]';
+  private static readonly STORAGE_KEY = 'nodespace:tab-state';
   private static readonly DEBOUNCE_MS = 500;
+  private static readonly DEBUG = import.meta.env.DEV;
 
   private static saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Log message in development mode only
+   */
+  private static log(message: string): void {
+    if (this.DEBUG) {
+      console.log(`${this.LOG_PREFIX} ${message}`);
+    }
+  }
+
+  /**
+   * Log warning in all environments
+   */
+  private static warn(message: string): void {
+    console.warn(`${this.LOG_PREFIX} ${message}`);
+  }
+
+  /**
+   * Log error in all environments
+   */
+  private static error(message: string, error?: unknown): void {
+    console.error(`${this.LOG_PREFIX} ${message}`, error || '');
+  }
 
   /**
    * Save tab state to persistent storage (debounced)
@@ -60,9 +85,9 @@ export class TabPersistenceService {
       // For now, use localStorage (Tauri store integration can be added later)
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(persisted));
 
-      console.log('[TabPersistence] State saved successfully');
+      this.log('State saved successfully');
     } catch (error) {
-      console.error('[TabPersistence] Failed to save state:', error);
+      this.error('Failed to save state:', error);
     }
   }
 
@@ -75,7 +100,7 @@ export class TabPersistenceService {
       const stored = localStorage.getItem(this.STORAGE_KEY);
 
       if (!stored) {
-        console.log('[TabPersistence] No saved state found');
+        this.log('No saved state found');
         return null;
       }
 
@@ -83,17 +108,17 @@ export class TabPersistenceService {
 
       // Validate the structure
       if (!this.isValidState(parsed)) {
-        console.warn('[TabPersistence] Invalid state structure, ignoring');
+        this.warn('Invalid state structure, ignoring');
         return null;
       }
 
       // Handle version migrations
       const migrated = this.migrate(parsed);
 
-      console.log('[TabPersistence] State loaded successfully');
+      this.log('State loaded successfully');
       return migrated;
     } catch (error) {
-      console.error('[TabPersistence] Failed to load state:', error);
+      this.error('Failed to load state:', error);
       return null;
     }
   }
@@ -110,14 +135,60 @@ export class TabPersistenceService {
 
     const s = state as Record<string, unknown>;
 
-    return (
-      typeof s.version === 'number' &&
-      Array.isArray(s.tabs) &&
-      Array.isArray(s.panes) &&
-      typeof s.activePaneId === 'string' &&
-      typeof s.activeTabIds === 'object' &&
-      s.activeTabIds !== null
-    );
+    // Basic structure validation
+    if (
+      typeof s.version !== 'number' ||
+      !Array.isArray(s.tabs) ||
+      !Array.isArray(s.panes) ||
+      typeof s.activePaneId !== 'string' ||
+      typeof s.activeTabIds !== 'object' ||
+      s.activeTabIds === null
+    ) {
+      return false;
+    }
+
+    // Validate tab structure
+    const tabs = s.tabs as unknown[];
+    if (
+      !tabs.every((tab) => {
+        if (!tab || typeof tab !== 'object') return false;
+        const t = tab as Record<string, unknown>;
+        return (
+          typeof t.id === 'string' &&
+          typeof t.title === 'string' &&
+          (t.type === 'node' || t.type === 'placeholder') &&
+          typeof t.closeable === 'boolean' &&
+          typeof t.paneId === 'string'
+        );
+      })
+    ) {
+      return false;
+    }
+
+    // Validate pane structure
+    const panes = s.panes as unknown[];
+    if (
+      !panes.every((pane) => {
+        if (!pane || typeof pane !== 'object') return false;
+        const p = pane as Record<string, unknown>;
+        return (
+          typeof p.id === 'string' &&
+          typeof p.width === 'number' &&
+          Array.isArray(p.tabIds) &&
+          (p.tabIds as unknown[]).every((id) => typeof id === 'string')
+        );
+      })
+    ) {
+      return false;
+    }
+
+    // Validate activeTabIds map
+    const activeTabIds = s.activeTabIds as Record<string, unknown>;
+    if (!Object.values(activeTabIds).every((id) => typeof id === 'string')) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -139,13 +210,14 @@ export class TabPersistenceService {
 
   /**
    * Clear all persisted tab state
+   * Useful for testing or resetting to default state
    */
   static clear(): void {
     try {
       localStorage.removeItem(this.STORAGE_KEY);
-      console.log('[TabPersistence] State cleared');
+      this.log('State cleared');
     } catch (error) {
-      console.error('[TabPersistence] Failed to clear state:', error);
+      this.error('Failed to clear state:', error);
     }
   }
 

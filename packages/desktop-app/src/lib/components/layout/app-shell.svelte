@@ -16,6 +16,7 @@
   import { MCP_EVENTS } from '$lib/constants';
   import type { Node } from '$lib/types';
   import { loadPersistedState } from '$lib/stores/navigation';
+  import { TabPersistenceService } from '$lib/services/tab-persistence-service';
 
   // Constants
   const LOG_PREFIX = '[AppShell]';
@@ -190,6 +191,9 @@
     document.addEventListener('click', handleLinkClick, true);
 
     return async () => {
+      // Flush any pending tab state saves before unmounting
+      TabPersistenceService.flush();
+
       cleanup?.();
       if (unlistenMenu) {
         (await unlistenMenu)();
