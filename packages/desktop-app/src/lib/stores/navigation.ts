@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 import { formatDateISO } from '$lib/utils/date-formatting';
 import { clearScrollPosition, clearPaneScrollPositions } from './scroll-state';
+import { TabPersistenceService } from '$lib/services/tab-persistence-service';
 
 export interface Tab {
   id: string;
@@ -65,6 +66,34 @@ const initialTabState: TabState = {
 };
 
 export const tabState = writable<TabState>(initialTabState);
+
+// Subscribe to state changes and persist automatically
+tabState.subscribe((state) => {
+  TabPersistenceService.save(state);
+});
+
+/**
+ * Load persisted tab state from storage
+ * Should be called once on application startup
+ * @returns True if state was loaded successfully
+ */
+export function loadPersistedState(): boolean {
+  const persisted = TabPersistenceService.load();
+
+  if (!persisted) {
+    return false;
+  }
+
+  // Restore the state
+  tabState.set({
+    tabs: persisted.tabs,
+    panes: persisted.panes,
+    activePaneId: persisted.activePaneId,
+    activeTabIds: persisted.activeTabIds
+  });
+
+  return true;
+}
 
 // Test utility to reset store to initial state
 export function resetTabState() {
