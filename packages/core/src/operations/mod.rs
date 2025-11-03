@@ -1079,6 +1079,13 @@ impl NodeOperations {
                             fresh_sibling,
                         ));
                     } else {
+                        // Log retry attempts for operational visibility
+                        tracing::warn!(
+                            "Sibling chain update retry attempt {} for node '{}' during reorder (max: {})",
+                            attempt + 1,
+                            fresh_sibling.id,
+                            max_retries
+                        );
                         // Retry with exponential backoff
                         tokio::time::sleep(tokio::time::Duration::from_millis(10 * (1 << attempt)))
                             .await;
@@ -1237,6 +1244,13 @@ impl NodeOperations {
                             fresh_sibling,
                         ));
                     } else {
+                        // Log retry attempts for operational visibility
+                        tracing::warn!(
+                            "Sibling chain update retry attempt {} for node '{}' during delete (max: {})",
+                            attempt + 1,
+                            fresh_sibling.id,
+                            max_retries
+                        );
                         // Retry with exponential backoff
                         tokio::time::sleep(tokio::time::Duration::from_millis(10 * (1 << attempt)))
                             .await;
