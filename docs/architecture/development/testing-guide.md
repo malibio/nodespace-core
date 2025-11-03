@@ -59,19 +59,24 @@ NodeSpace integration tests support two execution modes:
   - Each mode creates separate files (or no files for in-memory)
   - No interference between modes
 
-## Current Test Status (Updated 2025-01-16)
+## Test Execution Behavior
 
-**Frontend Tests**: 377 passing, 2 skipped, 3 intermittent failures
-**Backend Tests**: Basic coverage with example tests
-**Overall Health**: ✅ Good (98%+ pass rate)
+**Conditional Test Skipping:**
+- Some integration tests require full database persistence and will automatically skip in in-memory mode
+- These tests run when using `bun run test:db`
+- Tests use `shouldUseDatabase()` utility to determine execution mode
+- This allows fast development feedback while maintaining comprehensive integration testing
 
-**Known Issues**:
-- 3 ContentProcessor tests have intermittent failures due to test isolation issues (pass individually, fail in full suite)
-- 2 Svelte reactivity tests intentionally skipped (require Svelte runtime)
+**Checking Test Status:**
+```bash
+# See current test results
+bun run test              # Quick feedback (in-memory mode)
+cargo test --workspace    # Rust backend tests
 
-**Recently Fixed**:
-- ContentEditableController nesting logic for mixed formatting markers
-- marked.js performance test threshold adjustment
+# For detailed investigation
+bun run test:db          # Full integration validation
+bun run test:coverage    # With coverage report
+```
 
 ## 4 Core Testing Types
 
