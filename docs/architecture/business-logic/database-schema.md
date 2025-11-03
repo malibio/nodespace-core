@@ -831,9 +831,18 @@ When migrating from separate `nodespace-*` repositories:
 4. **Test coverage**: Comprehensive testing before switching
 
 ### Schema Evolution
-- **Version tracking**: Track schema versions in metadata
-- **Forward compatibility**: Design for additive changes
-- **Migration scripts**: Automated schema updates
-- **Rollback capability**: Safe downgrade procedures
+
+**Complete Implementation**: [Issue #106 - Schema Management System](https://github.com/malibio/nodespace-core/issues/106)
+
+NodeSpace uses a **lazy migration strategy** for safe schema evolution:
+
+- **Version tracking**: Each node tracks `_schema_version` in properties field
+- **On-access migration**: Nodes upgrade when read, not bulk operation (desktop-safe)
+- **Migration registry**: Pure functions for schema transforms (v1→v2, v2→v3, etc.)
+- **No ALTER TABLE**: Pure JSON schema eliminates SQL migrations on user machines
+- **Protection levels**: core/user/system fields with enforcement at API level
+- **Enum extensibility**: `core_values` (protected) + `user_values` (user-extensible)
+
+See [Issue #106](https://github.com/malibio/nodespace-core/issues/106) for complete 7-phase implementation details including SchemaService, MigrationRegistry, MCP tools, and frontend wrappers.
 
 This schema design provides the foundation for NodeSpace's flexible, AI-native knowledge management system while maintaining performance and extensibility.
