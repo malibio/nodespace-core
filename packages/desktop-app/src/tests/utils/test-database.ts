@@ -144,7 +144,6 @@ export async function initializeTestDatabase(
             parentId: null,
             containerNodeId: null,
             beforeSiblingId: null,
-            version: 1,
             properties: {},
             embeddingVector: null,
             mentions: []

@@ -138,10 +138,10 @@ export interface BackendAdapter {
 
   /**
    * Create a new node
-   * @param node - Node data without timestamps
+   * @param node - Node data without timestamps or version (backend sets these)
    * @returns ID of the created node
    */
-  createNode(node: Omit<Node, 'createdAt' | 'modifiedAt'>): Promise<string>;
+  createNode(node: Omit<Node, 'createdAt' | 'modifiedAt' | 'version'>): Promise<string>;
 
   /**
    * Get a node by ID
@@ -329,7 +329,7 @@ export class TauriAdapter implements BackendAdapter {
     }
   }
 
-  async createNode(node: Omit<Node, 'createdAt' | 'modifiedAt'>): Promise<string> {
+  async createNode(node: Omit<Node, 'createdAt' | 'modifiedAt' | 'version'>): Promise<string> {
     try {
       const nodeId = await invoke<string>('create_node', { node });
 
@@ -723,7 +723,7 @@ export class HttpAdapter implements BackendAdapter {
     }
   }
 
-  async createNode(node: Omit<Node, 'createdAt' | 'modifiedAt'>): Promise<string> {
+  async createNode(node: Omit<Node, 'createdAt' | 'modifiedAt' | 'version'>): Promise<string> {
     try {
       // Wrap the HTTP write operation with retry logic
       const nodeId = await this.retryOnTransientError(async () => {
