@@ -502,6 +502,36 @@ interface TursoSyncConfig {
 - **Network performance** and optimization
 - **User collaboration** patterns
 
+## Schema Evolution
+
+**Complete Implementation**: [Issue #106 - Schema Management System](https://github.com/malibio/nodespace-core/issues/106)
+
+NodeSpace implements a **lazy migration strategy** for safe schema evolution across desktop installations:
+
+### Lazy Migration Benefits
+
+- **Desktop-Safe**: No bulk migrations on user machines (critical for 10,000+ installations)
+- **Version Tracking**: Each node stores `_schema_version` in properties field
+- **On-Access Migration**: Nodes auto-upgrade when read, distributing load over time
+- **No Coordination**: No need for synchronized migrations across installations
+- **Pure Functions**: Migration transforms are deterministic (v1→v2, v2→v3, etc.)
+
+### Protection Levels
+
+- **`core` fields**: Cannot be deleted, type cannot change (UI components depend on these)
+- **`user` fields**: User-added fields, fully modifiable/deletable
+- **`system` fields**: Auto-managed fields, read-only (future use)
+
+### Enum Extensibility
+
+- **`core_values`**: Protected enum values (cannot be removed - UI depends on these)
+- **`user_values`**: User-extensible values (can be added/removed via SchemaService)
+- **Validation**: Ensures only allowed values are used
+
+See [Issue #106](https://github.com/malibio/nodespace-core/issues/106) for complete 7-phase implementation including SchemaService, MigrationRegistry, MCP tools, and frontend TypeScript wrappers.
+
+---
+
 ## Conclusion
 
 NodeSpace's local-first architecture with Turso embedded and Pure JSON schema provides the optimal foundation for AI-native knowledge management:
@@ -513,5 +543,6 @@ NodeSpace's local-first architecture with Turso embedded and Pure JSON schema pr
 5. **Future-Ready**: Turso embedded replicas enable seamless sync (free → premium tier)
 6. **Rule-Based Intelligence**: Dynamic index management based on query patterns (not LLM)
 7. **User-Centric**: Users own and control their data completely
+8. **Safe Evolution**: Lazy migration strategy enables schema changes without desktop coordination
 
 This approach avoids the catastrophic risk of desktop migrations while providing a unified database stack from free tier (0-100K nodes) to premium tier (100K+ with cloud sync). The result is a fast, reliable, and privacy-respecting knowledge management system that scales from individual use to team collaboration.
