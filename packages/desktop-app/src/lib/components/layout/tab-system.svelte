@@ -222,17 +222,7 @@
     color: hsl(var(--foreground));
   }
 
-  .tab-item:focus-visible {
-    background-color: hsl(var(--hover-background));
-    color: hsl(var(--hover-foreground));
-    outline: 2px solid hsl(var(--ring));
-    outline-offset: -2px;
-  }
-
-  .tab-item--active:focus-visible {
-    outline: 2px solid hsl(var(--ring));
-    outline-offset: -2px;
-  }
+  /* Removed :focus-visible borders - Tab key used for indent/outdent, not UI navigation */
 
   .tab-item--active {
     background-color: hsl(var(--active-tab-background));
@@ -327,11 +317,7 @@
     color: hsl(var(--foreground));
   }
 
-  .tab-close-btn:focus-visible {
-    outline: 2px solid hsl(var(--ring));
-    outline-offset: 2px;
-    opacity: 1;
-  }
+  /* Removed :focus-visible border - Tab key used for indent/outdent, not UI navigation */
 
   /* Disabled close button (last tab in last pane) */
   .tab-close-btn--disabled {
