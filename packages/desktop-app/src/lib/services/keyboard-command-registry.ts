@@ -6,6 +6,7 @@
  */
 
 import type { TextareaController } from '$lib/design/components/textarea-controller';
+import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
 /**
  * Context provided to keyboard commands during execution
@@ -243,7 +244,7 @@ export class KeyboardCommandRegistry {
       controller,
       nodeId: additionalContext.nodeId || '',
       nodeType: additionalContext.nodeType || 'text',
-      paneId: additionalContext.paneId || 'default',
+      paneId: additionalContext.paneId || DEFAULT_PANE_ID,
       content: additionalContext.content || '',
       cursorPosition: additionalContext.cursorPosition || 0,
       selection,

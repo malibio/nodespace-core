@@ -30,6 +30,13 @@
   let {
     header,
     nodeId = null,
+    /**
+     * Tab identifier for this viewer instance.
+     * Combined with paneId (from context) to create a unique scroll position identifier.
+     * Each tab+pane combination maintains independent scroll state, allowing the same
+     * document to be viewed in multiple panes with different scroll positions.
+     * @default 'default'
+     */
     tabId = 'default',
     onTitleChange
   }: {
@@ -1373,9 +1380,12 @@
     // Restore scroll position when the scroll container is available
     if (scrollContainer && viewerId) {
       const savedPosition = getScrollPosition(viewerId);
+      // Capture current container reference to prevent race conditions
+      const currentContainer = scrollContainer;
       // Use requestAnimationFrame to ensure DOM is ready
       requestAnimationFrame(() => {
-        if (scrollContainer) {
+        // Only restore if container hasn't changed (prevents stale updates)
+        if (scrollContainer === currentContainer) {
           scrollContainer.scrollTop = savedPosition;
         }
       });
