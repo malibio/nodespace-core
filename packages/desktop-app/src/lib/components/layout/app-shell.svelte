@@ -10,6 +10,7 @@
   import { layoutState, toggleSidebar } from '$lib/stores/layout';
   import { registerCorePlugins } from '$lib/plugins/core-plugins';
   import { pluginRegistry } from '$lib/plugins/index';
+  import { toggleTheme } from '$lib/design/theme';
   import { isValidDateString } from '$lib/utils/date-formatting';
   import { SharedNodeStore } from '$lib/services/shared-node-store';
   import { MCP_EVENTS } from '$lib/constants';
@@ -196,12 +197,16 @@
   $: isCollapsed = $layoutState.sidebarCollapsed;
 
   // Handle global keyboard shortcuts
-  // function handleKeydown(_event: KeyboardEvent) {
-  //   // No global shortcuts currently defined
-  // }
+  function handleKeydown(event: KeyboardEvent) {
+    // Toggle theme - Cmd+\ (Mac) or Ctrl+\ (Windows/Linux)
+    if ((event.metaKey || event.ctrlKey) && event.key === '\\') {
+      event.preventDefault();
+      toggleTheme();
+    }
+  }
 </script>
 
-<!-- <svelte:window on:keydown={handleKeydown} /> -->
+<svelte:window on:keydown={handleKeydown} />
 
 <!-- 
   Application Shell Component
