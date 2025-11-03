@@ -836,21 +836,19 @@ When migrating from separate `nodespace-*` repositories:
 
 ### Schema Evolution
 
-NodeSpace implements a lazy migration strategy for schema changes:
+**Complete Implementation**: [Issue #106 - Schema Management System](https://github.com/malibio/nodespace-core/issues/106)
 
-- **Version tracking**: Each node instance tracks `_schema_version` in properties
+NodeSpace uses a **lazy migration strategy** for safe schema evolution:
+
+- **Version tracking**: Each node tracks `_schema_version` in properties field
+- **On-access migration**: Nodes upgrade when read, not bulk operation (desktop-safe)
+- **Migration registry**: Pure functions for schema transforms (v1→v2, v2→v3, etc.)
+- **No ALTER TABLE**: Pure JSON schema eliminates SQL migrations on user machines
+- **Protection levels**: core/user/system fields with enforcement at API level
+- **Enum extensibility**: `core_values` (protected) + `user_values` (user-extensible)
 - **Forward compatibility**: Schemas designed for additive changes via protection levels
-- **Lazy migration**: Nodes auto-upgrade on first access after schema change
-- **Migration transforms**: Pure functions that upgrade nodes (v1→v2, v2→v3, etc.)
-- **Protection enforcement**: Core fields cannot be deleted or modified (UI dependencies)
 - **Rollback capability**: Old schema versions supported indefinitely
 
-**Practical Implementation**: The [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) provides:
-- 7-phase incremental implementation plan
-- Code examples for each component (SchemaService, MigrationRegistry, lazy integration)
-- Protection enforcement patterns and validation logic
-- Testing strategies for schema evolution
-- MCP integration for AI agent schema manipulation
-- Sub-agent delegation guidance for complex phases
+See [Issue #106](https://github.com/malibio/nodespace-core/issues/106) for complete 7-phase implementation details including SchemaService, MigrationRegistry, MCP tools, and frontend wrappers.
 
 This schema design provides the foundation for NodeSpace's flexible, AI-native knowledge management system while maintaining performance and extensibility.

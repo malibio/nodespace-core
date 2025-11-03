@@ -7,7 +7,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, getContext } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
   import { pluginRegistry } from '$lib/components/viewers/index';
@@ -20,6 +20,10 @@
   import type { Node } from '$lib/types';
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+
+  // Get paneId from context (set by PaneContent)
+  const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
 
   // Props
   let {
@@ -66,7 +70,7 @@
 
   // Set view context, load children, and initialize header content when nodeId changes
   $effect(() => {
-    nodeManager.setViewParentId(nodeId);
+    // Removed setViewParentId - now pass nodeId directly to visibleNodes()
 
     if (nodeId) {
       loadChildrenForParent(nodeId);
@@ -237,7 +241,7 @@
       resolvePhase = resolve;
     });
 
-    const nodes = nodeManager.visibleNodes;
+    const nodes = nodeManager.visibleNodes(nodeId);
 
     for (const node of nodes) {
       // Skip placeholder nodes
@@ -313,7 +317,7 @@
   $effect(() => {
     if (!nodeId) return;
 
-    const currentNodeIds = new Set(nodeManager.visibleNodes.map((n) => n.id));
+    const currentNodeIds = new Set(nodeManager.visibleNodes(nodeId).map((n) => n.id));
 
     // Skip the first run (when previousNodeIds is empty)
     if (previousNodeIds.size > 0) {
@@ -463,7 +467,7 @@
   $effect.pre(() => {
     if (!nodeId) return;
 
-    const visibleNodes = nodeManager.visibleNodes;
+    const visibleNodes = nodeManager.visibleNodes(nodeId);
 
     // Collect all structural changes first
     const updates: Array<{
@@ -698,7 +702,7 @@
       }
 
       // Check if node is a placeholder by looking at visibleNodes which includes UI state
-      const visibleNode = nodeManager.visibleNodes.find((n) => n.id === childNodeId);
+      const visibleNode = nodeManager.visibleNodes(nodeId).find((n) => n.id === childNodeId);
       const isPlaceholder = visibleNode?.isPlaceholder || false;
 
       // Skip placeholder nodes - they should not be persisted yet
@@ -730,7 +734,7 @@
   function requestNodeFocus(nodeId: string, position: number) {
     // Use FocusManager as single source of truth for focus management
     // This replaces the old DOM-based focus approach
-    focusManager.setEditingNode(nodeId, position);
+    focusManager.setEditingNode(nodeId, paneId, position);
 
     // Force textarea update to ensure merged content is visible immediately
     // Especially important for Safari which doesn't always reactive-update properly
@@ -885,7 +889,8 @@
         inheritHeaderLevel,
         insertAtBeginning || false,
         originalContent,
-        !focusOriginalNode // Focus new node when creating splits, original node when creating above
+        !focusOriginalNode, // Focus new node when creating splits, original node when creating above
+        paneId
       );
     } else {
       // Create real node when splitting existing content
@@ -899,7 +904,8 @@
         inheritHeaderLevel,
         insertAtBeginning || false,
         originalContent,
-        !focusOriginalNode // Focus new node when creating splits, original node when creating above
+        !focusOriginalNode, // Focus new node when creating splits, original node when creating above
+        paneId
       );
     }
 
@@ -911,7 +917,7 @@
 
     // Set cursor position using FocusManager (single source of truth)
     if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
-      focusManager.setEditingNode(newNodeId, newNodeCursorPosition);
+      focusManager.setEditingNode(newNodeId, paneId, newNodeCursorPosition);
     }
 
     // Handle focus direction based on focusOriginalNode parameter
@@ -1133,7 +1139,7 @@
     // 1. Switching from view mode to edit mode (isEditing derived value)
     // 2. Focusing the textarea (autoFocus effect in base-node.svelte)
     // 3. Calling controller.enterFromArrowNavigation() with pixel-accurate positioning
-    focusManager.setEditingNodeFromArrowNavigation(targetNodeId, direction, pixelOffset);
+    focusManager.setEditingNodeFromArrowNavigation(targetNodeId, direction, pixelOffset, paneId);
   }
 
   // Handle arrow key navigation between nodes using entry/exit methods
@@ -1144,11 +1150,11 @@
       pixelOffset: number;
     }>
   ) {
-    const { nodeId, direction, pixelOffset } = event.detail;
+    const { nodeId: eventNodeId, direction, pixelOffset } = event.detail;
 
     // Get visible nodes from NodeManager
-    const currentVisibleNodes = nodeManager.visibleNodes;
-    const currentIndex = currentVisibleNodes.findIndex((n) => n.id === nodeId);
+    const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+    const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
     if (currentIndex === -1) return;
 
@@ -1179,16 +1185,16 @@
     event: CustomEvent<{ nodeId: string; currentContent: string }>
   ) {
     try {
-      const { nodeId } = event.detail;
+      const { nodeId: eventNodeId } = event.detail;
 
       // Validate node exists before combining
-      if (!nodeManager.nodes.has(nodeId)) {
-        console.error('Cannot combine non-existent node:', nodeId);
+      if (!nodeManager.nodes.has(eventNodeId)) {
+        console.error('Cannot combine non-existent node:', eventNodeId);
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes;
-      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === nodeId);
+      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) {
         return; // No previous node to combine with
@@ -1211,7 +1217,7 @@
       const cursorPositionAfterMerge = previousNode.content.length;
 
       // Always use combineNodes (handles both empty and non-empty nodes with proper child promotion)
-      nodeManager.combineNodes(nodeId, previousNode.id);
+      nodeManager.combineNodes(eventNodeId, previousNode.id, paneId);
 
       // Always request focus at the merge point (end of original previous node content)
       // Use setTimeout to ensure DOM has updated after the merge operation
@@ -1230,16 +1236,16 @@
   // Handle deleting empty node (Backspace at start of empty node)
   async function handleDeleteNode(event: CustomEvent<{ nodeId: string }>) {
     try {
-      const { nodeId } = event.detail;
+      const { nodeId: eventNodeId } = event.detail;
 
       // Validate node exists before deletion
-      if (!nodeManager.nodes.has(nodeId)) {
-        console.error('Cannot delete non-existent node:', nodeId);
+      if (!nodeManager.nodes.has(eventNodeId)) {
+        console.error('Cannot delete non-existent node:', eventNodeId);
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes;
-      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === nodeId);
+      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) return; // No previous node to focus
 
@@ -1260,7 +1266,7 @@
       }
 
       // Use combineNodes even for empty nodes (handles child promotion properly)
-      nodeManager.combineNodes(nodeId, previousNode.id);
+      nodeManager.combineNodes(eventNodeId, previousNode.id, paneId);
       requestNodeFocus(previousNode.id, previousNode.content.length);
     } catch (error) {
       console.error('Error during node deletion:', error);
@@ -1289,7 +1295,7 @@
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
   const minDepth = $derived(() => {
-    const nodes = nodeManager.visibleNodes;
+    const nodes = nodeManager.visibleNodes(nodeId);
     if (nodes.length === 0) return 0;
     return Math.min(...nodes.map((n) => n.depth || 0));
   });
@@ -1339,7 +1345,7 @@
 
   // Reactively load components when node types change
   $effect(() => {
-    const visibleNodes = nodeManager.visibleNodes;
+    const visibleNodes = nodeManager.visibleNodes(nodeId);
 
     // Collect all unique node types
     const nodeTypes = new Set(visibleNodes.map((node) => node.nodeType));
@@ -1403,7 +1409,7 @@
 
   <!-- Scrollable Node Content Area (children structure) -->
   <div class="node-content-area">
-    {#each nodeManager.visibleNodes as node (node.id)}
+    {#each nodeManager.visibleNodes(nodeId) as node (node.id)}
       {@const relativeDepth = (node.depth || 0) - minDepth()}
       <div
         class="node-container"
@@ -1468,7 +1474,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   // ATOMIC UPDATE: Use batch to ensure content + nodeType persist together
                   // This prevents race conditions where content persists before nodeType changes
@@ -1495,7 +1501,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   if (node.isPlaceholder) {
                     // For placeholder nodes, just update the nodeType locally
@@ -1550,7 +1556,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition);
+                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   if (node.isPlaceholder) {
                     // For placeholder nodes, just update the nodeType locally
