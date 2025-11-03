@@ -1697,6 +1697,42 @@
     flex-direction: column;
     gap: 0; /* 0px gap - all spacing from node padding for 8px total */
 
+    /* Autohide scrollbar - only show when scrolling */
+    scrollbar-width: thin; /* Firefox */
+    scrollbar-color: transparent transparent; /* Firefox - hidden by default */
+  }
+
+  /* Show scrollbar on hover or while scrolling */
+  .node-content-area:hover,
+  .node-content-area:active {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent; /* Firefox */
+  }
+
+  /* WebKit (Chrome, Safari, Edge) scrollbar styling */
+  .node-content-area::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .node-content-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .node-content-area::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 4px;
+  }
+
+  /* Show scrollbar on hover or while scrolling */
+  .node-content-area:hover::-webkit-scrollbar-thumb,
+  .node-content-area:active::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+  }
+
+  .node-content-area::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+
+  .base-node-viewer {
     /* Dynamic Circle Positioning System - All values configurable from here */
     --circle-offset: 22px; /* Circle center distance from container left edge - reserves space for chevrons */
     --circle-diameter: 20px; /* Circle size (width and height) */
