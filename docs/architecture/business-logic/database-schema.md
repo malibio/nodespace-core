@@ -822,6 +822,10 @@ LIMIT 10;
 
 ## Migration Strategy
 
+> **📖 For detailed implementation procedures**, see the [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md).
+
+**Summary**: NodeSpace uses lazy migration with version tracking to handle schema evolution without ALTER TABLE operations. This preserves the Pure JSON architecture while enabling controlled schema evolution.
+
 ### From External Repositories
 When migrating from separate `nodespace-*` repositories:
 
@@ -842,6 +846,8 @@ NodeSpace uses a **lazy migration strategy** for safe schema evolution:
 - **No ALTER TABLE**: Pure JSON schema eliminates SQL migrations on user machines
 - **Protection levels**: core/user/system fields with enforcement at API level
 - **Enum extensibility**: `core_values` (protected) + `user_values` (user-extensible)
+- **Forward compatibility**: Schemas designed for additive changes via protection levels
+- **Rollback capability**: Old schema versions supported indefinitely
 
 See [Issue #106](https://github.com/malibio/nodespace-core/issues/106) for complete 7-phase implementation details including SchemaService, MigrationRegistry, MCP tools, and frontend wrappers.
 
