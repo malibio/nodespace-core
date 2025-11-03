@@ -514,7 +514,13 @@ impl NodeService {
         Ok(())
     }
 
-    pub async fn create_node(&self, node: Node) -> Result<String, NodeServiceError> {
+    pub async fn create_node(&self, mut node: Node) -> Result<String, NodeServiceError> {
+        // Auto-detect date nodes: if ID is in date format (YYYY-MM-DD), force node_type to "date"
+        // This ensures date nodes are always correctly typed regardless of input
+        if is_date_node_id(&node.id) {
+            node.node_type = "date".to_string();
+        }
+
         // Validate node using behavior registry
         self.behaviors.validate_node(&node)?;
 
