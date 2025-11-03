@@ -4,6 +4,17 @@
 
 The NodeSpace Validation System provides comprehensive business rule enforcement through natural language rule definition, cross-field validation logic, and conversational error handling. Users can define complex validation rules in plain English, which are automatically converted to executable logic and integrated into the AI-native workflow.
 
+### Schema Validation Integration
+
+The validation system integrates with NodeSpace's schema management for type-level validation. When schemas evolve, validation rules automatically apply to the current schema version through lazy migration. See [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) for details on:
+
+- **Schema version compatibility** - Validation works across schema versions
+- **Lazy migration with validation** - Nodes validated against current schema after migration
+- **Protection level enforcement** - Schema changes respect validation rules
+- **Type validation** - Enum values, field types, and constraints checked against schema
+
+This integration ensures data integrity while allowing schemas to evolve safely.
+
 ## Core Architecture
 
 ### Validation Engine Structure
