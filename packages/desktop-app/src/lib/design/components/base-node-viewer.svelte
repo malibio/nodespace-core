@@ -1133,7 +1133,7 @@
     // 1. Switching from view mode to edit mode (isEditing derived value)
     // 2. Focusing the textarea (autoFocus effect in base-node.svelte)
     // 3. Calling controller.enterFromArrowNavigation() with pixel-accurate positioning
-    focusManager.setEditingNodeFromArrowNavigation(targetNodeId, direction, pixelOffset);
+    focusManager.setEditingNodeFromArrowNavigation(targetNodeId, direction, pixelOffset, paneId);
   }
 
   // Handle arrow key navigation between nodes using entry/exit methods
