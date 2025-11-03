@@ -822,10 +822,6 @@ LIMIT 10;
 
 ## Migration Strategy
 
-> **📖 For detailed implementation procedures**, see the [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md).
-
-**Summary**: NodeSpace uses lazy migration with version tracking to handle schema evolution without ALTER TABLE operations. This preserves the Pure JSON architecture while enabling controlled schema evolution.
-
 ### From External Repositories
 When migrating from separate `nodespace-*` repositories:
 
@@ -835,22 +831,9 @@ When migrating from separate `nodespace-*` repositories:
 4. **Test coverage**: Comprehensive testing before switching
 
 ### Schema Evolution
-
-NodeSpace implements a lazy migration strategy for schema changes:
-
-- **Version tracking**: Each node instance tracks `_schema_version` in properties
-- **Forward compatibility**: Schemas designed for additive changes via protection levels
-- **Lazy migration**: Nodes auto-upgrade on first access after schema change
-- **Migration transforms**: Pure functions that upgrade nodes (v1→v2, v2→v3, etc.)
-- **Protection enforcement**: Core fields cannot be deleted or modified (UI dependencies)
-- **Rollback capability**: Old schema versions supported indefinitely
-
-**Practical Implementation**: The [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) provides:
-- 7-phase incremental implementation plan
-- Code examples for each component (SchemaService, MigrationRegistry, lazy integration)
-- Protection enforcement patterns and validation logic
-- Testing strategies for schema evolution
-- MCP integration for AI agent schema manipulation
-- Sub-agent delegation guidance for complex phases
+- **Version tracking**: Track schema versions in metadata
+- **Forward compatibility**: Design for additive changes
+- **Migration scripts**: Automated schema updates
+- **Rollback capability**: Safe downgrade procedures
 
 This schema design provides the foundation for NodeSpace's flexible, AI-native knowledge management system while maintaining performance and extensibility.
