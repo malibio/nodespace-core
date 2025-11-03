@@ -1028,8 +1028,7 @@ impl NodeOperations {
         }
 
         // Fix sibling chain BEFORE reordering (maintain chain integrity)
-        // Note: This next_sibling update doesn't need version checking since we're just
-        // fixing the chain, not responding to user intent on that specific node
+        // Use version-checked updates with retry to prevent race conditions
         if let Some(parent_id) = &node.parent_id {
             // Find all siblings (nodes with same parent)
             let siblings = self
@@ -1042,14 +1041,49 @@ impl NodeOperations {
                 .iter()
                 .find(|n| n.before_sibling_id.as_deref() == Some(node_id))
             {
-                // Update next sibling to skip over the moved node
+                // Update next sibling to skip over the moved node with version checking
                 // This maintains the chain: if A → B → C and we move B, we update C to point to A
-                let mut fix_update = NodeUpdate::new();
-                fix_update.before_sibling_id = Some(node.before_sibling_id.clone());
+                // Retry on version conflicts to handle concurrent modifications
+                let max_retries = 3;
+                for attempt in 0..max_retries {
+                    // Fetch fresh version on each attempt
+                    let fresh_sibling = self
+                        .node_service
+                        .get_node(&next_sibling.id)
+                        .await?
+                        .ok_or_else(|| {
+                            NodeOperationError::node_not_found(next_sibling.id.clone())
+                        })?;
 
-                self.node_service
-                    .update_node(&next_sibling.id, fix_update)
-                    .await?;
+                    let mut fix_update = NodeUpdate::new();
+                    fix_update.before_sibling_id = Some(node.before_sibling_id.clone());
+
+                    let rows_affected = self
+                        .node_service
+                        .update_with_version_check(
+                            &fresh_sibling.id,
+                            fresh_sibling.version,
+                            fix_update,
+                        )
+                        .await?;
+
+                    if rows_affected > 0 {
+                        // Success - chain fixed
+                        break;
+                    } else if attempt == max_retries - 1 {
+                        // Final attempt failed - return version conflict error
+                        return Err(NodeOperationError::version_conflict(
+                            fresh_sibling.id.clone(),
+                            fresh_sibling.version,
+                            fresh_sibling.version + 1, // Actual version is now higher
+                            fresh_sibling,
+                        ));
+                    } else {
+                        // Retry with exponential backoff
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10 * (1 << attempt)))
+                            .await;
+                    }
+                }
             }
         }
 
@@ -1156,8 +1190,7 @@ impl NodeOperations {
         };
 
         // 2. Fix sibling chain BEFORE deletion (only if node has a parent)
-        // Note: This next_sibling update doesn't need version checking since we're just
-        // fixing the chain, not responding to user intent on that specific node
+        // Use version-checked updates with retry to prevent race conditions
         if let Some(parent_id) = &node.parent_id {
             // Find all siblings (nodes with same parent)
             let siblings = self
@@ -1172,12 +1205,43 @@ impl NodeOperations {
             {
                 // Update next sibling to point to what the deleted node pointed to
                 // This maintains the chain: if A → B → C and we delete B, we get A → C
-                let mut update = NodeUpdate::new();
-                update.before_sibling_id = Some(node.before_sibling_id.clone());
+                // Retry on version conflicts to handle concurrent modifications
+                let max_retries = 3;
+                for attempt in 0..max_retries {
+                    // Fetch fresh version on each attempt
+                    let fresh_sibling = self
+                        .node_service
+                        .get_node(&next_sibling.id)
+                        .await?
+                        .ok_or_else(|| {
+                            NodeOperationError::node_not_found(next_sibling.id.clone())
+                        })?;
 
-                self.node_service
-                    .update_node(&next_sibling.id, update)
-                    .await?;
+                    let mut update = NodeUpdate::new();
+                    update.before_sibling_id = Some(node.before_sibling_id.clone());
+
+                    let rows_affected = self
+                        .node_service
+                        .update_with_version_check(&fresh_sibling.id, fresh_sibling.version, update)
+                        .await?;
+
+                    if rows_affected > 0 {
+                        // Success - chain fixed
+                        break;
+                    } else if attempt == max_retries - 1 {
+                        // Final attempt failed - return version conflict error
+                        return Err(NodeOperationError::version_conflict(
+                            fresh_sibling.id.clone(),
+                            fresh_sibling.version,
+                            fresh_sibling.version + 1, // Actual version is now higher
+                            fresh_sibling,
+                        ));
+                    } else {
+                        // Retry with exponential backoff
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10 * (1 << attempt)))
+                            .await;
+                    }
+                }
             }
         }
 

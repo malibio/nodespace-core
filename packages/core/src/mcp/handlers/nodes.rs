@@ -71,10 +71,10 @@ pub struct GetNodeParams {
 #[derive(Debug, Deserialize)]
 pub struct UpdateNodeParams {
     pub node_id: String,
-    /// Expected version for optimistic concurrency control
-    /// If not provided, will fetch current version (optimistic: assumes no conflict)
-    #[serde(default)]
-    pub version: Option<i64>,
+    /// Expected version for optimistic concurrency control (REQUIRED)
+    /// This prevents race conditions and silent data loss from concurrent updates.
+    /// Always fetch the node first to get its current version before updating.
+    pub version: i64,
     #[serde(default)]
     pub node_type: Option<String>,
     #[serde(default)]
@@ -87,10 +87,10 @@ pub struct UpdateNodeParams {
 #[derive(Debug, Deserialize)]
 pub struct DeleteNodeParams {
     pub node_id: String,
-    /// Expected version for optimistic concurrency control
-    /// If not provided, will fetch current version (optimistic: assumes no conflict)
-    #[serde(default)]
-    pub version: Option<i64>,
+    /// Expected version for optimistic concurrency control (REQUIRED)
+    /// This prevents race conditions and accidental deletion of modified nodes.
+    /// Always fetch the node first to get its current version before deleting.
+    pub version: i64,
 }
 
 /// Parameters for query_nodes method
@@ -268,29 +268,11 @@ pub async fn handle_update_node(
     //
     // Use MCP only for content/property updates. Use separate operations for structural changes.
 
-    // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
-    // ⚠️ WARNING: This bypasses optimistic concurrency control!
-    // Auto-fetching version creates a race condition window where concurrent updates
-    // can be silently overwritten. For critical operations, always provide explicit version.
-    let version = match params.version {
-        Some(v) => v,
-        None => {
-            tracing::warn!(
-                "OCC bypassed: version parameter not provided (race condition possible if concurrent updates occur)"
-            );
-            let current_node = operations
-                .get_node(&params.node_id)
-                .await
-                .map_err(operation_error_to_mcp)?
-                .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
-            current_node.version
-        }
-    };
-
+    // Version is now mandatory - no auto-fetch to prevent TOCTOU race conditions
     let updated_node = operations
         .update_node(
             &params.node_id,
-            version,
+            params.version,
             params.content,
             params.node_type,
             params.properties,
@@ -314,28 +296,9 @@ pub async fn handle_delete_node(
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // Delete node via NodeOperations
-
-    // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
-    // ⚠️ WARNING: This bypasses optimistic concurrency control!
-    // Auto-fetching version creates a race condition window where concurrent updates
-    // can be silently overwritten. For critical operations, always provide explicit version.
-    let version = match params.version {
-        Some(v) => v,
-        None => {
-            tracing::warn!(
-                "OCC bypassed: version parameter not provided (race condition possible if concurrent updates occur)"
-            );
-            let current_node = operations
-                .get_node(&params.node_id)
-                .await
-                .map_err(operation_error_to_mcp)?
-                .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
-            current_node.version
-        }
-    };
-
+    // Version is now mandatory - no auto-fetch to prevent TOCTOU race conditions
     let result = operations
-        .delete_node(&params.node_id, version)
+        .delete_node(&params.node_id, params.version)
         .await
         .map_err(operation_error_to_mcp)?;
 

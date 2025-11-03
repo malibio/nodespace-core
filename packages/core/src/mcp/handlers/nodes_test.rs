@@ -137,7 +137,7 @@ mod tests {
 #[cfg(test)]
 mod occ_tests {
     use crate::mcp::handlers::nodes::{handle_delete_node, handle_update_node};
-    use crate::mcp::types::VERSION_CONFLICT;
+    use crate::mcp::types::{INVALID_PARAMS, VERSION_CONFLICT};
     use crate::operations::{CreateNodeParams, NodeOperations};
     use crate::{DatabaseService, NodeService};
     use serde_json::json;
@@ -437,7 +437,7 @@ mod occ_tests {
         assert_eq!(updated.properties["priority"], "high");
     }
 
-    /// Verifies update succeeds without version parameter (auto-fetches current version)
+    /// Verifies update FAILS when version parameter is missing (prevents TOCTOU race conditions)
     #[tokio::test]
     async fn test_update_without_version_parameter() {
         let (operations, _temp) = setup_test_operations().await.unwrap();
@@ -455,7 +455,7 @@ mod occ_tests {
             .await
             .unwrap();
 
-        // Update without version parameter - should auto-fetch current version
+        // Update without version parameter - should now FAIL (version is mandatory)
         let params = json!({
             "node_id": node_id,
             "content": "Updated without version"
@@ -463,17 +463,16 @@ mod occ_tests {
 
         let result = handle_update_node(&operations, params).await;
 
-        // Should succeed and return new version
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response["node_id"], node_id);
-        assert_eq!(response["version"], 2); // Version incremented from 1 to 2
-        assert_eq!(response["success"], true);
+        // Should fail with invalid_params error
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS);
+        assert!(error.message.contains("missing field `version`"));
 
-        // Verify content was actually updated
+        // Verify node was NOT updated (still has original content and version 1)
         let node = operations.get_node(&node_id).await.unwrap().unwrap();
-        assert_eq!(node.content, "Updated without version");
-        assert_eq!(node.version, 2);
+        assert_eq!(node.content, "Test");
+        assert_eq!(node.version, 1);
     }
 }
 
@@ -1461,6 +1460,75 @@ mod integration_tests {
             duration_batch <= duration_sequential,
             "Batch should be at least as fast as sequential (got {:.2}x speedup)",
             speedup
+        );
+    }
+
+    /// Verifies OCC version check overhead is < 5ms per operation
+    /// This test validates the performance acceptance criterion
+    #[tokio::test]
+    async fn test_occ_performance_overhead() {
+        let (operations, _temp) = setup_test_operations().await.unwrap();
+
+        // Create a test node
+        let node_id = operations
+            .create_node(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Performance test".to_string(),
+                parent_id: None,
+                container_node_id: None,
+                before_sibling_id: None,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Warm up (first operation may be slower due to caching)
+        let node = operations.get_node(&node_id).await.unwrap().unwrap();
+        let _ = operations
+            .update_node(
+                &node_id,
+                node.version,
+                Some("warmup".to_string()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Measure 100 update operations with version checking
+        let iterations = 100;
+        let start = std::time::Instant::now();
+
+        for i in 0..iterations {
+            let node = operations.get_node(&node_id).await.unwrap().unwrap();
+            operations
+                .update_node(
+                    &node_id,
+                    node.version,
+                    Some(format!("Update {}", i)),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let elapsed = start.elapsed();
+        let avg_ms = elapsed.as_millis() as f64 / iterations as f64;
+
+        // Acceptance criterion: < 5ms overhead per operation
+        // Note: This measures total operation time (read + version check + write)
+        // The version check itself adds only ~0.1-1ms (single integer comparison)
+        assert!(
+            avg_ms < 5.0,
+            "OCC overhead too high: {:.2}ms average (expected < 5ms)",
+            avg_ms
+        );
+
+        println!(
+            "✓ Performance test passed: {:.2}ms average per operation (target: < 5ms)",
+            avg_ms
         );
     }
 }
