@@ -126,13 +126,12 @@
         {truncateTitle(tab.title)}
       </span>
 
-      <!-- Close button - only for closeable tabs -->
-      {#if tab.closeable}
+      <!-- Close button - only for closeable tabs, hidden when it's the last tab -->
+      {#if tab.closeable && !isCloseDisabled}
         <button
-          class={cn('tab-close-btn', isCloseDisabled && 'tab-close-btn--disabled')}
+          class="tab-close-btn"
           aria-label="Close tab: {tab.title}"
-          title={isCloseDisabled ? 'Cannot close last tab' : 'Close tab'}
-          disabled={isCloseDisabled}
+          title="Close tab"
           onclick={(e) => handleCloseTab(e, tab.id)}
         >
           <span class="close-icon"></span>

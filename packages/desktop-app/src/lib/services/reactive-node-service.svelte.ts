@@ -1651,8 +1651,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // This supports multi-tab/multi-pane scenarios where multiple viewers may share the same placeholder
       // See base-node-viewer.svelte loadChildrenForParent() for placeholder reuse logic
 
-      // Clear existing state
-      Object.keys(_uiState).forEach((id) => delete _uiState[id]);
+      // CRITICAL: Do NOT clear all global _uiState - this would destroy expansion state
+      // for nodes being viewed in other panes. Only update state for nodes being initialized.
+      // _rootNodeIds is still cleared because it represents the top-level view (single instance)
       _rootNodeIds = [];
 
       const defaults = {
