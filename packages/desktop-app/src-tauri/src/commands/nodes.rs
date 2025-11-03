@@ -317,6 +317,7 @@ pub async fn update_node(
             update.properties,
         )
         .await
+        .map(|_| ()) // Discard the returned Node, command just needs Ok(())
         .map_err(Into::into)
 }
 

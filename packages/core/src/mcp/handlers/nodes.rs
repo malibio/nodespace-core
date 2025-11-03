@@ -264,9 +264,15 @@ pub async fn handle_update_node(
     // Use MCP only for content/property updates. Use separate operations for structural changes.
 
     // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
+    // ⚠️ WARNING: This bypasses optimistic concurrency control!
+    // Auto-fetching version creates a race condition window where concurrent updates
+    // can be silently overwritten. For critical operations, always provide explicit version.
     let version = match params.version {
         Some(v) => v,
         None => {
+            tracing::warn!(
+                "OCC bypassed: version parameter not provided (race condition possible if concurrent updates occur)"
+            );
             let current_node = operations
                 .get_node(&params.node_id)
                 .await
@@ -305,9 +311,15 @@ pub async fn handle_delete_node(
     // Delete node via NodeOperations
 
     // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
+    // ⚠️ WARNING: This bypasses optimistic concurrency control!
+    // Auto-fetching version creates a race condition window where concurrent updates
+    // can be silently overwritten. For critical operations, always provide explicit version.
     let version = match params.version {
         Some(v) => v,
         None => {
+            tracing::warn!(
+                "OCC bypassed: version parameter not provided (race condition possible if concurrent updates occur)"
+            );
             let current_node = operations
                 .get_node(&params.node_id)
                 .await
@@ -951,9 +963,13 @@ pub async fn handle_update_nodes_batch(
 
     for update in params.updates {
         // If version not provided, fetch current version (optimistic: assumes no concurrent updates)
+        // ⚠️ WARNING: This bypasses optimistic concurrency control!
         let version = match update.version {
             Some(v) => v,
             None => {
+                tracing::warn!(
+                    "OCC bypassed: version parameter not provided for batch update (race condition possible)"
+                );
                 match operations.get_node(&update.id).await {
                     Ok(Some(node)) => node.version,
                     Ok(None) => {

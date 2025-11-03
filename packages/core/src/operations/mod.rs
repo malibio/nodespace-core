@@ -1964,7 +1964,7 @@ mod tests {
         // Create a test node (version=1)
         let node_id = operations
             .create_node(CreateNodeParams {
-                id: Some("test-node".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Original content".to_string(),
                 parent_id: None,
@@ -2029,7 +2029,7 @@ mod tests {
         // Create container
         let container_id = operations
             .create_node(CreateNodeParams {
-                id: Some("container".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
@@ -2043,7 +2043,7 @@ mod tests {
         // Create two parent nodes in the container
         let parent1_id = operations
             .create_node(CreateNodeParams {
-                id: Some("parent1".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Parent 1".to_string(),
                 parent_id: None,
@@ -2056,7 +2056,7 @@ mod tests {
 
         let parent2_id = operations
             .create_node(CreateNodeParams {
-                id: Some("parent2".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Parent 2".to_string(),
                 parent_id: None,
@@ -2070,7 +2070,7 @@ mod tests {
         // Create child node under parent1
         let child_id = operations
             .create_node(CreateNodeParams {
-                id: Some("child".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Child node".to_string(),
                 parent_id: Some(parent1_id.clone()),
@@ -2113,7 +2113,7 @@ mod tests {
         // Create container
         let container_id = operations
             .create_node(CreateNodeParams {
-                id: Some("container".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
@@ -2127,7 +2127,7 @@ mod tests {
         // Create parent node
         let parent_id = operations
             .create_node(CreateNodeParams {
-                id: Some("parent".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
@@ -2141,7 +2141,7 @@ mod tests {
         // Create three sibling nodes: A → B → C
         let node_a = operations
             .create_node(CreateNodeParams {
-                id: Some("node-a".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Node A".to_string(),
                 parent_id: Some(parent_id.clone()),
@@ -2154,7 +2154,7 @@ mod tests {
 
         let node_b = operations
             .create_node(CreateNodeParams {
-                id: Some("node-b".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Node B".to_string(),
                 parent_id: Some(parent_id.clone()),
@@ -2193,7 +2193,7 @@ mod tests {
         // Create a test node
         let node_id = operations
             .create_node(CreateNodeParams {
-                id: Some("test-node".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Test content".to_string(),
                 parent_id: None,
@@ -2241,7 +2241,7 @@ mod tests {
         // Create a test node
         let node_id = operations
             .create_node(CreateNodeParams {
-                id: Some("test-node".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Test content".to_string(),
                 parent_id: None,
@@ -2280,7 +2280,7 @@ mod tests {
         // Create a test node
         let node_id = operations
             .create_node(CreateNodeParams {
-                id: Some("test-node".to_string()),
+                id: None, // Auto-generate UUID
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: None,
@@ -2324,7 +2324,7 @@ mod tests {
                 actual_version,
                 current_node,
             }) => {
-                assert_eq!(err_node_id, "test-node");
+                assert_eq!(err_node_id, node_id); // Compare with actual node_id
                 assert_eq!(expected_version, 1);
                 assert_eq!(actual_version, 2);
                 assert_eq!(current_node.content, "Updated");
