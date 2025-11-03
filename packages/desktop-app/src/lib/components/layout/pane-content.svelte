@@ -20,16 +20,25 @@
 
   // Track loaded viewer components by nodeType
   let viewerComponents = $state<Map<string, unknown>>(new Map());
+  let viewerLoadErrors = $state<Map<string, string>>(new Map());
 
   // Load viewer for active tab's node type
   $effect(() => {
     const nodeType = activeTab?.content?.nodeType;
-    if (nodeType && !viewerComponents.has(nodeType)) {
+    if (nodeType && !viewerComponents.has(nodeType) && !viewerLoadErrors.has(nodeType)) {
       (async () => {
-        const viewer = await pluginRegistry.getViewer(nodeType);
-        if (viewer) {
-          viewerComponents.set(nodeType, viewer);
-          viewerComponents = new Map(viewerComponents); // Trigger reactivity
+        try {
+          const viewer = await pluginRegistry.getViewer(nodeType);
+          if (viewer) {
+            viewerComponents.set(nodeType, viewer);
+            viewerComponents = new Map(viewerComponents); // Trigger reactivity
+          }
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : 'Unknown error loading viewer';
+          console.error(`[PaneContent] Failed to load viewer for ${nodeType}:`, error);
+          viewerLoadErrors.set(nodeType, errorMessage);
+          viewerLoadErrors = new Map(viewerLoadErrors); // Trigger reactivity
         }
       })();
     }
@@ -37,22 +46,35 @@
 </script>
 
 {#if activeTab?.content}
-  <!-- Dynamic viewer routing via plugin registry -->
-  <!-- Falls back to BaseNodeViewer if no custom viewer registered -->
   {@const content = activeTab.content}
-  {@const ViewerComponent = (viewerComponents.get(content.nodeType ?? 'text') ??
-    BaseNodeViewer) as typeof BaseNodeViewer}
+  {@const nodeType = content.nodeType ?? 'text'}
+  {@const loadError = viewerLoadErrors.get(nodeType)}
 
-  <!-- KEY FIX: Use {#key} to force separate component instances per pane+nodeId -->
-  <!-- This ensures each pane gets its own BaseNodeViewer instance with isolated state -->
-  {#key `${pane.id}-${content.nodeId}`}
-    <ViewerComponent
-      nodeId={content.nodeId}
-      onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
-      onNodeIdChange={(newNodeId: string) =>
-        updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType })}
-    />
-  {/key}
+  {#if loadError}
+    <!-- Plugin loading error -->
+    <div class="error-state">
+      <h2>Failed to Load Viewer</h2>
+      <p>Unable to load the viewer for node type: <strong>{nodeType}</strong></p>
+      <p class="error-message">{loadError}</p>
+      <p class="help-text">Try refreshing the page or contact support if the problem persists.</p>
+    </div>
+  {:else}
+    <!-- Dynamic viewer routing via plugin registry -->
+    <!-- Falls back to BaseNodeViewer if no custom viewer registered -->
+    {@const ViewerComponent = (viewerComponents.get(nodeType) ??
+      BaseNodeViewer) as typeof BaseNodeViewer}
+
+    <!-- KEY FIX: Use {#key} to force separate component instances per pane+nodeId -->
+    <!-- This ensures each pane gets its own BaseNodeViewer instance with isolated state -->
+    {#key `${pane.id}-${content.nodeId}`}
+      <ViewerComponent
+        nodeId={content.nodeId}
+        onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
+        onNodeIdChange={(newNodeId: string) =>
+          updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType })}
+      />
+    {/key}
+  {/if}
 {:else if activeTab}
   <!-- Placeholder content for tabs without node content -->
   <div class="placeholder-content">
@@ -90,5 +112,39 @@
     justify-content: center;
     height: 100%;
     color: hsl(var(--muted-foreground));
+  }
+
+  /* Error state */
+  .error-state {
+    padding: 2rem;
+    text-align: center;
+    color: hsl(var(--destructive));
+  }
+
+  .error-state h2 {
+    margin: 0 0 1rem 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  .error-state p {
+    margin: 0.5rem 0;
+  }
+
+  .error-state .error-message {
+    font-family: monospace;
+    font-size: 0.875rem;
+    background: hsl(var(--muted));
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
+  }
+
+  .error-state .help-text {
+    margin-top: 1rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.875rem;
   }
 </style>

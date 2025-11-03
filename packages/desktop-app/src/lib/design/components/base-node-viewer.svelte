@@ -20,9 +20,10 @@
   import type { Node } from '$lib/types';
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
   // Get paneId from context (set by PaneContent)
-  const paneId = getContext<string>('paneId') ?? 'default';
+  const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
 
   // Props
   let {

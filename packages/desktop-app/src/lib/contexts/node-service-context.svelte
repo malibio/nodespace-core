@@ -50,9 +50,10 @@
   import { tauriNodeService } from '$lib/services/tauri-node-service';
   import { ContentProcessor } from '$lib/services/content-processor';
   import { focusManager } from '$lib/services/focus-manager.svelte';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
   // Get paneId from context (set by PaneContent)
-  const paneId = getContext<string>('paneId') ?? 'default';
+  const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
 
   // Props
   let {

@@ -50,6 +50,7 @@
   import { createMockElementForView, findCharacterFromClickFast } from './cursor-positioning';
   import { mapViewPositionToEditPosition } from '$lib/utils/view-edit-mapper';
   import { NodeSearchService } from '$lib/services/node-search-service';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
   // Props (Svelte 5 runes syntax) - nodeReferenceService removed
   let {
@@ -73,8 +74,8 @@
   } = $props();
 
   // Get paneId from Svelte context (set by PaneContent)
-  // Falls back to 'default' for backward compatibility (single-pane mode)
-  const paneId = getContext<string>('paneId') ?? 'default';
+  // Falls back to DEFAULT_PANE_ID for backward compatibility (single-pane mode)
+  const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
 
   // isEditing is now derived from FocusManager (single source of truth)
   // This replaces the old bindable prop approach
@@ -874,7 +875,7 @@
       bind:this={textareaElement}
       use:positionCursor={{ data: cursorPositionData, controller }}
       class="node__content node__content--textarea"
-      id="textarea-{paneId}-{nodeId}"
+      id="textarea__{paneId}__{nodeId}"
       rows="1"
       tabindex="0"
     ></textarea>
@@ -882,7 +883,7 @@
     <div
       bind:this={viewElement}
       class="node__content node__content--view"
-      id="view-{paneId}-{nodeId}"
+      id="view__{paneId}__{nodeId}"
       tabindex="0"
       onclick={(e) => {
         // Capture click coordinates

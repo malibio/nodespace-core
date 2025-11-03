@@ -28,6 +28,7 @@ import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import type { Node, NodeUIState } from '$lib/types';
 import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
+import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
 export interface NodeManagerEvents {
   focusRequested: (nodeId: string, position?: number) => void;
@@ -331,7 +332,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     insertAtBeginning?: boolean,
     originalNodeContent?: string,
     focusNewNode?: boolean,
-    paneId: string = 'default'
+    paneId: string = DEFAULT_PANE_ID
   ): string {
     const afterNode = findNode(afterNodeId);
     if (!afterNode) {
@@ -577,7 +578,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     insertAtBeginning: boolean = false,
     originalNodeContent?: string,
     focusNewNode?: boolean,
-    paneId: string = 'default'
+    paneId: string = DEFAULT_PANE_ID
   ): string {
     return createNode(
       afterNodeId,
@@ -763,7 +764,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   function combineNodes(
     currentNodeId: string,
     previousNodeId: string,
-    paneId: string = 'default'
+    paneId: string = DEFAULT_PANE_ID
   ): void {
     const currentNode = sharedNodeStore.getNode(currentNodeId);
     const previousNode = sharedNodeStore.getNode(previousNodeId);

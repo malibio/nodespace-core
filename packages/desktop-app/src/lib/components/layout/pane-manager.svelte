@@ -32,6 +32,7 @@
   import TabSystem from './tab-system.svelte';
   import PaneContent from './pane-content.svelte';
   import { cn } from '$lib/utils.js';
+  import { throttle } from '$lib/utils/throttle.js';
 
   // Props - no longer need children snippet, we render PaneContent directly
 
@@ -60,8 +61,8 @@
     event.preventDefault();
   }
 
-  // Handle resize drag movement
-  function handleResizeMove(event: MouseEvent): void {
+  // Handle resize drag movement (throttled for performance)
+  const handleResizeMove = throttle(function (event: MouseEvent): void {
     if (!resizing || !containerElement) return;
 
     const delta = event.clientX - startX;
@@ -80,7 +81,7 @@
     const newWidthPercent = (newWidth / containerWidth) * 100;
     const firstPaneId = $tabState.panes[0].id;
     resizePane(firstPaneId, newWidthPercent);
-  }
+  }, 16); // ~60fps throttling for smooth resize
 
   // End resize operation
   function handleResizeEnd(): void {
@@ -95,6 +96,24 @@
   // Get active tab ID for a specific pane
   function getActiveTabId(paneId: string): string {
     return $tabState.activeTabIds[paneId] || '';
+  }
+
+  // Handle keyboard resize for accessibility (WCAG 2.1 Level AA)
+  function handleResizeKeyboard(event: KeyboardEvent): void {
+    const firstPane = $tabState.panes[0];
+    if (!firstPane || $tabState.panes.length < 2) return;
+
+    const step = event.shiftKey ? 10 : 5; // Larger steps with Shift key
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      const newWidth = Math.max(20, Math.min(80, firstPane.width - step));
+      resizePane(firstPane.id, newWidth);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      const newWidth = Math.max(20, Math.min(80, firstPane.width + step));
+      resizePane(firstPane.id, newWidth);
+    }
   }
 </script>
 
@@ -137,8 +156,9 @@
     {#if index < $tabState.panes.length - 1}
       <button
         class={cn('resize-handle', resizing && 'resize-handle--active')}
-        aria-label="Resize panes - drag to adjust width"
+        aria-label="Resize panes - drag or use arrow keys to adjust width"
         onmousedown={handleResizeStart}
+        onkeydown={handleResizeKeyboard}
         type="button"
       ></button>
     {/if}
