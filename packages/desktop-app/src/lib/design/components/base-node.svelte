@@ -442,7 +442,7 @@
 
     // Re-enter edit mode if we've lost focus (shouldn't happen with preventDefault, but safety check)
     if (!isEditing && textareaElement) {
-      focusManager.setEditingNode(nodeId, undefined, paneId);
+      focusManager.setEditingNode(nodeId, paneId);
       await tick();
     }
 
@@ -560,7 +560,7 @@
       // Only update if this node isn't already set as editing
       // (Don't overwrite arrow navigation context set by setEditingNodeFromArrowNavigation)
       if (focusManager.editingNodeId !== nodeId) {
-        focusManager.setEditingNode(nodeId, undefined, paneId);
+        focusManager.setEditingNode(nodeId, paneId);
       }
 
       // CRITICAL: Clear node type conversion flag after successful focus
@@ -922,7 +922,7 @@
       onkeydown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           // Use FocusManager instead of directly setting isEditing
-          focusManager.setEditingNode(nodeId, undefined, paneId);
+          focusManager.setEditingNode(nodeId, paneId);
           setTimeout(() => controller?.focus(), 0);
         }
       }}

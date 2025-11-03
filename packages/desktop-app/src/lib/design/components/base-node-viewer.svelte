@@ -730,7 +730,7 @@
   function requestNodeFocus(nodeId: string, position: number) {
     // Use FocusManager as single source of truth for focus management
     // This replaces the old DOM-based focus approach
-    focusManager.setEditingNode(nodeId, position, paneId);
+    focusManager.setEditingNode(nodeId, paneId, position);
 
     // Force textarea update to ensure merged content is visible immediately
     // Especially important for Safari which doesn't always reactive-update properly
@@ -885,7 +885,8 @@
         inheritHeaderLevel,
         insertAtBeginning || false,
         originalContent,
-        !focusOriginalNode // Focus new node when creating splits, original node when creating above
+        !focusOriginalNode, // Focus new node when creating splits, original node when creating above
+        paneId
       );
     } else {
       // Create real node when splitting existing content
@@ -899,7 +900,8 @@
         inheritHeaderLevel,
         insertAtBeginning || false,
         originalContent,
-        !focusOriginalNode // Focus new node when creating splits, original node when creating above
+        !focusOriginalNode, // Focus new node when creating splits, original node when creating above
+        paneId
       );
     }
 
@@ -911,7 +913,7 @@
 
     // Set cursor position using FocusManager (single source of truth)
     if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
-      focusManager.setEditingNode(newNodeId, newNodeCursorPosition, paneId);
+      focusManager.setEditingNode(newNodeId, paneId, newNodeCursorPosition);
     }
 
     // Handle focus direction based on focusOriginalNode parameter
@@ -1211,7 +1213,7 @@
       const cursorPositionAfterMerge = previousNode.content.length;
 
       // Always use combineNodes (handles both empty and non-empty nodes with proper child promotion)
-      nodeManager.combineNodes(eventNodeId, previousNode.id);
+      nodeManager.combineNodes(eventNodeId, previousNode.id, paneId);
 
       // Always request focus at the merge point (end of original previous node content)
       // Use setTimeout to ensure DOM has updated after the merge operation
@@ -1260,7 +1262,7 @@
       }
 
       // Use combineNodes even for empty nodes (handles child promotion properly)
-      nodeManager.combineNodes(eventNodeId, previousNode.id);
+      nodeManager.combineNodes(eventNodeId, previousNode.id, paneId);
       requestNodeFocus(previousNode.id, previousNode.content.length);
     } catch (error) {
       console.error('Error during node deletion:', error);

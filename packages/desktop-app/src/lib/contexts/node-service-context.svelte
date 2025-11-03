@@ -88,7 +88,7 @@
         focusRequested: (nodeId: string, position?: number) => {
           // Use FocusManager as single source of truth for focus management
           // This replaces the old DOM-based contenteditable selector approach
-          focusManager.setEditingNode(nodeId, position, paneId);
+          focusManager.setEditingNode(nodeId, paneId, position);
         },
         hierarchyChanged: () => {
           // Hierarchy change handling logic here if needed

@@ -118,7 +118,7 @@ export const focusManager = {
   /**
    * Focus a node with default cursor positioning (beginning of first line, skip syntax)
    */
-  focusNode(nodeId: string, paneId: string = 'default'): void {
+  focusNode(nodeId: string, paneId: string): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
     _cursorPosition = { type: 'default', skipSyntax: true };
@@ -131,7 +131,7 @@ export const focusManager = {
   /**
    * Focus a node at a specific absolute cursor position
    */
-  focusNodeAtPosition(nodeId: string, position: number, paneId: string = 'default'): void {
+  focusNodeAtPosition(nodeId: string, position: number, paneId: string): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
     _cursorPosition = { type: 'absolute', position };
@@ -144,15 +144,12 @@ export const focusManager = {
   /**
    * Focus a node at a specific line (beginning, optionally skip syntax)
    */
-  focusNodeAtLine(
-    nodeId: string,
-    line: number = 0,
-    skipSyntax: boolean = true,
-    paneId: string = 'default'
-  ): void {
+  focusNodeAtLine(nodeId: string, paneId: string, line?: number, skipSyntax?: boolean): void {
+    const finalLine = line ?? 0;
+    const finalSkipSyntax = skipSyntax ?? true;
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
-    _cursorPosition = { type: 'line-column', line, skipSyntax };
+    _cursorPosition = { type: 'line-column', line: finalLine, skipSyntax: finalSkipSyntax };
     // Clear legacy state
     _pendingCursorPosition = null;
     _arrowNavDirection = null;
@@ -166,7 +163,7 @@ export const focusManager = {
     nodeId: string,
     direction: 'up' | 'down',
     pixelOffset: number,
-    paneId: string = 'default'
+    paneId: string
   ): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
@@ -236,7 +233,7 @@ export const focusManager = {
    * Focus a node from node type conversion with cursor preservation
    * Integrates into unified cursor positioning system
    */
-  focusNodeFromTypeConversion(nodeId: string, position: number, paneId: string = 'default'): void {
+  focusNodeFromTypeConversion(nodeId: string, position: number, paneId: string): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
     _cursorPosition = { type: 'node-type-conversion', position };
@@ -251,10 +248,10 @@ export const focusManager = {
    * Set which node is being edited (LEGACY)
    * @deprecated Use focusNode, focusNodeAtPosition, or focusNodeAtLine instead
    * @param nodeId - The node to edit, or null to clear editing state
-   * @param cursorPosition - Optional cursor position for precise positioning
    * @param paneId - The pane ID where the node is being edited (for split-pane support)
+   * @param cursorPosition - Optional cursor position for precise positioning
    */
-  setEditingNode(nodeId: string | null, cursorPosition?: number, paneId: string = 'default'): void {
+  setEditingNode(nodeId: string | null, paneId: string, cursorPosition?: number): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
     _pendingCursorPosition = cursorPosition ?? null;
@@ -282,7 +279,7 @@ export const focusManager = {
     nodeId: string,
     direction: 'up' | 'down',
     pixelOffset: number,
-    paneId: string = 'default'
+    paneId: string
   ): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
@@ -301,11 +298,7 @@ export const focusManager = {
    * @param nodeId - The node to edit
    * @param cursorPosition - Cursor position to restore after conversion
    */
-  setEditingNodeFromTypeConversion(
-    nodeId: string,
-    cursorPosition: number,
-    paneId: string = 'default'
-  ): void {
+  setEditingNodeFromTypeConversion(nodeId: string, cursorPosition: number, paneId: string): void {
     _editingNodeId = nodeId;
     _editingPaneId = paneId;
     _pendingCursorPosition = null; // Clear pending position

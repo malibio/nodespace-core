@@ -330,7 +330,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     headerLevel?: number,
     insertAtBeginning?: boolean,
     originalNodeContent?: string,
-    focusNewNode?: boolean
+    focusNewNode?: boolean,
+    paneId: string = 'default'
   ): string {
     const afterNode = findNode(afterNodeId);
     if (!afterNode) {
@@ -451,7 +452,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
     if (shouldFocusNewNode) {
-      focusManager.setEditingNode(nodeId);
+      focusManager.setEditingNode(nodeId, paneId);
     }
 
     // Update sibling linked list
@@ -563,7 +564,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // If we're not focusing the new node, keep focus on the original node
     if (!shouldFocusNewNode && afterNode) {
-      focusManager.setEditingNode(afterNodeId);
+      focusManager.setEditingNode(afterNodeId, paneId);
     }
 
     return nodeId;
@@ -575,7 +576,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     headerLevel?: number,
     insertAtBeginning: boolean = false,
     originalNodeContent?: string,
-    focusNewNode?: boolean
+    focusNewNode?: boolean,
+    paneId: string = 'default'
   ): string {
     return createNode(
       afterNodeId,
@@ -584,7 +586,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       headerLevel,
       insertAtBeginning,
       originalNodeContent,
-      focusNewNode
+      focusNewNode,
+      paneId
     );
   }
 
@@ -757,7 +760,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     });
   }
 
-  function combineNodes(currentNodeId: string, previousNodeId: string): void {
+  function combineNodes(
+    currentNodeId: string,
+    previousNodeId: string,
+    paneId: string = 'default'
+  ): void {
     const currentNode = sharedNodeStore.getNode(currentNodeId);
     const previousNode = sharedNodeStore.getNode(previousNodeId);
 
@@ -812,7 +819,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     invalidateSortedChildrenCache(currentNodeId);
 
     // Set focus on the previous node using FocusManager
-    focusManager.setEditingNode(previousNodeId);
+    focusManager.setEditingNode(previousNodeId, paneId, mergePosition);
     events.focusRequested(previousNodeId, mergePosition);
     events.nodeDeleted(currentNodeId);
     events.hierarchyChanged();
