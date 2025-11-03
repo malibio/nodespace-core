@@ -21,6 +21,7 @@
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+  import { getViewerId, saveScrollPosition, getScrollPosition } from '$lib/stores/scroll-state';
 
   // Get paneId from context (set by PaneContent)
   const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
@@ -29,10 +30,12 @@
   let {
     header,
     nodeId = null,
+    tabId = 'default',
     onTitleChange
   }: {
     header?: Snippet;
     nodeId?: string | null;
+    tabId?: string;
     onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void; // In type for interface, not used by BaseNodeViewer
   } = $props();
@@ -67,6 +70,12 @@
   // Loading flag to prevent watchers from firing during initial load
   // Start as true to prevent watcher from firing before loadChildrenForParent() completes
   let isLoadingInitialNodes = true;
+
+  // Scroll position tracking
+  // Reference to the scroll container element
+  let scrollContainer: HTMLElement | null = null;
+  // Generate unique viewer ID for this viewer instance
+  const viewerId = getViewerId(tabId, paneId);
 
   // Set view context, load children, and initialize header content when nodeId changes
   $effect(() => {
@@ -1340,6 +1349,39 @@
     await preloadComponents();
   });
 
+  // Scroll position management: Save scroll position when user scrolls
+  $effect(() => {
+    if (!scrollContainer) return;
+
+    const handleScroll = () => {
+      if (scrollContainer) {
+        saveScrollPosition(viewerId, scrollContainer.scrollTop);
+      }
+    };
+
+    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      if (scrollContainer) {
+        scrollContainer.removeEventListener('scroll', handleScroll);
+      }
+    };
+  });
+
+  // Scroll position restoration: Restore when viewer becomes active or mounts
+  $effect(() => {
+    // Restore scroll position when the scroll container is available
+    if (scrollContainer && viewerId) {
+      const savedPosition = getScrollPosition(viewerId);
+      // Use requestAnimationFrame to ensure DOM is ready
+      requestAnimationFrame(() => {
+        if (scrollContainer) {
+          scrollContainer.scrollTop = savedPosition;
+        }
+      });
+    }
+  });
+
   // Reactively load components when node types change
   $effect(() => {
     const visibleNodes = nodeManager.visibleNodes(nodeId);
@@ -1405,7 +1447,7 @@
   {/if}
 
   <!-- Scrollable Node Content Area (children structure) -->
-  <div class="node-content-area">
+  <div class="node-content-area" bind:this={scrollContainer}>
     {#each nodeManager.visibleNodes(nodeId) as node (node.id)}
       {@const relativeDepth = (node.depth || 0) - minDepth()}
       <div
