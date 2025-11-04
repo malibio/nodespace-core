@@ -44,7 +44,8 @@ impl From<NodeServiceError> for CommandError {
         CommandError {
             message: format!("Schema operation failed: {}", err),
             code: "SCHEMA_SERVICE_ERROR".to_string(),
-            details: Some(format!("{:?}", err)),
+            // Use Display trait instead of Debug to avoid leaking internal details
+            details: Some(err.to_string()),
         }
     }
 }
