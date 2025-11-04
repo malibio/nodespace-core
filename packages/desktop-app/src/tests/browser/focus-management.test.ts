@@ -105,12 +105,10 @@ describe('Focus Management - Real World Scenarios', () => {
     // Refocus main textarea
     textarea1.focus();
 
-    // Browser should restore cursor position (this is browser default behavior we're testing)
+    // Chromium restores cursor position after focus/blur cycle
+    // This is documented browser behavior we rely on for NodeSpace
     const cursorPosition = textarea1.selectionStart;
-
-    // Note: Browser behavior may vary - some browsers restore position, some move to end
-    // This test documents the actual behavior
-    expect(cursorPosition).toBeGreaterThanOrEqual(0);
+    expect(cursorPosition).toBe(5);
   });
 
   it('focus events fire correctly', () => {

@@ -24,8 +24,8 @@ export default defineConfig({
       name: 'chromium',
       provider: 'playwright',
       headless: true,
-      // Enable screenshotting for debugging failures
-      screenshotFailures: false
+      // Enable screenshotting for debugging failures (helps identify issues quickly)
+      screenshotFailures: true
     },
 
     // Only run browser integration tests
