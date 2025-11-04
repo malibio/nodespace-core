@@ -17,14 +17,46 @@ git status
 - Commit any pending changes first
 - Ensure clean working directory
 
-### 2. Determine Branching Strategy
+### 2. Pull Latest Changes
+```bash
+git fetch origin && git pull origin main
+```
+- Ensure working from latest codebase
+- Avoid working on stale code
+
+### 3. Run Test Suite Baseline
+```bash
+# Run full test suite to establish baseline
+bun run test:all
+
+# Record the results:
+# - How many tests are passing?
+# - How many tests are failing?
+# - Which specific tests are failing?
+```
+
+**Why this matters:**
+- Establishes baseline state BEFORE your changes
+- Prevents accidental regressions
+- Helps identify if failures are pre-existing or introduced by your work
+- Documents known issues at start of work
+
+**Record your baseline:** Create a comment in the issue noting:
+```
+Starting work - baseline test status:
+- Frontend: X passing, Y failing
+- Backend: X passing, Y failing
+- Known failures: [list specific test names]
+```
+
+### 4. Determine Branching Strategy
 - **REQUIRED**: Read [Epic and Sub-Issue Workflow Guide](epic-and-subissue-workflow.md) for comprehensive guidance
 - Identify issue type: Epic, Sub-Issue, or Standalone
 - Apply correct branching strategy based on issue type
 - **For Sub-Issues**: Always use parent epic branch (never create separate branch)
 
-### 3. Create/Switch to Branch
-Based on strategy determined in step 2:
+### 5. Create/Switch to Branch
+Based on strategy determined in step 4:
 
 **Individual Branch Approach:**
 ```bash
@@ -36,12 +68,12 @@ git checkout -b feature/issue-<number>-brief-description
 git checkout feature/issue-<parent-number>-name
 ```
 
-### 4. Assign Issue
+### 6. Assign Issue
 ```bash
 bun run gh:assign <number> "@me"
 ```
 
-### 5. Update Project Status - Use Bun API Commands
+### 7. Update Project Status - Use Bun API Commands
 **Use TypeScript GitHub API commands (no Claude Code approval prompts):**
 
 ```bash
@@ -57,7 +89,7 @@ bun run gh:status <number> "In Progress"
 
 **📖 See [Issue Workflow](issue-workflow.md) for complete CLI command reference**
 
-### 5.1 Parent Issue Status (Single-Branch Strategy)
+### 7.1 Parent Issue Status (Single-Branch Strategy)
 **If working on sub-issues with single-branch approach:**
 - Update BOTH parent and sub-issue to "In Progress"  
 - Assign BOTH issues to yourself
@@ -71,7 +103,7 @@ bun run gh:status <parent-number> "In Progress"
 bun run gh:assign <parent-number> "@me"
 ```
 
-### 6. Select Appropriate Agent/Expert - MANDATORY
+### 8. Select Appropriate Agent/Expert - MANDATORY
 **🚨 YOU MUST USE SPECIALIZED AGENTS FOR IMPLEMENTATION:**
 
 This step is NOT optional. You MUST delegate to specialized agents using the Task tool:
@@ -87,12 +119,12 @@ This step is NOT optional. You MUST delegate to specialized agents using the Tas
 
 **✅ CORRECT APPROACH**: Use Task tool with appropriate subagent_type for all implementation work
 
-### 7. Read Issue Requirements
+### 9. Read Issue Requirements
 - Understand ALL acceptance criteria
 - Note any special requirements or constraints
 - Identify dependencies or integration points
 
-### 8. Plan Self-Contained Implementation
+### 10. Plan Self-Contained Implementation
 - Design approach that works independently
 - Identify what mocks are needed for parallel development
 - Plan vertical slice implementation (end-to-end functionality)
@@ -116,6 +148,9 @@ This step is NOT optional. You MUST delegate to specialized agents using the Tas
 Before proceeding to implementation, verify ALL of the following:
 
 - [ ] Git status is clean (no uncommitted changes)
+- [ ] Latest changes pulled from main (`git pull origin main`)
+- [ ] **Baseline test status recorded** (frontend and backend test counts)
+- [ ] **Known failing tests documented** (specific test names noted in issue comment)
 - [ ] Correct branch created/selected (individual vs parent branch strategy)
 - [ ] Issue assigned using `bun run gh:assign <number> "@me"` (API command)
 - [ ] Project status updated using `bun run gh:status <number> "In Progress"` (API command)
