@@ -167,6 +167,44 @@ Brief description of the complete feature being implemented.
 - [ ] Ready for integration with other systems
 ```
 
+### Timeline and Effort Estimates
+
+**❌ DO NOT include timeline or effort estimates in issue descriptions.**
+
+**Why:**
+- Estimates become stale as implementation details change
+- Creates false expectations and pressure
+- Issues are reference documentation, not project plans
+- Time tracking should be done in project management tools, not issue text
+
+**✅ EXCEPTION: Phased Implementation**
+
+Sequential phases ARE acceptable when breaking down large features:
+
+```markdown
+## Implementation Approach: Phased Delivery
+
+### Phase 1: Infrastructure Setup
+- Set up core configuration
+- Create base utilities
+- Implement proof-of-concept
+
+### Phase 2: Core Functionality
+- Implement main features
+- Add error handling
+- Write comprehensive tests
+
+### Phase 3: Polish and Documentation
+- Performance optimization
+- Complete documentation
+- Add usage examples
+```
+
+**Key Difference:**
+- ❌ Bad: "Phase 1: 2-3 hours"
+- ✅ Good: "Phase 1: Infrastructure Setup"
+- Phases describe WHAT, not HOW LONG
+
 ### Self-Contained Issue Requirements
 
 Every issue must include sufficient detail for independent implementation:
