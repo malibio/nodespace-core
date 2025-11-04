@@ -101,7 +101,7 @@ INSERT INTO nodes (
     }'
 );
 
--- Example: Task instance
+-- Example: Task instance (using type-namespaced properties - Issue #397)
 INSERT INTO nodes (
     id,                     -- UUID or custom identifier
     node_type,             -- "task" (references schema)
@@ -116,11 +116,17 @@ INSERT INTO nodes (
     '2025-01-03',
     '2025-01-03',
     '{
-        "status": "IN_PROGRESS",
-        "due_date": "2025-01-10",
-        "started_at": "2025-01-03"
+        "task": {
+            "status": "IN_PROGRESS",
+            "due_date": "2025-01-10",
+            "started_at": "2025-01-03"
+        }
     }'
 );
+
+-- Note: Properties are namespaced by type (properties.task.*) to preserve
+-- properties during type conversions (task → text → task).
+-- See: docs/architecture/development/type-namespaced-properties-migration.md
 ```
 
 **Protection Levels:**

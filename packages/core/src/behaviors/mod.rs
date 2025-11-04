@@ -1165,8 +1165,9 @@ mod tests {
         invalid_node.content = String::new();
         assert!(behavior.validate(&invalid_node).is_err());
 
-        // NOTE: Status value validation is handled by schema system, not behavior validation
-        // We only validate type correctness here (string vs number, etc.)
+        // NOTE: Status value validation (e.g., "OPEN" vs "INVALID_STATUS") will be handled
+        // by the schema system in the future. Currently we only validate type correctness
+        // (string vs number, etc.)
 
         // Invalid: status not a string (new format)
         let bad_status_type = Node::new(
@@ -1206,6 +1207,55 @@ mod tests {
         assert_eq!(metadata["task"]["priority"], 2);
         assert!(metadata["task"]["due_date"].is_null());
         assert!(metadata["task"]["assignee_id"].is_null());
+    }
+
+    #[test]
+    fn test_type_conversion_preserves_properties() {
+        // Core value proposition of Issue #397: Properties should be preserved
+        // when converting between node types (e.g., task → text → task)
+
+        let behavior = TaskNodeBehavior;
+
+        // Create a task node with properties in the new nested format
+        let mut task_node = Node::new(
+            "task".to_string(),
+            "Important task".to_string(),
+            None,
+            json!({
+                "task": {
+                    "status": "in_progress",
+                    "priority": 3,
+                    "due_date": "2025-01-15"
+                }
+            }),
+        );
+
+        // Verify initial validation passes
+        assert!(behavior.validate(&task_node).is_ok());
+        assert_eq!(task_node.properties["task"]["status"], "in_progress");
+        assert_eq!(task_node.properties["task"]["priority"], 3);
+
+        // Convert to text node (simulate type conversion)
+        task_node.node_type = "text".to_string();
+
+        // Task properties should still exist in the properties JSON
+        // (even though it's no longer a task node)
+        assert!(task_node.properties["task"].is_object());
+        assert_eq!(task_node.properties["task"]["status"], "in_progress");
+        assert_eq!(task_node.properties["task"]["priority"], 3);
+        assert_eq!(task_node.properties["task"]["due_date"], "2025-01-15");
+
+        // Convert back to task node
+        task_node.node_type = "task".to_string();
+
+        // Properties should still be there and validate correctly
+        assert!(behavior.validate(&task_node).is_ok());
+        assert_eq!(task_node.properties["task"]["status"], "in_progress");
+        assert_eq!(task_node.properties["task"]["priority"], 3);
+        assert_eq!(task_node.properties["task"]["due_date"], "2025-01-15");
+
+        // This demonstrates the key benefit: properties survive type conversions
+        // without data loss, enabling flexible node type changes in the UI
     }
 
     #[test]

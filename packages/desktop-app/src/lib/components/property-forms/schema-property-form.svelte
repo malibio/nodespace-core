@@ -178,20 +178,48 @@
 
   // Update node property
   function updateProperty(fieldName: string, value: unknown) {
-    if (!node) return;
+    if (!node || !schema) return;
 
-    // Use new nested format: properties.{nodeType}.{fieldName} (Issue #397)
-    // This preserves properties when converting between types
-    const typeNamespace = node.properties?.[nodeType] || {};
-    const updatedNamespace = {
-      ...(typeof typeNamespace === 'object' ? typeNamespace : {}),
-      [fieldName]: value
-    };
+    // AUTO-MIGRATION (Issue #397): If this is the first write and node is still in old
+    // flat format, migrate all existing properties to new nested format. This prevents
+    // mixed-format properties within the same node and ensures clean data migration.
+    const typeNamespace = node.properties?.[nodeType];
+    const isOldFormat = !typeNamespace || typeof typeNamespace !== 'object';
 
-    const updatedProperties = {
+    let migratedNamespace: Record<string, unknown> = {};
+
+    if (isOldFormat) {
+      // Migrate all schema fields from old flat format to new nested format
+      schema.fields.forEach((field) => {
+        // Type guard: node is guaranteed non-null due to early return above
+        if (!node) return;
+        const oldValue = node.properties?.[field.name];
+        if (oldValue !== undefined) {
+          migratedNamespace[field.name] = oldValue;
+        }
+      });
+    } else {
+      // Already in new format, just copy existing namespace
+      migratedNamespace = { ...(typeNamespace as Record<string, unknown>) };
+    }
+
+    // Apply the update
+    migratedNamespace[fieldName] = value;
+
+    // Build updated properties with nested namespace
+    const updatedProperties: Record<string, unknown> = {
       ...node.properties,
-      [nodeType]: updatedNamespace
+      [nodeType]: migratedNamespace
     };
+
+    // If we migrated from old format, remove the old flat properties
+    if (isOldFormat) {
+      schema.fields.forEach((field) => {
+        // Type guard: node is guaranteed non-null due to early return above
+        if (!node) return;
+        delete updatedProperties[field.name];
+      });
+    }
 
     sharedNodeStore.updateNode(
       nodeId,
