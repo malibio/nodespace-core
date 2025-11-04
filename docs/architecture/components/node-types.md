@@ -483,7 +483,46 @@ Structured data management with calculated fields and natural language operation
 - **Validation Rules**: Business rules expressed in natural language
 - **Relationship Management**: Links between entities with referential integrity
 
-## 5. QueryNode
+## 5. DateNode
+
+Date-specific nodes with automatic detection and type enforcement for calendar-based organization.
+
+### Automatic Date Node Detection
+
+Date nodes are **automatically detected** based on their ID format, ensuring data integrity regardless of client input:
+
+- **ID Format**: `YYYY-MM-DD` (exactly 10 characters, ISO 8601 date format)
+- **Auto-Detection**: `NodeService.create_node()` automatically sets `node_type="date"` for any node with a date-formatted ID, regardless of the input `node_type`
+- **Rationale**: Enforces the invariant **"Date nodes MUST have node_type='date'"** to prevent type mismatches from client bugs
+- **Implementation**: See `packages/core/src/services/node_service.rs:517-523`
+
+### Example
+
+```rust
+// Client sends node with incorrect type
+let node = Node {
+    id: "2025-01-15".to_string(),
+    node_type: "text".to_string(),  // Wrong!
+    // ... other fields
+};
+
+// NodeService.create_node() auto-corrects to:
+// node_type = "date"  ✅ Correct!
+```
+
+### Developer Notes
+
+- **Always use date-format IDs** (`YYYY-MM-DD`) for date nodes
+- **Don't rely on client-provided `node_type`** for date nodes - the system enforces this server-side
+- **Tests should expect auto-correction** when creating date nodes with wrong types
+- **Parent auto-creation**: The system also auto-creates date nodes when they are referenced as parents but don't exist
+
+### Related
+
+- PR #376 introduced this auto-detection behavior to fix failing tests
+- See [Storage Architecture](../data/storage-architecture.md) for node persistence details
+
+## 6. QueryNode
 
 Live data queries with real-time updates and AI-enhanced result processing. (See [Real-Time Updates](real-time-updates.md) for detailed documentation.)
 
