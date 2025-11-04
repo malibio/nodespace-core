@@ -127,6 +127,65 @@ Return migrated node
 | `user` | ✅ Yes | ✅ Yes | User-added customizations |
 | `system` | ❌ No | ❌ No | Auto-managed internal fields |
 
+### Namespace Enforcement (Conflict Prevention)
+
+**Critical**: To prevent conflicts between user properties and future core properties, NodeSpace enforces **namespace prefixes** for user-defined properties.
+
+#### Required Namespaces
+
+| Namespace | Purpose | Example |
+|-----------|---------|---------|
+| `custom:*` | User-defined properties | `custom:estimatedHours`, `custom:clientName` |
+| `org:*` | Organization-specific properties | `org:departmentCode`, `org:billingCategory` |
+| `plugin:*` | Plugin-provided properties | `plugin:jira:issueId`, `plugin:github:prUrl` |
+
+#### Core Property Rules
+
+- **No Prefix**: Core properties use simple names (`status`, `priority`, `due_date`)
+- **Protected**: Core properties cannot use namespace prefixes
+- **Reserved**: Simple names are reserved for future core expansion
+
+#### Enforcement
+
+```rust
+// SchemaService validation
+pub fn add_field(&self, schema_name: &str, field: SchemaField) -> Result<()> {
+    if field.protection == ProtectionLevel::Core {
+        // Core fields cannot have prefix
+        if field.name.contains(':') {
+            return Err("Core properties cannot use namespace prefix");
+        }
+    } else {
+        // User fields MUST have prefix
+        if !field.name.contains(':') {
+            return Err(
+                "User-defined properties must use namespace prefix.\n" +
+                "Examples: 'custom:myField', 'org:field', 'plugin:name:field'"
+            );
+        }
+    }
+    // ... proceed with validation
+}
+```
+
+#### Benefits
+
+1. **Zero Collision Risk**: Core will never use prefixed names
+2. **Clear Ownership**: Easy to identify core vs user properties
+3. **Plugin Safety**: Each plugin uses its own namespace
+4. **Future-Proof**: NodeSpace can add core properties without breaking user data
+
+#### Migration Strategy
+
+For existing properties without namespaces (if any exist):
+
+1. **Detection**: On schema update, detect non-namespaced user properties
+2. **Auto-Rename**: Automatically prefix with `custom:` during migration
+3. **Backup**: Create backup before renaming
+4. **User Notification**: Show which properties were renamed
+
+See related issue for implementation: [Namespace Enforcement](#) (to be created)
+
 ### Why Lazy Migration?
 
 **Desktop Application Reality**:
