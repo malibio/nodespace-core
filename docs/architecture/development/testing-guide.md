@@ -47,17 +47,15 @@ NodeSpace uses a **hybrid three-tier testing strategy** for optimal speed, relia
 - **Use Case**: Unit tests, service tests, component logic, TDD workflow
 - **Command**: `bun run test` or `bun run test:watch`
 - **Location**: `src/tests/**/*.test.ts` (excluding `browser/`)
-- **Test Count**: 728+ tests
 
 **2. Vitest Browser Mode (Real Browser - For Critical Interactions)**
-- **Speed**: Slower (~500ms-2s per test file, but only ~10-20 tests total)
+- **Speed**: Slower (~500ms-2s per test file)
 - **Browser**: Real Chromium via Playwright
 - **DOM**: Actual browser DOM with real focus/blur/event APIs
 - **Use Case**: Focus management, real browser events, dropdown interactions, cross-node navigation
 - **Command**: `bun run test:browser` or `bun run test:browser:watch`
 - **Location**: `src/tests/browser/**/*.test.ts`
 - **Setup**: Requires `bunx playwright install chromium` (one-time)
-- **Test Count**: ~10-20 targeted critical tests
 
 **3. Database Mode (Full Integration)**
 - **Speed**: Slowest (~10-15s per test file)
@@ -185,7 +183,7 @@ test('creates and saves a note', async ({ page }) => {
 });
 ```
 
-### 5. Browser Mode Testing (New - For Real Browser Behavior)
+### 5. Browser Mode Testing (For Real Browser Behavior)
 
 **When to Use Browser Mode:**
 Use Vitest Browser Mode **only** when testing functionality that requires real browser APIs that Happy-DOM cannot simulate:
@@ -193,41 +191,40 @@ Use Vitest Browser Mode **only** when testing functionality that requires real b
 - ✅ **Focus/Blur Events**: Real `focus()` and `blur()` events that fire correctly
 - ✅ **Edit Mode Transitions**: Click-to-edit workflows with real focus behavior
 - ✅ **Dropdown Interactions**: Slash commands, @mentions with real keyboard navigation
-- ✅ **Browser-Specific APIs**: `document.activeElement`, `selectionStart/End`, etc.
+- ✅ **Browser-Specific APIs**: `document.activeElement`, `selectionStart/End`, `getBoundingClientRect()`
+- ✅ **Textarea Selection API**: Cursor positioning with real selection ranges
+- ✅ **Viewport Dimensions**: Real `window.innerWidth/innerHeight` for positioning
 - ❌ **NOT for**: Logic tests, service tests, state management (use Happy-DOM)
 
-**Browser Test Example:**
+**Pragmatic Testing Approach:**
+Browser tests should focus on **browser-specific APIs**, not full component integration. Testing DOM APIs directly is faster and more maintainable than rendering complex Svelte components with extensive context requirements.
 
+#### Browser Test Examples
+
+**Example 1: Focus Management**
 ```typescript
 // src/tests/browser/focus-management.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 
 describe('Focus Management - Browser Mode', () => {
   beforeEach(() => {
-    // Clear DOM before each test
     document.body.innerHTML = '';
   });
 
-  it('can focus and blur elements with real events', () => {
-    // Create two textareas
+  it('handles focus transitions between textareas', () => {
     const textarea1 = document.createElement('textarea');
-    textarea1.id = 'textarea-1';
-    document.body.appendChild(textarea1);
-
     const textarea2 = document.createElement('textarea');
-    textarea2.id = 'textarea-2';
+    document.body.appendChild(textarea1);
     document.body.appendChild(textarea2);
 
-    // Focus first textarea
     textarea1.focus();
     expect(document.activeElement).toBe(textarea1);
 
-    // Focus second textarea (should blur first automatically)
     textarea2.focus();
     expect(document.activeElement).toBe(textarea2);
   });
 
-  it('focus events fire correctly', () => {
+  it('fires focus/blur events correctly', () => {
     const textarea = document.createElement('textarea');
     document.body.appendChild(textarea);
 
@@ -237,18 +234,173 @@ describe('Focus Management - Browser Mode', () => {
     textarea.addEventListener('focus', () => focusCount++);
     textarea.addEventListener('blur', () => blurCount++);
 
-    // Focus the textarea
     textarea.focus();
     expect(focusCount).toBe(1);
-    expect(blurCount).toBe(0);
 
-    // Blur by focusing another element
-    const anotherTextarea = document.createElement('textarea');
-    document.body.appendChild(anotherTextarea);
-    anotherTextarea.focus();
+    const other = document.createElement('textarea');
+    document.body.appendChild(other);
+    other.focus();
 
-    expect(focusCount).toBe(1);
     expect(blurCount).toBe(1);
+  });
+});
+```
+
+**Example 2: Dropdown Positioning with getBoundingClientRect**
+```typescript
+// src/tests/browser/dropdown-positioning.test.ts
+describe('Dropdown Positioning - Browser Mode', () => {
+  it('verifies getBoundingClientRect returns real dimensions', () => {
+    const textarea = document.createElement('textarea');
+    textarea.style.position = 'absolute';
+    textarea.style.left = '100px';
+    textarea.style.top = '100px';
+    textarea.style.width = '300px';
+    textarea.style.height = '100px';
+    document.body.appendChild(textarea);
+
+    const rect = textarea.getBoundingClientRect();
+
+    // Happy-DOM returns all zeros, real browser returns actual values
+    expect(rect.width).toBeGreaterThan(0);
+    expect(rect.height).toBeGreaterThan(0);
+    expect(rect.left).toBeGreaterThan(0);
+    expect(rect.top).toBeGreaterThan(0);
+  });
+
+  it('detects viewport edges for smart positioning', () => {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    expect(viewportWidth).toBeGreaterThan(0);
+    expect(viewportHeight).toBeGreaterThan(0);
+
+    // Simulate dropdown near right edge
+    const cursorX = viewportWidth - 100;
+    const dropdownWidth = 300;
+    const wouldOverflow = cursorX + dropdownWidth > viewportWidth;
+
+    expect(wouldOverflow).toBe(true);
+
+    // Smart positioning would flip to left
+    const adjustedX = cursorX - dropdownWidth;
+    expect(adjustedX).toBeGreaterThan(0);
+  });
+});
+```
+
+**Example 3: Textarea Selection API**
+```typescript
+// src/tests/browser/cursor-positioning.test.ts
+describe('Cursor Positioning - Browser Mode', () => {
+  it('can detect cursor position for text splitting', () => {
+    const textarea = document.createElement('textarea');
+    textarea.value = 'Hello World';
+    document.body.appendChild(textarea);
+
+    textarea.focus();
+    textarea.setSelectionRange(6, 6); // After "Hello "
+
+    expect(textarea.selectionStart).toBe(6);
+    expect(textarea.selectionEnd).toBe(6);
+
+    const beforeCursor = textarea.value.substring(0, 6);
+    const afterCursor = textarea.value.substring(6);
+
+    expect(beforeCursor).toBe('Hello ');
+    expect(afterCursor).toBe('World');
+  });
+
+  it('preserves cursor position after focus/blur cycle', () => {
+    const textarea1 = document.createElement('textarea');
+    textarea1.value = 'Test content';
+    const textarea2 = document.createElement('textarea');
+    document.body.appendChild(textarea1);
+    document.body.appendChild(textarea2);
+
+    textarea1.focus();
+    textarea1.setSelectionRange(5, 5);
+
+    // Blur and refocus
+    textarea2.focus();
+    textarea1.focus();
+
+    // Chromium restores cursor position automatically
+    expect(textarea1.selectionStart).toBe(5);
+  });
+
+  it('can insert content at cursor position', () => {
+    const textarea = document.createElement('textarea');
+    textarea.value = 'Before  After';
+    document.body.appendChild(textarea);
+
+    textarea.focus();
+    textarea.setSelectionRange(7, 7);
+
+    const cursorPos = textarea.selectionStart;
+    const reference = '@[[Node Title]]';
+    const before = textarea.value.substring(0, cursorPos);
+    const after = textarea.value.substring(cursorPos);
+    textarea.value = before + reference + after;
+
+    expect(textarea.value).toBe('Before @[[Node Title]] After');
+
+    // Move cursor after insertion
+    const newCursorPos = cursorPos + reference.length;
+    textarea.setSelectionRange(newCursorPos, newCursorPos);
+    expect(textarea.selectionStart).toBe(newCursorPos);
+  });
+});
+```
+
+**Example 4: Keyboard Event Propagation**
+```typescript
+// src/tests/browser/keyboard-events.test.ts
+describe('Keyboard Events - Browser Mode', () => {
+  it('detects Enter key with preventDefault', () => {
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    let enterPressed = false;
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        enterPressed = true;
+        e.preventDefault();
+      }
+    });
+
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true
+      })
+    );
+
+    expect(enterPressed).toBe(true);
+  });
+
+  it('detects arrow key navigation', () => {
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    let arrowDownCount = 0;
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        arrowDownCount++;
+        e.preventDefault();
+      }
+    });
+
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })
+    );
+
+    expect(arrowDownCount).toBe(1);
   });
 });
 ```
@@ -259,8 +411,10 @@ describe('Focus Management - Browser Mode', () => {
 |---------|-----------|--------------|
 | Speed | ~100-200ms per file | ~500ms-2s per file |
 | Setup | None | `bunx playwright install chromium` |
-| DOM API | Simulated | Real browser |
+| DOM API | Simulated | Real browser (Chromium) |
 | Focus/Blur | ❌ Doesn't work | ✅ Works correctly |
+| getBoundingClientRect | ❌ Returns zeros | ✅ Returns real dimensions |
+| Textarea Selection | ❌ Unreliable | ✅ Works correctly |
 | Test Location | `src/tests/**/*.test.ts` | `src/tests/browser/**/*.test.ts` |
 | Use Case | 99% of tests | Critical browser interactions |
 | Run Command | `bun run test` | `bun run test:browser` |
@@ -268,10 +422,20 @@ describe('Focus Management - Browser Mode', () => {
 **Best Practices for Browser Tests:**
 
 1. **Keep them minimal**: Only test what Happy-DOM cannot
-2. **Clean up DOM**: Use `beforeEach(() => document.body.innerHTML = '')`
-3. **Direct DOM APIs**: Access `document`, `document.activeElement` directly (no special Playwright APIs needed)
-4. **Synchronous when possible**: Prefer direct DOM manipulation over async interactions
-5. **No framework imports**: Browser tests run in real browser, avoid importing Svelte components
+2. **Test APIs, not components**: Focus on browser APIs directly rather than complex component integration
+3. **Clean up DOM**: Always use `beforeEach(() => document.body.innerHTML = '')`
+4. **Direct DOM manipulation**: Create elements with `document.createElement()`, not component rendering
+5. **Avoid framework complexity**: Don't render Svelte components unless absolutely necessary (requires extensive context setup)
+6. **Synchronous when possible**: Prefer direct DOM manipulation over async interactions
+7. **Focus on browser-specific behavior**: Real focus events, cursor positioning, viewport calculations
+8. **Complement, don't duplicate**: Business logic stays in Happy-DOM unit tests
+
+**When NOT to use Browser Mode:**
+- ❌ Testing service methods (use Happy-DOM unit tests)
+- ❌ Testing business logic (use Happy-DOM unit tests)
+- ❌ Testing data transformations (use Happy-DOM unit tests)
+- ❌ Testing event emissions (use Happy-DOM with spies)
+- ❌ Testing full component rendering (too complex for browser mode)
 
 ## Simple Mock Strategy
 
