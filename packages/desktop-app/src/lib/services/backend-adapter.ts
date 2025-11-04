@@ -1450,6 +1450,10 @@ export class HttpAdapter implements BackendAdapter {
   }
 
   // === Schema Management Operations ===
+  //
+  // NOTE: Schema operations use retryOnTransientError wrapper to handle SQLite write lock contention.
+  // This is consistent with the established pattern for mutation operations (see node and embedding endpoints).
+  // Read operations also use retry for consistency, though they're less likely to encounter lock errors.
 
   async getSchema(schemaId: string): Promise<SchemaDefinition> {
     return await this.retryOnTransientError(async () => {

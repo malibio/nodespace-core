@@ -14,13 +14,13 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
     response::Json,
     routing::{delete, get, post},
     Router,
 };
-use serde::{Deserialize, Serialize};
+use nodespace_core::models::schema::{ProtectionLevel, SchemaField};
 use nodespace_core::services::SchemaService;
+use serde::{Deserialize, Serialize};
 
 use crate::dev_server::{AppState, HttpError};
 
@@ -109,10 +109,9 @@ async fn get_schema(
 ) -> Result<Json<GetSchemaResponse>, HttpError> {
     // Get NodeService from state
     let node_service = {
-        let lock = state
-            .node_service
-            .read()
-            .map_err(|e| HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR"))?;
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR")
+        })?;
         std::sync::Arc::clone(&*lock)
     };
 
@@ -128,7 +127,7 @@ async fn get_schema(
     // Convert to response format
     let response = GetSchemaResponse {
         is_core: schema.is_core,
-        version: schema.version,
+        version: schema.version as i32,
         description: schema.description,
         fields: schema
             .fields
@@ -136,7 +135,7 @@ async fn get_schema(
             .map(|f| SchemaFieldResponse {
                 name: f.name,
                 field_type: f.field_type,
-                protection: f.protection,
+                protection: format!("{:?}", f.protection),
                 core_values: f.core_values,
                 user_values: f.user_values,
                 indexed: f.indexed,
@@ -173,36 +172,61 @@ async fn add_field(
 
     // Get NodeService from state
     let node_service = {
-        let lock = state
-            .node_service
-            .read()
-            .map_err(|e| HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR"))?;
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR")
+        })?;
         std::sync::Arc::clone(&*lock)
     };
 
     // Create SchemaService
     let schema_service = SchemaService::new(node_service);
 
-    // Add field
-    let result = schema_service
-        .add_field(
-            &schema_id,
-            &request.field_name,
-            &request.field_type,
-            request.indexed,
-            request.required,
-            request.default,
-            request.description,
-            request.item_type,
-            request.enum_values,
-            request.extensible,
-        )
+    // Validate field type constraints at API boundary
+    // This provides better HTTP error responses (400 Bad Request) vs backend errors (500)
+    if request.field_type == "enum" && request.enum_values.is_none() {
+        return Err(HttpError::new(
+            "Enum fields must specify enumValues".to_string(),
+            "VALIDATION_ERROR",
+        ));
+    }
+
+    if request.field_type == "array" && request.item_type.is_none() {
+        return Err(HttpError::new(
+            "Array fields must specify itemType".to_string(),
+            "VALIDATION_ERROR",
+        ));
+    }
+
+    // Build SchemaField from request
+    let schema_field = SchemaField {
+        name: request.field_name,
+        field_type: request.field_type,
+        protection: ProtectionLevel::User, // Only user fields can be added
+        core_values: None,                 // User fields don't have core values
+        user_values: request.enum_values,
+        indexed: request.indexed,
+        required: request.required,
+        extensible: request.extensible,
+        default: request.default,
+        description: request.description,
+        item_type: request.item_type,
+    };
+
+    // Add field to schema
+    schema_service
+        .add_field(&schema_id, schema_field)
+        .await
+        .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
+
+    // Get updated schema to return new version
+    let updated_schema = schema_service
+        .get_schema(&schema_id)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
 
     Ok(Json(MutationResponse {
-        schema_id: result.schema_id,
-        new_version: result.new_version,
+        schema_id,
+        new_version: updated_schema.version as i32,
         success: true,
     }))
 }
@@ -225,10 +249,9 @@ async fn remove_field(
 
     // Get NodeService from state
     let node_service = {
-        let lock = state
-            .node_service
-            .read()
-            .map_err(|e| HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR"))?;
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR")
+        })?;
         std::sync::Arc::clone(&*lock)
     };
 
@@ -236,14 +259,20 @@ async fn remove_field(
     let schema_service = SchemaService::new(node_service);
 
     // Remove field
-    let result = schema_service
+    schema_service
         .remove_field(&schema_id, &field_name)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
 
+    // Get updated schema to return new version
+    let updated_schema = schema_service
+        .get_schema(&schema_id)
+        .await
+        .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
+
     Ok(Json(MutationResponse {
-        schema_id: result.schema_id,
-        new_version: result.new_version,
+        schema_id,
+        new_version: updated_schema.version as i32,
         success: true,
     }))
 }
@@ -269,10 +298,9 @@ async fn extend_enum(
 
     // Get NodeService from state
     let node_service = {
-        let lock = state
-            .node_service
-            .read()
-            .map_err(|e| HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR"))?;
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR")
+        })?;
         std::sync::Arc::clone(&*lock)
     };
 
@@ -280,14 +308,20 @@ async fn extend_enum(
     let schema_service = SchemaService::new(node_service);
 
     // Extend enum
-    let result = schema_service
-        .extend_enum(&schema_id, &field_name, &request.value)
+    schema_service
+        .extend_enum_field(&schema_id, &field_name, request.value)
+        .await
+        .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
+
+    // Get updated schema to return new version
+    let updated_schema = schema_service
+        .get_schema(&schema_id)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
 
     Ok(Json(MutationResponse {
-        schema_id: result.schema_id,
-        new_version: result.new_version,
+        schema_id,
+        new_version: updated_schema.version as i32,
         success: true,
     }))
 }
@@ -310,10 +344,9 @@ async fn remove_enum_value(
 
     // Get NodeService from state
     let node_service = {
-        let lock = state
-            .node_service
-            .read()
-            .map_err(|e| HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR"))?;
+        let lock = state.node_service.read().map_err(|e| {
+            HttpError::new(format!("Failed to acquire read lock: {}", e), "LOCK_ERROR")
+        })?;
         std::sync::Arc::clone(&*lock)
     };
 
@@ -321,14 +354,20 @@ async fn remove_enum_value(
     let schema_service = SchemaService::new(node_service);
 
     // Remove enum value
-    let result = schema_service
+    schema_service
         .remove_enum_value(&schema_id, &field_name, &value)
         .await
         .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
 
+    // Get updated schema to return new version
+    let updated_schema = schema_service
+        .get_schema(&schema_id)
+        .await
+        .map_err(|e| HttpError::from_anyhow(e.into(), "SCHEMA_ERROR"))?;
+
     Ok(Json(MutationResponse {
-        schema_id: result.schema_id,
-        new_version: result.new_version,
+        schema_id,
+        new_version: updated_schema.version as i32,
         success: true,
     }))
 }
