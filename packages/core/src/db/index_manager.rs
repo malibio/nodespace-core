@@ -86,16 +86,16 @@ impl IndexManager {
 
         // Set busy timeout on this connection
         // Use query() instead of execute() because PRAGMA returns rows
-        let mut stmt = conn.prepare("PRAGMA busy_timeout = 5000")
+        // Regression: Using execute() caused test failures in issue #406
+        let mut stmt = conn
+            .prepare("PRAGMA busy_timeout = 5000")
             .await
             .map_err(|e| {
                 DatabaseError::sql_execution(format!("Failed to set busy timeout: {}", e))
             })?;
-        let _ = stmt.query(())
-            .await
-            .map_err(|e| {
-                DatabaseError::sql_execution(format!("Failed to set busy timeout: {}", e))
-            })?;
+        let _ = stmt.query(()).await.map_err(|e| {
+            DatabaseError::sql_execution(format!("Failed to set busy timeout: {}", e))
+        })?;
 
         Ok(conn)
     }

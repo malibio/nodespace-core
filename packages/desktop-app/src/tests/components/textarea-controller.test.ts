@@ -252,9 +252,13 @@ describe('TextareaController', () => {
       element.dispatchEvent(enterEvent);
 
       // Wait for async command execution
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(
+        () => {
+          expect(eventCalls.createNewNode).toHaveLength(1);
+        },
+        { timeout: 100 }
+      );
 
-      expect(eventCalls.createNewNode).toHaveLength(1);
       expect(eventCalls.createNewNode?.[0]?.afterNodeId).toBe('test-node');
     });
 
@@ -266,9 +270,13 @@ describe('TextareaController', () => {
       element.dispatchEvent(tabEvent);
 
       // Wait for async command execution
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(
+        () => {
+          expect(eventCalls.indentNode).toHaveLength(1);
+        },
+        { timeout: 100 }
+      );
 
-      expect(eventCalls.indentNode).toHaveLength(1);
       expect(eventCalls.indentNode?.[0]?.nodeId).toBe('test-node');
     });
 
@@ -284,9 +292,13 @@ describe('TextareaController', () => {
       element.dispatchEvent(shiftTabEvent);
 
       // Wait for async command execution
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(
+        () => {
+          expect(eventCalls.outdentNode).toHaveLength(1);
+        },
+        { timeout: 100 }
+      );
 
-      expect(eventCalls.outdentNode).toHaveLength(1);
       expect(eventCalls.outdentNode?.[0]?.nodeId).toBe('test-node');
     });
 
@@ -880,10 +892,12 @@ describe('TextareaController', () => {
       element.dispatchEvent(cmdBEvent);
 
       // Wait for async command execution
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // Should apply bold formatting
-      expect(element.value).toBe('**text**');
+      await vi.waitFor(
+        () => {
+          expect(element.value).toBe('**text**');
+        },
+        { timeout: 100 }
+      );
     });
 
     it('should handle Cmd+I for italic formatting', async () => {
@@ -902,10 +916,12 @@ describe('TextareaController', () => {
       element.dispatchEvent(cmdIEvent);
 
       // Wait for async command execution
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // Should apply italic formatting
-      expect(element.value).toBe('*text*');
+      await vi.waitFor(
+        () => {
+          expect(element.value).toBe('*text*');
+        },
+        { timeout: 100 }
+      );
     });
 
     it('should handle Ctrl+B for bold formatting (cross-platform)', async () => {
@@ -924,10 +940,12 @@ describe('TextareaController', () => {
       element.dispatchEvent(ctrlBEvent);
 
       // Wait for async command execution
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // Should apply bold formatting
-      expect(element.value).toBe('**text**');
+      await vi.waitFor(
+        () => {
+          expect(element.value).toBe('**text**');
+        },
+        { timeout: 100 }
+      );
     });
   });
 
