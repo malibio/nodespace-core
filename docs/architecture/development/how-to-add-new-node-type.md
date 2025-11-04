@@ -57,9 +57,14 @@ impl NodeBehavior for YourNodeTypeBehavior {
     }
 
     fn default_metadata(&self) -> serde_json::Value {
+        // IMPORTANT: Use type-namespaced properties (Issue #397)
+        // Properties must be nested under type name to preserve data during type conversions
         json!({
-            // Add any default metadata fields
-            // Example: "language": "plaintext" for code blocks
+            "your-node-type": {
+                // Add any default metadata fields here
+                // Example for code-block: "language": "plaintext"
+                // Example for task: "status": "pending", "priority": 2
+            }
         })
     }
 
