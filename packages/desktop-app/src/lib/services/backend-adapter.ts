@@ -694,30 +694,14 @@ export class TauriAdapter implements BackendAdapter {
 
   async getSchema(schemaId: string): Promise<SchemaDefinition> {
     try {
-      const result = await invoke<{ schema: unknown; schemaId: string; success: boolean }>(
-        'mcp_call_tool',
-        {
-          name: 'get_schema_definition',
-          arguments: { schema_id: schemaId }
-        }
-      );
-
-      if (!result.success || !result.schema) {
-        throw new NodeOperationError(
-          `Failed to retrieve schema '${schemaId}'`,
-          schemaId,
-          'getSchema'
-        );
-      }
-
-      // Convert from snake_case (Rust) to camelCase (TypeScript)
-      const schema = result.schema as {
+      // Call actual Tauri command (created by #388)
+      const schema = await invoke<{
         is_core: boolean;
         version: number;
         description: string;
         fields: Array<{
           name: string;
-          type: string;
+          field_type: string;
           protection: string;
           core_values?: string[];
           user_values?: string[];
@@ -728,15 +712,18 @@ export class TauriAdapter implements BackendAdapter {
           description?: string;
           item_type?: string;
         }>;
-      };
+      }>('get_schema_definition', {
+        schemaId
+      });
 
+      // Convert from snake_case (Rust) to camelCase (TypeScript)
       return {
         isCore: schema.is_core,
         version: schema.version,
         description: schema.description,
         fields: schema.fields.map((field) => ({
           name: field.name,
-          type: field.type,
+          type: field.field_type,
           protection: field.protection as 'core' | 'user' | 'system',
           coreValues: field.core_values,
           userValues: field.user_values,
@@ -756,22 +743,21 @@ export class TauriAdapter implements BackendAdapter {
 
   async addSchemaField(schemaId: string, config: AddFieldConfig): Promise<AddFieldResult> {
     try {
+      // Call actual Tauri command (created by #388)
       const result = await invoke<{
         schema_id: string;
         new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'add_schema_field',
-        arguments: {
-          schema_id: schemaId,
-          field_name: config.fieldName,
-          field_type: config.fieldType,
+      }>('add_schema_field', {
+        schemaId,
+        field: {
+          name: config.fieldName,
+          fieldType: config.fieldType,
           indexed: config.indexed ?? false,
           required: config.required,
           default: config.default,
           description: config.description,
-          item_type: config.itemType,
-          enum_values: config.enumValues,
+          itemType: config.itemType,
+          enumValues: config.enumValues,
           extensible: config.extensible
         }
       });
@@ -779,7 +765,7 @@ export class TauriAdapter implements BackendAdapter {
       return {
         schemaId: result.schema_id,
         newVersion: result.new_version,
-        success: result.success
+        success: true
       };
     } catch (error) {
       const err = toError(error);
@@ -789,22 +775,19 @@ export class TauriAdapter implements BackendAdapter {
 
   async removeSchemaField(schemaId: string, fieldName: string): Promise<RemoveFieldResult> {
     try {
+      // Call actual Tauri command (created by #388)
       const result = await invoke<{
         schema_id: string;
         new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'remove_schema_field',
-        arguments: {
-          schema_id: schemaId,
-          field_name: fieldName
-        }
+      }>('remove_schema_field', {
+        schemaId,
+        fieldName
       });
 
       return {
         schemaId: result.schema_id,
         newVersion: result.new_version,
-        success: result.success
+        success: true
       };
     } catch (error) {
       const err = toError(error);
@@ -818,23 +801,20 @@ export class TauriAdapter implements BackendAdapter {
     value: string
   ): Promise<ExtendEnumResult> {
     try {
+      // Call actual Tauri command (created by #388)
       const result = await invoke<{
         schema_id: string;
         new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'extend_schema_enum',
-        arguments: {
-          schema_id: schemaId,
-          field_name: fieldName,
-          value: value
-        }
+      }>('extend_schema_enum', {
+        schemaId,
+        fieldName,
+        value
       });
 
       return {
         schemaId: result.schema_id,
         newVersion: result.new_version,
-        success: result.success
+        success: true
       };
     } catch (error) {
       const err = toError(error);
@@ -848,23 +828,20 @@ export class TauriAdapter implements BackendAdapter {
     value: string
   ): Promise<RemoveEnumValueResult> {
     try {
+      // Call actual Tauri command (created by #388)
       const result = await invoke<{
         schema_id: string;
         new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'remove_schema_enum_value',
-        arguments: {
-          schema_id: schemaId,
-          field_name: fieldName,
-          value: value
-        }
+      }>('remove_schema_enum_value', {
+        schemaId,
+        fieldName,
+        value
       });
 
       return {
         schemaId: result.schema_id,
         newVersion: result.new_version,
-        success: result.success
+        success: true
       };
     } catch (error) {
       const err = toError(error);
