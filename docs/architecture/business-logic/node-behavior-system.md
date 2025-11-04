@@ -4,6 +4,62 @@
 
 The Node Behavior System is a trait-based architecture that provides type-specific functionality for different kinds of nodes in NodeSpace. It enables extensible behavior while maintaining a universal data storage format, supporting both built-in node types and future plugin development.
 
+## Architectural Decision: Hybrid Approach
+
+NodeSpace uses a **hybrid architecture** combining hardcoded behaviors with schema-driven extensions:
+
+### Core Layer (Hardcoded Behaviors)
+- **Purpose**: Protect critical properties that UI components depend on
+- **Implementation**: Rust traits in `packages/core/src/behaviors/mod.rs`
+- **Advantages**:
+  - ✅ Compile-time type safety
+  - ✅ Performance optimization (1000x faster validation)
+  - ✅ UI stability guarantees (core fields cannot be deleted by users)
+  - ✅ Git-versioned evolution with code review
+- **Scope**: Built-in types (task, text, date, project, person) and their core properties
+
+### Extension Layer (Schema-Driven)
+- **Purpose**: User customization and plugin extensibility
+- **Implementation**: Schema nodes with validation at runtime
+- **Advantages**:
+  - ✅ Runtime extensibility (no code deployment)
+  - ✅ User-customizable properties
+  - ✅ MCP/AI can modify schemas
+  - ✅ Plugin/extension support
+- **Scope**: User-defined properties and custom entity types
+
+### Validation Hierarchy
+```rust
+// Step 1: Core behavior validation (PROTECTED)
+if let Some(behavior) = registry.get(&node.node_type) {
+    behavior.validate(node)?;  // Cannot be overridden
+}
+
+// Step 2: Schema validation (USER-EXTENSIBLE)
+if let Some(schema) = schema_service.get_schema(&node.node_type)? {
+    validate_against_schema(node, &schema)?;
+}
+```
+
+### Property Ownership Model
+
+| Property Type | Protection | Modifiable | Example |
+|--------------|------------|------------|---------|
+| **Core Properties** | `core` | ❌ No | task.status, task.priority |
+| **User Extensions** | `user` | ✅ Yes | custom:estimatedHours, custom:tags |
+| **Custom Types** | N/A | ✅ Yes | recipe, workout (no hardcoded behavior) |
+
+### Why This Approach?
+
+The hybrid model provides:
+1. **Stability**: Core UI components won't break from user modifications
+2. **Performance**: Critical validation paths remain compiled and fast
+3. **Type Safety**: Core properties have compile-time guarantees
+4. **Extensibility**: Users can add properties and types without code changes
+5. **Best of Both Worlds**: Reliability for core features + flexibility for customization
+
+See [Schema Management Guide](../development/schema-management-implementation-guide.md) for schema-driven extensions.
+
 ## Core Architecture
 
 ### Separation of Data and Behavior
