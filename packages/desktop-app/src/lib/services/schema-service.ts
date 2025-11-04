@@ -2,7 +2,7 @@
  * Schema Service - TypeScript Wrapper for Schema Management
  *
  * Provides a type-safe TypeScript wrapper around the Rust backend's schema
- * management MCP tools. Enables frontend components to manage user-defined
+ * management operations. Enables frontend components to manage user-defined
  * entity schemas with full type safety.
  *
  * ## Features
@@ -39,16 +39,17 @@
  *
  * ## Architecture
  *
- * - Frontend Service (this file) → Tauri IPC → MCP Tools → SchemaService → NodeService → Database
+ * - Frontend Service (this file) → BackendAdapter (Tauri IPC or HTTP) → SchemaService → NodeService → Database
+ * - Uses BackendAdapter pattern for Tauri and HTTP mode support
  * - All operations enforce protection levels
  * - Schema version automatically incremented on changes
  * - Stateless design (no caching) - backend is fast enough for current needs
  *
  * @see packages/core/src/services/schema_service.rs - Rust implementation
- * @see packages/core/src/mcp/handlers/schema.rs - MCP tool handlers
+ * @see packages/desktop-app/src/lib/services/backend-adapter.ts - Backend adapter pattern
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { getBackendAdapter, type BackendAdapter } from './backend-adapter';
 import {
   SchemaOperationError,
   type SchemaDefinition,
@@ -105,9 +106,15 @@ function formatSchemaError(error: unknown, operation: string, schemaId: string):
 /**
  * Schema Service class
  *
- * Wraps Rust backend MCP schema tools with TypeScript interface
+ * Wraps Rust backend schema operations with TypeScript interface
  */
 export class SchemaService {
+  private adapter: BackendAdapter;
+
+  constructor(adapter?: BackendAdapter) {
+    this.adapter = adapter ?? getBackendAdapter();
+  }
+
   /**
    * Get a schema definition by schema ID
    *
@@ -122,62 +129,14 @@ export class SchemaService {
    * ```
    */
   async getSchema(schemaId: string): Promise<SchemaDefinition> {
-    // Validate input before expensive IPC call
+    // Validate input
     if (!schemaId || schemaId.trim() === '') {
       throw new SchemaOperationError('Schema ID cannot be empty', schemaId, 'get');
     }
 
     try {
-      const result = await invoke<{ schema: unknown; schemaId: string; success: boolean }>(
-        'mcp_call_tool',
-        {
-          name: 'get_schema_definition',
-          arguments: { schema_id: schemaId }
-        }
-      );
-
-      if (!result.success || !result.schema) {
-        throw new Error(`Failed to retrieve schema '${schemaId}'`);
-      }
-
-      // Convert from snake_case (Rust) to camelCase (TypeScript)
-      const schema = result.schema as {
-        is_core: boolean;
-        version: number;
-        description: string;
-        fields: Array<{
-          name: string;
-          type: string;
-          protection: string;
-          core_values?: string[];
-          user_values?: string[];
-          indexed: boolean;
-          required?: boolean;
-          extensible?: boolean;
-          default?: unknown;
-          description?: string;
-          item_type?: string;
-        }>;
-      };
-
-      return {
-        isCore: schema.is_core,
-        version: schema.version,
-        description: schema.description,
-        fields: schema.fields.map((field) => ({
-          name: field.name,
-          type: field.type,
-          protection: field.protection as 'core' | 'user' | 'system',
-          coreValues: field.core_values,
-          userValues: field.user_values,
-          indexed: field.indexed,
-          required: field.required,
-          extensible: field.extensible,
-          default: field.default,
-          description: field.description,
-          itemType: field.item_type
-        }))
-      };
+      // Adapter handles Tauri vs HTTP automatically and performs case conversion
+      return await this.adapter.getSchema(schemaId);
     } catch (error) {
       const message = formatSchemaError(error, 'get', schemaId);
       throw new SchemaOperationError(message, schemaId, 'get', error);
@@ -210,7 +169,7 @@ export class SchemaService {
    * ```
    */
   async addField(schemaId: string, config: AddFieldConfig): Promise<AddFieldResult> {
-    // Validate input before expensive IPC call
+    // Validate input
     if (!schemaId || schemaId.trim() === '') {
       throw new SchemaOperationError('Schema ID cannot be empty', schemaId, 'addField');
     }
@@ -222,31 +181,7 @@ export class SchemaService {
     }
 
     try {
-      const result = await invoke<{
-        schema_id: string;
-        new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'add_schema_field',
-        arguments: {
-          schema_id: schemaId,
-          field_name: config.fieldName,
-          field_type: config.fieldType,
-          indexed: config.indexed ?? false,
-          required: config.required,
-          default: config.default,
-          description: config.description,
-          item_type: config.itemType,
-          enum_values: config.enumValues,
-          extensible: config.extensible
-        }
-      });
-
-      return {
-        schemaId: result.schema_id,
-        newVersion: result.new_version,
-        success: result.success
-      };
+      return await this.adapter.addSchemaField(schemaId, config);
     } catch (error) {
       const message = formatSchemaError(error, 'add field', schemaId);
       throw new SchemaOperationError(message, schemaId, 'addField', error);
@@ -272,7 +207,7 @@ export class SchemaService {
    * ```
    */
   async removeField(schemaId: string, fieldName: string): Promise<RemoveFieldResult> {
-    // Validate input before expensive IPC call
+    // Validate input
     if (!schemaId || schemaId.trim() === '') {
       throw new SchemaOperationError('Schema ID cannot be empty', schemaId, 'removeField');
     }
@@ -281,23 +216,7 @@ export class SchemaService {
     }
 
     try {
-      const result = await invoke<{
-        schema_id: string;
-        new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'remove_schema_field',
-        arguments: {
-          schema_id: schemaId,
-          field_name: fieldName
-        }
-      });
-
-      return {
-        schemaId: result.schema_id,
-        newVersion: result.new_version,
-        success: result.success
-      };
+      return await this.adapter.removeSchemaField(schemaId, fieldName);
     } catch (error) {
       const message = formatSchemaError(error, 'remove field', schemaId);
       throw new SchemaOperationError(message, schemaId, 'removeField', error);
@@ -325,7 +244,7 @@ export class SchemaService {
    * ```
    */
   async extendEnum(schemaId: string, fieldName: string, value: string): Promise<ExtendEnumResult> {
-    // Validate input before expensive IPC call
+    // Validate input
     if (!schemaId || schemaId.trim() === '') {
       throw new SchemaOperationError('Schema ID cannot be empty', schemaId, 'extendEnum');
     }
@@ -337,24 +256,7 @@ export class SchemaService {
     }
 
     try {
-      const result = await invoke<{
-        schema_id: string;
-        new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'extend_schema_enum',
-        arguments: {
-          schema_id: schemaId,
-          field_name: fieldName,
-          value: value
-        }
-      });
-
-      return {
-        schemaId: result.schema_id,
-        newVersion: result.new_version,
-        success: result.success
-      };
+      return await this.adapter.extendSchemaEnum(schemaId, fieldName, value);
     } catch (error) {
       const message = formatSchemaError(error, 'extend enum', schemaId);
       throw new SchemaOperationError(message, schemaId, 'extendEnum', error);
@@ -385,7 +287,7 @@ export class SchemaService {
     fieldName: string,
     value: string
   ): Promise<RemoveEnumValueResult> {
-    // Validate input before expensive IPC call
+    // Validate input
     if (!schemaId || schemaId.trim() === '') {
       throw new SchemaOperationError('Schema ID cannot be empty', schemaId, 'removeEnumValue');
     }
@@ -397,24 +299,7 @@ export class SchemaService {
     }
 
     try {
-      const result = await invoke<{
-        schema_id: string;
-        new_version: number;
-        success: boolean;
-      }>('mcp_call_tool', {
-        name: 'remove_schema_enum_value',
-        arguments: {
-          schema_id: schemaId,
-          field_name: fieldName,
-          value: value
-        }
-      });
-
-      return {
-        schemaId: result.schema_id,
-        newVersion: result.new_version,
-        success: result.success
-      };
+      return await this.adapter.removeSchemaEnumValue(schemaId, fieldName, value);
     } catch (error) {
       const message = formatSchemaError(error, 'remove enum value', schemaId);
       throw new SchemaOperationError(message, schemaId, 'removeEnumValue', error);
@@ -485,6 +370,7 @@ export class SchemaService {
 /**
  * Factory function to create a new SchemaService instance
  *
+ * @param adapter - Optional backend adapter (defaults to auto-detected adapter)
  * @returns New SchemaService instance
  *
  * @example
@@ -496,8 +382,8 @@ export class SchemaService {
  * </script>
  * ```
  */
-export function createSchemaService(): SchemaService {
-  return new SchemaService();
+export function createSchemaService(adapter?: BackendAdapter): SchemaService {
+  return new SchemaService(adapter);
 }
 
 /**
