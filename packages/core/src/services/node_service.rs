@@ -832,7 +832,7 @@ impl NodeService {
     /// # }
     /// ```
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>, NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         let mut stmt = conn
             .prepare(
@@ -2244,7 +2244,7 @@ impl NodeService {
 
     /// Check if a node exists
     async fn node_exists(&self, id: &str) -> Result<bool, NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         let mut stmt = conn
             .prepare("SELECT COUNT(*) FROM nodes WHERE id = ?")
@@ -2348,7 +2348,7 @@ impl NodeService {
             self.behaviors.validate_node(node)?;
         }
 
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         // Begin transaction
         conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
@@ -2439,7 +2439,7 @@ impl NodeService {
             return Ok(());
         }
 
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         // Begin transaction
         conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
@@ -2585,7 +2585,7 @@ impl NodeService {
             return Ok(());
         }
 
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         // Begin transaction
         conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
@@ -2776,7 +2776,7 @@ impl NodeService {
     ///
     /// * `node` - Mutable reference to node to populate
     async fn populate_mentions(&self, node: &mut Node) -> Result<(), NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         // Query outgoing mentions (nodes that THIS node references)
         let mut stmt = conn
@@ -2895,7 +2895,7 @@ impl NodeService {
             }
         }
 
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         // Use INSERT OR IGNORE to handle duplicates gracefully
         conn.execute(
@@ -2936,7 +2936,7 @@ impl NodeService {
         source_id: &str,
         target_id: &str,
     ) -> Result<(), NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         conn.execute(
             "DELETE FROM node_mentions WHERE node_id = ? AND mentions_node_id = ?",
@@ -2973,7 +2973,7 @@ impl NodeService {
     /// # }
     /// ```
     pub async fn get_mentions(&self, node_id: &str) -> Result<Vec<String>, NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         let mut stmt = conn
             .prepare("SELECT mentions_node_id FROM node_mentions WHERE node_id = ?")
@@ -3026,7 +3026,7 @@ impl NodeService {
     /// # }
     /// ```
     pub async fn get_mentioned_by(&self, node_id: &str) -> Result<Vec<String>, NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         let mut stmt = conn
             .prepare("SELECT node_id FROM node_mentions WHERE mentions_node_id = ?")
@@ -3084,7 +3084,7 @@ impl NodeService {
         &self,
         node_id: &str,
     ) -> Result<Vec<String>, NodeServiceError> {
-        let conn = self.db.connect()?;
+        let conn = self.db.connect_with_timeout().await?;
 
         let query = "
             SELECT DISTINCT
