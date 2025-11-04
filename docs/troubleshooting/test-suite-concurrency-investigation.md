@@ -159,6 +159,6 @@ The SIGABRT/SIGSEGV/SIGTRAP crashes were caused by two bugs in database connecti
 
 ---
 
-*Investigation Date*: November 4, 2025
+*Investigation Date*: November 4, 2024
 *Issue*: #398
 *Investigator*: Claude Code

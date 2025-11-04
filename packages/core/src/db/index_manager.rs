@@ -345,6 +345,8 @@ mod tests {
 
         // Create nodes table for testing
         // Use IndexManager's connect_with_timeout for proper concurrency support
+        // This ensures the busy_timeout PRAGMA is set correctly, preventing race conditions
+        // when tests run concurrently (see Issue #398)
         let index_manager = IndexManager::new(db.clone());
         let conn = index_manager.connect_with_timeout().await.unwrap();
         conn.execute(
