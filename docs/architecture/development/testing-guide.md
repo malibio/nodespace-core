@@ -13,9 +13,17 @@
 # Rust backend tests
 cargo test
 
-# Frontend tests (in-memory mode - fast, recommended)
-bun run test              # Run all tests once
+# Frontend tests (Happy-DOM - fast, recommended for 99% of tests)
+bun run test              # Run all unit tests once
+bun run test:unit         # Same as above (explicit)
 bun run test:watch        # Watch mode for TDD
+
+# Browser tests (Vitest Browser Mode - real Chromium for critical tests)
+bun run test:browser      # Run browser integration tests
+bun run test:browser:watch # Watch mode for browser tests
+
+# Run all frontend tests (unit + browser)
+bun run test:all          # Runs both Happy-DOM and browser tests
 
 # Frontend tests (database mode - full SQLite integration)
 bun run test:db           # Full integration tests
@@ -24,30 +32,45 @@ bun run test:db:watch     # Watch mode with database
 # Frontend tests with coverage
 bun run test:coverage
 
-# All tests (backend + frontend)
-cargo test && bun run test
+# All tests (backend + frontend + browser)
+cargo test && bun run test:all
 ```
 
 ### Test Execution Modes
 
-NodeSpace integration tests support two execution modes:
+NodeSpace uses a **hybrid three-tier testing strategy** for optimal speed, reliability, and real browser testing:
 
-**1. In-Memory Mode (Default - Recommended)**
+**1. Happy-DOM Mode (Default - Recommended for 99% of tests)**
 - **Speed**: 100x faster (~100-200ms per test file)
 - **Database**: No SQLite persistence
-- **Use Case**: Development, TDD, CI/CD
+- **DOM**: Happy-DOM simulated environment
+- **Use Case**: Unit tests, service tests, component logic, TDD workflow
 - **Command**: `bun run test` or `bun run test:watch`
+- **Location**: `src/tests/**/*.test.ts` (excluding `browser/`)
+- **Test Count**: 728+ tests
 
-**2. Database Mode (Full Integration)**
-- **Speed**: Slower (~10-15s per test file)
+**2. Vitest Browser Mode (Real Browser - For Critical Interactions)**
+- **Speed**: Slower (~500ms-2s per test file, but only ~10-20 tests total)
+- **Browser**: Real Chromium via Playwright
+- **DOM**: Actual browser DOM with real focus/blur/event APIs
+- **Use Case**: Focus management, real browser events, dropdown interactions, cross-node navigation
+- **Command**: `bun run test:browser` or `bun run test:browser:watch`
+- **Location**: `src/tests/browser/**/*.test.ts`
+- **Setup**: Requires `bunx playwright install chromium` (one-time)
+- **Test Count**: ~10-20 targeted critical tests
+
+**3. Database Mode (Full Integration)**
+- **Speed**: Slowest (~10-15s per test file)
 - **Database**: Full SQLite persistence and validation
-- **Use Case**: Pre-merge validation, debugging database issues
+- **DOM**: Happy-DOM
+- **Use Case**: Pre-merge validation, debugging database-specific issues
 - **Command**: `bun run test:db` or `bun run test:db:watch`
 
 **When to use which mode:**
-- Use **in-memory mode** for daily development and TDD workflow
-- Use **database mode** before merging critical changes or when debugging database-specific issues
-- CI/CD pipelines use **in-memory mode** for speed
+- Use **Happy-DOM mode** (default) for 99% of tests - unit tests, service logic, component logic
+- Use **Browser Mode** only when you need real focus/blur events or browser-specific DOM APIs that Happy-DOM cannot simulate
+- Use **Database Mode** before merging critical changes or when debugging database-specific issues
+- CI/CD pipelines run both **Happy-DOM** and **Browser Mode** tests
 
 **Database cleanup behavior:**
 - **In-memory mode**: No database files created, no cleanup needed
@@ -157,10 +180,98 @@ test('creates and saves a note', async ({ page }) => {
   await page.click('[data-testid="new-note"]');
   await page.fill('textarea', 'My note content');
   await page.click('[data-testid="save"]');
-  
+
   await expect(page.locator('text=My note content')).toBeVisible();
 });
 ```
+
+### 5. Browser Mode Testing (New - For Real Browser Behavior)
+
+**When to Use Browser Mode:**
+Use Vitest Browser Mode **only** when testing functionality that requires real browser APIs that Happy-DOM cannot simulate:
+
+- ✅ **Focus/Blur Events**: Real `focus()` and `blur()` events that fire correctly
+- ✅ **Edit Mode Transitions**: Click-to-edit workflows with real focus behavior
+- ✅ **Dropdown Interactions**: Slash commands, @mentions with real keyboard navigation
+- ✅ **Browser-Specific APIs**: `document.activeElement`, `selectionStart/End`, etc.
+- ❌ **NOT for**: Logic tests, service tests, state management (use Happy-DOM)
+
+**Browser Test Example:**
+
+```typescript
+// src/tests/browser/focus-management.test.ts
+import { describe, it, expect, beforeEach } from 'vitest';
+
+describe('Focus Management - Browser Mode', () => {
+  beforeEach(() => {
+    // Clear DOM before each test
+    document.body.innerHTML = '';
+  });
+
+  it('can focus and blur elements with real events', () => {
+    // Create two textareas
+    const textarea1 = document.createElement('textarea');
+    textarea1.id = 'textarea-1';
+    document.body.appendChild(textarea1);
+
+    const textarea2 = document.createElement('textarea');
+    textarea2.id = 'textarea-2';
+    document.body.appendChild(textarea2);
+
+    // Focus first textarea
+    textarea1.focus();
+    expect(document.activeElement).toBe(textarea1);
+
+    // Focus second textarea (should blur first automatically)
+    textarea2.focus();
+    expect(document.activeElement).toBe(textarea2);
+  });
+
+  it('focus events fire correctly', () => {
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+
+    let focusCount = 0;
+    let blurCount = 0;
+
+    textarea.addEventListener('focus', () => focusCount++);
+    textarea.addEventListener('blur', () => blurCount++);
+
+    // Focus the textarea
+    textarea.focus();
+    expect(focusCount).toBe(1);
+    expect(blurCount).toBe(0);
+
+    // Blur by focusing another element
+    const anotherTextarea = document.createElement('textarea');
+    document.body.appendChild(anotherTextarea);
+    anotherTextarea.focus();
+
+    expect(focusCount).toBe(1);
+    expect(blurCount).toBe(1);
+  });
+});
+```
+
+**Key Differences from Happy-DOM Tests:**
+
+| Feature | Happy-DOM | Browser Mode |
+|---------|-----------|--------------|
+| Speed | ~100-200ms per file | ~500ms-2s per file |
+| Setup | None | `bunx playwright install chromium` |
+| DOM API | Simulated | Real browser |
+| Focus/Blur | ❌ Doesn't work | ✅ Works correctly |
+| Test Location | `src/tests/**/*.test.ts` | `src/tests/browser/**/*.test.ts` |
+| Use Case | 99% of tests | Critical browser interactions |
+| Run Command | `bun run test` | `bun run test:browser` |
+
+**Best Practices for Browser Tests:**
+
+1. **Keep them minimal**: Only test what Happy-DOM cannot
+2. **Clean up DOM**: Use `beforeEach(() => document.body.innerHTML = '')`
+3. **Direct DOM APIs**: Access `document`, `document.activeElement` directly (no special Playwright APIs needed)
+4. **Synchronous when possible**: Prefer direct DOM manipulation over async interactions
+5. **No framework imports**: Browser tests run in real browser, avoid importing Svelte components
 
 ## Simple Mock Strategy
 
