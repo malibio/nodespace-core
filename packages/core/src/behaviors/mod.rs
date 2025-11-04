@@ -442,8 +442,7 @@ impl NodeBehavior for TaskNodeBehavior {
         // - Old format: properties.status (deprecated, will be auto-migrated)
 
         // Try new nested format first, fall back to old flat format
-        let task_props = node.properties.get("task")
-            .or(Some(&node.properties)); // Fallback to root for backward compat
+        let task_props = node.properties.get("task").or(Some(&node.properties)); // Fallback to root for backward compat
 
         // If task properties exist, validate them
         if let Some(props) = task_props {

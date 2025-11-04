@@ -106,6 +106,26 @@
     loadSchema();
   });
 
+  /**
+   * Get property value with backward compatibility (Issue #397)
+   *
+   * Supports both formats:
+   * - New nested: properties.task.status
+   * - Old flat: properties.status
+   */
+  function getPropertyValue(fieldName: string): unknown {
+    if (!node) return undefined;
+
+    // Try new nested format first: properties[nodeType][fieldName]
+    const typeNamespace = node.properties?.[nodeType];
+    if (typeNamespace && typeof typeNamespace === 'object' && fieldName in typeNamespace) {
+      return (typeNamespace as Record<string, unknown>)[fieldName];
+    }
+
+    // Fall back to old flat format: properties[fieldName]
+    return node.properties?.[fieldName];
+  }
+
   // Calculate field completion stats
   const fieldStats = $derived(() => {
     if (!schema || !node) {
@@ -120,7 +140,7 @@
     const filled = allFields.filter((field) => {
       // Type guard to ensure node is not null
       if (!node) return false;
-      const value = node.properties?.[field.name];
+      const value = getPropertyValue(field.name);
       if (value === null || value === undefined) return false;
       if (typeof value === 'string' && value.trim() === '') return false;
       return true;
@@ -137,7 +157,7 @@
     const statusField = schema.fields.find((f) => f.name === 'status' && f.type === 'enum');
     // Use current value or default value from schema
     const statusValue = statusField
-      ? node.properties?.[statusField.name] || statusField.default || null
+      ? getPropertyValue(statusField.name) || statusField.default || null
       : null;
     // Ensure status is a string - handle arrays incorrectly stored
     let status: string | null = null;
@@ -151,7 +171,7 @@
 
     // Find due date field
     const dueDateField = schema.fields.find((f) => f.name === 'dueDate' || f.name === 'due_date');
-    const dueDate = dueDateField ? node.properties?.[dueDateField.name] : null;
+    const dueDate = dueDateField ? getPropertyValue(dueDateField.name) : null;
 
     return { status, dueDate };
   });
@@ -160,9 +180,17 @@
   function updateProperty(fieldName: string, value: unknown) {
     if (!node) return;
 
+    // Use new nested format: properties.{nodeType}.{fieldName} (Issue #397)
+    // This preserves properties when converting between types
+    const typeNamespace = node.properties?.[nodeType] || {};
+    const updatedNamespace = {
+      ...(typeof typeNamespace === 'object' ? typeNamespace : {}),
+      [fieldName]: value
+    };
+
     const updatedProperties = {
       ...node.properties,
-      [fieldName]: value
+      [nodeType]: updatedNamespace
     };
 
     sharedNodeStore.updateNode(
