@@ -61,6 +61,25 @@ pub struct SchemaFieldResponse {
     pub item_type: Option<String>,
 }
 
+/// Convert SchemaField from nodespace-core to HTTP response format
+impl From<SchemaField> for SchemaFieldResponse {
+    fn from(f: SchemaField) -> Self {
+        Self {
+            name: f.name,
+            field_type: f.field_type,
+            protection: format!("{:?}", f.protection),
+            core_values: f.core_values,
+            user_values: f.user_values,
+            indexed: f.indexed,
+            required: f.required,
+            extensible: f.extensible,
+            default: f.default,
+            description: f.description,
+            item_type: f.item_type,
+        }
+    }
+}
+
 /// Request body for adding a field
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,23 +148,7 @@ async fn get_schema(
         is_core: schema.is_core,
         version: schema.version as i32,
         description: schema.description,
-        fields: schema
-            .fields
-            .into_iter()
-            .map(|f| SchemaFieldResponse {
-                name: f.name,
-                field_type: f.field_type,
-                protection: format!("{:?}", f.protection),
-                core_values: f.core_values,
-                user_values: f.user_values,
-                indexed: f.indexed,
-                required: f.required,
-                extensible: f.extensible,
-                default: f.default,
-                description: f.description,
-                item_type: f.item_type,
-            })
-            .collect(),
+        fields: schema.fields.into_iter().map(|f| f.into()).collect(),
     };
 
     Ok(Json(response))
