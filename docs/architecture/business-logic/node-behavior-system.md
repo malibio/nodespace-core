@@ -243,12 +243,16 @@ impl NodeBehavior for TaskNodeBehavior {
             return Err("Task nodes must have a description".to_string());
         }
 
-        // Validate metadata structure
+        // NOTE: In the actual implementation (Issue #392), enum value validation
+        // is handled by the schema system, not behaviors. Behaviors only validate TYPES.
+        // This example is kept for historical reference.
+
+        // Validate metadata structure (TYPE checking only - values checked by schema)
         if let Some(status) = node.metadata.get("status") {
-            let status_str = status.as_str().ok_or("Status must be a string")?;
-            if !["pending", "in-progress", "completed", "cancelled"].contains(&status_str) {
-                return Err(format!("Invalid task status: {}", status_str));
+            if !status.is_string() && !status.is_null() {
+                return Err("Status must be a string".to_string());
             }
+            // Value validation (OPEN, IN_PROGRESS, DONE, BLOCKED) handled by schema
         }
 
         if let Some(due_date) = node.metadata.get("due_date") {
@@ -258,10 +262,10 @@ impl NodeBehavior for TaskNodeBehavior {
         }
 
         if let Some(priority) = node.metadata.get("priority") {
-            let priority_num = priority.as_i64().ok_or("Priority must be a number")?;
-            if !(1..=4).contains(&priority_num) {
-                return Err("Priority must be between 1 (low) and 4 (urgent)".to_string());
+            if !priority.is_string() && !priority.is_null() {
+                return Err("Priority must be a string".to_string());
             }
+            // Value validation (LOW, MEDIUM, HIGH) handled by schema
         }
 
         Ok(())
@@ -277,11 +281,12 @@ impl NodeBehavior for TaskNodeBehavior {
 
     fn default_metadata(&self) -> Value {
         json!({
-            "status": "pending",
-            "priority": 2,  // medium priority
-            "due_date": null,
-            "assignee_id": null,
-            "estimated_hours": null
+            "task": {  // Namespaced under "task" (Issue #397)
+                "status": "OPEN",  // Schema-defined enum values are UPPERCASE
+                "priority": "MEDIUM",  // Priority is string enum (LOW, MEDIUM, HIGH)
+                "due_date": null,
+                "assignee_id": null
+            }
         })
     }
 
@@ -403,13 +408,14 @@ impl NodeBehavior for ProjectNodeBehavior {
             return Err("Project nodes must have a name/title".to_string());
         }
 
-        // Validate status
+        // NOTE: This is a hypothetical example. In actual implementation (Issue #392),
+        // enum value validation is handled by schemas, not behaviors.
+        // Validate status TYPE only
         if let Some(status) = node.metadata.get("status") {
-            let status_str = status.as_str().ok_or("Status must be a string")?;
-            let valid_statuses = ["planning", "active", "completed", "archived", "cancelled"];
-            if !valid_statuses.contains(&status_str) {
-                return Err(format!("Invalid project status: {}", status_str));
+            if !status.is_string() && !status.is_null() {
+                return Err("Status must be a string".to_string());
             }
+            // Value validation would be handled by project schema
         }
 
         // Validate date logic
