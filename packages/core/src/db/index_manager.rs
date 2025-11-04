@@ -85,7 +85,13 @@ impl IndexManager {
         let conn = self.db.connect().map_err(DatabaseError::LibsqlError)?;
 
         // Set busy timeout on this connection
-        conn.execute("PRAGMA busy_timeout = 5000", ())
+        // Use query() instead of execute() because PRAGMA returns rows
+        let mut stmt = conn.prepare("PRAGMA busy_timeout = 5000")
+            .await
+            .map_err(|e| {
+                DatabaseError::sql_execution(format!("Failed to set busy timeout: {}", e))
+            })?;
+        let _ = stmt.query(())
             .await
             .map_err(|e| {
                 DatabaseError::sql_execution(format!("Failed to set busy timeout: {}", e))
