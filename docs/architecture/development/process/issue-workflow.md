@@ -344,6 +344,25 @@ bun run quality:fix
 ### PR Creation Requirements
 
 **🚨 BLOCKING Quality Requirements (CANNOT CREATE PR WITHOUT):**
+
+**1. Test Suite Verification (BLOCKING):**
+```bash
+# Run full test suite
+bun run test:all
+
+# MUST verify:
+# - No NEW test failures introduced (compare to baseline from startup sequence)
+# - If any new failures exist, they must be fixed before PR creation
+# - Pre-existing failures documented in PR description
+```
+
+**Requirements:**
+- [ ] **No new test failures**: All tests that were passing in baseline still pass
+- [ ] **Test count verified**: Total passing tests >= baseline count
+- [ ] **Known failures documented**: If baseline had failures, they're noted in PR description
+- [ ] **Regression check**: Compare current failures vs baseline failures
+
+**2. Code Quality (BLOCKING):**
 - [ ] **ESLint**: ZERO errors (warnings acceptable in development)
 - [ ] **Prettier**: Code consistently formatted
 - [ ] **TypeScript**: ZERO compilation errors, strict type checking passed
@@ -351,14 +370,21 @@ bun run quality:fix
 
 ### PR Review Process
 
-**🚨 MANDATORY FIRST STEP - Linting Verification (ALL REVIEWERS: AI AGENTS & HUMANS):**
-- [ ] **Reviewer MUST run**: `bun run quality:fix` before any other review steps
+**🚨 MANDATORY FIRST STEP - Test Suite Verification (ALL REVIEWERS: AI AGENTS & HUMANS):**
+- [ ] **Reviewer MUST run**: `bun run test:all` before any other review steps
+- [ ] **No new test failures**: Compare results to baseline documented in issue
+- [ ] **Automatic rejection**: If new test failures introduced, reject PR immediately with list of broken tests
+- [ ] **Regression accountability**: New failures = process violation, implementer must fix
+- [ ] **Universal standards**: Same test requirements for all team members regardless of human/AI status
+
+**🚨 MANDATORY SECOND STEP - Linting Verification (ALL REVIEWERS: AI AGENTS & HUMANS):**
+- [ ] **Reviewer MUST run**: `bun run quality:fix` after test verification
 - [ ] **Zero errors confirmed**: ESLint, Prettier, TypeScript, Svelte Check all pass
 - [ ] **Automatic rejection**: If any linting errors found, reject PR immediately with specific error list
 - [ ] **Implementer accountability**: Failed linting = process violation, require acknowledgment (AI agents & humans)
 - [ ] **Universal standards**: Same quality requirements for all team members regardless of human/AI status
 
-**CRITICAL: Issue Requirements Review (SECOND PRIORITY):**
+**CRITICAL: Issue Requirements Review (THIRD PRIORITY):**
 - [ ] **All acceptance criteria met**: Each checkbox in the original issue is verified and completed
 - [ ] **Original requirements satisfied**: Implementation addresses the specific goals stated in the issue
 - [ ] **Scope alignment**: No feature creep - implementation stays within defined scope
@@ -367,12 +393,13 @@ bun run quality:fix
 - [ ] **Success criteria validated**: Implementation can be demonstrated to work as specified
 
 **PR Review and Merge (MANDATORY WITH EXPLICIT VERIFICATION):**
-1. **🚨 FIRST - Verify Code Quality Gates (BLOCKING)**: Run `bun run quality:fix` and confirm ZERO errors
-2. **Review against original issue requirements FIRST** - verify all acceptance criteria are met
-3. **Conduct comprehensive technical review** (use senior-architect-reviewer for complex changes)  
-4. **If review shows ready to merge**: Immediately approve and merge the PR
-5. **If review shows issues**: Request changes with specific feedback
-6. **❌ AUTOMATIC REJECTION**: Any PR with linting/TypeScript errors must be rejected immediately
+1. **🚨 FIRST - Verify Test Suite (BLOCKING)**: Run `bun run test:all` and verify no new failures vs baseline
+2. **🚨 SECOND - Verify Code Quality Gates (BLOCKING)**: Run `bun run quality:fix` and confirm ZERO errors
+3. **Review against original issue requirements** - verify all acceptance criteria are met
+4. **Conduct comprehensive technical review** (use senior-architect-reviewer for complex changes)
+5. **If review shows ready to merge**: Immediately approve and merge the PR
+6. **If review shows issues**: Request changes with specific feedback
+7. **❌ AUTOMATIC REJECTION**: Any PR with new test failures or linting/TypeScript errors must be rejected immediately
 
 ## Package Management Requirements
 
