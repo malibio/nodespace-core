@@ -191,6 +191,7 @@ impl SchemaService {
                      - 'custom:{}' for personal custom properties\n\
                      - 'org:{}' for organization-specific properties\n\
                      - 'plugin:name:{}' for plugin-provided properties\n\n\
+                     See: docs/architecture/development/schema-management-implementation-guide.md\n\
                      This ensures your custom properties will never conflict with future NodeSpace core features.",
                     field.name, field.name, field.name
                 )));
@@ -592,7 +593,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_user_field_with_namespace() {
+    async fn test_add_user_field_with_custom_namespace_succeeds() {
         let (service, _temp) = setup_test_service().await;
         let schema_id = create_test_schema(&service).await;
 
