@@ -156,8 +156,10 @@ impl TaskNode {
     ///
     /// Returns `TaskStatus::Pending` if no status is set.
     pub fn status(&self) -> TaskStatus {
-        self.node.properties["status"]
-            .as_str()
+        self.node
+            .properties
+            .get("status")
+            .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
             .unwrap_or(TaskStatus::Pending)
     }
@@ -169,12 +171,20 @@ impl TaskNode {
         }
     }
 
+    /// Default priority value (medium priority)
+    const DEFAULT_PRIORITY: i32 = 2;
+
     /// Get the task's priority
     ///
     /// Returns `2` (medium priority) if no priority is set.
     /// Valid range is typically 1 (highest) to 4 (lowest).
     pub fn priority(&self) -> i32 {
-        self.node.properties["priority"].as_i64().unwrap_or(2) as i32
+        self.node
+            .properties
+            .get("priority")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or(Self::DEFAULT_PRIORITY)
     }
 
     /// Set the task's priority
@@ -190,8 +200,10 @@ impl TaskNode {
     ///
     /// Returns `None` if no due date is set.
     pub fn due_date(&self) -> Option<String> {
-        self.node.properties["due_date"]
-            .as_str()
+        self.node
+            .properties
+            .get("due_date")
+            .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
 
@@ -212,8 +224,10 @@ impl TaskNode {
     ///
     /// Returns `None` if no assignee is set.
     pub fn assignee_id(&self) -> Option<String> {
-        self.node.properties["assignee_id"]
-            .as_str()
+        self.node
+            .properties
+            .get("assignee_id")
+            .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
 
@@ -296,7 +310,7 @@ impl TaskNodeBuilder {
         properties.insert("status".to_string(), json!(status.as_str()));
 
         // Set priority (default to 2 if not specified)
-        let priority = self.priority.unwrap_or(2);
+        let priority = self.priority.unwrap_or(TaskNode::DEFAULT_PRIORITY);
         properties.insert("priority".to_string(), json!(priority));
 
         // Set optional fields

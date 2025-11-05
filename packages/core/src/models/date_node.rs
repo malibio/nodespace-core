@@ -101,6 +101,17 @@ impl DateNode {
     ///
     /// Returns a builder for setting additional properties.
     ///
+    /// # Note on Builder API Design
+    ///
+    /// DateNode uses `for_date()` instead of the standard `builder()` pattern used by
+    /// TaskNode and TextNode. This is intentional because:
+    ///
+    /// - Date nodes have deterministic IDs derived from the date itself (YYYY-MM-DD format)
+    /// - The date is the primary identifier and content, not a property like in other nodes
+    /// - `DateNode::for_date(date)` reads more naturally in domain language than
+    ///   `DateNode::builder(date_string)`
+    /// - Emphasizes that date nodes are special: one node per date, with deterministic IDs
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -156,8 +167,10 @@ impl DateNode {
     ///
     /// Returns `None` if no timezone is set.
     pub fn timezone(&self) -> Option<String> {
-        self.node.properties["timezone"]
-            .as_str()
+        self.node
+            .properties
+            .get("timezone")
+            .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
 
@@ -178,8 +191,10 @@ impl DateNode {
     ///
     /// Returns `false` if not set.
     pub fn is_holiday(&self) -> bool {
-        self.node.properties["is_holiday"]
-            .as_bool()
+        self.node
+            .properties
+            .get("is_holiday")
+            .and_then(|v| v.as_bool())
             .unwrap_or(false)
     }
 
