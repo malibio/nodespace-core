@@ -1376,15 +1376,17 @@
     // If we have a viewer placeholder, render it (with no parent, viewer-local only)
     if (viewerPlaceholder) {
       // Convert placeholder to renderable format with UI state
-      return [{
-        ...viewerPlaceholder,
-        depth: 0,
-        children: [],
-        expanded: false,
-        autoFocus: true,
-        inheritHeaderLevel: 0,
-        isPlaceholder: true
-      }];
+      return [
+        {
+          ...viewerPlaceholder,
+          depth: 0,
+          children: [],
+          expanded: false,
+          autoFocus: true,
+          inheritHeaderLevel: 0,
+          isPlaceholder: true
+        }
+      ];
     }
 
     // No children and no placeholder
