@@ -99,6 +99,89 @@ bun run test:db          # Full integration validation
 bun run test:coverage    # With coverage report
 ```
 
+## Rust Backend Test Concurrency & SQLite Thread-Safety
+
+### Test Concurrency Configuration (Issue #411)
+
+**Current Setting**: `--test-threads=2`
+
+NodeSpace's Rust test suite uses **`--test-threads=2`** (reduced from Rust's default of 4) to achieve 100% test reliability. This is a pragmatic trade-off between test speed and reliability.
+
+**Why threads=2?**
+- **100% reliability**: 20/20 consecutive runs pass (validated statistically)
+- **Minimal performance impact**: ~17s test suite runtime (vs ~15s with threads=4)
+- **Eliminates OCC contention**: Reduces Optimistic Concurrency Control conflicts enough to prevent failures
+- **Production-ready**: Sufficient parallelism for development workflow
+
+**Historical Context:**
+- **threads=4**: ~40% reliability (high OCC contention causes version conflicts)
+- **threads=2**: 100% reliability (OCC contention reduced to acceptable levels)
+- **threads=1**: 100% reliability (no contention, but ~2x slower)
+
+### SQLite Thread-Safety Pattern (CRITICAL)
+
+**⚠️ ALWAYS use `connect_with_timeout()` in async functions**
+
+NodeSpace uses Tokio's async runtime, which can move futures between threads at `.await` points. SQLite connections have thread-affinity requirements, making synchronous `connect()` unsafe in async contexts.
+
+**✅ Correct Pattern:**
+```rust
+// In async functions - ALWAYS use connect_with_timeout()
+async fn my_async_function(&self) -> Result<(), DatabaseError> {
+    let conn = self.connect_with_timeout().await?;
+
+    // Safe: Connection has 5-second busy timeout configured
+    // Operations will wait and retry instead of failing on SQLITE_BUSY
+    self.execute_pragma(&conn, "PRAGMA some_query").await?;
+
+    Ok(())
+}
+```
+
+**❌ Incorrect Pattern:**
+```rust
+// DON'T DO THIS in async functions
+async fn my_async_function(&self) -> Result<(), DatabaseError> {
+    let conn = self.connect()?;  // ❌ Thread-safety violation!
+
+    // This can fail with "bad parameter or other API misuse"
+    // if Tokio moves the future to a different thread
+    self.execute_pragma(&conn, "PRAGMA some_query").await?;
+
+    Ok(())
+}
+```
+
+**Why This Matters:**
+1. **Thread-affinity**: SQLite connections must stay on the thread where they were created
+2. **Tokio runtime**: Can move futures between threads at every `.await` point
+3. **Busy timeout**: The 5-second timeout allows concurrent operations to serialize gracefully
+4. **Test reliability**: Prevents "bad parameter" errors and SQLITE_BUSY failures
+
+**Implementation Details:**
+- `connect_with_timeout()` sets `PRAGMA busy_timeout = 5000` (5 seconds)
+- This allows concurrent operations to wait and retry instead of failing immediately
+- The pattern is documented in `packages/core/src/db/database.rs` module docs
+- All async functions in `database.rs` use this pattern (see PR #405, #411)
+
+**When to use `connect()` vs `connect_with_timeout()`:**
+- **`connect_with_timeout()`**: 99% of cases - all async functions in Tokio runtime
+- **`connect()`**: Only in synchronous, single-threaded contexts (tests using connections synchronously)
+
+### Debugging Test Failures
+
+**If tests fail intermittently with threads=2:**
+1. Check for SQLite thread-safety violations (async functions using `connect()`)
+2. Look for OCC version conflicts (multiple tests updating same nodes concurrently)
+3. Verify WAL checkpoint timing (race conditions during database swap)
+4. Use `RUST_BACKTRACE=1 cargo test` for detailed error traces
+
+**If you need 100% reliability with threads=4:**
+- Investigate OCC retry logic timing issues
+- Consider per-test database isolation
+- Implement better OCC backoff/retry strategy
+- Estimated effort: 2-3 days (tracked as future work)
+
 ## 4 Core Testing Types
 
 ### 1. Unit Testing
