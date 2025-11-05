@@ -669,33 +669,54 @@
       // Clear content tracking BEFORE loading to prevent watcher from firing on stale data
       lastSavedContent.clear();
 
+      // Try to load children from database
       const allNodes = await sharedNodeStore.loadChildrenForParent(nodeId);
 
       // Check if we have any nodes at all
       if (allNodes.length === 0) {
-        // No children exist - create viewer-local placeholder (not in sharedNodeStore yet)
-        // This placeholder is only visible to this viewer until it gets content
-        const placeholderId = globalThis.crypto.randomUUID();
-        viewerPlaceholder = {
-          id: placeholderId,
-          nodeType: 'text',
-          content: '',
-          parentId: null, // Not assigned as child yet - will be set when content added
-          containerNodeId: null,
-          beforeSiblingId: null,
-          createdAt: new Date().toISOString(),
-          modifiedAt: new Date().toISOString(),
-          version: 1,
-          properties: {},
-          mentions: []
-        };
+        // No persisted children - check if there's already a viewer-local placeholder
+        const existingChildren = sharedNodeStore.getNodesForParent(nodeId);
 
-        // Initialize NodeManager with the local placeholder
-        nodeManager.initializeNodes([viewerPlaceholder], {
-          expanded: true,
-          autoFocus: true,
-          inheritHeaderLevel: 0
-        });
+        if (existingChildren.length === 0) {
+          // No children at all - create viewer-local placeholder
+          // This placeholder will be added to sharedNodeStore by initializeNodes()
+          // It becomes a real persisted node only when content is added
+          const placeholderId = globalThis.crypto.randomUUID();
+          viewerPlaceholder = {
+            id: placeholderId,
+            nodeType: 'text',
+            content: '',
+            parentId: nodeId, // Assign parent for rendering, but won't persist yet
+            containerNodeId: nodeId,
+            beforeSiblingId: null,
+            createdAt: new Date().toISOString(),
+            modifiedAt: new Date().toISOString(),
+            version: 1,
+            properties: {},
+            mentions: []
+          };
+
+          // Initialize NodeManager with the local placeholder
+          // initializeNodes() will automatically add it to sharedNodeStore with skipPersistence=true
+          nodeManager.initializeNodes([viewerPlaceholder], {
+            expanded: true,
+            autoFocus: true,
+            inheritHeaderLevel: 0
+          });
+        } else {
+          // Reuse existing placeholder(s) from previous viewer instance
+          viewerPlaceholder = null;
+
+          // Track initial content of existing children
+          existingChildren.forEach((node) => lastSavedContent.set(node.id, node.content));
+
+          // Re-initialize with existing children
+          nodeManager.initializeNodes(existingChildren, {
+            expanded: true,
+            autoFocus: false,
+            inheritHeaderLevel: 0
+          });
+        }
       } else {
         // Real children exist - clear any viewer placeholder
         viewerPlaceholder = null;
