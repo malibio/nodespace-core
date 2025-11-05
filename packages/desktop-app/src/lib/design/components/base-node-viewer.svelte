@@ -240,6 +240,8 @@
     if (isOldFormat) {
       // Migrate from old flat format (minimal migration - just copy existing values)
       updatedNamespace = { ...targetNode.properties };
+      // Remove internal fields that shouldn't be in namespace
+      delete updatedNamespace._schema_version;
     } else {
       // Already in new format - copy namespace
       updatedNamespace = { ...(typeNamespace as Record<string, unknown>) };
@@ -253,6 +255,11 @@
       ...targetNode.properties,
       [targetNode.nodeType]: updatedNamespace
     };
+
+    // Clean up: remove old flat property if migrating from old format
+    if (isOldFormat) {
+      delete updatedProperties[fieldName];
+    }
 
     // Persist via sharedNodeStore
     sharedNodeStore.updateNode(
