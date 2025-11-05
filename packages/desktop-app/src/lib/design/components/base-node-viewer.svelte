@@ -80,6 +80,10 @@
   // Start as true to prevent watcher from firing before loadChildrenForParent() completes
   let isLoadingInitialNodes = true;
 
+  // Viewer-local placeholder (not in sharedNodeStore until it gets content)
+  // This placeholder is only visible to this viewer instance
+  let viewerPlaceholder = $state<Node | null>(null);
+
   // Scroll position tracking
   // Reference to the scroll container element
   let scrollContainer: HTMLElement | null = null;
@@ -181,7 +185,10 @@
    * @param node - Node with properties from database
    * @returns Metadata object compatible with node component expectations
    */
-  function extractNodeMetadata(node: { nodeType: string; properties?: Record<string, unknown> }): Record<string, unknown> {
+  function extractNodeMetadata(node: {
+    nodeType: string;
+    properties?: Record<string, unknown>;
+  }): Record<string, unknown> {
     const properties = node.properties || {};
 
     // Task nodes: Map schema status to taskState for icon rendering
@@ -666,43 +673,33 @@
 
       // Check if we have any nodes at all
       if (allNodes.length === 0) {
-        // Check if placeholder already exists (reuse for multi-tab support)
-        const existingNodes = sharedNodeStore.getNodesForParent(nodeId);
+        // No children exist - create viewer-local placeholder (not in sharedNodeStore yet)
+        // This placeholder is only visible to this viewer until it gets content
+        const placeholderId = globalThis.crypto.randomUUID();
+        viewerPlaceholder = {
+          id: placeholderId,
+          nodeType: 'text',
+          content: '',
+          parentId: null, // Not assigned as child yet - will be set when content added
+          containerNodeId: null,
+          beforeSiblingId: null,
+          createdAt: new Date().toISOString(),
+          modifiedAt: new Date().toISOString(),
+          version: 1,
+          properties: {},
+          mentions: []
+        };
 
-        if (existingNodes.length === 0) {
-          // No placeholder exists - create one
-          const placeholderId = globalThis.crypto.randomUUID();
-          const placeholder: Node = {
-            id: placeholderId,
-            nodeType: 'text',
-            content: '',
-            parentId: nodeId,
-            containerNodeId: nodeId,
-            beforeSiblingId: null,
-            createdAt: new Date().toISOString(),
-            modifiedAt: new Date().toISOString(),
-            version: 1, // Placeholder starts at version 1
-            properties: {},
-            mentions: []
-          };
-
-          // Initialize with placeholder
-          // initializeNodes() will auto-detect this is a placeholder and use viewer source
-          nodeManager.initializeNodes([placeholder], {
-            expanded: true,
-            autoFocus: true,
-            inheritHeaderLevel: 0
-          });
-        } else {
-          // Placeholder exists - initialize UI with existing placeholder
-          // initializeNodes() will auto-detect placeholders and use viewer source
-          nodeManager.initializeNodes(existingNodes, {
-            expanded: true,
-            autoFocus: true,
-            inheritHeaderLevel: 0
-          });
-        }
+        // Initialize NodeManager with the local placeholder
+        nodeManager.initializeNodes([viewerPlaceholder], {
+          expanded: true,
+          autoFocus: true,
+          inheritHeaderLevel: 0
+        });
       } else {
+        // Real children exist - clear any viewer placeholder
+        viewerPlaceholder = null;
+
         // Track initial content of ALL loaded nodes BEFORE initializing
         // This prevents the content watcher from thinking these are new nodes
         allNodes.forEach((node) => lastSavedContent.set(node.id, node.content));
@@ -1561,8 +1558,34 @@
                 on:navigateArrow={handleArrowNavigation}
                 on:contentChanged={(e: CustomEvent<{ content: string }>) => {
                   const content = e.detail.content;
-                  // Update node content (placeholder flag is handled automatically)
-                  nodeManager.updateNodeContent(node.id, content);
+
+                  // Check if this is the viewer-local placeholder getting its first content
+                  if (
+                    viewerPlaceholder &&
+                    node.id === viewerPlaceholder.id &&
+                    content.trim() !== '' &&
+                    nodeId
+                  ) {
+                    // Promote placeholder to real node by assigning parent and adding to store
+                    const promotedNode: Node = {
+                      ...viewerPlaceholder,
+                      content,
+                      parentId: nodeId,
+                      containerNodeId: nodeId
+                    };
+
+                    // Add to shared store as a real persisted node
+                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                    // Clear viewer placeholder - now using real node from store
+                    viewerPlaceholder = null;
+
+                    // Reload children to get the newly promoted node
+                    loadChildrenForParent(nodeId);
+                  } else {
+                    // Regular node content update (placeholder flag is handled automatically)
+                    nodeManager.updateNodeContent(node.id, content);
+                  }
                   // Focus management handled by FocusManager (single source of truth)
                 }}
                 on:nodeTypeChanged={(
