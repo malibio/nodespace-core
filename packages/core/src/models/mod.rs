@@ -10,6 +10,10 @@
 
 mod node;
 pub mod schema;
+mod task_node;
+#[cfg(test)]
+#[path = "task_node_test.rs"]
+mod task_node_test;
 pub mod time;
 
 pub use node::{
@@ -17,4 +21,5 @@ pub use node::{
     ValidationError,
 };
 pub use schema::{ProtectionLevel, SchemaDefinition, SchemaField};
+pub use task_node::{TaskNode, TaskNodeBuilder, TaskStatus};
 pub use time::{SystemTimeProvider, TimeProvider};
