@@ -173,8 +173,12 @@ export interface UpdateOptions {
    * - 'immediate': Persist immediately (bypasses debouncing)
    * - 'debounced': Use normal debounced persistence (default for user edits)
    * - false: Skip persistence (for in-memory/temporary updates)
-   * - true: Use auto-determined persistence (legacy behavior)
+   * - true: Trigger persistence with auto-determined mode (structural=immediate, content=debounced)
    * - undefined: Use auto-determined persistence based on source type (legacy default)
+   *
+   * The difference between `true` and `undefined`:
+   * - `true`: Explicitly request persistence with auto mode selection
+   * - `undefined`: Defer to legacy source.type-based behavior (Phase 1 backward compatibility)
    *
    * @example
    * // Explicit immediate persistence (instead of using 'external' source)
@@ -182,6 +186,9 @@ export interface UpdateOptions {
    *
    * // Explicitly skip persistence (clearer than skipPersistence flag)
    * store.setNode(node, source, { persist: false })
+   *
+   * // Force persistence with auto-determined mode (useful for structural changes)
+   * store.updateNode(nodeId, { parentId: newParent }, source, { persist: true })
    *
    * // Mark node as already persisted without re-persisting
    * store.setNode(node, source, { markAsPersistedOnly: true })

@@ -1310,6 +1310,27 @@ describe('SharedNodeStore', () => {
         // Should NOT be persisted
         expect(PersistenceCoordinator.getInstance().isPersisted('persist-test')).toBe(false);
       });
+
+      it('should respect persist: true for explicit auto-determined persistence', async () => {
+        const viewerSource: UpdateSource = { type: 'viewer', viewerId: 'test-viewer' };
+        store.setNode(mockNode, viewerSource);
+
+        // Update with explicit persist: true (triggers persistence with auto mode)
+        // Structural changes use immediate mode, content changes use debounced mode
+        store.updateNode('persist-test', { parentId: 'new-parent' }, viewerSource, {
+          persist: true
+        });
+
+        // Should update in memory immediately
+        expect(store.getNode('persist-test')?.parentId).toBe('new-parent');
+
+        // Structural change should trigger immediate persistence (not debounced)
+        // Check that operation was queued (isPending or isPersisted)
+        const coordinator = PersistenceCoordinator.getInstance();
+        const isPendingOrPersisted =
+          coordinator.isPending('persist-test') || coordinator.isPersisted('persist-test');
+        expect(isPendingOrPersisted).toBe(true);
+      });
     });
 
     describe('markAsPersistedOnly option', () => {
