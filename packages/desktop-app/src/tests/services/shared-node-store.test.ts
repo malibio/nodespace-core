@@ -580,10 +580,12 @@ describe('SharedNodeStore', () => {
         store.setNode(node, viewerSource, true); // skipPersistence
 
         // Update content (triggers debounced persistence)
-        // Note: Use non-viewer source since viewer content changes don't persist
-        // (BaseNodeViewer handles debouncing for viewer sources)
-        const externalSource: UpdateSource = { type: 'external', source: 'test' };
-        store.updateNode('test-node', { content: 'Updated' }, externalSource);
+        // Use 'database' source with explicit debounced persistence
+        // (Phase 1 refactor: explicit persistence control replaces 'external' workaround)
+        const updateSource: UpdateSource = { type: 'database', reason: 'test' };
+        store.updateNode('test-node', { content: 'Updated' }, updateSource, {
+          persist: 'debounced'
+        });
 
         // Should update in memory immediately
         expect(store.getNode('test-node')?.content).toBe('Updated');
@@ -1266,6 +1268,76 @@ describe('SharedNodeStore', () => {
 
         expect(consoleSpy).toHaveBeenCalled();
         consoleSpy.mockRestore();
+      });
+    });
+  });
+
+  describe('Explicit Persistence API (Issue #393 Refactor)', () => {
+    const mockNode: Node = {
+      id: 'persist-test',
+      nodeType: 'text',
+      content: 'Test',
+      parentId: null,
+      containerNodeId: null,
+      beforeSiblingId: null,
+      version: 1,
+      properties: {},
+      createdAt: Date.now().toString(),
+      modifiedAt: Date.now().toString()
+    };
+
+    beforeEach(() => {
+      store = SharedNodeStore.getInstance();
+      PersistenceCoordinator.resetInstance();
+    });
+
+    describe('persist option', () => {
+      it('should respect persist: false to skip persistence', async () => {
+        const viewerSource: UpdateSource = { type: 'viewer', viewerId: 'test-viewer' };
+        store.setNode(mockNode, viewerSource);
+
+        // Update with explicit persist: false
+        store.updateNode('persist-test', { content: 'Updated' }, viewerSource, {
+          persist: false
+        });
+
+        // Should update in memory
+        expect(store.getNode('persist-test')?.content).toBe('Updated');
+
+        // Wait to ensure no persistence triggered
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Should NOT be persisted
+        expect(PersistenceCoordinator.getInstance().isPersisted('persist-test')).toBe(false);
+      });
+    });
+
+    describe('markAsPersistedOnly option', () => {
+      it('should mark node as persisted without re-persisting', () => {
+        const backendSource: UpdateSource = { type: 'database', reason: 'navigation' };
+
+        // Load node from backend (using database source marks as persisted)
+        store.setNode(mockNode, backendSource);
+
+        // Verify node is marked as persisted internally
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect((store as any).persistedNodeIds.has('persist-test')).toBe(true);
+      });
+    });
+
+    describe('legacy source.type behavior', () => {
+      it('should maintain backward compatibility: database source skips persistence', async () => {
+        const backendSource: UpdateSource = { type: 'database', reason: 'test' };
+
+        // Old behavior: database source implicitly skips persistence
+        store.setNode(mockNode, backendSource);
+        store.updateNode('persist-test', { content: 'Updated' }, backendSource);
+
+        // Wait to ensure no persistence
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Should NOT trigger persistence operation
+        expect(PersistenceCoordinator.getInstance().isPending('persist-test')).toBe(false);
       });
     });
   });
