@@ -216,6 +216,53 @@
   }
 
   /**
+   * Update a schema field value for a node (schema-aware property update)
+   *
+   * Follows the same nested format pattern as schema-property-form.svelte:
+   * - Builds nested structure: properties[nodeType][fieldName] = value
+   * - Handles auto-migration from flat to nested format
+   * - Calls sharedNodeStore.updateNode() to persist
+   *
+   * @param targetNodeId - Node ID to update
+   * @param fieldName - Schema field name (e.g., 'status', 'due_date')
+   * @param value - New value for the field
+   */
+  function updateSchemaField(targetNodeId: string, fieldName: string, value: unknown) {
+    const targetNode = sharedNodeStore.getNode(targetNodeId);
+    if (!targetNode) return;
+
+    // Build nested namespace (properties[nodeType][fieldName])
+    const typeNamespace = targetNode.properties?.[targetNode.nodeType];
+    const isOldFormat = !typeNamespace || typeof typeNamespace !== 'object';
+
+    let updatedNamespace: Record<string, unknown> = {};
+
+    if (isOldFormat) {
+      // Migrate from old flat format (minimal migration - just copy existing values)
+      updatedNamespace = { ...targetNode.properties };
+    } else {
+      // Already in new format - copy namespace
+      updatedNamespace = { ...(typeNamespace as Record<string, unknown>) };
+    }
+
+    // Apply the update
+    updatedNamespace[fieldName] = value;
+
+    // Build final properties with nested namespace
+    const updatedProperties = {
+      ...targetNode.properties,
+      [targetNode.nodeType]: updatedNamespace
+    };
+
+    // Persist via sharedNodeStore
+    sharedNodeStore.updateNode(
+      targetNodeId,
+      { properties: updatedProperties },
+      { type: 'viewer', viewerId: viewerId }
+    );
+  }
+
+  /**
    * Wait for a pending node save to complete, with timeout and grace period
    * Delegates to SharedNodeStore which tracks pending saves
    * @param nodeIds - Array of node IDs to wait for
@@ -1713,8 +1760,16 @@
                   // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
                   // They must persist to database, not just update locally
                   // Use same batching logic as real nodes to ensure atomic persistence
-                  if (node.isPlaceholder && nodeId && viewerPlaceholder && node.id === viewerPlaceholder.id) {
-                    console.log('[BaseNodeViewer] Promoting placeholder to real node with type:', e.detail.nodeType);
+                  if (
+                    node.isPlaceholder &&
+                    nodeId &&
+                    viewerPlaceholder &&
+                    node.id === viewerPlaceholder.id
+                  ) {
+                    console.log(
+                      '[BaseNodeViewer] Promoting placeholder to real node with type:',
+                      e.detail.nodeType
+                    );
                     // Promote placeholder to real node with the new type
                     const promotedNode: Node = {
                       ...viewerPlaceholder,
@@ -1736,12 +1791,25 @@
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
                   const { nodeId, state } = e.detail;
-                  const node = nodeManager.nodes.get(nodeId);
-                  if (node) {
-                    node.properties = { ...node.properties, taskState: state };
-                    // Trigger sync to persist the change
-                    nodeManager.updateNodeContent(nodeId, node.content);
+
+                  // Map UI state to schema enum value
+                  let schemaStatus: string;
+                  switch (state) {
+                    case 'pending':
+                      schemaStatus = 'OPEN';
+                      break;
+                    case 'inProgress':
+                      schemaStatus = 'IN_PROGRESS';
+                      break;
+                    case 'completed':
+                      schemaStatus = 'DONE';
+                      break;
+                    default:
+                      schemaStatus = 'OPEN';
                   }
+
+                  // Update using schema-aware helper (handles nested format correctly)
+                  updateSchemaField(nodeId, 'status', schemaStatus);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
@@ -1788,8 +1856,16 @@
                   // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
                   // They must persist to database, not just update locally
                   // Use same batching logic as real nodes to ensure atomic persistence
-                  if (node.isPlaceholder && nodeId && viewerPlaceholder && node.id === viewerPlaceholder.id) {
-                    console.log('[BaseNodeViewer] Promoting placeholder to real node with type:', e.detail.nodeType);
+                  if (
+                    node.isPlaceholder &&
+                    nodeId &&
+                    viewerPlaceholder &&
+                    node.id === viewerPlaceholder.id
+                  ) {
+                    console.log(
+                      '[BaseNodeViewer] Promoting placeholder to real node with type:',
+                      e.detail.nodeType
+                    );
                     // Promote placeholder to real node with the new type
                     const promotedNode: Node = {
                       ...viewerPlaceholder,
@@ -1811,12 +1887,25 @@
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
                   const { nodeId, state } = e.detail;
-                  const node = nodeManager.nodes.get(nodeId);
-                  if (node) {
-                    node.properties = { ...node.properties, taskState: state };
-                    // Trigger sync to persist the change
-                    nodeManager.updateNodeContent(nodeId, node.content);
+
+                  // Map UI state to schema enum value
+                  let schemaStatus: string;
+                  switch (state) {
+                    case 'pending':
+                      schemaStatus = 'OPEN';
+                      break;
+                    case 'inProgress':
+                      schemaStatus = 'IN_PROGRESS';
+                      break;
+                    case 'completed':
+                      schemaStatus = 'DONE';
+                      break;
+                    default:
+                      schemaStatus = 'OPEN';
                   }
+
+                  // Update using schema-aware helper (handles nested format correctly)
+                  updateSchemaField(nodeId, 'status', schemaStatus);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
