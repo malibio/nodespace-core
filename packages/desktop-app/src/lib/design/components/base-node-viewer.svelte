@@ -172,6 +172,41 @@
   }
 
   /**
+   * Extract and transform node properties into component-compatible metadata
+   *
+   * Handles the mismatch between database property storage and component metadata expectations:
+   * - Task nodes: Maps properties.task.status → metadata.taskState (for icon rendering)
+   * - Other nodes: Returns properties as-is for future extension
+   *
+   * @param node - Node with properties from database
+   * @returns Metadata object compatible with node component expectations
+   */
+  function extractNodeMetadata(node: { nodeType: string; properties?: Record<string, unknown> }): Record<string, unknown> {
+    const properties = node.properties || {};
+
+    // Task nodes: Map schema status to taskState for icon rendering
+    if (node.nodeType === 'task') {
+      const taskProps = properties[node.nodeType] as Record<string, unknown> | undefined;
+      const status = taskProps?.status || properties.status; // Support both nested and flat formats
+
+      // Map task status to NodeState expected by TaskNode
+      let taskState: 'pending' | 'inProgress' | 'completed' = 'pending';
+      if (status === 'IN_PROGRESS') {
+        taskState = 'inProgress';
+      } else if (status === 'DONE') {
+        taskState = 'completed';
+      } else if (status === 'OPEN') {
+        taskState = 'pending';
+      }
+
+      return { taskState, ...properties };
+    }
+
+    // Default: Return properties as-is
+    return properties;
+  }
+
+  /**
    * Wait for a pending node save to complete, with timeout and grace period
    * Delegates to SharedNodeStore which tracks pending saves
    * @param nodeIds - Array of node IDs to wait for
@@ -1511,13 +1546,14 @@
           {#if node.nodeType in loadedNodes}
             {#key node.id}
               {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
+              {@const nodeMetadata = extractNodeMetadata(node)}
               <NodeComponent
                 nodeId={node.id}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
                 children={node.children}
-                metadata={node.properties || {}}
+                metadata={nodeMetadata}
                 editableConfig={{ allowMultiline: true }}
                 on:createNewNode={handleCreateNewNode}
                 on:indentNode={handleIndentNode}
