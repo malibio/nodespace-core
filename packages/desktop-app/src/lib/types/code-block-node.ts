@@ -127,6 +127,12 @@ export const CodeBlockNodeHelpers = {
    *
    * @param language - Language identifier to check
    * @returns True if language is in the common list
+   *
+   * @example
+   * ```typescript
+   * CodeBlockNodeHelpers.isCommonLanguage('typescript'); // true
+   * CodeBlockNodeHelpers.isCommonLanguage('brainfuck'); // false
+   * ```
    */
   isCommonLanguage(language: string): boolean {
     const commonLanguages = new Set([

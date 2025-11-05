@@ -185,6 +185,8 @@ impl OrderedListNodeBuilder {
     ///     .build();
     /// ```
     pub fn build(self) -> OrderedListNode {
+        // OrderedList nodes have no custom properties (empty object is correct)
+        // All node metadata (content, parent_id, etc.) is stored in the universal Node
         let properties = json!({});
 
         let node = Node::new(

@@ -94,6 +94,11 @@ export const OrderedListNodeHelpers = {
    *
    * @param node - Ordered list node to check
    * @returns True if content contains multiple lines
+   *
+   * @example
+   * ```typescript
+   * OrderedListNodeHelpers.isMultiline(listNode); // true if has newlines
+   * ```
    */
   isMultiline(node: OrderedListNode): boolean {
     return node.content.includes('\n');
@@ -121,6 +126,12 @@ export const OrderedListNodeHelpers = {
    *
    * @param node - Ordered list node
    * @returns Number of lines in the list item
+   *
+   * @example
+   * ```typescript
+   * const lines = OrderedListNodeHelpers.getLineCount(listNode);
+   * console.log(`List item has ${lines} lines`);
+   * ```
    */
   getLineCount(node: OrderedListNode): number {
     if (node.content.length === 0) return 0;
@@ -150,6 +161,11 @@ export const OrderedListNodeHelpers = {
    *
    * @param node - Ordered list node
    * @returns True if content starts with "N. "
+   *
+   * @example
+   * ```typescript
+   * OrderedListNodeHelpers.hasNumberPrefix(listNode); // true if starts with "1. "
+   * ```
    */
   hasNumberPrefix(node: OrderedListNode): boolean {
     return /^\d+\.\s/.test(node.content);

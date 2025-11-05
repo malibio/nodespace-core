@@ -94,6 +94,11 @@ export const QuoteBlockNodeHelpers = {
    *
    * @param node - Quote block node to check
    * @returns True if content contains multiple lines
+   *
+   * @example
+   * ```typescript
+   * QuoteBlockNodeHelpers.isMultiline(quoteNode); // true if has newlines
+   * ```
    */
   isMultiline(node: QuoteBlockNode): boolean {
     return node.content.includes('\n');
@@ -121,6 +126,12 @@ export const QuoteBlockNodeHelpers = {
    *
    * @param node - Quote block node
    * @returns Number of lines in the quote
+   *
+   * @example
+   * ```typescript
+   * const lines = QuoteBlockNodeHelpers.getLineCount(quoteNode);
+   * console.log(`Quote has ${lines} lines`);
+   * ```
    */
   getLineCount(node: QuoteBlockNode): number {
     if (node.content.length === 0) return 0;
