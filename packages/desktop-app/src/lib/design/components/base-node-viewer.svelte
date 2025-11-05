@@ -681,13 +681,14 @@
           // No children at all - create viewer-local placeholder
           // This placeholder will be added to sharedNodeStore by initializeNodes()
           // It becomes a real persisted node only when content is added
+          // CRITICAL: parentId must be null so it's NOT visible to other viewers
           const placeholderId = globalThis.crypto.randomUUID();
           viewerPlaceholder = {
             id: placeholderId,
             nodeType: 'text',
             content: '',
-            parentId: nodeId, // Assign parent for rendering, but won't persist yet
-            containerNodeId: nodeId,
+            parentId: null, // No parent - viewer-local only until content is typed
+            containerNodeId: null,
             beforeSiblingId: null,
             createdAt: new Date().toISOString(),
             modifiedAt: new Date().toISOString(),
@@ -1363,10 +1364,37 @@
   // Proper Svelte 5 reactivity: use object instead of Map for reactive tracking
   let loadedNodes = $state<Record<string, unknown>>({});
 
+  // Derive the list of nodes to render - either viewer placeholder or real children
+  const nodesToRender = $derived(() => {
+    const realChildren = nodeManager.visibleNodes(nodeId);
+
+    // If we have real children, render those
+    if (realChildren.length > 0) {
+      return realChildren;
+    }
+
+    // If we have a viewer placeholder, render it (with no parent, viewer-local only)
+    if (viewerPlaceholder) {
+      // Convert placeholder to renderable format with UI state
+      return [{
+        ...viewerPlaceholder,
+        depth: 0,
+        children: [],
+        expanded: false,
+        autoFocus: true,
+        inheritHeaderLevel: 0,
+        isPlaceholder: true
+      }];
+    }
+
+    // No children and no placeholder
+    return [];
+  });
+
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
   const minDepth = $derived(() => {
-    const nodes = nodeManager.visibleNodes(nodeId);
+    const nodes = nodesToRender();
     if (nodes.length === 0) return 0;
     return Math.min(...nodes.map((n) => n.depth || 0));
   });
@@ -1456,7 +1484,7 @@
 
   // Reactively load components when node types change
   $effect(() => {
-    const visibleNodes = nodeManager.visibleNodes(nodeId);
+    const visibleNodes = nodesToRender();
 
     // Collect all unique node types
     const nodeTypes = new Set(visibleNodes.map((node) => node.nodeType));
@@ -1531,7 +1559,7 @@
       {/if}
     {/if}
 
-    {#each nodeManager.visibleNodes(nodeId) as node (node.id)}
+    {#each nodesToRender() as node (node.id)}
       {@const relativeDepth = (node.depth || 0) - minDepth()}
       <div
         class="node-container"
