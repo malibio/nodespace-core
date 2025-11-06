@@ -315,6 +315,7 @@
       const nodeResults: NodeResult[] = backendResults.map((node: NodeData) => ({
         id: node.id,
         title: node.content.split('\n')[0] || 'Untitled',
+        // Backend ensures valid node types; fallback to 'text' for type safety
         type: (node.nodeType || 'text') as NodeType
       }));
 
