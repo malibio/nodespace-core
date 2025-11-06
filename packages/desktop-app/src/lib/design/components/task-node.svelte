@@ -17,6 +17,7 @@
   import { createEventDispatcher } from 'svelte';
   import BaseNode from './base-node.svelte';
   import type { NodeState } from '$lib/design/icons/registry';
+  import { getNavigationService } from '$lib/services/navigation-service';
 
   // Props using Svelte 5 runes mode - same interface as BaseNode
   let {
@@ -156,6 +157,30 @@
    */
 
   /**
+   * Handle open button click to navigate to task viewer
+   */
+  async function handleOpenClick(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const navigationService = getNavigationService();
+
+    // Open in other pane with Cmd+Click, new tab with Shift+Click, or current tab otherwise
+    if (event.metaKey || event.ctrlKey) {
+      if (event.shiftKey) {
+        // Cmd+Shift+Click: Open in other pane
+        await navigationService.navigateToNodeInOtherPane(nodeId);
+      } else {
+        // Cmd+Click: Open in new tab
+        await navigationService.navigateToNode(nodeId, true);
+      }
+    } else {
+      // Regular click: Navigate to task in current tab
+      await navigationService.navigateToNode(nodeId, false);
+    }
+  }
+
+  /**
    * Forward all other events to parent components
    */
   function forwardEvent<T>(eventName: string) {
@@ -188,9 +213,17 @@
     on:slashCommandSelected={forwardEvent('slashCommandSelected')}
     on:nodeTypeChanged={forwardEvent('nodeTypeChanged')}
   />
+
+  <!-- Open button (appears on hover) -->
+  <button class="task-open-button" onclick={handleOpenClick} type="button"> open </button>
 </div>
 
 <style>
+  /* Task node wrapper - position relative for absolute button positioning */
+  .task-node-wrapper {
+    position: relative;
+  }
+
   /* Completed task styling following design system */
   .task-completed {
     text-decoration: line-through;
@@ -200,5 +233,31 @@
   .task-completed :global(.node__content) {
     text-decoration: line-through;
     opacity: 0.7;
+  }
+
+  /* Open button (top-right, appears on hover) */
+  .task-open-button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: hsl(var(--background));
+    border: 1px solid hsl(var(--border));
+    color: hsl(var(--muted-foreground));
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    text-transform: lowercase;
+  }
+
+  .task-node-wrapper:hover .task-open-button {
+    opacity: 1;
+  }
+
+  /* Hover state for better feedback */
+  .task-open-button:hover {
+    background: hsl(var(--muted));
   }
 </style>
