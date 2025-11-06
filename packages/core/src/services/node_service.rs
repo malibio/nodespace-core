@@ -43,7 +43,11 @@ const ROOT_CONTAINER_ID: &str = "root";
 /// Check if a string matches date node format: YYYY-MM-DD
 ///
 /// Valid examples: "2025-10-13", "2024-01-01"
-/// Invalid examples: "abcd-ef-gh", "2025-10-1", "25-10-13"
+/// Invalid examples: "abcd-ef-gh", "2025-10-1", "25-10-13", "2025-13-45" (invalid date)
+///
+/// This function validates both format AND semantic validity:
+/// - Format: YYYY-MM-DD pattern (10 chars, correct positions for digits/dashes)
+/// - Semantics: Must be a valid calendar date (no month 13, no day 45, etc.)
 fn is_date_node_id(id: &str) -> bool {
     // Must be exactly 10 characters: YYYY-MM-DD
     if id.len() != 10 {
@@ -52,7 +56,7 @@ fn is_date_node_id(id: &str) -> bool {
 
     // Check format: 4 digits, dash, 2 digits, dash, 2 digits
     let bytes = id.as_bytes();
-    bytes[0].is_ascii_digit()
+    let format_valid = bytes[0].is_ascii_digit()
         && bytes[1].is_ascii_digit()
         && bytes[2].is_ascii_digit()
         && bytes[3].is_ascii_digit()
@@ -61,7 +65,15 @@ fn is_date_node_id(id: &str) -> bool {
         && bytes[6].is_ascii_digit()
         && bytes[7] == b'-'
         && bytes[8].is_ascii_digit()
-        && bytes[9].is_ascii_digit()
+        && bytes[9].is_ascii_digit();
+
+    if !format_valid {
+        return false;
+    }
+
+    // Semantic validation: Verify it's a valid calendar date
+    // This prevents accepting strings like "2025-13-45" (invalid month/day)
+    chrono::NaiveDate::parse_from_str(id, "%Y-%m-%d").is_ok()
 }
 
 /// Check if a node is a container node based on its container_node_id
@@ -3540,10 +3552,12 @@ mod tests {
         let invalid1 = service.get_node("not-a-date").await.unwrap();
         assert!(invalid1.is_none());
 
-        // Note: Chrono's parse_from_str is lenient and may normalize some invalid dates
-        // (e.g., "2025-13-45" might become "2026-02-14"). This is acceptable behavior.
+        // Invalid dates (wrong format) should return None
+        let invalid2 = service.get_node("25-10-13").await.unwrap(); // Wrong format
+        assert!(invalid2.is_none());
 
-        let invalid3 = service.get_node("25-10-13").await.unwrap(); // Wrong format
+        // Semantically invalid dates should return None
+        let invalid3 = service.get_node("2025-13-45").await.unwrap(); // Invalid month/day
         assert!(invalid3.is_none());
     }
 
