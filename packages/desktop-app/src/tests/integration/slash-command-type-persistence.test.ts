@@ -117,9 +117,47 @@ describe('Slash Command Type Persistence', () => {
       // expect(persisted?.properties).toHaveProperty('task');
     });
 
-    it('should preserve nodeType through multiple content updates', async () => {
+    it('should persist nodeType even with zero delay between calls', async () => {
+      // Stress test: verify synchronous store updates work correctly
+      // with NO delay between updateNodeType and updateNodeContent
       const placeholderNode: Node = {
         id: 'slash-test-2',
+        nodeType: 'text',
+        content: '',
+        parentId: null,
+        containerNodeId: null,
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {},
+        mentions: []
+      };
+
+      store.setNode(placeholderNode, viewerSource);
+
+      // Convert to task via slash command
+      reactiveService.updateNodeType(placeholderNode.id, 'task');
+      // Immediate content update with ZERO delay (stress test)
+      reactiveService.updateNodeContent(placeholderNode.id, 'Buy milk');
+
+      // Verify UI shows correct state immediately
+      let node = store.getNode(placeholderNode.id);
+      expect(node?.nodeType).toBe('task');
+      expect(node?.content).toBe('Buy milk');
+
+      // Wait for debounce + persistence
+      await sleep(600);
+
+      // Verify persistence preserved both fields
+      const persisted = store.getNode(placeholderNode.id);
+      expect(persisted?.nodeType).toBe('task');
+      expect(persisted?.content).toBe('Buy milk');
+    });
+
+    it('should preserve nodeType through multiple content updates', async () => {
+      const placeholderNode: Node = {
+        id: 'slash-test-3',
         nodeType: 'text',
         content: '',
         parentId: null,
@@ -158,7 +196,7 @@ describe('Slash Command Type Persistence', () => {
   describe('Slash Command: Placeholder → Header', () => {
     it('should persist header nodeType from slash command', async () => {
       const placeholderNode: Node = {
-        id: 'slash-test-3',
+        id: 'slash-test-4',
         nodeType: 'text',
         content: '',
         parentId: null,
@@ -300,7 +338,7 @@ describe('Slash Command Type Persistence', () => {
 
   describe('Schema Defaults Applied', () => {
     it.skip('should apply task schema defaults when converting to task', async () => {
-      // TODO: Schema defaults not yet implemented - will be added in separate issue
+      // TODO: Schema defaults not yet implemented - tracked in Issue #427
       // This test is skipped until schema default application is implemented
       const placeholderNode: Node = {
         id: 'schema-test-1',
