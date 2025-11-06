@@ -397,9 +397,13 @@ export class SharedNodeStore {
       // This ensures hierarchy operations work while debouncing rapid typing
       const persistBehavior = this.determinePersistenceBehavior(source, options, changes);
       if (persistBehavior.shouldPersist) {
-        // CRITICAL: Check if beforeSiblingId or parentId reference unpersisted placeholders
+        // GUARD: Check if beforeSiblingId or parentId reference unpersisted placeholders
         // Placeholders use skipPersistence, so there's no operation to wait for
         // Remove these references to avoid FOREIGN KEY constraint violations
+        //
+        // Type casting explanation: TypeScript doesn't allow deleting properties from Partial<Node>
+        // because it's readonly. We create MutablePartialNode to allow deletion, which is safe
+        // because we're modifying a local changes object, not the original node in the store.
         type MutablePartialNode = { [K in keyof Partial<Node>]: Partial<Node>[K] };
         const coordinator = PersistenceCoordinator.getInstance();
 
@@ -508,11 +512,17 @@ export class SharedNodeStore {
             nodeId,
             async () => {
               try {
-                // CRITICAL: Re-check placeholder status at persistence execution time
+                // GUARD: Re-check placeholder status at persistence execution time
                 // Prevents persisting empty nodes when structural changes trigger persistence
+                //
+                // EDGE CASE: Eventual consistency in rapid typing scenarios
+                // If user adds content between queueing and execution (due to debouncing),
+                // the node might have valid content by execution time but still be skipped.
+                // This is acceptable because the content update will trigger a new persistence
+                // operation that will succeed. The system is eventually consistent.
                 const currentNode = this.nodes.get(nodeId);
                 if (currentNode && isPlaceholderNode(currentNode)) {
-                  return; // Skip persistence - structural changes will persist when content is added
+                  return; // Skip persistence - will retry when content is added
                 }
 
                 // Check if node has been persisted - use in-memory tracking to avoid database query
@@ -963,8 +973,9 @@ export class SharedNodeStore {
 
     // Check if node needs to be persisted
     if (!this.persistedNodeIds.has(nodeId)) {
-      // CRITICAL: Skip placeholder nodes - they should not be force-persisted
+      // GUARD: Skip placeholder nodes - they should not be force-persisted
       // Placeholder nodes will be persisted when they receive actual content
+      // This prevents invalid nodes from being persisted during ancestor chain resolution
       if (isPlaceholderNode(node)) {
         return; // Don't persist placeholders, even in ancestor chain
       }
@@ -1007,6 +1018,13 @@ export class SharedNodeStore {
    * This is simpler than conditional persistence and avoids circular dependencies.
    * Alternative approaches (conditional persistence, polling) add complexity without
    * significant benefit. This manual reconciliation is a proven pattern.
+   *
+   * PERFORMANCE CHARACTERISTICS:
+   * - Complexity: O(n) where n = total nodes in memory
+   * - Typical case: 1-5 nodes need reconciliation (user rarely creates many placeholders)
+   * - Large documents: With 1000+ nodes, this could add ~1-5ms per placeholder persistence
+   * - Mitigation: Placeholders persist on content addition (user typing), not bulk operations
+   * - Future optimization: Could maintain explicit deferred reference map if needed
    *
    * @param newlyPersistedNodeId - ID of the node that was just persisted
    */
