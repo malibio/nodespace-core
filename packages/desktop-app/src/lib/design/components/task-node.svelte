@@ -215,7 +215,15 @@
   />
 
   <!-- Open button (appears on hover) -->
-  <button class="task-open-button" onclick={handleOpenClick} type="button"> open </button>
+  <button
+    class="task-open-button"
+    onclick={handleOpenClick}
+    type="button"
+    aria-label="Open task in viewer (Cmd+Click for new tab, Cmd+Shift+Click for split view)"
+    title="Open task"
+  >
+    open
+  </button>
 </div>
 
 <style>
@@ -250,6 +258,7 @@
     opacity: 0;
     transition: opacity 0.15s ease;
     text-transform: lowercase;
+    z-index: 5; /* Below popovers (1001) but above node content */
   }
 
   .task-node-wrapper:hover .task-open-button {
