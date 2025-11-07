@@ -25,32 +25,28 @@ export const layoutState = writable<LayoutState>(initialLayoutState);
 // Track initialization state to prevent overwriting loaded state
 let isInitialized = false;
 
-// Debounce timer for persistence
-let persistenceTimer: number | undefined;
-const PERSISTENCE_DEBOUNCE_MS = 300;
-
-// Subscribe to state changes and persist automatically (debounced)
+// Subscribe to state changes and persist automatically
+// Note: LayoutPersistenceService.save() handles debouncing internally
 layoutState.subscribe((state) => {
   // Only persist after initialization to avoid overwriting loaded state
   if (isInitialized) {
-    // Clear existing timer
-    if (persistenceTimer !== undefined) {
-      clearTimeout(persistenceTimer);
-    }
-
-    // Debounce persistence to avoid rapid-fire saves during interactions
-    persistenceTimer = setTimeout(() => {
-      LayoutPersistenceService.save(state);
-    }, PERSISTENCE_DEBOUNCE_MS) as unknown as number;
+    LayoutPersistenceService.save(state);
   }
 });
 
 /**
  * Load persisted layout state from storage
  * Should be called once on application startup
+ * Idempotent - safe to call multiple times (subsequent calls are no-ops)
  * @returns True if state was loaded successfully, false if no saved state exists or loading failed
  */
 export function loadPersistedLayoutState(): boolean {
+  // Guard against multiple initializations (e.g., component remounting)
+  if (isInitialized) {
+    console.warn('[Layout] loadPersistedLayoutState called after initialization, ignoring');
+    return false;
+  }
+
   const persisted = LayoutPersistenceService.load();
 
   if (persisted) {

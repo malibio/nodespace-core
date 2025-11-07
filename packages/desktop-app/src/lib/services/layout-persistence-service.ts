@@ -85,6 +85,13 @@ export class LayoutPersistenceService {
       this.log(`State saved: sidebarCollapsed=${state.sidebarCollapsed}`);
     } catch (error) {
       this.error('Failed to save state:', error);
+
+      // Clear pending state and timer to prevent retry with potentially stale data
+      this.pendingState = null;
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
     }
   }
 

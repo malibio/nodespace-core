@@ -23,6 +23,19 @@
   export let results: NodeResult[] = [];
   export let visible: boolean = false;
 
+  /**
+   * UX Decision: Loading state removed (previously showed "Searching..." message)
+   *
+   * Rationale:
+   * 1. 3-character minimum search threshold prevents premature backend calls
+   * 2. Results appear fast enough that loading state creates visual noise
+   * 3. Empty results state is sufficient feedback during search
+   * 4. Avoids flickering "Searching..." → results transition
+   *
+   * Parent component (base-node.svelte) implements smart caching to minimize
+   * backend calls, making loading indicators unnecessary for this UX pattern.
+   */
+
   // Event handler props (Svelte 5 pattern)
   export let onselect: ((_result: NodeResult) => void) | undefined = undefined;
   export let onclose: (() => void) | undefined = undefined;
