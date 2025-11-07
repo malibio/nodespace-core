@@ -85,6 +85,9 @@
   // This placeholder is only visible to this viewer instance
   let viewerPlaceholder = $state<Node | null>(null);
 
+  // Track the viewed node reactively for schema form display
+  let currentViewedNode = $state<Node | null>(null);
+
   // Scroll position tracking
   // Reference to the scroll container element
   let scrollContainer: HTMLElement | null = null;
@@ -103,9 +106,19 @@
         const node = sharedNodeStore.getNode(nodeId);
         headerContent = node?.content || '';
 
+        // Update reactive node reference for schema form
+        currentViewedNode = node || null;
+
         // Update tab title after node is loaded
-        updateTabTitle(headerContent);
+        // Skip if this is a date node - DateNodeViewer handles its own title formatting
+        const isDateNode = /^\d{4}-\d{2}-\d{2}$/.test(nodeId);
+        if (!isDateNode) {
+          updateTabTitle(headerContent);
+        }
       });
+    } else {
+      // Clear when no nodeId
+      currentViewedNode = null;
     }
   });
 
@@ -1641,11 +1654,8 @@
   <!-- Scrollable Node Content Area (children structure) -->
   <div class="node-content-area" bind:this={scrollContainer}>
     <!-- Schema-Driven Properties Panel - appears after header, before children -->
-    {#if nodeId}
-      {@const currentNode = sharedNodeStore.getNode(nodeId)}
-      {#if currentNode}
-        <SchemaPropertyForm {nodeId} nodeType={currentNode.nodeType} />
-      {/if}
+    {#if currentViewedNode && nodeId}
+      <SchemaPropertyForm {nodeId} nodeType={currentViewedNode.nodeType} />
     {/if}
 
     {#each nodesToRender() as node (node.id)}

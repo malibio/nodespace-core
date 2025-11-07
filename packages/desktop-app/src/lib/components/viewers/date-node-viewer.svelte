@@ -53,12 +53,12 @@
   // Derive current date ID from currentDate (using local timezone, not UTC)
   const currentDateId = $derived(formatDateISO(currentDate));
 
-  // Single $effect for legitimate side effect: updating tab title
-  // Dependencies: currentDate (derived from nodeId prop)
-  // This re-runs whenever currentDate changes (i.e., when navigating between dates)
+  // Derive the tab title from current date
+  const tabTitle = $derived(getDateTabTitle(currentDate));
+
+  // Update parent with tab title whenever it changes
   $effect(() => {
-    const title = getDateTabTitle(currentDate);
-    onTitleChange?.(title);
+    onTitleChange?.(tabTitle);
   });
 
   /**
@@ -106,7 +106,7 @@
 <svelte:window on:keydown={handleKeydown} />
 
 <div class="date-node-viewer">
-  <BaseNodeViewer nodeId={currentDateId} {onTitleChange}>
+  <BaseNodeViewer nodeId={currentDateId}>
     {#snippet header()}
       <!-- Date Navigation Header - inherits base styling from BaseNodeViewer -->
       <div class="date-nav-container">
