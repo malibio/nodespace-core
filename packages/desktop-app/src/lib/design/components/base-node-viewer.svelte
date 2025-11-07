@@ -96,15 +96,16 @@
     // Removed setViewParentId - now pass nodeId directly to visibleNodes()
 
     if (nodeId) {
-      loadChildrenForParent(nodeId);
+      // Load children asynchronously - this will load the parent node first
+      loadChildrenForParent(nodeId).then(() => {
+        // After loading completes, initialize header content and update tab title
+        // This ensures the node is loaded before we try to read its content
+        const node = sharedNodeStore.getNode(nodeId);
+        headerContent = node?.content || '';
 
-      // Initialize header content from node synchronously
-      // This works now because loadChildrenForParent() loads the parent node first
-      const node = sharedNodeStore.getNode(nodeId);
-      headerContent = node?.content || '';
-
-      // Update tab title on load
-      updateTabTitle(headerContent);
+        // Update tab title after node is loaded
+        updateTabTitle(headerContent);
+      });
     }
   });
 

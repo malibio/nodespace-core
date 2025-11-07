@@ -54,8 +54,11 @@
   const currentDateId = $derived(formatDateISO(currentDate));
 
   // Single $effect for legitimate side effect: updating tab title
+  // Dependencies: currentDate (derived from nodeId prop)
+  // This re-runs whenever currentDate changes (i.e., when navigating between dates)
   $effect(() => {
-    onTitleChange?.(getDateTabTitle(currentDate));
+    const title = getDateTabTitle(currentDate);
+    onTitleChange?.(title);
   });
 
   /**
