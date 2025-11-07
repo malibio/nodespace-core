@@ -165,18 +165,14 @@
 
     const navigationService = getNavigationService();
 
-    // Open in other pane with Cmd+Click, new tab with Shift+Click, or current tab otherwise
+    // Regular click: Open in dedicated viewer pane (other pane)
+    // Modifier keys provide alternative behaviors
     if (event.metaKey || event.ctrlKey) {
-      if (event.shiftKey) {
-        // Cmd+Shift+Click: Open in other pane
-        await navigationService.navigateToNodeInOtherPane(nodeId);
-      } else {
-        // Cmd+Click: Open in new tab
-        await navigationService.navigateToNode(nodeId, true);
-      }
+      // Cmd+Click: Open in new tab in same pane
+      await navigationService.navigateToNode(nodeId, true);
     } else {
-      // Regular click: Navigate to task in current tab
-      await navigationService.navigateToNode(nodeId, false);
+      // Regular click: Open in dedicated viewer pane (creates new pane if needed)
+      await navigationService.navigateToNodeInOtherPane(nodeId);
     }
   }
 
@@ -219,8 +215,8 @@
     class="task-open-button"
     onclick={handleOpenClick}
     type="button"
-    aria-label="Open task in viewer (Cmd+Click for new tab, Cmd+Shift+Click for split view)"
-    title="Open task"
+    aria-label="Open task in dedicated viewer pane (Cmd+Click for new tab in same pane)"
+    title="Open task in viewer"
   >
     open
   </button>
