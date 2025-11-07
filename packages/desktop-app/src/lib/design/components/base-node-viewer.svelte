@@ -1487,6 +1487,40 @@
     return [];
   });
 
+  // Reactive effect: Create placeholder when children drop to zero
+  $effect(() => {
+    const realChildren = nodeManager.visibleNodes(nodeId);
+
+    // If we have no real children and no placeholder, create one
+    if (realChildren.length === 0 && !viewerPlaceholder && nodeId) {
+      const placeholderId = globalThis.crypto.randomUUID();
+      viewerPlaceholder = {
+        id: placeholderId,
+        nodeType: 'text',
+        content: '',
+        parentId: null, // Viewer-local only
+        containerNodeId: null,
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {},
+        mentions: []
+      };
+
+      // Initialize NodeManager with the placeholder
+      nodeManager.initializeNodes([viewerPlaceholder], {
+        expanded: true,
+        autoFocus: false, // Don't steal focus when auto-creating
+        inheritHeaderLevel: 0
+      });
+    }
+    // Clear placeholder when real children exist
+    else if (realChildren.length > 0 && viewerPlaceholder) {
+      viewerPlaceholder = null;
+    }
+  });
+
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
   const minDepth = $derived(() => {
