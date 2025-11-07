@@ -54,8 +54,7 @@ describe('NodeAutocomplete', () => {
           visible: false,
           position: defaultPosition,
           query: '',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -69,8 +68,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: '',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -85,8 +83,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: [],
-          loading: true
+          results: []
         }
       });
 
@@ -99,8 +96,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'nonexistent',
-          results: [],
-          loading: false
+          results: []
         }
       });
 
@@ -114,8 +110,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: '',
-          results: [],
-          loading: false
+          results: []
         }
       });
 
@@ -129,8 +124,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -149,8 +143,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -166,8 +159,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -189,8 +181,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -211,8 +202,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -235,8 +225,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -256,8 +245,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -284,7 +272,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false,
+
           onselect: onSelect
         }
       });
@@ -304,7 +292,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false,
+
           onselect: onSelect
         }
       });
@@ -327,7 +315,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false,
+
           onclose: onClose
         }
       });
@@ -346,7 +334,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false,
+
           onselect: onSelect,
           onclose: onClose
         }
@@ -368,7 +356,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: [],
-          loading: false,
+
           onselect: onSelect
         }
       });
@@ -390,8 +378,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -411,8 +398,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -432,8 +418,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -453,8 +438,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -474,8 +458,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -503,8 +486,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -519,8 +501,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -536,7 +517,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false,
+
           onselect: onSelect
         }
       });
@@ -560,8 +541,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -578,8 +558,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -596,8 +575,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -618,8 +596,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -641,7 +618,7 @@ describe('NodeAutocomplete', () => {
           position: defaultPosition,
           query: 'test',
           results: mockResults,
-          loading: false,
+
           onselect: onSelect
         }
       });
@@ -660,8 +637,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -681,8 +657,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -705,8 +680,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: singleResult,
-          loading: false
+          results: singleResult
         }
       });
 
@@ -726,8 +700,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: minimalResults,
-          loading: false
+          results: minimalResults
         }
       });
 
@@ -740,15 +713,14 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: [],
-          loading: true
+          results: []
         }
       });
 
       expect(screen.getByText('Searching nodes...')).toBeInTheDocument();
 
       // Transition to results
-      await result.rerender({ loading: false, results: mockResults });
+      await result.rerender({ results: mockResults });
       await waitForEffects();
 
       expect(screen.queryByText('Searching nodes...')).not.toBeInTheDocument();
@@ -761,8 +733,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -790,8 +761,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: diverseResults,
-          loading: false
+          results: diverseResults
         }
       });
 
@@ -807,8 +777,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: { x: 100, y: 100 },
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -830,8 +799,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -873,8 +841,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: { x: 100, y: 100 }, // Plenty of space below
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -897,8 +864,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: { x: 100, y: 700 }, // Near bottom, insufficient space below
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -920,8 +886,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: { x: 1000, y: 100 }, // Near right edge
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -940,8 +905,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: { x: 1000, y: 700 }, // Bottom-right corner
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -966,8 +930,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 
@@ -994,8 +957,7 @@ describe('NodeAutocomplete', () => {
           visible: true,
           position: defaultPosition,
           query: 'test',
-          results: mockResults,
-          loading: false
+          results: mockResults
         }
       });
 

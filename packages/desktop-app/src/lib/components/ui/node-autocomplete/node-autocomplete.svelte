@@ -21,7 +21,6 @@
   export let position: { x: number; y: number } = { x: 0, y: 0 };
   export let query: string = '';
   export let results: NodeResult[] = [];
-  export let loading: boolean = false;
   export let visible: boolean = false;
 
   // Event handler props (Svelte 5 pattern)
@@ -190,23 +189,7 @@
     role="listbox"
     aria-label="Node reference autocomplete"
   >
-    {#if loading}
-      <div
-        style="padding: 2rem; display: flex; align-items: center; justify-content: center; gap: 0.75rem; color: hsl(var(--muted-foreground));"
-      >
-        <div
-          style="
-          width: 16px;
-          height: 16px;
-          border: 2px solid hsl(var(--border));
-          border-top: 2px solid hsl(var(--primary));
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        "
-        ></div>
-        <span>Searching nodes...</span>
-      </div>
-    {:else if results.length === 0}
+    {#if results.length === 0}
       <!-- Always show "Create new" option when no results, never show "No nodes found" -->
       {#if query}
         <div
