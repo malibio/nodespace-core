@@ -43,11 +43,11 @@ dirs = "5.0"
 tracing = "0.1"
 futures = "0.3"
 
-# LanceDB experimental parallel implementation (upgraded to 0.20 for Rust 1.91.0 compatibility)
-lancedb = "0.20"
-arrow-array = "55.0"
-arrow-schema = "55.0"
-arrow-data = "55.0"
+# LanceDB experimental parallel implementation (upgraded to 0.22.3 to test JSON scalar index support)
+lancedb = "0.22.3"
+arrow-array = "56.0"
+arrow-schema = "56.0"
+arrow-data = "56.0"
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 base64 = "0.22"

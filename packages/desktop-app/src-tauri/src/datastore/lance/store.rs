@@ -1,8 +1,8 @@
 use super::types::{LanceDBError, UniversalNode};
 use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, ListArray, RecordBatch, RecordBatchIterator,
-    StringArray,
+    Array, FixedSizeListArray, Float32Array, LargeBinaryArray, ListArray, RecordBatch,
+    RecordBatchIterator, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use chrono::{DateTime, Utc};
@@ -122,7 +122,7 @@ impl LanceDataStore {
             ),
             Field::new("created_at", DataType::Utf8, false),
             Field::new("modified_at", DataType::Utf8, false),
-            Field::new("properties", DataType::Utf8, true), // Nullable JSON string
+            Field::new("properties", DataType::LargeBinary, true), // Nullable JSON as binary for json_extract()
             Field::new("version", DataType::Int64, false),
         ]))
     }
@@ -156,8 +156,8 @@ impl LanceDataStore {
                 Arc::new(ListBuilder::new(StringBuilder::new()).finish()), // mentions
                 Arc::new(StringArray::from(Vec::<String>::new())), // created_at
                 Arc::new(StringArray::from(Vec::<String>::new())), // modified_at
-                Arc::new(StringArray::from(Vec::<Option<String>>::new())), // properties
-                Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new())), // version
+                Arc::new(LargeBinaryArray::from(Vec::<Option<&[u8]>>::new())), // properties (binary for v0.22.3)
+                Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new())),    // version
             ],
         )
         .map_err(|e| LanceDBError::Arrow(format!("Failed to create empty batch: {}", e)))?;
@@ -283,9 +283,25 @@ impl LanceDataStore {
             nodes.iter().map(|n| n.before_sibling_id.clone()).collect();
         let created_ats: Vec<String> = nodes.iter().map(|n| n.created_at.clone()).collect();
         let modified_ats: Vec<String> = nodes.iter().map(|n| n.modified_at.clone()).collect();
-        let properties: Vec<Option<String>> = nodes
+        // Convert properties to binary format for LanceDB v0.22.3 json_extract() compatibility
+        let properties_bytes: Vec<Vec<u8>> = nodes
             .iter()
-            .map(|n| n.properties.as_ref().map(|v| v.to_string()))
+            .map(|n| {
+                n.properties
+                    .as_ref()
+                    .map(|v| v.to_string().into_bytes())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let properties_refs: Vec<Option<&[u8]>> = properties_bytes
+            .iter()
+            .map(|bytes| {
+                if bytes.is_empty() {
+                    None
+                } else {
+                    Some(bytes.as_slice())
+                }
+            })
             .collect();
         let versions: Vec<i64> = nodes.iter().map(|n| n.version).collect();
 
@@ -347,7 +363,7 @@ impl LanceDataStore {
                 Arc::new(mentions),
                 Arc::new(StringArray::from(created_ats)),
                 Arc::new(StringArray::from(modified_ats)),
-                Arc::new(StringArray::from(properties)),
+                Arc::new(LargeBinaryArray::from(properties_refs)), // Binary for v0.22.3 json_extract()
                 Arc::new(arrow_array::Int64Array::from(versions)),
             ],
         )
@@ -463,19 +479,23 @@ impl LanceDataStore {
                     }
                 });
 
-            let properties_str = batch
+            let properties_bytes = batch
                 .column_by_name("properties")
-                .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+                .and_then(|col| col.as_any().downcast_ref::<LargeBinaryArray>())
                 .and_then(|arr| {
                     if arr.is_null(i) {
                         None
                     } else {
-                        Some(arr.value(i).to_string())
+                        Some(arr.value(i).to_vec())
                     }
                 });
 
-            // Convert properties string back to JSON Value
-            let properties = properties_str.and_then(|s| serde_json::from_str(&s).ok());
+            // Convert properties binary back to JSON Value
+            let properties = properties_bytes.and_then(|bytes| {
+                std::str::from_utf8(&bytes)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(s).ok())
+            });
 
             // Extract vector embedding from FixedSizeListArray
             let vector = if !vector_list_array.is_null(i) {

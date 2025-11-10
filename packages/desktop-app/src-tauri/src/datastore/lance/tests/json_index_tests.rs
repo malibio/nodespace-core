@@ -143,7 +143,7 @@ mod tests {
         // CRITICAL TEST: Can we filter by single-level JSON property?
         // In LanceDB, the properties field is stored as JSON string, so we need to use json_extract
         let filter =
-            "properties != '' AND cast(json_extract(properties, '$.status') as text) = 'done'";
+            "properties IS NOT NULL AND cast(json_extract(properties, '$.status') as string) = 'done'";
 
         println!("\nAttempting filter: {}", filter);
         let results = store.query_nodes(filter).await?;
@@ -182,7 +182,7 @@ mod tests {
         println!("✅ 100 nodes inserted");
 
         // CRITICAL TEST: Can we filter by nested property (customer.name)?
-        let filter = "properties != '' AND cast(json_extract(properties, '$.customer.name') as text) = 'Customer 42'";
+        let filter = "properties IS NOT NULL AND cast(json_extract(properties, '$.customer.name') as string) = 'Customer 42'";
 
         println!("\nAttempting nested filter: {}", filter);
         let results = store.query_nodes(filter).await?;
@@ -218,7 +218,7 @@ mod tests {
         println!("✅ 100 nodes inserted");
 
         // CRITICAL TEST: Can we filter by 3-level nested property?
-        let filter = "properties != '' AND cast(json_extract(properties, '$.customer.address.zip') as text) = '00042'";
+        let filter = "properties IS NOT NULL AND cast(json_extract(properties, '$.customer.address.zip') as string) = '00042'";
 
         println!("\nAttempting 3-level nested filter: {}", filter);
         let results = store.query_nodes(filter).await?;
@@ -252,7 +252,7 @@ mod tests {
         println!("✅ 100 nodes inserted");
 
         // CRITICAL TEST: Can we filter by 5-level nested property?
-        let filter = "properties != '' AND cast(json_extract(properties, '$.project.team.lead.contact.email') as text) = 'lead42@example.com'";
+        let filter = "properties IS NOT NULL AND cast(json_extract(properties, '$.project.team.lead.contact.email') as string) = 'lead42@example.com'";
 
         println!("\nAttempting 5-level nested filter: {}", filter);
         let results = store.query_nodes(filter).await?;
@@ -289,7 +289,7 @@ mod tests {
 
         // CRITICAL TEST: Can we filter nodes that HAVE the sparse property?
         let filter =
-            "properties != '' AND json_extract(properties, '$.estimatedHours') IS NOT NULL";
+            "properties IS NOT NULL AND json_extract(properties, '$.estimatedHours') IS NOT NULL";
 
         println!("\nAttempting sparse property filter: {}", filter);
         let results = store.query_nodes(filter).await?;
@@ -347,7 +347,7 @@ mod tests {
             // Level 1: status
             let query_start = Instant::now();
             let filter1 =
-                "properties != '' AND cast(json_extract(properties, '$.status') as text) = 'done'";
+                "properties IS NOT NULL AND cast(json_extract(properties, '$.status') as string) = 'done'";
             let results1 = store.query_nodes(filter1).await?;
             let query1_duration = query_start.elapsed();
             println!(
@@ -358,7 +358,7 @@ mod tests {
 
             // Level 3: customer.address.zip
             let query_start = Instant::now();
-            let filter3 = "properties != '' AND cast(json_extract(properties, '$.customer.address.zip') as text) = '00042'";
+            let filter3 = "properties IS NOT NULL AND cast(json_extract(properties, '$.customer.address.zip') as string) = '00042'";
             let results3 = store.query_nodes(filter3).await?;
             let query3_duration = query_start.elapsed();
             println!(
@@ -369,7 +369,7 @@ mod tests {
 
             // Level 5: project.team.lead.contact.email
             let query_start = Instant::now();
-            let filter5 = "properties != '' AND cast(json_extract(properties, '$.project.team.lead.contact.email') as text) = 'lead42@example.com'";
+            let filter5 = "properties IS NOT NULL AND cast(json_extract(properties, '$.project.team.lead.contact.email') as string) = 'lead42@example.com'";
             let results5 = store.query_nodes(filter5).await?;
             let query5_duration = query_start.elapsed();
             println!(
@@ -438,7 +438,7 @@ mod tests {
         // Test query performance without index to establish baseline
         let query_start = Instant::now();
         let filter =
-            "properties != '' AND cast(json_extract(properties, '$.status') as text) = 'done'";
+            "properties IS NOT NULL AND cast(json_extract(properties, '$.status') as string) = 'done'";
         let results = store.query_nodes(filter).await?;
         let query_duration = query_start.elapsed();
 
