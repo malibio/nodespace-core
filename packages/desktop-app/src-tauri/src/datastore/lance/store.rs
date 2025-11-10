@@ -1,8 +1,8 @@
 use super::types::{LanceDBError, UniversalNode};
 use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, LargeBinaryArray, ListArray, RecordBatch,
-    RecordBatchIterator, StringArray,
+    Array, FixedSizeListArray, Float32Array, ListArray, RecordBatch, RecordBatchIterator,
+    StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use chrono::{DateTime, Utc};
@@ -122,7 +122,7 @@ impl LanceDataStore {
             ),
             Field::new("created_at", DataType::Utf8, false),
             Field::new("modified_at", DataType::Utf8, false),
-            Field::new("properties", DataType::LargeBinary, true), // Nullable JSON as binary for json_extract()
+            Field::new("properties", DataType::Utf8, true), // Nullable - Plain JSON string for v0.22.3 scalar indexing
             Field::new("version", DataType::Int64, false),
         ]))
     }
@@ -156,8 +156,8 @@ impl LanceDataStore {
                 Arc::new(ListBuilder::new(StringBuilder::new()).finish()), // mentions
                 Arc::new(StringArray::from(Vec::<String>::new())), // created_at
                 Arc::new(StringArray::from(Vec::<String>::new())), // modified_at
-                Arc::new(LargeBinaryArray::from(Vec::<Option<&[u8]>>::new())), // properties (binary for v0.22.3)
-                Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new())),    // version
+                Arc::new(StringArray::from(Vec::<Option<String>>::new())), // properties (plain JSON string)
+                Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new())), // version
             ],
         )
         .map_err(|e| LanceDBError::Arrow(format!("Failed to create empty batch: {}", e)))?;
@@ -283,25 +283,10 @@ impl LanceDataStore {
             nodes.iter().map(|n| n.before_sibling_id.clone()).collect();
         let created_ats: Vec<String> = nodes.iter().map(|n| n.created_at.clone()).collect();
         let modified_ats: Vec<String> = nodes.iter().map(|n| n.modified_at.clone()).collect();
-        // Convert properties to binary format for LanceDB v0.22.3 json_extract() compatibility
-        let properties_bytes: Vec<Vec<u8>> = nodes
+        // Convert properties to plain JSON strings for v0.22.3 scalar indexing
+        let properties: Vec<Option<String>> = nodes
             .iter()
-            .map(|n| {
-                n.properties
-                    .as_ref()
-                    .map(|v| v.to_string().into_bytes())
-                    .unwrap_or_default()
-            })
-            .collect();
-        let properties_refs: Vec<Option<&[u8]>> = properties_bytes
-            .iter()
-            .map(|bytes| {
-                if bytes.is_empty() {
-                    None
-                } else {
-                    Some(bytes.as_slice())
-                }
-            })
+            .map(|n| n.properties.as_ref().map(|v| v.to_string()))
             .collect();
         let versions: Vec<i64> = nodes.iter().map(|n| n.version).collect();
 
@@ -363,7 +348,7 @@ impl LanceDataStore {
                 Arc::new(mentions),
                 Arc::new(StringArray::from(created_ats)),
                 Arc::new(StringArray::from(modified_ats)),
-                Arc::new(LargeBinaryArray::from(properties_refs)), // Binary for v0.22.3 json_extract()
+                Arc::new(StringArray::from(properties)), // Plain JSON string for v0.22.3 scalar indexing
                 Arc::new(arrow_array::Int64Array::from(versions)),
             ],
         )
@@ -479,23 +464,18 @@ impl LanceDataStore {
                     }
                 });
 
-            let properties_bytes = batch
+            // Extract properties as JSON string
+            let properties = batch
                 .column_by_name("properties")
-                .and_then(|col| col.as_any().downcast_ref::<LargeBinaryArray>())
+                .and_then(|col| col.as_any().downcast_ref::<StringArray>())
                 .and_then(|arr| {
                     if arr.is_null(i) {
                         None
                     } else {
-                        Some(arr.value(i).to_vec())
+                        // Parse JSON string back to serde_json::Value
+                        serde_json::from_str(arr.value(i)).ok()
                     }
                 });
-
-            // Convert properties binary back to JSON Value
-            let properties = properties_bytes.and_then(|bytes| {
-                std::str::from_utf8(&bytes)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(s).ok())
-            });
 
             // Extract vector embedding from FixedSizeListArray
             let vector = if !vector_list_array.is_null(i) {
@@ -723,6 +703,92 @@ impl LanceDataStore {
                 .map_err(|e| LanceDBError::Operation(format!("Failed to add batch: {}", e)))?;
 
             Ok(())
+        } else {
+            Err(LanceDBError::Database("Table not initialized".to_string()))
+        }
+    }
+
+    /// Create a scalar index on a specific JSON path for efficient filtering
+    ///
+    /// This enables LanceDB v0.22.3's JSON scalar index feature for dynamic schema support.
+    ///
+    /// # Example
+    /// ```rust
+    /// // Enable fast filtering on task status
+    /// store.create_json_path_index("properties.status").await?;
+    ///
+    /// // Now this query uses the index
+    /// let done_tasks = store.query_nodes("properties.status = 'done'").await?;
+    /// ```
+    ///
+    /// # Arguments
+    /// * `json_path` - Dot-notation path to the JSON field (e.g., "properties.status", "properties.customer.address.zip")
+    ///
+    /// # Returns
+    /// * `Ok(())` if index created successfully
+    /// * `Err(LanceDBError)` if index creation fails
+    pub async fn create_json_path_index(&self, json_path: &str) -> Result<(), LanceDBError> {
+        let table_guard = self.table.read().await;
+        if let Some(table) = table_guard.as_ref() {
+            // LanceDB v0.22.3 supports BTree indexes for scalar/JSON fields
+            table
+                .create_index(
+                    &[json_path],
+                    lancedb::index::Index::BTree(Default::default()),
+                )
+                .execute()
+                .await
+                .map_err(|e| {
+                    LanceDBError::Operation(format!(
+                        "Failed to create index on {}: {}",
+                        json_path, e
+                    ))
+                })?;
+
+            Ok(())
+        } else {
+            Err(LanceDBError::Database("Table not initialized".to_string()))
+        }
+    }
+
+    /// Create multiple scalar indexes on JSON paths
+    ///
+    /// # Example
+    /// ```rust
+    /// store.create_json_path_indexes(&[
+    ///     "properties.status",
+    ///     "properties.priority",
+    ///     "properties.customer.tier",
+    /// ]).await?;
+    /// ```
+    pub async fn create_json_path_indexes(&self, paths: &[&str]) -> Result<(), LanceDBError> {
+        for path in paths {
+            self.create_json_path_index(path).await?;
+        }
+        Ok(())
+    }
+
+    /// Check if a scalar index exists on a specific JSON path
+    ///
+    /// # Example
+    /// ```rust
+    /// if !store.has_json_path_index("properties.status").await? {
+    ///     store.create_json_path_index("properties.status").await?;
+    /// }
+    /// ```
+    pub async fn has_json_path_index(&self, json_path: &str) -> Result<bool, LanceDBError> {
+        let table_guard = self.table.read().await;
+        if let Some(table) = table_guard.as_ref() {
+            // Query table metadata to check for index
+            let indices = table
+                .list_indices()
+                .await
+                .map_err(|e| LanceDBError::Operation(format!("Failed to list indices: {}", e)))?;
+
+            // Check if any index includes this column
+            Ok(indices
+                .iter()
+                .any(|idx| idx.columns.contains(&json_path.to_string())))
         } else {
             Err(LanceDBError::Database("Table not initialized".to_string()))
         }

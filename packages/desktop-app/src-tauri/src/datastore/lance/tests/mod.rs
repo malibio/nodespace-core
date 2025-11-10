@@ -2,3 +2,4 @@
 
 pub mod json_index_tests;
 pub mod json_index_v22_retest;
+pub mod json_path_index_tests; // CORRECT v0.22.3 dynamic JSON pattern tests
