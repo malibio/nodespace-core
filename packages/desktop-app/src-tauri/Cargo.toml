@@ -48,6 +48,7 @@ lancedb = "0.22.3"
 arrow-array = "56.0"
 arrow-schema = "56.0"
 arrow-data = "56.0"
+arrow-buffer = "56.0"
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 base64 = "0.22"
