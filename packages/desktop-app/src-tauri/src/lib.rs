@@ -4,6 +4,9 @@ pub mod commands;
 // Shared constants
 pub mod constants;
 
+// Experimental datastore implementations (LanceDB parallel evaluation)
+pub mod datastore;
+
 // HTTP dev server module (feature-gated for development only)
 #[cfg(feature = "dev-server")]
 pub mod dev_server;
@@ -177,6 +180,12 @@ pub fn run() {
             commands::schemas::remove_schema_field,
             commands::schemas::extend_schema_enum,
             commands::schemas::remove_schema_enum_value,
+            // Experimental LanceDB commands
+            commands::nodes_experimental::create_node_lance_experimental,
+            commands::nodes_experimental::read_node_lance_experimental,
+            commands::nodes_experimental::update_node_lance_experimental,
+            commands::nodes_experimental::delete_node_lance_experimental,
+            commands::nodes_experimental::compare_backends,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -127,6 +127,9 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
         );
     }
 
+    // Clone db_path early for LanceDB initialization
+    let db_path_for_lance = db_path.clone();
+
     // Initialize database
     let db_service = DatabaseService::new(db_path)
         .await
@@ -160,6 +163,42 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
     // Start the background processor
     processor.clone().start();
 
+    // Initialize experimental LanceDB if enabled via environment variable
+    let experimental_state = if std::env::var("EXPERIMENTAL_USE_LANCEDB")
+        .unwrap_or_default()
+        .to_lowercase()
+        == "true"
+    {
+        tracing::info!("🧪 EXPERIMENTAL_USE_LANCEDB enabled - initializing LanceDB");
+
+        // Determine LanceDB path (alongside Turso database)
+        let lance_path = db_path_for_lance
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("lance_data");
+
+        tracing::info!("📍 LanceDB path: {:?}", lance_path);
+
+        match crate::datastore::lance::LanceDataStore::new(lance_path.to_str().unwrap()).await {
+            Ok(lance_db) => {
+                tracing::info!("✅ LanceDB initialized successfully");
+                crate::commands::nodes_experimental::ExperimentalState {
+                    lance_db: Some(Arc::new(tokio::sync::RwLock::new(lance_db))),
+                }
+            }
+            Err(e) => {
+                tracing::error!("❌ Failed to initialize LanceDB: {}", e);
+                tracing::warn!(
+                    "⚠️  Continuing without LanceDB - experimental commands will be disabled"
+                );
+                crate::commands::nodes_experimental::ExperimentalState { lance_db: None }
+            }
+        }
+    } else {
+        tracing::info!("ℹ️  LanceDB not enabled (set EXPERIMENTAL_USE_LANCEDB=true to enable)");
+        crate::commands::nodes_experimental::ExperimentalState { lance_db: None }
+    };
+
     // Manage all services
     app.manage(db_service);
     app.manage(node_service);
@@ -169,6 +208,7 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
         service: embedding_service_arc,
     });
     app.manage(processor);
+    app.manage(experimental_state);
 
     // Initialize MCP server now that NodeService is available
     // MCP will use the same NodeService as Tauri commands

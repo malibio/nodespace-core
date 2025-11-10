@@ -37,10 +37,20 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tauri-plugin-decorum = "1.1.1"
-nodespace-core = { workspace = true }
+# Temporarily disable embedding-service feature to avoid half version conflict with lancedb
+nodespace-core = { workspace = true, default-features = false }
 dirs = "5.0"
 tracing = "0.1"
 futures = "0.3"
+
+# LanceDB experimental parallel implementation (upgraded to 0.20 for Rust 1.91.0 compatibility)
+lancedb = "0.20"
+arrow-array = "55.0"
+arrow-schema = "55.0"
+arrow-data = "55.0"
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
 
 # HTTP dev server dependencies (dev-only)
 axum = { version = "0.7", optional = true }
