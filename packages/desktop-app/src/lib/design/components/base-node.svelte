@@ -441,13 +441,8 @@
       const rootNodes = allNodes.filter(isContainerNode);
 
       // Filter to only persisted root nodes (those that exist in the database)
-      // Check if SharedNodeStore has persistedNodeIds tracking
-      const sharedNodeStore = (
-        nodeManager as { sharedNodeStore?: { persistedNodeIds: Set<string> } }
-      ).sharedNodeStore;
-      const persistedRootNodes = sharedNodeStore?.persistedNodeIds
-        ? rootNodes.filter((node) => sharedNodeStore.persistedNodeIds.has(node.id))
-        : rootNodes; // Fallback to all nodes if tracking not available
+      // Use new explicit persistenceState field instead of deleted persistedNodeIds Set
+      const persistedRootNodes = rootNodes.filter((node) => node.persistenceState === 'persisted');
 
       const lastRootNode = persistedRootNodes[persistedRootNodes.length - 1];
       const beforeSiblingId = lastRootNode ? lastRootNode.id : null;
