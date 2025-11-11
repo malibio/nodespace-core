@@ -583,7 +583,7 @@ async fn create_node(node: Node) -> Result<(), String> {
 
 ### What Are Placeholder Nodes?
 
-**Placeholder nodes** are temporary UI-only nodes that exist to provide smooth UX when creating new nodes, but **should NOT be persisted** to the database until the user adds actual content.
+**Placeholder nodes** are temporary UI-only nodes that exist to provide smooth UX when creating new nodes, but **should not be persisted** to the database until the user adds actual content.
 
 **Think of them as:** Draft envelopes - you start addressing an envelope, but you don't mail it until you've actually written something inside.
 
@@ -591,7 +591,7 @@ async fn create_node(node: Node) -> Result<(), String> {
 
 **Problem:** When user creates a new node (presses Enter), we need to:
 1. Show the new node instantly in the UI (for smooth UX)
-2. But NOT save it to the database yet (avoid cluttering DB with empty nodes)
+2. But not save it to the database yet (avoid cluttering DB with empty nodes)
 3. Wait until user actually types content (then persist)
 
 **Solution:** Create placeholder nodes in memory only:
@@ -652,7 +652,7 @@ export function isPlaceholderNode(node: PlaceholderCheckable): boolean {
       return trimmedContent === '';
 
     case 'date':
-      // Date nodes are NEVER placeholders (backend-managed containers)
+      // Date nodes are never placeholders (backend-managed containers)
       return false;
 
     default:
@@ -725,7 +725,7 @@ updateNode(nodeId: string, changes: Partial<Node>, source: UpdateSource) {
 
   // Check placeholder status before persisting
   if (!isPlaceholderNode(updatedNode) && source.type !== 'database') {
-    // NOT a placeholder → persist to database
+    // not a placeholder → persist to database
     persistenceCoordinator.persist(nodeId, () => {
       return tauriNodeService.updateNode(nodeId, updatedNode);
     });
@@ -754,7 +754,7 @@ updateNode(nodeId: string, changes: Partial<Node>, source: UpdateSource) {
 │ 3. SHOW IN UI                                              │
 │    User sees empty node with cursor                        │
 │    Node exists in memory (SharedNodeStore)                 │
-│    Node does NOT exist in database                         │
+│    Node does not exist in database                         │
 └────────────────┬───────────────────────────────────────────┘
                  ↓
 ┌────────────────────────────────────────────────────────────┐
@@ -840,7 +840,7 @@ describe('Placeholder Detection', () => {
     expect(isPlaceholderNode({ nodeType: 'quote-block', content: '> ' })).toBe(true);
   });
 
-  it('should NOT detect quote-block with content as placeholder', () => {
+  it('should not detect quote-block with content as placeholder', () => {
     expect(isPlaceholderNode({ nodeType: 'quote-block', content: '> Hello' })).toBe(false);
   });
 
@@ -858,7 +858,7 @@ describe('Placeholder Detection', () => {
 
 ### Special Case: Date Nodes
 
-**Date nodes are NEVER placeholders** (even with empty content):
+**Date nodes are never placeholders** (even with empty content):
 
 ```typescript
 case 'date':
@@ -876,7 +876,7 @@ case 'date':
 1. **Purpose:** Smooth UX - show new nodes instantly without cluttering database
 2. **Detection:** Empty content or just type-specific prefixes (e.g., "> " for quote)
 3. **Lifecycle:** Memory-only → User types content → Persist to database
-4. **Persistence:** Placeholders are NEVER persisted (checked at multiple layers)
+4. **Persistence:** Placeholders are never persisted (checked at multiple layers)
 5. **Edge Cases:** Guard against FOREIGN KEY violations from placeholder references
 6. **Pattern Conversion:** Atomic batching prevents race conditions
 7. **Date Nodes Exception:** Never placeholders (backend-managed containers)
@@ -1202,7 +1202,7 @@ if (failed.size === 0) {
 
 ### ⚠️ Critical Lessons from Issue #246
 
-**DO NOT manually await waitForNodeSaves() in operation implementations** - this bypasses the PersistenceCoordinator's dependency management.
+**DO not manually await waitForNodeSaves() in operation implementations** - this bypasses the PersistenceCoordinator's dependency management.
 
 #### ❌ WRONG: Manual Awaits Bypass Coordinator
 
@@ -1766,7 +1766,7 @@ sharedNodeStore.deleteNode(..., dependencies: [nodeId]);
 ```typescript
 // Check source
 const source = {
-  type: 'viewer',  // ← Should NOT be 'database'
+  type: 'viewer',  // ← Should not be 'database'
   identifier: 'base-node-viewer'
 };
 

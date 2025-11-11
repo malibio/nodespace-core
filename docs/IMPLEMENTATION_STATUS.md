@@ -53,7 +53,7 @@ This document provides a clear overview of NodeSpace's current implementation st
 
 4. **AI Embeddings**
    - Status: ✅ **Production**
-   - Engine: Candle + ONNX (NOT mistral.rs)
+   - Engine: Candle + ONNX (not mistral.rs)
    - Model: BAAI/bge-small-en-v1.5 (384 dimensions)
    - Location: `packages/nlp-engine/`
    - Docs: See [AI Integration Status](#ai-integration-status) below
@@ -86,7 +86,7 @@ This document provides a clear overview of NodeSpace's current implementation st
 
 ### Planned Features (GitHub Issues)
 
-**NOT YET IMPLEMENTED - See GitHub Issues:**
+**not YET IMPLEMENTED - See GitHub Issues:**
 
 1. **Advanced AI Features** 📋
    - **AIChatNode** - AI interaction hub with intent classification
@@ -188,7 +188,7 @@ packages/desktop-app/src/lib/
 - Modes: Focus (markdown syntax) ↔ Blur (formatted display)
 - Features: Auto-save, debouncing, cursor preservation
 
-**NOT ContentEditable** (outdated in some docs):
+**not ContentEditable** (outdated in some docs):
 - ❌ Old approach used ContentEditableController
 - ❌ Some docs still reference this pattern
 - ✅ Current: TextareaController is the truth
@@ -245,7 +245,7 @@ packages/desktop-app/src/lib/
 - `person` - Person entities
 - `project` - Project entities
 
-**Planned Node Types (NOT IMPLEMENTED):**
+**Planned Node Types (not IMPLEMENTED):**
 
 📋 **Advanced Types** (documented in GitHub issues):
 - ❌ **AIChatNode** - AI interaction hub (see `docs/architecture/core/system-overview.md` lines 331-362)
@@ -287,7 +287,7 @@ packages/desktop-app/src/lib/
 - Similarity: Cosine similarity
 - Performance: <50ms for typical queries
 
-**NOT IMPLEMENTED:**
+**not IMPLEMENTED:**
 
 ❌ **LLM Inference** (embeddings only, no text generation)
 - No chat capabilities
