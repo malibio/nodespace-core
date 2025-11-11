@@ -735,12 +735,27 @@ export class SharedNodeStore {
     const { shouldMarkAsPersisted } = this.determinePersistenceBehavior(source, options);
 
     // Set persistence state based on source and options
-    if (shouldMarkAsPersisted) {
-      // Node loaded from database - mark as persisted
-      this.updatePersistenceState(node.id, 'persisted');
+    // CRITICAL: Check if node is a placeholder FIRST, even for database-loaded nodes
+    // Placeholder nodes that came from database are ephemeral until they get content
+    const isPlaceholder = isPlaceholderNode(node);
+
+    // CRITICAL: Preserve existing persistence state for nodes not yet persisted
+    // If a node is 'ephemeral' or 'pending', DO NOT change it to 'persisted'
+    // just because we're reloading it (e.g., after content change triggers reactive reload)
+    const existingState = existingNode?.persistenceState;
+    const shouldPreserveState = existingState === 'ephemeral' || existingState === 'pending';
+
+    if (shouldPreserveState && !isNewNode) {
+      // Don't change the persistence state - it's still waiting to be persisted
+    } else if (shouldMarkAsPersisted) {
+      // Node loaded from database - but placeholders stay ephemeral
+      if (isPlaceholder) {
+        this.updatePersistenceState(node.id, 'ephemeral');
+      } else {
+        this.updatePersistenceState(node.id, 'persisted');
+      }
     } else if (isNewNode && !skipPersistence) {
-      // New node being created - start as pending (unless it's a placeholder, handled below)
-      const isPlaceholder = isPlaceholderNode(node);
+      // New node being created - start as pending (unless it's a placeholder)
       if (isPlaceholder) {
         this.updatePersistenceState(node.id, 'ephemeral');
       } else {
@@ -748,8 +763,7 @@ export class SharedNodeStore {
       }
     }
 
-    // Check if node is a placeholder (node with only type-specific prefix, no actual content)
-    const isPlaceholder = isPlaceholderNode(node);
+    // Check if placeholder is from viewer (for special handling below)
     const isPlaceholderFromViewer = isPlaceholder && source.type === 'viewer' && isNewNode;
 
     // Phase 2.4: Persist to database
@@ -828,6 +842,7 @@ export class SharedNodeStore {
               this.updatePersistenceState(node.id, 'persisting');
 
               if (isPersistedToDatabase) {
+
                 try {
                   // Get current version for optimistic concurrency control
                   const currentVersion = node.version ?? 1;
@@ -856,6 +871,7 @@ export class SharedNodeStore {
                   }
                 }
               } else {
+                console.log('[SharedNodeStore.persist] Node not persisted, calling CREATE');
                 await tauriNodeService.createNode(nodeToPersist);
                 this.updatePersistenceState(node.id, 'persisted'); // Track as persisted
               }

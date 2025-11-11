@@ -792,6 +792,14 @@
             autoFocus: true,
             inheritHeaderLevel: 0
           });
+
+          // Focus the placeholder node directly after initialization
+          // This ensures users can start typing immediately without clicking
+          // IMPORTANT: Must use setEditingNode (not focusNode) to set BOTH nodeId and paneId
+          // BaseNode checks both editingNodeId AND editingPaneId to determine isEditing
+          requestAnimationFrame(() => {
+            focusManager.setEditingNode(placeholderId, paneId);
+          });
         } else {
           // Reuse existing placeholder(s) from previous viewer instance
           viewerPlaceholder = null;
