@@ -126,6 +126,51 @@ Archiving preserves this knowledge while removing confusion about what is actual
 
 ---
 
+### 7. Future Planning & Business Strategy (`future-planning/`)
+**Status**: Future planning and business strategy documents
+**Archived**: 2025-01-21
+**Reason**: Planning documents for future scaling, business models, and infrastructure that are not part of current development roadmap.
+
+**Files Archived**:
+- monetization-strategy.md - Creator economy pricing (references unimplemented features)
+- cost-analysis.md - Infrastructure cost planning
+- scaling-strategy.md - Future scaling plans
+- supabase-integration.md - Alternative backend (not current architecture)
+- tech-stack-roadmap.md - References LanceDB (replaced by Turso)
+- post-mvp-roadmap.md - Comprehensive post-MVP enhancements
+- future-tech-stack.md - Future technology ADR
+
+**Why**: References outdated tech decisions (LanceDB, mistral.rs) and describes capabilities far beyond current focus (collaborative features, enterprise scaling).
+
+**Current Work**: SurrealDB migration (#462-469), custom schema system (#447-450)
+
+---
+
+### 8. Aspirational Components (`aspirational-components/`)
+**Status**: Detailed component specifications for unimplemented features
+**Archived**: 2025-01-21
+**Reason**: These describe complex future features beyond current development focus.
+
+**Files Archived**:
+- entity-management.md - EntityNode with calculated fields (not current approach)
+- validation-system.md - Natural language validation engine (not implemented)
+- workflow-canvas-system.md - Visual workflow editor (marked "Planned")
+- nlp-implementation-roadmap.md - 3-4 month NLP MVP timeline
+- nlp-strategy-roadmap.md - Detailed NLP strategy
+- ai-integration.md - AI integration architecture
+- ai-native-hybrid-approach.md - Hybrid AI strategy
+- bert-implementation-guide.md - BERT integration
+- confidence-ambiguity-system.md - AI confidence scoring
+- hybrid-intent-classification.md - Two-stage intent classification
+
+**Current Reality**:
+- ✅ Implemented: Candle + ONNX embeddings only (384-dim)
+- ❌ Not implemented: LLM inference, function calling, EntityNode, validation engine
+
+**Current Approach**: Issue #449 describes simpler schema-driven custom types using existing node system.
+
+---
+
 ## Archive Date
 **January 21, 2025**
 
