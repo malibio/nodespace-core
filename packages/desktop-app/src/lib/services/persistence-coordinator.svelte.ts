@@ -23,6 +23,7 @@
  */
 
 import { shouldLogDatabaseErrors } from '$lib/utils/test-environment';
+import type { SharedNodeStore } from './shared-node-store';
 
 // ============================================================================
 // Error Types
@@ -148,6 +149,9 @@ export class PersistenceCoordinator {
   // Reset guard to prevent concurrent resets
   private isResetting = false;
 
+  // SharedNodeStore reference (injected to avoid circular dependency)
+  private sharedNodeStore: SharedNodeStore | null = null;
+
   // Metrics
   private metrics: PersistenceMetrics = {
     totalOperations: 0,
@@ -181,6 +185,14 @@ export class PersistenceCoordinator {
    */
   static resetInstance(): void {
     PersistenceCoordinator.instance = null;
+  }
+
+  /**
+   * Set SharedNodeStore reference (injected to avoid circular dependency)
+   * Called by SharedNodeStore during initialization
+   */
+  setSharedNodeStore(store: SharedNodeStore): void {
+    this.sharedNodeStore = store;
   }
 
   // ========================================================================
@@ -298,8 +310,19 @@ export class PersistenceCoordinator {
     for (const dep of op.dependencies) {
       if (typeof dep === 'string') {
         const depOp = this.operations.get(dep);
+        // Check if dependency has pending operation
         if (depOp && (depOp.status === 'pending' || depOp.status === 'in-progress')) {
           blockingDeps.add(dep);
+        } else if (this.sharedNodeStore) {
+          // Also check if dependency is an ephemeral or pending node
+          // Ephemeral nodes have no operations but still need to be waited for
+          const depNode = this.sharedNodeStore.getNode(dep);
+          if (
+            depNode &&
+            (depNode.persistenceState === 'ephemeral' || depNode.persistenceState === 'pending')
+          ) {
+            blockingDeps.add(dep);
+          }
         }
       }
       // Lambda dependencies cannot be blocked - they execute inline
@@ -699,6 +722,19 @@ export class PersistenceCoordinator {
         }
       }
     }
+  }
+
+  /**
+   * Notify coordinator that a dependency is ready (ephemeral node transitioned to pending)
+   * This unblocks operations that were waiting for this dependency
+   *
+   * @param nodeId - Node ID that is now ready (transitioned from ephemeral to pending)
+   */
+  notifyDependencyReady(nodeId: string): void {
+    // Unblock any operations waiting for this dependency
+    // This handles the case where ephemeral nodes transition to pending
+    // and operations blocked on them can now proceed
+    this.unblockDependentOperations(nodeId);
   }
 
   /**

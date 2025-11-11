@@ -154,6 +154,10 @@ export class SharedNodeStore {
   static getInstance(): SharedNodeStore {
     if (!SharedNodeStore.instance) {
       SharedNodeStore.instance = new SharedNodeStore();
+
+      // Inject this instance into PersistenceCoordinator to avoid circular dependency
+      // PersistenceCoordinator needs SharedNodeStore to check ephemeral node states
+      PersistenceCoordinator.getInstance().setSharedNodeStore(SharedNodeStore.instance);
     }
     return SharedNodeStore.instance;
   }
@@ -271,6 +275,10 @@ export class SharedNodeStore {
     // CRITICAL: When transitioning ephemeral → pending, process deferred updates
     if (oldState === 'ephemeral' && newState === 'pending') {
       this.processDeferredUpdates(nodeId);
+
+      // Notify PersistenceCoordinator to unblock waiting operations
+      // This ensures operations queued with this node as dependency can proceed
+      PersistenceCoordinator.getInstance().notifyDependencyReady(nodeId);
     }
 
     // Notify subscribers about persistence state change (using database source for internal state changes)
@@ -537,7 +545,12 @@ export class SharedNodeStore {
         // Skip persisting placeholder nodes - they exist in UI but not in database
         // Placeholders are nodes with only type-specific prefixes and no actual content
         // They will be persisted once user adds real content
-        const isPlaceholder = isPlaceholderNode(updatedNode);
+        //
+        // CRITICAL: Check both content-based placeholder detection AND persistenceState
+        // Issue #450: Only nodes in 'ephemeral' state should skip persistence
+        // 'pending' means ready to persist, NOT a placeholder!
+        const isPlaceholder =
+          isPlaceholderNode(updatedNode) || updatedNode.persistenceState === 'ephemeral';
 
         // CRITICAL: Skip persistence if batch is active for this node
         // The batch will handle persistence atomically when committed
