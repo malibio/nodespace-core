@@ -8,6 +8,22 @@
  */
 
 /**
+ * Explicit persistence state for frontend nodes
+ *
+ * This tracks the lifecycle of a node through the persistence layer,
+ * from creation in UI to storage in database.
+ *
+ * NOTE: This is a FRONTEND-ONLY concern. The backend does not know or care
+ * about this state - it only receives persisted data.
+ */
+export type PersistenceState =
+  | 'ephemeral'    // Exists in UI only, never been persisted (empty placeholders)
+  | 'pending'      // Queued for persistence (has content, waiting to be saved)
+  | 'persisting'   // Currently being written to database
+  | 'persisted'    // Successfully saved to database (came from backend)
+  | 'failed';      // Persistence attempt failed (needs retry)
+
+/**
  * Node - Matches Rust backend schema exactly
  *
  * This is the authoritative node type. All services and components
@@ -143,6 +159,23 @@ export interface Node {
    * NOT stored in database
    */
   mentions?: string[];
+
+  /**
+   * Frontend persistence state tracking
+   *
+   * Tracks this node's lifecycle through the persistence layer.
+   * Orthogonal to node origin - a node from backend starts as 'persisted',
+   * while a frontend-created node starts as 'ephemeral' or 'pending'.
+   *
+   * State machine:
+   * - ephemeral → pending (when content added to placeholder)
+   * - pending → persisting (when queued for backend write)
+   * - persisting → persisted (on successful backend response)
+   * - persisting → failed (on backend error, retry available)
+   *
+   * NOT stored in database. Set by frontend on node creation/loading.
+   */
+  persistenceState?: PersistenceState;
 }
 
 /**
