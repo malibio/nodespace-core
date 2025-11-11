@@ -1083,7 +1083,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // CRITICAL: Check if this node is a placeholder (ephemeral/pending state)
     // Placeholder structural changes should remain in-memory until content is added
-    const isPlaceholder = node.persistenceState === 'ephemeral' || node.persistenceState === 'pending';
+    const isPlaceholder =
+      node.persistenceState === 'ephemeral' || node.persistenceState === 'pending';
 
     // Find siblings that come after this node (they will become children)
     const siblings = sharedNodeStore.getNodesForParent(oldParentId).map((n) => n.id);
