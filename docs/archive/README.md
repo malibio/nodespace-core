@@ -112,6 +112,20 @@ Archiving preserves this knowledge while removing confusion about what is actual
 
 ---
 
+### 6. Resolved Investigations (`resolved-investigations/`)
+**Status**: Historical investigation/handoff documents
+**Archived**: 2025-01-21
+**Reason**: These documents tracked debugging and investigation processes for issues that are now resolved and closed.
+
+**Files Archived**:
+- TEST-STATE-ANALYSIS.md - Issue #409 analysis (fixed in PR #410)
+- threads-4-investigation-handoff.md - Issue #411 handoff (resolved with threads=2)
+- test-suite-concurrency-investigation.md - Issue #398 investigation (fixed in PR #408)
+
+**Reference**: These were temporary analysis/handoff documents that served their purpose. Issues are closed and fixes are merged.
+
+---
+
 ## Archive Date
 **January 21, 2025**
 
