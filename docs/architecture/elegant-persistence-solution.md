@@ -1,5 +1,16 @@
 # Elegant Persistence Solution: Priority-Based Flush Control
 
+> **⚠️ DEPRECATED**: This document has been consolidated into [`persistence-system.md`](persistence-system.md) which provides comprehensive coverage of the entire persistence system including frontend service layers, placeholder nodes, and complete code examples.
+>
+> **Please use the consolidated documentation:**
+> - **New Location**: [`/docs/architecture/persistence-system.md`](persistence-system.md)
+> - **Why Updated**: Eliminates confusion from overlapping docs, adds missing service layer explanations and placeholder node documentation
+> - **Migration Date**: 2025-01-21
+>
+> This file is kept for historical reference only.
+
+---
+
 ## Problem Statement
 
 Current architecture has dual persistence paths:
