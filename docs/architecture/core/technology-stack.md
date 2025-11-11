@@ -135,67 +135,82 @@ Tier 2: NodeSpace Domain Components (BaseNode, TextNode, etc.)
 
 ## AI Integration Stack
 
-### Primary: mistral.rs
+### Current Implementation: Candle + ONNX (Embeddings Only)
 
-**Why mistral.rs:**
-- **Native Rust Integration**: Direct library integration, no HTTP overhead
-- **UQFF Support**: Ultra-Quick File Format for 3-5x faster model loading
-- **Metal GPU Acceleration**: Optimized performance on macOS with Metal
-- **Memory Efficiency**: Granular control over GPU/CPU memory allocation
-- **Model Flexibility**: Support for various quantization levels and model sizes
+**Status:** ✅ **Production** - Embedding generation implemented
+
+**Why Candle + ONNX:**
+- **Native Rust Integration**: Hugging Face's Candle framework (pure Rust ML)
+- **ONNX Format**: Standard model format with broad ecosystem support
+- **Metal GPU Acceleration**: Optimized performance on macOS with Metal backend
+- **Memory Efficiency**: Efficient inference with minimal overhead
+- **Ecosystem**: Large model library from Hugging Face Hub
+
+**Current Capabilities:**
+- ✅ **Embedding Generation**: 384-dimensional vectors for semantic search
+- ✅ **Adaptive Chunking**: Automatic text splitting based on token count
+- ✅ **Vector Search**: Native libsql F32_BLOB integration
+- ❌ **LLM Inference**: not implemented (embeddings only)
 
 **Configuration:**
 ```rust
-use mistralrs::{UqffVisionModelBuilder, TextMessageRole, RequestBuilder};
-
-pub struct AIConfig {
-    pub model_path: String,           // "/path/to/gemma-3n-8b-it-UQFF"
-    pub max_context_length: usize,    // 8192 tokens
-    pub temperature: f32,             // 0.7 for balanced creativity
-    pub max_tokens: usize,            // 1024 for responses
-    pub use_gpu: bool,               // Metal GPU acceleration
-}
+// packages/nlp-engine/Cargo.toml
+[dependencies]
+candle-core = { version = "0.9", features = ["metal"] }
+candle-onnx = { version = "0.9" }
+tokenizers = { version = "0.15" }
 ```
 
-### Alternative Backends
-
-**Configurable AI Backend System:**
+**Embedding Service:**
 ```rust
-#[derive(Debug, Clone)]
-pub enum AIBackend {
-    MistralRS {
-        model_path: String,
-        quantization: QuantizationLevel,
-    },
-    Ollama {
-        endpoint: String,
-        model_name: String,
-    },
-    Candle {
-        model_config: CandleConfig,
-        device: Device,
-    },
+// packages/core/src/services/embedding_service.rs
+pub struct EmbeddingService {
+    model: OnnxModel,
+    tokenizer: Tokenizer,
+}
+
+impl EmbeddingService {
+    pub async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
+        // Tokenize text
+        let tokens = self.tokenizer.encode(text, false)?;
+
+        // Generate 384-dim embedding with BAAI/bge-small-en-v1.5
+        let embedding = self.model.forward(&tokens)?;
+
+        Ok(embedding)
+    }
 }
 ```
-
-**Development Flexibility:**
-- **mistral.rs**: Production embedding, optimal performance
-- **Ollama**: Development convenience, external service
-- **Candle**: Future option when build tooling improves
 
 ### Model Configuration
 
-**Primary Model: Gemma 3n-E4B-it 8B**
-- **Memory Usage**: 4-6GB RAM with Q4K quantization
-- **Context Length**: 8192 tokens
-- **Capabilities**: Excellent reasoning for knowledge management tasks
-- **Performance**: ~50-100 tokens/second on modern hardware
-- **Format**: UQFF for fast loading (10-30 seconds vs 2-3 minutes)
+**Current Model: BAAI/bge-small-en-v1.5**
+- **Dimensions**: 384 (compact, efficient)
+- **Memory Usage**: ~120MB model size
+- **Performance**: <50ms per embedding on modern hardware
+- **Format**: ONNX (optimized for inference)
+- **Use Case**: Semantic search, content similarity
 
-**Quantization Strategy:**
-- **Q4K**: 4-bit quantization, optimal balance of quality/size
-- **Memory Efficiency**: ~50% reduction vs FP16 with minimal quality loss
-- **Loading Speed**: UQFF format enables sub-30-second startup
+**Chunking Strategy:**
+- **< 512 tokens**: Single chunk (optimal for most content)
+- **512-2048 tokens**: Sliding window with overlap
+- **> 2048 tokens**: Section-based chunking (headers, paragraphs)
+- **Stale Tracking**: Flag for re-embedding when content changes
+
+### Future: LLM Inference (Planned)
+
+**not Currently Implemented** - Tracked in GitHub issues labeled `ai-features`
+
+**Potential Backends:**
+- **Candle**: Continue with Candle ecosystem (natural extension)
+- **llama.cpp-rs**: Rust bindings for llama.cpp (mature, optimized)
+- **Ollama Integration**: External service for development convenience
+
+**Planned Capabilities:**
+- 📋 Intent classification for AI interaction
+- 📋 Content generation and summarization
+- 📋 Conversational AI features (AIChatNode)
+- 📋 Entity extraction and structured data
 
 ## Database Architecture
 
