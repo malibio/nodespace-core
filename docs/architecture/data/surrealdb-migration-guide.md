@@ -25,7 +25,7 @@ This guide provides step-by-step implementation instructions for Phase 1 of Epic
 
 - [ ] **Day 1-2**: Define NodeStore trait
   - [ ] Create `packages/core/src/db/node_store.rs`
-  - [ ] Define trait with 23 methods
+  - [ ] Define trait with 22 methods (transaction method deferred to Phase 2)
   - [ ] Add comprehensive documentation
   - [ ] Compile check passes
   - [ ] Commit: "Define NodeStore trait abstraction layer (#462)"
@@ -271,7 +271,7 @@ git add .
 git commit -m "Extract create_node SQL to DatabaseService (#462)"
 ```
 
-**Repeat** for all 23 methods (one commit per day).
+**Repeat** for all 22 methods (one commit per day).
 
 ### Step 3: Implement TursoStore
 
@@ -373,7 +373,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // Add tests for all 23 methods
+    // Add tests for all 22 methods
     // Focus on: success cases, error cases, edge cases
 }
 ```
@@ -486,6 +486,182 @@ cargo bench --bench node_store_overhead
 ```
 
 **Validate**: Trait call should be <5% slower than direct call (typically <2ns difference).
+
+## SQL Audit Process
+
+Before merging Phase 1, conduct a comprehensive SQL audit to ensure all database operations are properly abstracted.
+
+### Audit Checklist
+
+**1. Global SQL Search**
+```bash
+# Search for raw SQL in NodeService
+rg "SELECT|INSERT|UPDATE|DELETE" packages/core/src/services/node_service.rs
+
+# Should return ZERO matches (all SQL extracted to DatabaseService)
+```
+
+**2. DatabaseService Method Coverage**
+```bash
+# List all DatabaseService methods
+rg "pub async fn db_" packages/core/src/services/database_service.rs
+
+# Verify: 22 methods match NodeStore trait methods
+```
+
+**3. NodeService Dependency Audit**
+```bash
+# Search for any remaining direct database calls
+rg "self\.database\." packages/core/src/services/node_service.rs
+
+# Should only see: self.database.method_name() (no raw SQL)
+```
+
+**4. Test Coverage Verification**
+```bash
+# Check for SQL in test files
+rg "SELECT|INSERT|UPDATE|DELETE" packages/core/src/services/node_service_test.rs
+
+# Should return ZERO matches (tests use trait methods)
+```
+
+### SQL Migration Patterns
+
+**Pattern 1: Simple CRUD Operations**
+
+Before:
+```rust
+// In NodeService (❌ Direct SQL)
+let node = sqlx::query_as!(
+    Node,
+    "SELECT * FROM nodes WHERE id = ?",
+    id
+)
+.fetch_one(&self.database.pool)
+.await?;
+```
+
+After:
+```rust
+// In DatabaseService (✅ Extracted)
+pub async fn db_get_node(&self, id: &str) -> Result<Option<Node>> {
+    let node = sqlx::query_as!(
+        Node,
+        "SELECT * FROM nodes WHERE id = ?",
+        id
+    )
+    .fetch_optional(&self.pool)
+    .await?;
+    Ok(node)
+}
+
+// In NodeService (✅ Uses abstraction)
+let node = self.database.db_get_node(id).await?
+    .ok_or_else(|| anyhow!("Node not found"))?;
+```
+
+**Pattern 2: Complex Queries with JOINs**
+
+Before:
+```rust
+// In NodeService (❌ Complex SQL inline)
+let containers = sqlx::query_as!(
+    Node,
+    r#"
+    SELECT DISTINCT n.*
+    FROM nodes n
+    JOIN mentions m ON n.id = m.container_id
+    WHERE m.target_id = ?
+    "#,
+    node_id
+)
+.fetch_all(&self.database.pool)
+.await?;
+```
+
+After:
+```rust
+// In DatabaseService (✅ Extracted and documented)
+/// Get containers mentioning this node (for backlinks)
+pub async fn db_get_mentioning_containers(&self, node_id: &str) -> Result<Vec<Node>> {
+    let containers = sqlx::query_as!(
+        Node,
+        r#"
+        SELECT DISTINCT n.*
+        FROM nodes n
+        JOIN mentions m ON n.id = m.container_id
+        WHERE m.target_id = ?
+        "#,
+        node_id
+    )
+    .fetch_all(&self.pool)
+    .await?;
+    Ok(containers)
+}
+
+// In NodeService (✅ Uses abstraction)
+let containers = self.database.db_get_mentioning_containers(node_id).await?;
+```
+
+**Pattern 3: Transactions (Deferred to Phase 2)**
+
+Before:
+```rust
+// In NodeService (❌ Direct transaction)
+let mut tx = self.database.pool.begin().await?;
+sqlx::query!("INSERT INTO nodes ...").execute(&mut tx).await?;
+sqlx::query!("INSERT INTO mentions ...").execute(&mut tx).await?;
+tx.commit().await?;
+```
+
+After (Phase 1):
+```rust
+// In NodeService (✅ Sequential operations - acceptable for Phase 1)
+self.database.db_create_node(node).await?;
+self.database.db_create_mention(source_id, target_id).await?;
+
+// Note: Not atomic in Phase 1, but acceptable risk for early development
+// Phase 2 will add proper transaction support
+```
+
+### Audit Report Template
+
+After completing the audit, document findings:
+
+```markdown
+## SQL Audit Report - Epic #461 Phase 1
+
+**Date**: [YYYY-MM-DD]
+**Auditor**: [Name/Agent]
+
+### Summary
+- ✅ All CRUD SQL extracted to DatabaseService
+- ✅ All query SQL extracted to DatabaseService
+- ✅ NodeService has ZERO direct SQL
+- ✅ 22/22 trait methods implemented
+- ⚠️  3 methods use sequential operations (not atomic) - acceptable for Phase 1
+
+### Findings
+1. **NodeService SQL**: 0 matches (PASS)
+2. **DatabaseService methods**: 22 methods (PASS)
+3. **Test SQL**: 0 matches (PASS)
+4. **Edge cases**: All error paths use trait methods (PASS)
+
+### Recommendations
+- Phase 1 ready to merge
+- Phase 2 should add transaction support for atomic multi-operation sequences
+- Monitor production for any edge cases requiring transactions
+```
+
+### Continuous Audit (During Implementation)
+
+Run this command after each commit:
+```bash
+# Quick SQL audit
+rg "SELECT|INSERT|UPDATE|DELETE" packages/core/src/services/node_service.rs || echo "✅ No raw SQL in NodeService"
+```
+
+If any SQL found, extract it immediately before continuing.
 
 ## Testing Strategy
 

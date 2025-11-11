@@ -45,27 +45,26 @@ This document provides the complete roadmap for migrating NodeSpace from Turso t
 **Scope**:
 - Issue #464: Implement NodeStore Trait for SurrealDB Backend
 - SurrealStore implementation using PoC code (Epic #460)
-- Feature flag for backend selection
+- Direct replacement of TursoStore with SurrealStore (no feature flags)
 
 **Deliverables**:
-- ✅ SurrealStore implementation (all 23 trait methods)
-- ✅ Feature flag: `--features surrealdb`
-- ✅ Parallel test suite (both backends)
-- ✅ Performance benchmarks (Turso vs SurrealDB)
-- ✅ Migration tool (optional - if needed)
+- ✅ SurrealStore implementation (all 22 trait methods)
+- ✅ Test suite passes with SurrealStore backend
+- ✅ Performance benchmarks (Turso baseline vs SurrealDB)
+- ✅ Migration tool (optional - if needed for data migration)
 
 **Branch**: `feature/epic-467-surrealdb-implementation`
 
 **Success Criteria**:
-- All tests pass with both backends
+- All tests pass with SurrealStore backend
 - SurrealDB performance meets/exceeds PoC benchmarks
 - Zero data loss during backend switch
-- Feature flag enables clean backend selection
+- Clean cutover from Turso to SurrealDB (git revert as escape hatch)
 
 **Prerequisites for Phase 3**:
 - Phase 2 merged to main
-- Both backends working in production
-- Performance validated equivalent
+- SurrealDB backend stable in production
+- Performance validated equivalent to PoC benchmarks
 
 ---
 
@@ -273,12 +272,18 @@ This document provides the complete roadmap for migrating NodeSpace from Turso t
 **Trigger**: Critical performance regression or test failures
 
 **Process**:
-1. Disable feature flag: `--no-default-features`
-2. Revert to direct DatabaseService calls (legacy path)
+1. Use `git revert` to undo abstraction layer commits
+2. Return to direct DatabaseService usage (no trait abstraction)
 3. Hot-fix release if in production
-4. Analyze root cause
+4. Analyze root cause and refine approach
 
-**Recovery Time**: <1 hour (feature flag flip)
+**Recovery Time**: <1 hour (git revert + rebuild)
+
+**Why No Feature Flag**:
+- Early development phase - acceptable to revert via git
+- Simpler implementation (no conditional compilation)
+- Clean rollback without maintaining dual code paths
+- If abstraction fails, we likely need to redesign anyway
 
 ---
 
@@ -287,12 +292,18 @@ This document provides the complete roadmap for migrating NodeSpace from Turso t
 **Trigger**: SurrealDB fails validation or causes issues
 
 **Process**:
-1. Feature flag defaults to Turso
-2. Deprecate SurrealDB implementation
-3. Return to Turso-only mode
+1. Use `git revert` to undo SurrealStore implementation
+2. Return to TursoStore implementation
+3. Analyze SurrealDB issues
 4. Re-evaluate SurrealDB viability
 
-**Recovery Time**: <1 hour (configuration change)
+**Recovery Time**: <1 hour (git revert + rebuild)
+
+**Why No Feature Flag**:
+- Early development phase - limited production users
+- Trait abstraction makes switching backend simple (change one line)
+- If SurrealDB fundamentally doesn't work, we need to fix it, not toggle it
+- Simpler codebase without conditional compilation
 
 ---
 

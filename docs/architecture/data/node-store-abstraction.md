@@ -95,11 +95,15 @@ pub trait NodeStore: Send + Sync {
     /// Create a new node in the database
     ///
     /// # Arguments
-    /// * `node` - Node to create with all properties
+    /// * `node` - Node to create (ownership transferred)
     ///
     /// # Returns
     /// Created node with any generated fields (timestamps, etc.)
-    async fn create_node(&self, node: &Node) -> Result<Node>;
+    ///
+    /// # Ownership
+    /// Uses move semantics (takes ownership, returns ownership)
+    /// to avoid unnecessary cloning.
+    async fn create_node(&self, node: Node) -> Result<Node>;
 
     /// Get node by ID
     ///
@@ -111,13 +115,53 @@ pub trait NodeStore: Send + Sync {
     ///
     /// # Arguments
     /// * `id` - Node ID to update
-    /// * `update` - Fields to update (sparse update, only provided fields changed)
-    async fn update_node(&self, id: &str, update: &NodeUpdate) -> Result<Node>;
+    /// * `update` - Fields to update (sparse update, only provided fields changed, ownership transferred)
+    ///
+    /// # Ownership
+    /// Takes ownership of NodeUpdate to avoid cloning. Returns owned Node.
+    async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<Node>;
 
     /// Delete node and its children (cascading delete)
     ///
-    /// # Note
-    /// Implementation must handle cascade deletion of child nodes
+    /// # Cascade Delete Semantics
+    ///
+    /// **Behavior**: Recursively deletes the target node and all descendants in the node hierarchy.
+    ///
+    /// **Implementation Requirements**:
+    ///
+    /// 1. **Atomicity**: All deletes MUST occur in a single transaction (all-or-nothing).
+    ///    - If any delete fails, the entire operation rolls back
+    ///    - No partial deletions allowed
+    ///
+    /// 2. **Traversal Order**: Depth-first, leaf-to-root deletion order
+    ///    - Prevents foreign key violations
+    ///    - Children deleted before parents
+    ///
+    /// 3. **Mention Cleanup**: Delete all mention relationships where:
+    ///    - `source_id` equals any deleted node ID, OR
+    ///    - `target_id` equals any deleted node ID
+    ///    - This prevents orphaned references
+    ///
+    /// 4. **Recursion Limit**: Implementations must support hierarchies up to 1,000 levels deep
+    ///    - Exceeding 1,000 levels returns validation error (not a crash)
+    ///    - Realistic limit for NodeSpace use cases
+    ///
+    /// 5. **Performance Requirements**:
+    ///    - Use bulk DELETE queries where backend supports them (avoid N+1 queries)
+    ///    - Target: Delete subtree of 10,000 nodes in <5 seconds
+    ///    - Monitor stack depth to prevent stack overflow
+    ///
+    /// 6. **Error Handling**:
+    ///    - Database constraint violations → roll back with clear error message
+    ///    - Concurrent modification detected → conflict error, caller should retry
+    ///    - Node not found → succeed silently (idempotent delete)
+    ///
+    /// # Test Cases
+    /// - Single node deletion (no children): <10ms
+    /// - Node with 1,000 descendants: <1 second
+    /// - Node with 10,000 descendants: <5 seconds
+    /// - Concurrent deletion + creation: One operation wins, other fails cleanly
+    /// - Deletion during mention creation: Atomic (mention points to valid node or delete fails)
     async fn delete_node(&self, id: &str) -> Result<()>;
 
     //
@@ -241,23 +285,17 @@ pub trait NodeStore: Send + Sync {
     async fn search_by_embedding(&self, embedding: &[u8], limit: i64) -> Result<Vec<(Node, f64)>>;
 
     //
-    // BATCH & TRANSACTION OPERATIONS
+    // BATCH OPERATIONS
     //
-
-    /// Execute multiple operations in transaction
-    ///
-    /// # Note
-    /// Implementation must ensure atomicity (all-or-nothing)
-    async fn transaction<F, T>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&dyn NodeStore) -> Result<T> + Send,
-        T: Send;
 
     /// Batch create nodes (optimized insertion)
     ///
     /// # Note
     /// Implementation should use bulk insert for performance
-    async fn batch_create_nodes(&self, nodes: &[Node]) -> Result<Vec<Node>>;
+    ///
+    /// # Ownership
+    /// Takes ownership of Vec<Node> to avoid cloning
+    async fn batch_create_nodes(&self, nodes: Vec<Node>) -> Result<Vec<Node>>;
 
     //
     // DATABASE LIFECYCLE
@@ -281,7 +319,132 @@ pub trait NodeStore: Send + Sync {
 | **Batch/Transaction** | 2 | Performance optimization |
 | **Lifecycle** | 1 | Resource management |
 
-**Total**: 23 trait methods covering complete NodeSpace database API
+**Total**: 22 trait methods covering complete NodeSpace database API
+
+### NodeFilter Specification
+
+The `NodeFilter` struct provides comprehensive filtering for node queries:
+
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct NodeFilter {
+    /// Filter by node type (e.g., "text", "task", "date")
+    pub node_type: Option<String>,
+
+    /// Filter by parent node ID (immediate children only)
+    pub parent_id: Option<String>,
+
+    /// Filter by container ID (all descendants of a container)
+    pub container_id: Option<String>,
+
+    /// Filter by creation timestamp (nodes created after this time)
+    pub created_after: Option<DateTime<Utc>>,
+
+    /// Filter by update timestamp (nodes updated after this time)
+    pub updated_after: Option<DateTime<Utc>>,
+
+    /// Filter by property values (JSON path queries)
+    /// Example: {"status": "completed", "priority": "high"}
+    pub property_filters: Option<HashMap<String, serde_json::Value>>,
+
+    /// Filter by content text search (case-insensitive substring match)
+    pub content_contains: Option<String>,
+
+    /// Limit number of results (for pagination)
+    pub limit: Option<u32>,
+
+    /// Offset for pagination (skip first N results)
+    pub offset: Option<u32>,
+}
+```
+
+**Query Semantics**:
+- All filter fields are combined with AND logic (all conditions must match)
+- `None` values are ignored (no filtering on that field)
+- Empty filter returns all nodes
+- Implementations must support efficient indexed queries where possible
+
+**Example Usage**:
+```rust
+// Find all completed tasks updated in the last 7 days
+let filter = NodeFilter {
+    node_type: Some("task".to_string()),
+    updated_after: Some(Utc::now() - Duration::days(7)),
+    property_filters: Some(HashMap::from([
+        ("status".to_string(), json!("completed")),
+    ])),
+    ..Default::default()
+};
+let nodes = store.get_nodes(filter).await?;
+```
+
+### Embedding Specification
+
+NodeSpace uses vector embeddings for semantic search and AI-powered features.
+
+**Embedding Format**:
+- **Model**: BAAI/bge-small-en-v1.5 (current default)
+- **Dimensions**: 384 floating-point values
+- **Storage Format**: Binary-encoded `Vec<u8>` (IEEE 754 float32, little-endian)
+- **Size**: 384 dimensions × 4 bytes = 1,536 bytes per embedding
+
+**Similarity Metric**:
+- **Method**: Cosine similarity
+- **Range**: -1.0 (opposite) to 1.0 (identical)
+- **Typical range**: 0.3 (unrelated) to 0.95 (highly similar)
+- **Threshold for "related"**: ≥ 0.5 (configurable)
+
+**Binary Encoding/Decoding**:
+```rust
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+
+// Encode Vec<f32> to Vec<u8>
+pub fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(embedding.len() * 4);
+    for &value in embedding {
+        bytes.write_f32::<LittleEndian>(value).unwrap();
+    }
+    bytes
+}
+
+// Decode Vec<u8> to Vec<f32>
+pub fn decode_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
+    let mut cursor = std::io::Cursor::new(bytes);
+    let mut embedding = Vec::with_capacity(bytes.len() / 4);
+    while cursor.position() < bytes.len() as u64 {
+        embedding.push(cursor.read_f32::<LittleEndian>()?);
+    }
+    Ok(embedding)
+}
+```
+
+**Database Storage**:
+- **Turso**: BLOB column (`embedding BLOB`)
+- **SurrealDB**: Bytes field (`embedding: bytes`)
+- **Indexed**: Yes (for efficient vector search)
+
+**Query Semantics**:
+- `search_by_embedding()` returns nodes ordered by cosine similarity (descending)
+- Results include both the node and its similarity score
+- `limit` parameter controls max results (default: 10, max: 100)
+
+**Example Usage**:
+```rust
+// Generate embedding for query text
+let query_embedding = embedding_service.generate("How do I use tasks?").await?;
+let encoded = encode_embedding(&query_embedding);
+
+// Search for similar nodes
+let results = store.search_by_embedding(&encoded, 10).await?;
+for (node, score) in results {
+    println!("Node: {}, Similarity: {:.2}", node.content, score);
+}
+```
+
+**Performance Requirements**:
+- Embedding search on 100K nodes: <100ms
+- Batch embedding updates: 1,000 nodes/second
+- Background embedding generation: Non-blocking (async worker)
 
 ### Design Decisions
 
@@ -303,21 +466,18 @@ pub trait NodeStore: Send + Sync {
 
 #### 3. Transaction Support
 
-**Decision**: Generic transaction method with closure
+**Decision**: No generic transaction method in Phase 1
 **Rationale**:
-- Flexible: Supports any operation sequence
-- Type-safe: Compiler validates operations
-- Backend-agnostic: Works with libsql and SurrealDB
+- Phase 1 focuses on abstraction layer only
+- Transaction API requires careful design (closure cannot be async)
+- Deferred to Phase 2 (SurrealDB implementation) where requirements are clearer
+- Current operations are mostly atomic (single node/mention operations)
+- Batch operations provide basic multi-operation support
 
-**Example**:
-```rust
-store.transaction(|store| {
-    store.create_node(&node1).await?;
-    store.create_node(&node2).await?;
-    store.create_mention(&node1.id, &node2.id).await?;
-    Ok(())
-}).await?;
-```
+**Future Considerations** (Phase 2):
+- May use explicit `begin_transaction()`/`commit()`/`rollback()` API
+- Or callback-based API with proper async support
+- Will evaluate based on SurrealDB transaction capabilities
 
 #### 4. Error Handling
 
