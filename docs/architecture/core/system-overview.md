@@ -1,8 +1,30 @@
 # NodeSpace Architecture Specification
 
+> **📋 Document Status**: This document describes the **target architecture** for NodeSpace, including both implemented features and planned capabilities. Features are marked with status badges:
+> - ✅ **Production** - Fully implemented and working
+> - 🚧 **In Migration** - Partially implemented or being migrated
+> - 📋 **Planned** - Designed but not yet implemented
+> - 🔬 **Research** - Under investigation
+>
+> For current implementation status, see [`/docs/IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md)
+
 ## Executive Summary
 
-NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded Turso database** and **TypeScript services**, providing a unified frontend-centric approach. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
+NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded database** (migrating from Turso to SurrealDB) and **TypeScript services**, providing a unified frontend-centric approach.
+
+**Current Implementation** (✅ Production):
+- **Node Types**: Text, Task, Date, Code-block, Quote-block, Ordered-list, Header
+- **Text Editing**: ContentEditable-based with dual-representation mode
+- **Hierarchy**: Parent-child relationships with sibling ordering
+- **AI**: Embedding generation only (Candle + ONNX, 384-dimensional vectors)
+- **Database**: libsql/Turso (Phase 0, migrating to SurrealDB in Phase 1-4)
+
+**Planned Capabilities** (📋 Planned):
+- **Advanced Node Types**: AI Chat, Entity, PDF, Query nodes
+- **AI Integration**: LLM inference, intent classification, content generation
+- **Validation System**: Natural language rules, cross-field validation
+- **Plugin Architecture**: External node types with full service access
+- **Real-time Queries**: Live data views with automatic updates
 
 ### Key Architectural Decisions
 
@@ -29,26 +51,31 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 ### Technology Stack
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Tauri Desktop App                        │
-├─────────────────────────────────────────────────────────────┤
-│  Frontend (Svelte + TypeScript Services)                    │
-│  ├── Node Components         │  ├── HierarchyService        │
-│  ├── Query Views             │  ├── NodeOperationsService   │
-│  ├── AI Chat Interface       │  ├── Extended NodeManager    │
-│  └── Plugin Loader           │  └── EventBus Coordination   │
-├─────────────────────────────────────────────────────────────┤
-│                   Node Type System                          │
-│  ┌─────────┬─────────┬─────────┬─────────┬─────────┬──────────┐ │
-│  │  Text   │  Task   │AIChat   │ Entity  │  Query  │ Plugins  │ │  
-│  │  Node   │  Node   │ Node    │  Node   │  Node   │(PDF,etc) │ │
-│  └─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘ │
-├─────────────────────────────────────────────────────────────┤
-│                     Data Layer                              │
-│  ├── Embedded Turso (universal node schema with vector search) │
-│  ├── File System (raw content)                              │
-│  └── NLP Engine (mistral.rs)                                │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       Tauri Desktop App                              │
+├──────────────────────────────────────────────────────────────────────┤
+│  Frontend (Svelte + TypeScript Services)          [✅ Production]    │
+│  ├── Node Components         │  ├── HierarchyService                │
+│  ├── ContentEditable System  │  ├── NodeOperationsService           │
+│  ├── Multi-node Selection    │  ├── Extended NodeManager            │
+│  └── Theme System            │  └── EventBus Coordination           │
+├──────────────────────────────────────────────────────────────────────┤
+│                   Node Type System                                   │
+│  ┌──────────────────────────────────────────┐  ┌─────────────────┐  │
+│  │  Current (✅ Production)                  │  │ Planned (📋)    │  │
+│  ├──────────┬──────────┬──────────┬─────────┤  ├─────────┬───────┤  │
+│  │   Text   │   Task   │   Date   │  Header │  │ AIChat  │Entity │  │
+│  │   Node   │   Node   │   Node   │  Node   │  │  Node   │ Node  │  │
+│  ├──────────┴──────────┴──────────┴─────────┤  ├─────────┴───────┤  │
+│  │ Code   │ Quote  │ Ordered                │  │ Query │ Plugins │  │
+│  │ Block  │ Block  │ List                   │  │ Node  │(PDF,etc)│  │
+│  └────────┴────────┴────────────────────────┘  └───────┴─────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│                     Data Layer                                       │
+│  ├── libsql/Turso (Phase 0, migrating to SurrealDB)  [🚧 Migration] │
+│  ├── Universal node schema + vector embeddings                      │
+│  └── NLP Engine (Candle + ONNX, embeddings only)     [✅ Production]│
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Advanced UI/UX Capabilities
@@ -268,11 +295,18 @@ interface NodeSpaceNode {
 
 ## Node Type System
 
-### Core Node Types (Built-in)
+### Core Node Types
 
-The system includes five essential node types that form the foundation of the knowledge management system:
+**Current Implementation** (✅ Production): 7 node types fully functional
+- TextNode, TaskNode, DateNode, HeaderNode
+- Code-block, Quote-block, Ordered-list
 
-#### 1. TextNode - Foundation Node Type
+**Planned Capabilities** (📋 Planned): Advanced node types for AI-native workflows
+- AIChatNode, EntityNode, QueryNode, PDFNode (plugin), ImageNode (plugin)
+
+### Implemented Node Types (✅ Production)
+
+#### 1. TextNode - Foundation Node Type (✅ Production)
 ```typescript
 // Universal schema - all node types use the same structure
 const textNode: NodeSpaceNode = {
@@ -300,35 +334,41 @@ const textNode: NodeSpaceNode = {
 - Keyboard navigation (arrows, Enter, Backspace)
 - Auto-resize textareas
 
-#### 2. TaskNode - Todo Management
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskNode {
-    pub base: TextNode,
-    pub status: TaskStatus,                 // Pending, InProgress, Completed
-    pub due_date: Option<DateTime<Utc>>,
-    pub priority: TaskPriority,             // Low, Medium, High, Critical
-    pub assignee: Option<String>,
-    pub estimated_hours: Option<f32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TaskStatus {
-    Pending,
-    InProgress, 
-    Completed,
-    Cancelled,
+#### 2. TaskNode - Todo Management (✅ Production)
+```typescript
+// Universal schema with task-specific metadata
+const taskNode: NodeSpaceNode = {
+    id: "task-001",
+    type: "task",
+    content: "Complete documentation update",  // Task description
+    parent_id: "parent-001",
+    root_id: "root-001",
+    before_sibling_id: null,
+    created_at: "2025-01-21T10:00:00Z",
+    mentions: [],
+    metadata: {
+        completed: false,                    // Checkbox state
+        // Future: due_date, priority, assignee
+    },
+    embedding_vector: null
 }
 ```
 
 **Features:**
-- Status tracking with visual indicators
-- Due date management with overdue highlighting
-- Priority-based sorting and filtering
-- Assignment to users
-- Time estimation and tracking
+- ✅ Checkbox toggle (completed/pending)
+- ✅ Single-line editing
+- ✅ Hierarchy support
+- 📋 Due date management (planned)
+- 📋 Priority levels (planned)
+- 📋 Assignment system (planned)
 
-#### 3. AIChatNode - AI Interaction Hub
+---
+
+### Planned Node Types (📋 Planned)
+
+The following node types are designed but not yet implemented. See [`/docs/IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md) for roadmap details.
+
+#### 3. AIChatNode - AI Interaction Hub (📋 Planned)
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AIChatNode {
@@ -356,7 +396,7 @@ pub enum ChatIntent {
 - Content generation with node creation capabilities
 - Conversational validation error handling
 
-#### 4. EntityNode - Structured Data Management
+#### 4. EntityNode - Structured Data Management (📋 Planned)
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityNode {
@@ -419,7 +459,7 @@ pub struct CalculatedField {
 - **Cross-field Dependencies**: Complex business logic across multiple fields
 - **Caching**: Performance optimization with intelligent cache invalidation
 
-#### 5. QueryNode - Live Data Views
+#### 5. QueryNode - Live Data Views (📋 Planned)
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryNode {
