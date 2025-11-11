@@ -81,59 +81,198 @@ Each node type gets its own table with type-specific fields and constraints.
 
 #### Core Types (Built-in)
 
+**Design Decision**: Use **SCHEMAFULL + FLEXIBLE** for all built-in types
+- Core fields strictly typed and validated (catches bugs early)
+- FLEXIBLE allows user extensions without schema migrations
+- Schema nodes track which fields are core vs. user-defined
+
 ```sql
--- Task nodes
+-- Task nodes: Core behavior fields + user extensibility
 DEFINE TABLE task SCHEMAFULL;
 DEFINE FIELD id ON task TYPE record;
-DEFINE FIELD status ON task TYPE string
-    ASSERT $value IN ['todo', 'in_progress', 'done'];
+
+-- Core status field (app behavior depends on these values)
+-- Validation enforced at application layer via schema nodes
+DEFINE FIELD status ON task TYPE string;
+
+-- Core optional fields
 DEFINE FIELD priority ON task TYPE option<string>;
 DEFINE FIELD due_date ON task TYPE option<datetime>;
 DEFINE FIELD assignee ON task TYPE option<record>;
 
--- Text nodes (minimal type-specific data)
+-- Allow arbitrary user-defined fields (custom_status, labels, etc.)
+DEFINE FIELD * ON task FLEXIBLE;
+
+-- Text nodes: Minimal core + maximum flexibility
 DEFINE TABLE text SCHEMAFULL;
 DEFINE FIELD id ON text TYPE record;
--- Text nodes have no additional fields beyond what's in nodes table
--- But we create the table anyway for ID consistency
+DEFINE FIELD * ON text FLEXIBLE;  -- Users can add any metadata
 
--- Date nodes
+-- Date nodes: Core date behavior + user metadata
 DEFINE TABLE date SCHEMAFULL;
-DEFINE FIELD id ON date TYPE record;  -- Will be date:2025-01-03
+DEFINE FIELD id ON date TYPE record;  -- date:2025-01-03 (deterministic)
 DEFINE FIELD timezone ON date TYPE string DEFAULT 'UTC';
 DEFINE FIELD is_holiday ON date TYPE bool DEFAULT false;
+DEFINE FIELD * ON date FLEXIBLE;  -- Notes, tags, custom fields
 
--- Header nodes
+-- Header nodes: Core structure + user styling
 DEFINE TABLE header SCHEMAFULL;
 DEFINE FIELD id ON header TYPE record;
 DEFINE FIELD level ON header TYPE int ASSERT $value >= 1 AND $value <= 6;
+DEFINE FIELD * ON header FLEXIBLE;  -- Custom colors, icons, collapse state
 
--- Code block nodes
+-- Code block nodes: Core syntax + user configuration
 DEFINE TABLE code_block SCHEMAFULL;
 DEFINE FIELD id ON code_block TYPE record;
 DEFINE FIELD language ON code_block TYPE string;
 DEFINE FIELD line_numbers ON code_block TYPE bool DEFAULT false;
+DEFINE FIELD * ON code_block FLEXIBLE;  -- Themes, run configs, annotations
 ```
+
+**Why FLEXIBLE?**
+- ✅ **Early error detection** - Core fields validated at write time
+- ✅ **User customization** - Add custom fields without ALTER TABLE
+- ✅ **Plugin support** - Plugins can extend nodes with prefixed fields
+- ✅ **Workflow flexibility** - Users can add team-specific fields
+- ✅ **No migrations** - Schema evolves naturally with usage
+
+#### Schema Node Validation Pattern
+
+**CRITICAL**: Validation is enforced at **application layer** via schema nodes, not database constraints.
+
+**Schema Node (stored in universal `nodes` table):**
+```sql
+CREATE schema:task CONTENT {
+  id: 'schema:task',
+  node_type: 'schema',
+  content: 'Task',
+  properties: {
+    version: 1,
+    is_core: true,
+    fields: [
+      {
+        name: 'status',
+        type: 'enum',
+        protection: 'core',  -- Field cannot be deleted
+        core_values: ['todo', 'in_progress', 'done'],  -- App behavior
+        user_values: [],  -- User can extend via UI
+        extensible: true,
+        required: true,
+        default: 'todo'
+      },
+      {
+        name: 'priority',
+        type: 'enum',
+        protection: 'user',  -- User can modify/delete
+        core_values: ['urgent', 'high', 'medium', 'low'],
+        user_values: [],
+        extensible: true,
+        required: false
+      }
+    ]
+  }
+};
+```
+
+**Application Validation (Rust):**
+```rust
+// Validate task status against schema
+pub fn validate_task(task: &Node, schema: &SchemaNode) -> Result<()> {
+    let status = task.get_property("status")?;
+    let field = schema.get_field("status")?;
+
+    // All valid options: core + user
+    let all_valid = field.core_values
+        .iter()
+        .chain(field.user_values.iter())
+        .collect::<Vec<_>>();
+
+    if !all_valid.contains(&status) {
+        return Err(anyhow::anyhow!(
+            "Invalid status '{}'. Valid: {:?}",
+            status, all_valid
+        ));
+    }
+
+    Ok(())
+}
+
+// App behavior only depends on core values
+pub fn render_task_icon(status: &str) -> Icon {
+    match status {
+        "todo" => Icon::Circle,
+        "in_progress" => Icon::Spinner,
+        "done" => Icon::Check,
+        _ => Icon::Custom  // User-defined statuses get generic icon
+    }
+}
+```
+
+**User Extends Enum Values:**
+```javascript
+// User adds "on-hold" status via UI
+await nodeService.extendEnumField('schema:task', 'status', 'on-hold');
+
+// Schema node updated:
+// user_values: ['on-hold']
+// No ALTER TABLE needed - FLEXIBLE field accepts it!
+```
+
+**Why Application-Layer Validation?**
+- ✅ **No ALTER TABLE** - Instant schema updates
+- ✅ **Consistent enforcement** - Same validation in backend and frontend
+- ✅ **Core protection** - `core_values` never removed, app behavior stable
+- ✅ **User flexibility** - `user_values` can be added/removed freely
+- ✅ **Gradual evolution** - Promote useful user fields to core over time
+
+**Related Documentation**: See [`/docs/architecture/development/schema-management-implementation-guide.md`](../development/schema-management-implementation-guide.md) for complete schema management patterns.
 
 #### Custom Types (Created at Runtime)
 
-Users can create custom entity types dynamically:
+Users can create custom entity types dynamically via UI:
 
 ```sql
--- Example: User creates "Project" entity type
-DEFINE TABLE project SCHEMAFULL;
-DEFINE FIELD id ON project TYPE record;
-DEFINE FIELD budget ON project TYPE number;
-DEFINE FIELD deadline ON project TYPE datetime;
-DEFINE FIELD status ON project TYPE string
-    ASSERT $value IN ['planning', 'active', 'completed', 'cancelled'];
+-- User creates "Project" entity type (fully SCHEMALESS)
+DEFINE TABLE project SCHEMALESS;
 
--- Example: User creates "Invoice" entity type
-DEFINE TABLE invoice SCHEMAFULL;
-DEFINE FIELD id ON invoice TYPE record;
-DEFINE FIELD amount ON invoice TYPE number;
-DEFINE FIELD paid ON invoice TYPE bool DEFAULT false;
-DEFINE FIELD due_date ON invoice TYPE datetime;
+-- User defines fields through schema node
+CREATE schema:project CONTENT {
+  id: 'schema:project',
+  node_type: 'schema',
+  content: 'Project',
+  properties: {
+    version: 1,
+    is_core: false,  -- User-defined type
+    fields: [
+      {
+        name: 'budget',
+        type: 'number',
+        required: true
+      },
+      {
+        name: 'deadline',
+        type: 'datetime',
+        required: false
+      },
+      {
+        name: 'status',
+        type: 'enum',
+        core_values: [],  -- No core values (user-defined)
+        user_values: ['planning', 'active', 'completed', 'cancelled'],
+        extensible: true
+      }
+    ]
+  }
+};
+
+-- Create project instances
+CREATE project:abc-123 CONTENT {
+  id: 'project:abc-123',
+  budget: 50000.00,
+  deadline: <datetime>'2025-12-31',
+  status: 'active',
+  custom_field: 'anything'  -- SCHEMALESS allows arbitrary fields
+};
 ```
 
 ### Mention Relationships (Graph Edges)
