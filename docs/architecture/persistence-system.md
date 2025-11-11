@@ -304,6 +304,281 @@ class SyncService {
 
 ---
 
+## Frontend Service Layers Explained
+
+Before diving into the coordinator, let's understand **what each service does** and how they work together.
+
+### Layer 1: UI Layer
+
+**Services:** `BaseNodeViewer` (component) + `ReactiveNodeService` (orchestrator)
+
+**Role:** Orchestrator - decides WHEN and in WHAT ORDER operations happen
+
+**Responsibilities:**
+- Detect user actions (typing, indent, outdent, delete, merge)
+- Trigger multi-step operations (e.g., merge node → promote children → delete)
+- Provide immediate UI feedback (optimistic updates via in-memory changes)
+- Watch for changes via `$effect` and trigger persistence
+
+**Key Files:**
+- `packages/desktop-app/src/lib/design/components/base-node-viewer.svelte`
+- `packages/desktop-app/src/lib/services/reactive-node-service.svelte.ts`
+
+**What it does:**
+```typescript
+// Example: BaseNodeViewer watches for content changes
+$effect(() => {
+  for (const node of visibleNodes) {
+    if (node.content !== lastSaved) {
+      debounceSave(node.id, node.content);  // Triggers persistence
+    }
+  }
+});
+
+// Example: ReactiveNodeService orchestrates complex operations
+function combineNodes(currentId, previousId) {
+  // 1. Merge content (in-memory, immediate)
+  sharedNodeStore.updateNode(previousId, { content: merged }, source);
+
+  // 2. Promote children (in-memory, immediate)
+  for (const child of children) {
+    sharedNodeStore.updateNode(child.id, { parentId: previousId }, source);
+  }
+
+  // 3. Delete node (in-memory, immediate)
+  sharedNodeStore.deleteNode(currentId, source);
+
+  // UI updates instantly (optimistic)
+  // Persistence happens asynchronously in background
+}
+```
+
+**Think of it as:** The "traffic controller" - sees user actions and directs traffic to the right services.
+
+---
+
+### Layer 2: Coordination Layer
+
+**Service:** `PersistenceCoordinator`
+
+**Role:** Coordinator - manages asynchronous persistence with dependency tracking
+
+**Responsibilities:**
+- Accept persistence requests from UI layer
+- Track dependencies between operations (which must complete before which)
+- Enforce execution order (topological sorting)
+- Manage debouncing (batch rapid changes)
+- Detect conflicts (version checking)
+- Provide reactive status updates (is this node persisted yet?)
+
+**Key File:**
+- `packages/desktop-app/src/lib/services/persistence-coordinator.svelte.ts`
+
+**What it does:**
+```typescript
+// Example: Coordinating a new child node creation
+persistenceCoordinator.persist(
+  childId,
+  () => tauriNodeService.createNode(child),
+  {
+    mode: 'immediate',
+    dependencies: [parentId]  // Wait for parent first
+  }
+);
+
+// Internally, the coordinator:
+// 1. Checks if parent is already persisted
+// 2. If not, waits for parent's persistence to complete
+// 3. Then executes the child's persistence
+// 4. Updates reactive status (isPersisted, isPending)
+// 5. Handles errors and timeouts
+```
+
+**Think of it as:** The "project manager" - ensures work happens in the right order and nothing blocks.
+
+---
+
+### Layer 3: Data Layer
+
+**Service:** `SharedNodeStore`
+
+**Role:** Source of Truth - manages in-memory reactive state
+
+**Responsibilities:**
+- Store all node data in reactive `SvelteMap` (immediate access)
+- Handle multi-source updates (viewer, database, MCP server)
+- Notify subscribers of changes (trigger UI re-renders)
+- Delegate persistence to `PersistenceCoordinator`
+- Manage optimistic updates (show changes before database confirms)
+
+**Key File:**
+- `packages/desktop-app/src/lib/services/shared-node-store.ts`
+
+**What it does:**
+```typescript
+class SharedNodeStore {
+  private nodes = new SvelteMap<string, Node>();  // Reactive storage
+
+  updateNode(nodeId: string, changes: Partial<Node>, source: UpdateSource) {
+    // 1. Apply update to in-memory Map (synchronous)
+    this.nodes.set(nodeId, { ...existing, ...changes });
+
+    // 2. Notify subscribers (triggers UI re-render)
+    this.notifySubscribers(nodeId, updatedNode, source);
+
+    // 3. Emit event for service coordination
+    eventBus.emit({ type: 'node:updated', nodeId, ... });
+
+    // 4. Delegate persistence to coordinator (if not from database)
+    if (source.type !== 'database') {
+      persistenceCoordinator.persist(nodeId, () => {
+        return tauriNodeService.updateNode(nodeId, updatedNode);
+      }, { mode: 'debounce' });
+    }
+  }
+}
+```
+
+**Think of it as:** The "warehouse" - holds all the data and coordinates between UI, persistence, and other services.
+
+---
+
+### Layer 4: Backend Integration Layer
+
+**Service:** `TauriNodeService`
+
+**Role:** Backend Adapter - bridges frontend and Rust backend
+
+**Responsibilities:**
+- Serialize/deserialize data for IPC (Inter-Process Communication)
+- Queue database writes per node (prevent concurrent writes)
+- Call Tauri commands (invoke Rust functions)
+- Handle backend errors and retries
+
+**Key File:**
+- `packages/desktop-app/src/lib/services/tauri-node-service.ts`
+
+**What it does:**
+```typescript
+class TauriNodeService {
+  async createNode(node: Node): Promise<void> {
+    // Queue to prevent concurrent writes to same node
+    return queueDatabaseWrite(node.id, async () => {
+      // Serialize and send to Rust backend via Tauri IPC
+      await invoke('create_node', { node: serializeNode(node) });
+    });
+  }
+
+  async updateNode(nodeId: string, node: Node): Promise<void> {
+    return queueDatabaseWrite(nodeId, async () => {
+      await invoke('update_node', { nodeId, node: serializeNode(node) });
+    });
+  }
+}
+```
+
+**Think of it as:** The "postal service" - delivers messages between frontend and backend, ensuring they arrive in order.
+
+---
+
+### Layer 5: Backend Layer (Rust + Tauri)
+
+**Services:** Rust commands + libsql database
+
+**Role:** Executor - performs actual database operations
+
+**Responsibilities:**
+- Execute SQL queries via libsql
+- Enforce FOREIGN KEY constraints
+- Manage transactions
+- Serialize writes per node
+
+**Key Files:**
+- `packages/desktop-app/src-tauri/src/commands.rs`
+- `packages/core/src/db/database.rs`
+
+**What it does:**
+```rust
+#[tauri::command]
+async fn create_node(node: Node) -> Result<(), String> {
+    // Validate node structure
+    validate_node(&node)?;
+
+    // Insert into SQLite with FOREIGN KEY checks
+    database.execute(
+        "INSERT INTO nodes (id, content, parent_id, ...) VALUES (?, ?, ?, ...)",
+        params![node.id, node.content, node.parent_id, ...]
+    ).await?;
+
+    Ok(())
+}
+```
+
+**Think of it as:** The "bank vault" - safely stores data and enforces all the rules.
+
+---
+
+### How They Work Together
+
+**Complete Flow: User Types → Database Save**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ 1. USER TYPES                                                │
+│    "Hello World"                                             │
+└────────────────┬─────────────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 2. UI LAYER (BaseNodeViewer)                                │
+│    $effect detects change                                    │
+│    → debounceSave(nodeId, "Hello World")                     │
+└────────────────┬─────────────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 3. DATA LAYER (SharedNodeStore)                             │
+│    → updateNode(nodeId, { content: "Hello World" })         │
+│    → Update in-memory Map (UI shows change instantly)       │
+│    → Notify subscribers (UI re-renders)                     │
+│    → Emit 'node:updated' event                              │
+│    → Delegate to PersistenceCoordinator                     │
+└────────────────┬─────────────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 4. COORDINATION LAYER (PersistenceCoordinator)              │
+│    → persist(nodeId, operation, { mode: 'debounce' })       │
+│    → Wait 500ms (batch rapid changes)                       │
+│    → Check dependencies (none for content change)           │
+│    → Execute operation                                       │
+└────────────────┬─────────────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 5. BACKEND INTEGRATION (TauriNodeService)                   │
+│    → updateNode(nodeId, node)                               │
+│    → queueDatabaseWrite(nodeId, async () => {...})          │
+│    → invoke('update_node', { nodeId, node })                │
+└────────────────┬─────────────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 6. BACKEND LAYER (Rust + libsql)                            │
+│    → Execute SQL: UPDATE nodes SET content = ? WHERE id = ? │
+│    → Enforce FOREIGN KEY constraints                         │
+│    → Return success/error                                    │
+└────────────────┬─────────────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────────────────────────────┐
+│ 7. SUCCESS                                                   │
+│    → PersistenceCoordinator marks as persisted              │
+│    → SharedNodeStore updates persistedNodeIds               │
+│    → UI can show "Saved" indicator                          │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Time:** ~500ms (debounce) + ~5-10ms (database write) = ~510ms total
+
+**User Experience:** Changes appear instantly (optimistic), saved in background
+
+---
+
 ## PersistenceCoordinator
 
 ### The Problem
