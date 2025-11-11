@@ -579,6 +579,316 @@ async fn create_node(node: Node) -> Result<(), String> {
 
 ---
 
+## Placeholder Nodes
+
+### What Are Placeholder Nodes?
+
+**Placeholder nodes** are temporary UI-only nodes that exist to provide smooth UX when creating new nodes, but **should NOT be persisted** to the database until the user adds actual content.
+
+**Think of them as:** Draft envelopes - you start addressing an envelope, but you don't mail it until you've actually written something inside.
+
+### Why Do Placeholder Nodes Exist?
+
+**Problem:** When user creates a new node (presses Enter), we need to:
+1. Show the new node instantly in the UI (for smooth UX)
+2. But NOT save it to the database yet (avoid cluttering DB with empty nodes)
+3. Wait until user actually types content (then persist)
+
+**Solution:** Create placeholder nodes in memory only:
+```typescript
+// User presses Enter
+const newNode = {
+  id: generateId(),
+  content: '',           // Empty content
+  nodeType: 'text',
+  isPlaceholder: true    // Marker: don't persist yet
+};
+
+// Show in UI immediately (optimistic)
+sharedNodeStore.updateNode(newNode.id, newNode, viewerSource, {
+  skipPersistence: true  // Don't save to database
+});
+
+// User starts typing...
+// Now persist (placeholder becomes real node)
+```
+
+### How Placeholder Detection Works
+
+**Utility:** `packages/desktop-app/src/lib/utils/placeholder-detection.ts`
+
+```typescript
+export function isPlaceholderNode(node: PlaceholderCheckable): boolean {
+  const trimmedContent = node.content.trim();
+
+  switch (node.nodeType) {
+    case 'text':
+      // Empty text or just pattern prefixes
+      return trimmedContent === '' ||
+             trimmedContent === '>' ||
+             trimmedContent.match(/^#{1,6}\s*$/);  // Just "# " etc
+
+    case 'quote-block':
+      // Just "> " with no actual content
+      const contentWithoutPrefix = trimmedContent
+        .replace(/^>\s?/gm, '')
+        .trim();
+      return contentWithoutPrefix === '';
+
+    case 'code-block':
+      // Just "```" with no actual code
+      const contentWithoutBackticks = trimmedContent
+        .replace(/^```\w*\s*/, '')
+        .replace(/```$/, '');
+      return contentWithoutBackticks.trim() === '';
+
+    case 'ordered-list':
+      // Just "1. " with no actual content
+      const contentWithoutPrefix = trimmedContent.replace(/^1\.\s*/, '');
+      return contentWithoutPrefix === '';
+
+    case 'task':
+      // Empty task description
+      return trimmedContent === '';
+
+    case 'date':
+      // Date nodes are NEVER placeholders (backend-managed containers)
+      return false;
+
+    default:
+      return trimmedContent === '';
+  }
+}
+```
+
+### Pattern Conversion and Placeholders
+
+**Special Case:** Pattern conversion (typing `>` → converts text node to quote-block)
+
+```typescript
+// User types "> " in a text node
+const textNode = { nodeType: 'text', content: '> ' };
+
+// Pattern detector converts to quote-block
+const quoteNode = { nodeType: 'quote-block', content: '> ' };
+
+// But it's still a placeholder! (just prefix, no actual content)
+isPlaceholderNode(quoteNode);  // true
+
+// User continues typing: "> Hello"
+const realQuoteNode = { nodeType: 'quote-block', content: '> Hello' };
+isPlaceholderNode(realQuoteNode);  // false → NOW persist
+```
+
+**Atomic Batching for Pattern Conversions:**
+
+Pattern-converted node types (`quote-block`, `code-block`, `ordered-list`) require **atomic batching** to prevent race conditions:
+
+```typescript
+// BAD: Race condition
+updateNode(nodeId, { content: '> Hello' });    // Update 1
+updateNode(nodeId, { nodeType: 'quote-block' }); // Update 2
+// Backend might see content before nodeType change!
+
+// GOOD: Atomic batch
+updateNode(nodeId, {
+  content: '> Hello',
+  nodeType: 'quote-block'  // Both updates together
+});
+```
+
+### Persistence Prevention
+
+**In BaseNodeViewer:**
+
+```typescript
+// Content watcher ($effect)
+$effect(() => {
+  for (const node of visibleNodes) {
+    // Skip placeholders - don't trigger persistence
+    if (node.isPlaceholder) continue;
+
+    // Only save nodes with actual content
+    if (node.content !== lastSaved) {
+      debounceSave(node.id, node.content);
+    }
+  }
+});
+```
+
+**In SharedNodeStore:**
+
+```typescript
+updateNode(nodeId: string, changes: Partial<Node>, source: UpdateSource) {
+  // Apply to memory (always)
+  this.nodes.set(nodeId, updatedNode);
+
+  // Check placeholder status before persisting
+  if (!isPlaceholderNode(updatedNode) && source.type !== 'database') {
+    // NOT a placeholder → persist to database
+    persistenceCoordinator.persist(nodeId, () => {
+      return tauriNodeService.updateNode(nodeId, updatedNode);
+    });
+  }
+  // Placeholder → skip persistence (UI-only node)
+}
+```
+
+### Placeholder Lifecycle
+
+**Complete flow from creation to persistence:**
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ 1. USER PRESSES ENTER                                      │
+│    Creates new text node                                   │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 2. CREATE PLACEHOLDER                                      │
+│    { id: 'node-1', content: '', isPlaceholder: true }     │
+│    → updateNode(..., { skipPersistence: true })           │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 3. SHOW IN UI                                              │
+│    User sees empty node with cursor                        │
+│    Node exists in memory (SharedNodeStore)                 │
+│    Node does NOT exist in database                         │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 4. USER TYPES: "H"                                         │
+│    { content: 'H', isPlaceholder: false }                  │
+│    → updateNode(...) [no skipPersistence flag]            │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 5. PLACEHOLDER DETECTION                                   │
+│    isPlaceholderNode({ content: 'H' }) → false            │
+│    → Has actual content now!                               │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 6. TRIGGER PERSISTENCE                                     │
+│    persistenceCoordinator.persist(nodeId, ...)            │
+│    → Debounce 500ms (batch rapid changes)                 │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 7. PERSIST TO DATABASE                                     │
+│    tauriNodeService.createNode(node)                       │
+│    → INSERT INTO nodes (id, content, ...) VALUES (...)    │
+└────────────────┬───────────────────────────────────────────┘
+                 ↓
+┌────────────────────────────────────────────────────────────┐
+│ 8. MARK AS PERSISTED                                       │
+│    sharedNodeStore.persistedNodeIds.add('node-1')         │
+│    → Node now exists in database                           │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Time:** Instant UI (step 3) → ~500ms after typing (step 7)
+
+**User Experience:** Smooth, no lag, empty nodes don't clutter database
+
+### Edge Cases and Guarding
+
+**Problem:** What if parent/sibling references point to unpersisted placeholders?
+
+```typescript
+// User creates child under placeholder parent
+const placeholder = { id: 'parent-1', content: '', isPlaceholder: true };
+const child = { id: 'child-1', parentId: 'parent-1', content: 'Hello' };
+
+// FOREIGN KEY violation: parent-1 doesn't exist in database yet!
+```
+
+**Solution:** Defer persistence until references are resolved:
+
+```typescript
+// In SharedNodeStore (line 400-440)
+// GUARD: Check if beforeSiblingId or parentId reference unpersisted placeholders
+if (changes.parentId) {
+  const parent = this.nodes.get(changes.parentId);
+  if (parent && isPlaceholderNode(parent)) {
+    // Parent is unpersisted placeholder - defer until placeholder persists
+    deferUntilPersisted(changes.parentId);
+  }
+}
+
+if (changes.beforeSiblingId) {
+  const sibling = this.nodes.get(changes.beforeSiblingId);
+  if (sibling && isPlaceholderNode(sibling)) {
+    // Sibling is unpersisted placeholder - defer
+    deferUntilPersisted(changes.beforeSiblingId);
+  }
+}
+```
+
+### Testing Placeholder Behavior
+
+**Test File:** `packages/desktop-app/src/tests/services/placeholder-detection.test.ts`
+
+```typescript
+describe('Placeholder Detection', () => {
+  it('should detect empty text nodes as placeholders', () => {
+    expect(isPlaceholderNode({ nodeType: 'text', content: '' })).toBe(true);
+  });
+
+  it('should detect quote-block with only prefix as placeholder', () => {
+    expect(isPlaceholderNode({ nodeType: 'quote-block', content: '> ' })).toBe(true);
+  });
+
+  it('should NOT detect quote-block with content as placeholder', () => {
+    expect(isPlaceholderNode({ nodeType: 'quote-block', content: '> Hello' })).toBe(false);
+  });
+
+  it('should detect code-block with only backticks as placeholder', () => {
+    expect(isPlaceholderNode({ nodeType: 'code-block', content: '```' })).toBe(true);
+  });
+
+  it('should detect pattern prefixes in text nodes as placeholders', () => {
+    expect(isPlaceholderNode({ nodeType: 'text', content: '> ' })).toBe(true);
+    expect(isPlaceholderNode({ nodeType: 'text', content: '# ' })).toBe(true);
+    expect(isPlaceholderNode({ nodeType: 'text', content: '1. ' })).toBe(true);
+  });
+});
+```
+
+### Special Case: Date Nodes
+
+**Date nodes are NEVER placeholders** (even with empty content):
+
+```typescript
+case 'date':
+  // Date nodes are virtual/backend-managed containers, never placeholders
+  // They have empty content by design and are created on-demand by the backend
+  return false;
+```
+
+**Why?** Date nodes are containers for other nodes (e.g., "2025-01-15" contains all tasks for that day). They're created by the backend when needed, not by user typing.
+
+### Summary
+
+**Key Takeaways:**
+
+1. **Purpose:** Smooth UX - show new nodes instantly without cluttering database
+2. **Detection:** Empty content or just type-specific prefixes (e.g., "> " for quote)
+3. **Lifecycle:** Memory-only → User types content → Persist to database
+4. **Persistence:** Placeholders are NEVER persisted (checked at multiple layers)
+5. **Edge Cases:** Guard against FOREIGN KEY violations from placeholder references
+6. **Pattern Conversion:** Atomic batching prevents race conditions
+7. **Date Nodes Exception:** Never placeholders (backend-managed containers)
+
+**Implementation Files:**
+- Detection: `src/lib/utils/placeholder-detection.ts`
+- Prevention: `src/lib/design/components/base-node-viewer.svelte` (line 381, 614)
+- Guarding: `src/lib/services/shared-node-store.ts` (line 400-440)
+- Tests: `src/tests/services/placeholder-detection.test.ts`
+
+---
+
 ## PersistenceCoordinator
 
 ### The Problem
