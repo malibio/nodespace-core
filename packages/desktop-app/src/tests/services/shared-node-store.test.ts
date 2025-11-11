@@ -1341,8 +1341,8 @@ describe('SharedNodeStore', () => {
         store.setNode(mockNode, backendSource);
 
         // Verify node is marked as persisted internally
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        expect((store as any).persistedNodeIds.has('persist-test')).toBe(true);
+        const node = store.getNode('persist-test');
+        expect(node?.persistenceState).toBe('persisted');
       });
     });
 

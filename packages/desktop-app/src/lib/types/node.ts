@@ -17,11 +17,11 @@
  * about this state - it only receives persisted data.
  */
 export type PersistenceState =
-  | 'ephemeral'    // Exists in UI only, never been persisted (empty placeholders)
-  | 'pending'      // Queued for persistence (has content, waiting to be saved)
-  | 'persisting'   // Currently being written to database
-  | 'persisted'    // Successfully saved to database (came from backend)
-  | 'failed';      // Persistence attempt failed (needs retry)
+  | 'ephemeral' // Exists in UI only, never been persisted (empty placeholders)
+  | 'pending' // Queued for persistence (has content, waiting to be saved)
+  | 'persisting' // Currently being written to database
+  | 'persisted' // Successfully saved to database (came from backend)
+  | 'failed'; // Persistence attempt failed (needs retry)
 
 /**
  * Node - Matches Rust backend schema exactly

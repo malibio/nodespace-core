@@ -61,7 +61,7 @@ describe('Shift+Enter Key Operations', () => {
 
     hierarchyChangeCount = 0;
 
-    // Reset shared node store to clear persistedNodeIds from previous tests
+    // Reset shared node store to clear state from previous tests
     sharedNodeStore.__resetForTesting();
 
     service = createReactiveNodeService({

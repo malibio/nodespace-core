@@ -46,7 +46,7 @@ describe.sequential('Section 12: Regression Prevention', () => {
     // Clean database between tests to ensure test isolation
     await cleanDatabase(backend);
 
-    // Reset shared node store to clear persistedNodeIds from previous tests
+    // Reset shared node store to clear state from previous tests
     sharedNodeStore.__resetForTesting();
 
     // Clear any test errors from previous tests

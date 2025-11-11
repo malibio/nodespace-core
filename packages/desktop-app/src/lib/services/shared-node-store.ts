@@ -83,6 +83,20 @@ interface ActiveBatch {
 }
 
 /**
+ * Represents an update that's waiting for an ephemeral node to become pending
+ *
+ * When a node tries to reference an ephemeral node (e.g., beforeSiblingId pointing to a placeholder),
+ * we can't persist the reference immediately because the database will reject foreign key references
+ * to non-existent nodes. Instead, we defer the update until the ephemeral node transitions to pending.
+ */
+interface DeferredUpdate {
+  nodeId: string; // Node that needs updating
+  changes: Partial<Node>; // Changes to apply
+  source: UpdateSource; // Update source
+  waitingFor: string; // Ephemeral node ID we're waiting for
+}
+
+/**
  * SharedNodeStore - Reactive singleton store for node data
  */
 export class SharedNodeStore {
@@ -90,10 +104,6 @@ export class SharedNodeStore {
 
   // Core state - using plain Map (reactivity provided by ReactiveNodeService adapter)
   private nodes = new Map<string, Node>();
-
-  // Track which nodes have been persisted to database
-  // Avoids querying database on every update to check existence
-  private persistedNodeIds = new Set<string>();
 
   // Subscriptions for change notifications
   private subscriptions = new Map<string, Set<Subscription>>();
@@ -129,6 +139,10 @@ export class SharedNodeStore {
   // Batch update tracking for atomic multi-property updates
   // Used for pattern conversions where content + nodeType must persist together
   private activeBatches = new Map<string, ActiveBatch>();
+
+  // Deferred update tracking - updates waiting for ephemeral nodes to transition to pending
+  // Maps ephemeral node ID → array of updates waiting for that node
+  private deferredUpdates = new Map<string, DeferredUpdate[]>();
 
   private constructor() {
     // Private constructor for singleton
@@ -206,6 +220,61 @@ export class SharedNodeStore {
     // External sources and MCP sources trigger persistence
     // Viewer sources depend on context (handled by caller)
     return { shouldPersist: true, shouldMarkAsPersisted: false };
+  }
+
+  // ========================================================================
+  // Deferred Update Management
+  // ========================================================================
+
+  /**
+   * Add an update to the deferred queue
+   * Called when a structural update references an ephemeral node
+   */
+  private addDeferredUpdate(update: DeferredUpdate): void {
+    const queue = this.deferredUpdates.get(update.waitingFor) || [];
+    queue.push(update);
+    this.deferredUpdates.set(update.waitingFor, queue);
+  }
+
+  /**
+   * Process all deferred updates waiting for a node
+   * Call this when a node transitions from ephemeral → pending
+   */
+  private processDeferredUpdates(nodeId: string): void {
+    const queue = this.deferredUpdates.get(nodeId);
+    if (!queue || queue.length === 0) return;
+
+    for (const update of queue) {
+      // Replay the update with forcePersist to ensure it saves to database
+      this.updateNode(update.nodeId, update.changes, update.source, { persist: true });
+    }
+
+    // Clear the queue for this node
+    this.deferredUpdates.delete(nodeId);
+  }
+
+  /**
+   * Update a node's persistence state and trigger deferred updates
+   * This is the ONLY place where persistenceState should be directly modified
+   */
+  private updatePersistenceState(
+    nodeId: string,
+    newState: 'ephemeral' | 'pending' | 'persisting' | 'persisted' | 'failed'
+  ): void {
+    const node = this.nodes.get(nodeId);
+    if (!node) return;
+
+    const oldState = node.persistenceState;
+    node.persistenceState = newState;
+    this.nodes.set(nodeId, node);
+
+    // CRITICAL: When transitioning ephemeral → pending, process deferred updates
+    if (oldState === 'ephemeral' && newState === 'pending') {
+      this.processDeferredUpdates(nodeId);
+    }
+
+    // Notify subscribers about persistence state change (using database source for internal state changes)
+    this.notifySubscribers(nodeId, node, { type: 'database', reason: 'persistence-state-change' });
   }
 
   // ========================================================================
@@ -367,6 +436,16 @@ export class SharedNodeStore {
       this.nodes.set(nodeId, updatedNode);
       this.versions.set(nodeId, update.version!);
 
+      // CRITICAL: Handle persistence state transitions
+      // When content is added to an ephemeral placeholder, transition to pending
+      if (existingNode.persistenceState === 'ephemeral' && 'content' in changes) {
+        const hasContent = !isPlaceholderNode(updatedNode);
+        if (hasContent) {
+          // Transition ephemeral → pending (triggers deferred update processing)
+          this.updatePersistenceState(nodeId, 'pending');
+        }
+      }
+
       // Track pending update for potential rollback
       if (!this.pendingUpdates.has(nodeId)) {
         this.pendingUpdates.set(nodeId, []);
@@ -397,41 +476,49 @@ export class SharedNodeStore {
       // This ensures hierarchy operations work while debouncing rapid typing
       const persistBehavior = this.determinePersistenceBehavior(source, options, changes);
       if (persistBehavior.shouldPersist) {
-        // GUARD: Check if beforeSiblingId or parentId reference unpersisted placeholders
-        // Placeholders use skipPersistence, so there's no operation to wait for
-        // Remove these references to avoid FOREIGN KEY constraint violations
-        //
-        // Type casting explanation: TypeScript doesn't allow deleting properties from Partial<Node>
-        // because it's readonly. We create MutablePartialNode to allow deletion, which is safe
-        // because we're modifying a local changes object, not the original node in the store.
-        type MutablePartialNode = { [K in keyof Partial<Node>]: Partial<Node>[K] };
-        const coordinator = PersistenceCoordinator.getInstance();
+        // GUARD: Check if beforeSiblingId or parentId reference ephemeral placeholders
+        // If so, defer this update until the ephemeral node becomes pending (has content)
+        // This prevents FOREIGN KEY constraint violations while maintaining correct references
 
         // Check beforeSiblingId
         if ('beforeSiblingId' in changes && changes.beforeSiblingId) {
-          const isPersisted = this.persistedNodeIds.has(changes.beforeSiblingId);
-          const hasPending = coordinator.isPending(changes.beforeSiblingId);
-          if (!isPersisted && !hasPending) {
-            // Check if it's a placeholder node
-            const siblingNode = this.nodes.get(changes.beforeSiblingId);
-            if (siblingNode && isPlaceholderNode(siblingNode)) {
-              // beforeSiblingId points to unpersisted placeholder - defer until placeholder persists
-              delete (changes as MutablePartialNode).beforeSiblingId;
-            }
+          const siblingNode = this.nodes.get(changes.beforeSiblingId);
+
+          // If sibling is ephemeral, defer the entire update
+          if (siblingNode?.persistenceState === 'ephemeral') {
+            this.addDeferredUpdate({
+              nodeId,
+              changes,
+              source,
+              waitingFor: changes.beforeSiblingId
+            });
+
+            // Still update in-memory for immediate UI feedback
+            this.nodes.set(nodeId, updatedNode);
+            this.notifySubscribers(nodeId, updatedNode, source);
+
+            return; // Skip persistence for now
           }
         }
 
         // Check parentId
         if ('parentId' in changes && changes.parentId) {
-          const isPersisted = this.persistedNodeIds.has(changes.parentId);
-          const hasPending = coordinator.isPending(changes.parentId);
-          if (!isPersisted && !hasPending) {
-            // Check if it's a placeholder node
-            const parentNode = this.nodes.get(changes.parentId);
-            if (parentNode && isPlaceholderNode(parentNode)) {
-              // parentId points to unpersisted placeholder - defer until placeholder persists
-              delete (changes as MutablePartialNode).parentId;
-            }
+          const parentNode = this.nodes.get(changes.parentId);
+
+          // If parent is ephemeral, defer the entire update
+          if (parentNode?.persistenceState === 'ephemeral') {
+            this.addDeferredUpdate({
+              nodeId,
+              changes,
+              source,
+              waitingFor: changes.parentId
+            });
+
+            // Still update in-memory for immediate UI feedback
+            this.nodes.set(nodeId, updatedNode);
+            this.notifySubscribers(nodeId, updatedNode, source);
+
+            return; // Skip persistence for now
           }
         }
 
@@ -477,12 +564,11 @@ export class SharedNodeStore {
            * - Different from parentId (avoids duplicate dependency)
            * - NOT already persisted to database
            */
-          if (
-            updatedNode.containerNodeId &&
-            updatedNode.containerNodeId !== updatedNode.parentId &&
-            !this.persistedNodeIds.has(updatedNode.containerNodeId)
-          ) {
-            dependencies.push(updatedNode.containerNodeId);
+          if (updatedNode.containerNodeId && updatedNode.containerNodeId !== updatedNode.parentId) {
+            const containerNode = this.nodes.get(updatedNode.containerNodeId);
+            if (containerNode?.persistenceState !== 'persisted') {
+              dependencies.push(updatedNode.containerNodeId);
+            }
           }
 
           /**
@@ -493,13 +579,13 @@ export class SharedNodeStore {
            * - beforeSiblingId is set
            * - NOT already persisted to database
            *
-           * NOTE: Placeholder check is done earlier (line 263-274) to avoid FOREIGN KEY violations
+           * NOTE: Ephemeral placeholder check is done earlier (line 478-518) to defer updates
            */
-          if (
-            updatedNode.beforeSiblingId &&
-            !this.persistedNodeIds.has(updatedNode.beforeSiblingId)
-          ) {
-            dependencies.push(updatedNode.beforeSiblingId);
+          if (updatedNode.beforeSiblingId) {
+            const siblingNode = this.nodes.get(updatedNode.beforeSiblingId);
+            if (siblingNode?.persistenceState !== 'persisted') {
+              dependencies.push(updatedNode.beforeSiblingId);
+            }
           }
 
           // Add any additional dependencies from options
@@ -525,8 +611,11 @@ export class SharedNodeStore {
                   return; // Skip persistence - will retry when content is added
                 }
 
-                // Check if node has been persisted - use in-memory tracking to avoid database query
-                const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
+                // Check node persistence state
+                const isPersistedToDatabase = currentNode?.persistenceState === 'persisted';
+
+                // Update persistence state to 'persisting'
+                this.updatePersistenceState(nodeId, 'persisting');
 
                 if (isPersistedToDatabase) {
                   // IMPORTANT: For UPDATE, only send the changes (Partial<Node>), not the full node
@@ -535,14 +624,15 @@ export class SharedNodeStore {
                   const updatePayload = { ...changes };
 
                   // Get current node version for optimistic concurrency control
-                  const currentNode = this.nodes.get(nodeId);
                   const currentVersion = currentNode?.version ?? 1;
 
                   try {
                     await tauriNodeService.updateNode(nodeId, currentVersion, updatePayload);
+                    // Mark as persisted on success
+                    this.updatePersistenceState(nodeId, 'persisted');
                   } catch (updateError) {
                     // If UPDATE fails because node doesn't exist, try CREATE instead
-                    // This handles cases where persistedNodeIds is out of sync (page reload, database reset)
+                    // This handles cases where persistenceState is out of sync (page reload, database reset)
                     // Match both "NodeNotFound" and "does not exist" error messages
                     if (
                       updateError instanceof Error &&
@@ -553,16 +643,17 @@ export class SharedNodeStore {
                         `[SharedNodeStore] Node ${nodeId} not found in database, creating instead of updating`
                       );
                       await tauriNodeService.createNode(updatedNode);
-                      this.persistedNodeIds.add(nodeId); // Now it's persisted
+                      this.updatePersistenceState(nodeId, 'persisted'); // Now it's persisted
                     } else {
-                      // Re-throw other errors
+                      // Mark as failed on error
+                      this.updatePersistenceState(nodeId, 'failed');
                       throw updateError;
                     }
                   }
                 } else {
-                  // Node doesn't exist yet (was a placeholder or new node)
+                  // Node doesn't exist yet (was pending or new node)
                   await tauriNodeService.createNode(updatedNode);
-                  this.persistedNodeIds.add(nodeId); // Track as persisted
+                  this.updatePersistenceState(nodeId, 'persisted'); // Track as persisted
 
                   // CRITICAL: After persisting a placeholder that now has content,
                   // update any nodes that reference this node in their beforeSiblingId
@@ -633,7 +724,8 @@ export class SharedNodeStore {
    * Set a node (create or replace)
    */
   setNode(node: Node, source: UpdateSource, skipPersistence = false): void {
-    const isNewNode = !this.persistedNodeIds.has(node.id);
+    const existingNode = this.nodes.get(node.id);
+    const isNewNode = !existingNode;
     this.nodes.set(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
     this.notifySubscribers(node.id, node, source);
@@ -642,9 +734,18 @@ export class SharedNodeStore {
     const options: UpdateOptions = { skipPersistence };
     const { shouldMarkAsPersisted } = this.determinePersistenceBehavior(source, options);
 
-    // Mark as persisted if explicitly requested or loaded from backend
+    // Set persistence state based on source and options
     if (shouldMarkAsPersisted) {
-      this.persistedNodeIds.add(node.id);
+      // Node loaded from database - mark as persisted
+      this.updatePersistenceState(node.id, 'persisted');
+    } else if (isNewNode && !skipPersistence) {
+      // New node being created - start as pending (unless it's a placeholder, handled below)
+      const isPlaceholder = isPlaceholderNode(node);
+      if (isPlaceholder) {
+        this.updatePersistenceState(node.id, 'ephemeral');
+      } else {
+        this.updatePersistenceState(node.id, 'pending');
+      }
     }
 
     // Check if node is a placeholder (node with only type-specific prefix, no actual content)
@@ -681,12 +782,11 @@ export class SharedNodeStore {
          * - Different from parentId (avoids duplicate dependency)
          * - NOT already persisted to database
          */
-        if (
-          node.containerNodeId &&
-          node.containerNodeId !== node.parentId &&
-          !this.persistedNodeIds.has(node.containerNodeId)
-        ) {
-          dependencies.push(node.containerNodeId);
+        if (node.containerNodeId && node.containerNodeId !== node.parentId) {
+          const containerNode = this.nodes.get(node.containerNodeId);
+          if (containerNode?.persistenceState !== 'persisted') {
+            dependencies.push(node.containerNodeId);
+          }
         }
 
         /**
@@ -697,8 +797,11 @@ export class SharedNodeStore {
          * - beforeSiblingId is set
          * - NOT already persisted to database
          */
-        if (node.beforeSiblingId && !this.persistedNodeIds.has(node.beforeSiblingId)) {
-          dependencies.push(node.beforeSiblingId);
+        if (node.beforeSiblingId) {
+          const siblingNode = this.nodes.get(node.beforeSiblingId);
+          if (siblingNode?.persistenceState !== 'persisted') {
+            dependencies.push(node.beforeSiblingId);
+          }
         }
 
         // For placeholders with specialized nodeType, filter out content to avoid backend validation
@@ -717,13 +820,19 @@ export class SharedNodeStore {
           node.id,
           async () => {
             try {
-              // Check if node has been persisted - use in-memory tracking to avoid database query
-              const isPersistedToDatabase = this.persistedNodeIds.has(node.id);
+              // Check node persistence state
+              const currentNode = this.nodes.get(node.id);
+              const isPersistedToDatabase = currentNode?.persistenceState === 'persisted';
+
+              // Update state to 'persisting'
+              this.updatePersistenceState(node.id, 'persisting');
+
               if (isPersistedToDatabase) {
                 try {
                   // Get current version for optimistic concurrency control
                   const currentVersion = node.version ?? 1;
                   await tauriNodeService.updateNode(node.id, currentVersion, nodeToPersist);
+                  this.updatePersistenceState(node.id, 'persisted');
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
                   const errorMessage =
@@ -740,14 +849,15 @@ export class SharedNodeStore {
                       `[SharedNodeStore] Node ${node.id} not found in database, creating instead of updating (error: ${errorMessage})`
                     );
                     await tauriNodeService.createNode(nodeToPersist);
-                    this.persistedNodeIds.add(node.id);
+                    this.updatePersistenceState(node.id, 'persisted');
                   } else {
+                    this.updatePersistenceState(node.id, 'failed');
                     throw updateError;
                   }
                 }
               } else {
                 await tauriNodeService.createNode(nodeToPersist);
-                this.persistedNodeIds.add(node.id); // Track as persisted
+                this.updatePersistenceState(node.id, 'persisted'); // Track as persisted
               }
             } catch (dbError) {
               const error = dbError instanceof Error ? dbError : new Error(String(dbError));
@@ -807,7 +917,7 @@ export class SharedNodeStore {
       this.nodes.delete(nodeId);
       this.versions.delete(nodeId);
       this.pendingUpdates.delete(nodeId);
-      this.persistedNodeIds.delete(nodeId); // Remove from tracking set
+      this.deferredUpdates.delete(nodeId); // Clear any deferred updates waiting for this node
       this.notifySubscribers(nodeId, node, source);
 
       // Emit event - cast to bypass type checking for now
@@ -880,7 +990,7 @@ export class SharedNodeStore {
     this.nodes.clear();
     this.versions.clear();
     this.pendingUpdates.clear();
-    this.persistedNodeIds.clear();
+    this.deferredUpdates.clear();
     this.notifyAllSubscribers();
   }
 
@@ -923,7 +1033,8 @@ export class SharedNodeStore {
    * @returns True if node exists in database, false if only in memory
    */
   isNodePersisted(nodeId: string): boolean {
-    return this.persistedNodeIds.has(nodeId);
+    const node = this.nodes.get(nodeId);
+    return node?.persistenceState === 'persisted';
   }
 
   /**
@@ -977,31 +1088,32 @@ export class SharedNodeStore {
     }
 
     // Check if node needs to be persisted
-    if (!this.persistedNodeIds.has(nodeId)) {
-      // GUARD: Skip placeholder nodes - they should not be force-persisted
-      // Placeholder nodes will be persisted when they receive actual content
+    if (node.persistenceState !== 'persisted') {
+      // GUARD: Skip ephemeral placeholder nodes - they should not be force-persisted
+      // Ephemeral nodes will be persisted when they receive actual content and transition to pending
       // This prevents invalid nodes from being persisted during ancestor chain resolution
-      if (isPlaceholderNode(node)) {
-        return; // Don't persist placeholders, even in ancestor chain
+      if (node.persistenceState === 'ephemeral' || isPlaceholderNode(node)) {
+        return; // Don't persist ephemeral placeholders, even in ancestor chain
       }
 
-      // Node was never persisted (e.g., placeholder node created with skipPersistence)
+      // Node was never persisted (e.g., pending node created but not yet saved)
       // Force persist it now before any child operations that reference it
 
       // Trigger persistence via PersistenceCoordinator
       const handle = PersistenceCoordinator.getInstance().persist(
         nodeId,
         async () => {
+          this.updatePersistenceState(nodeId, 'persisting');
           await tauriNodeService.createNode(node);
+          this.updatePersistenceState(nodeId, 'persisted');
         },
         { mode: 'immediate' } // Use immediate mode for structural operations
       );
 
       try {
         await handle.promise;
-        // Mark as persisted on success
-        this.persistedNodeIds.add(nodeId);
       } catch (error) {
+        this.updatePersistenceState(nodeId, 'failed');
         console.error(`[SharedNodeStore] Failed to persist node ${nodeId}:`, error);
         throw error;
       }
@@ -1039,7 +1151,8 @@ export class SharedNodeStore {
     const nodesToUpdate: Array<{ nodeId: string; changes: Partial<Node> }> = [];
 
     for (const [id, node] of this.nodes.entries()) {
-      if (!this.persistedNodeIds.has(id)) {
+      // Only update nodes that are already persisted (not ephemeral or pending)
+      if (node.persistenceState !== 'persisted') {
         continue; // Skip unpersisted nodes
       }
 
@@ -1769,7 +1882,7 @@ export class SharedNodeStore {
 
       // Check if final state is a placeholder
       const isPlaceholder = isPlaceholderNode(finalNode);
-      const wasPersisted = this.persistedNodeIds.has(nodeId);
+      const wasPersisted = finalNode.persistenceState === 'persisted';
 
       // Persist if:
       // 1. Node has real content (not a placeholder), OR
@@ -1867,7 +1980,7 @@ export class SharedNodeStore {
    * @param finalNode - Final node state after batch
    */
   private persistBatchedChanges(nodeId: string, changes: Partial<Node>, finalNode: Node): void {
-    const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
+    const isPersistedToDatabase = finalNode.persistenceState === 'persisted';
 
     // Use PersistenceCoordinator for coordinated persistence
     const dependencies: Array<string | (() => Promise<void>)> = [];
@@ -1880,17 +1993,19 @@ export class SharedNodeStore {
     }
 
     // Ensure containerNodeId is persisted (FOREIGN KEY)
-    if (
-      finalNode.containerNodeId &&
-      finalNode.containerNodeId !== finalNode.parentId &&
-      !this.persistedNodeIds.has(finalNode.containerNodeId)
-    ) {
-      dependencies.push(finalNode.containerNodeId);
+    if (finalNode.containerNodeId && finalNode.containerNodeId !== finalNode.parentId) {
+      const containerNode = this.nodes.get(finalNode.containerNodeId);
+      if (containerNode?.persistenceState !== 'persisted') {
+        dependencies.push(finalNode.containerNodeId);
+      }
     }
 
     // Ensure beforeSiblingId is persisted (FOREIGN KEY)
-    if (finalNode.beforeSiblingId && !this.persistedNodeIds.has(finalNode.beforeSiblingId)) {
-      dependencies.push(finalNode.beforeSiblingId);
+    if (finalNode.beforeSiblingId) {
+      const siblingNode = this.nodes.get(finalNode.beforeSiblingId);
+      if (siblingNode?.persistenceState !== 'persisted') {
+        dependencies.push(finalNode.beforeSiblingId);
+      }
     }
 
     // Persist with immediate mode (batches should not be debounced)
@@ -1910,16 +2025,20 @@ export class SharedNodeStore {
           // SOLUTION: Try CREATE first (standard case), but if it fails with UNIQUE constraint,
           // fall back to UPDATE with batched changes to fix the race
           //
+          // Update persistence state to 'persisting'
+          this.updatePersistenceState(nodeId, 'persisting');
+
           // STRATEGY: Try UPDATE first if we know node is persisted, otherwise CREATE
           if (isPersistedToDatabase) {
             // Get current version for optimistic concurrency control
             const currentVersion = finalNode.version ?? 1;
             await tauriNodeService.updateNode(nodeId, currentVersion, changes);
+            this.updatePersistenceState(nodeId, 'persisted');
           } else {
             // Try CREATE, but handle race condition where old path persisted first
             try {
               await tauriNodeService.createNode(finalNode);
-              this.persistedNodeIds.add(nodeId);
+              this.updatePersistenceState(nodeId, 'persisted');
 
               // Update deferred sibling references
               this.updateDeferredSiblingReferences(nodeId);
@@ -1934,8 +2053,9 @@ export class SharedNodeStore {
                 // Update with batched changes to fix inconsistent state
                 const currentVersion = finalNode.version ?? 1;
                 await tauriNodeService.updateNode(nodeId, currentVersion, changes);
-                this.persistedNodeIds.add(nodeId);
+                this.updatePersistenceState(nodeId, 'persisted');
               } else {
+                this.updatePersistenceState(nodeId, 'failed');
                 throw createError;
               }
             }
@@ -2010,7 +2130,7 @@ export class SharedNodeStore {
    */
   __resetForTesting(): void {
     this.nodes.clear();
-    this.persistedNodeIds.clear();
+    this.deferredUpdates.clear();
     this.subscriptions.clear();
     this.wildcardSubscriptions.clear();
     this.pendingUpdates.clear();
