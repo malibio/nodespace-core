@@ -465,21 +465,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // that will be persisted when the nodes are next saved with content/property changes
     if (insertAtBeginning) {
       // New node takes afterNode's place, so afterNode now comes after newNode
-      sharedNodeStore.updateNode(
-        afterNodeId,
-        { beforeSiblingId: nodeId },
-        viewerSource,
-        { skipPersistence: true }
-      );
+      sharedNodeStore.updateNode(afterNodeId, { beforeSiblingId: nodeId }, viewerSource, {
+        skipPersistence: true
+      });
     } else {
       // New node inserted after afterNode - update next sibling to point to new node
       if (nextSibling) {
-        sharedNodeStore.updateNode(
-          nextSibling.id,
-          { beforeSiblingId: nodeId },
-          viewerSource,
-          { skipPersistence: true }
-        );
+        sharedNodeStore.updateNode(nextSibling.id, { beforeSiblingId: nodeId }, viewerSource, {
+          skipPersistence: true
+        });
       }
     }
 
@@ -894,8 +888,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * This prevents orphaned nodes when a node is moved (indent/outdent) or deleted.
    *
    * @param nodeId - The node being removed from its current parent
+   * @param skipPersistence - If true, sibling chain updates will be in-memory only (for placeholder nodes)
    */
-  function removeFromSiblingChain(nodeId: string): string | null {
+  function removeFromSiblingChain(nodeId: string, skipPersistence: boolean = false): string | null {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return null;
 
@@ -905,11 +900,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     if (nextSibling) {
       // Update next sibling to point to our predecessor, "splicing us out" of the chain
+      // IMPORTANT: Skip persistence for sibling pointer updates if this is a placeholder operation
       sharedNodeStore.updateNode(
         nextSibling.id,
         { beforeSiblingId: node.beforeSiblingId },
         viewerSource,
-        { skipConflictDetection: true } // Sequential structural updates
+        {
+          skipConflictDetection: true, // Sequential structural updates
+          skipPersistence // Skip persistence for placeholder structural changes
+        }
       );
       return nextSibling.id; // Return the ID of the updated sibling
     }
@@ -1082,6 +1081,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     const oldParentId = node.parentId;
 
+    // CRITICAL: Check if this node is a placeholder (ephemeral/pending state)
+    // Placeholder structural changes should remain in-memory until content is added
+    const isPlaceholder = node.persistenceState === 'ephemeral' || node.persistenceState === 'pending';
+
     // Find siblings that come after this node (they will become children)
     const siblings = sharedNodeStore.getNodesForParent(oldParentId).map((n) => n.id);
     const sortedSiblings = sortChildrenByBeforeSiblingId(siblings, oldParentId);
@@ -1090,7 +1093,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Step 1: Prepare for parent change
     // Remove node from current sibling chain to maintain chain integrity
-    const updatedSiblingFromRemoval = removeFromSiblingChain(nodeId);
+    // IMPORTANT: If outdenting a placeholder, sibling updates must also skip persistence
+    const updatedSiblingFromRemoval = removeFromSiblingChain(nodeId, isPlaceholder);
 
     // Step 2: Calculate new position in parent hierarchy
     const newParentId = parent.parentId || null;
@@ -1142,6 +1146,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Step 4: Execute main node update
+    // IMPORTANT: Skip persistence for placeholder outdent operations
     sharedNodeStore.updateNode(
       nodeId,
       {
@@ -1152,7 +1157,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       {
         persistenceDependencies: mainNodeDeps,
         // Skip conflict detection for sequential viewer operations
-        skipConflictDetection: true
+        skipConflictDetection: true,
+        // Skip persistence for placeholder structural changes
+        skipPersistence: isPlaceholder
       }
     );
 
@@ -1167,9 +1174,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
       for (const sibling of allSiblings) {
         if (sibling.id !== nodeId && sibling.beforeSiblingId === positionBeforeSibling) {
+          // IMPORTANT: Skip persistence for sibling chain repair if outdenting a placeholder
           sharedNodeStore.updateNode(sibling.id, { beforeSiblingId: nodeId }, viewerSource, {
             persistenceDependencies: [nodeId], // Wait for main node
-            skipConflictDetection: true // Sequential structural updates
+            skipConflictDetection: true, // Sequential structural updates
+            skipPersistence: isPlaceholder // Skip persistence for placeholder operations
           });
           break; // Only one sibling can point to positionBeforeSibling
         }
@@ -1198,7 +1207,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const sibling = sharedNodeStore.getNode(siblingId);
         if (sibling) {
           // Remove from current sibling chain BEFORE updating beforeSiblingId
-          const removedSiblingId = removeFromSiblingChain(siblingId);
+          // IMPORTANT: Skip persistence if outdenting a placeholder
+          const removedSiblingId = removeFromSiblingChain(siblingId, isPlaceholder);
 
           // First transferred sibling points to last existing child (or null)
           // Subsequent siblings point to the previous transferred sibling
@@ -1212,6 +1222,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           ];
 
           // Update the sibling
+          // IMPORTANT: Skip persistence when transferring siblings for placeholder outdent
           sharedNodeStore.updateNode(
             siblingId,
             {
@@ -1221,7 +1232,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             viewerSource,
             {
               persistenceDependencies: deps,
-              skipConflictDetection: true // Sequential structural updates
+              skipConflictDetection: true, // Sequential structural updates
+              skipPersistence: isPlaceholder // Skip persistence for placeholder operations
             }
           );
 
