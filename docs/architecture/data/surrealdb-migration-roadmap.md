@@ -1,10 +1,23 @@
 # SurrealDB Migration Roadmap - Epic #461
 
+> **🚧 Current Migration Phase**: **Phase 0→1 Transition**
+>
+> NodeSpace is migrating from Turso (Phase 0 baseline) to a hybrid architecture (SurrealDB for desktop, Turso for mobile). We are currently between phases:
+> - ✅ **Phase 0**: Turso baseline established - **COMPLETE**
+> - 🚧 **Phase 1**: NodeStore abstraction - **IN PROGRESS** (Issues #462-464)
+> - 📋 **Phase 2-4**: SurrealDB implementation, testing, deployment - **PLANNED**
+>
+> **Quick Links**:
+> - [Phase 1 Details](#phase-1-abstraction-layer-current---epic-461)
+> - [Phase 1 Architecture](node-store-abstraction.md)
+> - [Migration Guide](surrealdb-migration-guide.md)
+> - [GitHub Epic #461](https://github.com/malibio/nodespace-core/issues/461)
+
 ## Overview
 
 This document provides the complete roadmap for migrating NodeSpace from Turso to a hybrid database architecture (SurrealDB for desktop, Turso for mobile).
 
-**Status**: Phase 1 Planning (Awaiting Approval)
+**Legacy Status Note**: Phase 1 Planning (Awaiting Approval) - Updated status above reflects current progress
 
 ## Migration Phases
 

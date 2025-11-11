@@ -1,5 +1,16 @@
 # SurrealDB Migration Implementation Guide - Phase 1
 
+> **🚧 Implementation Status**: **Phase 1 - In Progress**
+>
+> This guide tracks the step-by-step implementation of Phase 1 (NodeStore abstraction). See [`surrealdb-migration-roadmap.md`](surrealdb-migration-roadmap.md) for the complete migration roadmap.
+>
+> **Phase 1 Progress**:
+> - 🚧 Issue #462: NodeStore Trait - In Progress
+> - 📋 Issue #463: TursoStore Implementation - Planned
+> - 📋 Issue #464: SurrealDBStore Implementation - Planned
+>
+> **Completion Status**: Check boxes below track actual implementation progress
+
 ## Purpose
 
 This guide provides step-by-step implementation instructions for Phase 1 of Epic #461: Creating the NodeStore abstraction layer and TursoStore wrapper.

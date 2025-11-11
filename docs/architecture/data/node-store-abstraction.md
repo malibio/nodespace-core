@@ -1,5 +1,15 @@
 # NodeStore Abstraction Layer - Architecture Design
 
+> **🚧 Migration Status**: **Phase 1 - In Progress**
+>
+> This is part of the SurrealDB migration roadmap. See [`surrealdb-migration-roadmap.md`](surrealdb-migration-roadmap.md) for complete migration phases.
+>
+> **Current Phase**: Phase 1 - NodeStore Abstraction
+> - **Status**: 🚧 In Progress
+> - **Related Issues**: #462 (NodeStore Trait), #463 (TursoStore Implementation), #464 (SurrealDBStore Implementation)
+> - **Timeline**: 2 weeks (14 days)
+> - **Dependencies**: Phase 0 (Baseline) - ✅ Complete
+
 ## Overview
 
 This document describes the NodeStore trait abstraction layer for Epic #461 (SurrealDB Migration - Phase 1). The abstraction enables parallel implementations of different database backends (Turso/libsql, SurrealDB) without changing business logic in NodeService.
