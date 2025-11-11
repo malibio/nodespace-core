@@ -1,5 +1,17 @@
 # AI Architecture Choices
 
+> **⚠️ OUTDATED**: This document describes aspirational AI architecture (mistral.rs with LLM inference) that has **not been implemented**.
+>
+> **Current Implementation**:
+> - **What's Implemented**: Candle + ONNX for **embedding generation only** (384-dimensional vectors)
+> - **What's NOT Implemented**: LLM inference, chat capabilities, content generation
+> - **See Current Stack**: [`/docs/architecture/core/technology-stack.md`](../core/technology-stack.md#ai-integration-stack)
+> - **Implementation Status**: [`/docs/IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md#ai-integration)
+>
+> This document is kept for historical reference and may inform future LLM integration plans.
+
+---
+
 ## Overview
 
 This document explains the architectural decisions around AI integration in NodeSpace, comparing different approaches and justifying the choice of embedded mistral.rs with Gemma 3n-E4B-it 8B.

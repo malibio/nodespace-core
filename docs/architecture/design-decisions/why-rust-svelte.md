@@ -1,5 +1,7 @@
 # Why Rust + Svelte Technology Stack
 
+> **📋 Note**: This document describes the original technology stack rationale. Some details about AI integration (mistral.rs) reflect aspirational architecture. See [`technology-stack.md`](../core/technology-stack.md) for current implementation (Candle + ONNX for embeddings).
+
 ## Decision Summary
 
 NodeSpace uses **Rust** for the backend with **Svelte + TypeScript** for the frontend, delivered as a desktop application through **Tauri**. This combination was chosen after careful evaluation of alternatives to optimize for performance, developer experience, and long-term maintainability.

@@ -1,13 +1,20 @@
 # Post-MVP Architecture Roadmap
 
+> **📋 Status**: This is an aspirational roadmap documenting planned enhancements beyond MVP. Many described features are not yet implemented.
+>
+> **Current Implementation Status**: See [`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md) for what's actually built.
+> - **AI Integration**: Only embeddings implemented (Candle + ONNX), not full mistral.rs LLM
+> - **Query System**: Planned, not implemented
+> - See document notes below for accurate status
+
 ## Executive Summary
 
 NodeSpace's current architecture represents an exceptional foundation (9.5/10) for an AI-native knowledge management system. This roadmap outlines ambitious enhancements that will elevate the system to enterprise-grade capabilities (10/10) while maintaining the excellent architectural decisions already in place.
 
 **Current Strengths:**
 - Outstanding trait-based plugin architecture with service injection
-- Embedded mistral.rs AI integration with Gemma 3n-E4B-it 8B model
-- Real-time query system with intelligent dependency tracking
+- ~~Embedded mistral.rs AI integration with Gemma 3n-E4B-it 8B model~~ *(Planned - currently Candle + ONNX embeddings only)*
+- ~~Real-time query system with intelligent dependency tracking~~ *(Planned - not yet implemented)*
 - Comprehensive testing philosophy using real services
 - Desktop-first approach with all-in-one embedded capabilities
 

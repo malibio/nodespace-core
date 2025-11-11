@@ -3,7 +3,7 @@
 **Status**: Accepted
 **Date**: 2025-10-07
 **Decision Makers**: Frontend Architect, Development Team
-**Related**: [Persistence Architecture](../persistence-architecture.md)
+**Related**: [Persistence System](../persistence-system.md) (consolidated persistence guide)
 
 ## Context
 
@@ -150,7 +150,7 @@ Pure Event Bus would **conflate** these concerns.
 
 ### Mitigation
 
-- ✅ Create `persistence-architecture.md` documentation
+- ✅ Create `persistence-system.md` documentation (consolidated guide)
 - ✅ Add this ADR to explain the decision
 - ✅ Add code comments in key files
 - ✅ Update developer onboarding guide
@@ -186,11 +186,13 @@ No code changes required. The existing implementation is correct.
 
 ### Required Documentation
 
-1. ✅ **Persistence Architecture Guide** (`docs/architecture/persistence-architecture.md`)
+1. ✅ **Persistence System Guide** (`docs/architecture/persistence-system.md`)
    - When to use direct persistence
    - When to use Event Bus
-   - Code examples
-   - Testing patterns
+   - Complete service layer explanations
+   - Placeholder nodes documentation
+   - Code examples and testing patterns
+   - *(Note: Replaces previous `persistence-architecture.md` and consolidates 4 overlapping docs)*
 
 2. ✅ **This ADR** (`docs/architecture/decisions/dual-persistence-architecture.md`)
    - Decision rationale
