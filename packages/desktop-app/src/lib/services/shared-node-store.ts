@@ -549,7 +549,8 @@ export class SharedNodeStore {
           const dependencies: Array<string | (() => Promise<void>)> = [];
 
           // For structural changes, ensure ENTIRE ancestor chain is persisted (FOREIGN KEY)
-          if (isStructuralChange && updatedNode.parentId) {
+          // CRITICAL: Skip ancestor chain persistence if skipPersistence is true (placeholder nodes)
+          if (isStructuralChange && updatedNode.parentId && !options.skipPersistence) {
             dependencies.push(async () => {
               await this.ensureAncestorChainPersisted(updatedNode.parentId!);
             });
