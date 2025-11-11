@@ -461,13 +461,25 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Update sibling linked list
+    // IMPORTANT: Skip persistence for sibling pointer updates - these are local-only changes
+    // that will be persisted when the nodes are next saved with content/property changes
     if (insertAtBeginning) {
       // New node takes afterNode's place, so afterNode now comes after newNode
-      sharedNodeStore.updateNode(afterNodeId, { beforeSiblingId: nodeId }, viewerSource);
+      sharedNodeStore.updateNode(
+        afterNodeId,
+        { beforeSiblingId: nodeId },
+        viewerSource,
+        { skipPersistence: true }
+      );
     } else {
       // New node inserted after afterNode - update next sibling to point to new node
       if (nextSibling) {
-        sharedNodeStore.updateNode(nextSibling.id, { beforeSiblingId: nodeId }, viewerSource);
+        sharedNodeStore.updateNode(
+          nextSibling.id,
+          { beforeSiblingId: nodeId },
+          viewerSource,
+          { skipPersistence: true }
+        );
       }
     }
 

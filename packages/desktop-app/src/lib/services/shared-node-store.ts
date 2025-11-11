@@ -842,7 +842,6 @@ export class SharedNodeStore {
               this.updatePersistenceState(node.id, 'persisting');
 
               if (isPersistedToDatabase) {
-
                 try {
                   // Get current version for optimistic concurrency control
                   const currentVersion = node.version ?? 1;
