@@ -335,7 +335,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     insertAtBeginning?: boolean,
     originalNodeContent?: string,
     focusNewNode?: boolean,
-    paneId: string = DEFAULT_PANE_ID
+    paneId: string = DEFAULT_PANE_ID,
+    isInitialPlaceholder: boolean = false
   ): string {
     const afterNode = findNode(afterNodeId);
     if (!afterNode) {
@@ -448,9 +449,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ? siblings.find((n) => n.beforeSiblingId === afterNodeId)
       : null;
 
-    // Skip persistence for placeholder nodes - they'll be saved when user types content
-    // This prevents backend validation errors for empty text nodes
-    const skipPersistence = isPlaceholder;
+    // Skip persistence ONLY for initial viewer placeholder (when no children exist)
+    // All other nodes (including blank nodes created during editing) persist immediately
+    // This prevents UNIQUE constraint violations when indenting blank nodes
+    const skipPersistence = isInitialPlaceholder;
     sharedNodeStore.setNode(newNode, viewerSource, skipPersistence);
     _uiState[nodeId] = newUIState;
 
@@ -582,7 +584,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     insertAtBeginning: boolean = false,
     originalNodeContent?: string,
     focusNewNode?: boolean,
-    paneId: string = DEFAULT_PANE_ID
+    paneId: string = DEFAULT_PANE_ID,
+    isInitialPlaceholder: boolean = false
   ): string {
     return createNode(
       afterNodeId,
@@ -592,7 +595,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       insertAtBeginning,
       originalNodeContent,
       focusNewNode,
-      paneId
+      paneId,
+      isInitialPlaceholder
     );
   }
 
@@ -1773,6 +1777,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         expanded?: boolean;
         autoFocus?: boolean;
         inheritHeaderLevel?: number;
+        isInitialPlaceholder?: boolean;
       }
     ): void {
       // NOTE: We no longer cleanup unpersisted nodes here
@@ -1788,7 +1793,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       const defaults = {
         expanded: options?.expanded ?? true,
         autoFocus: options?.autoFocus ?? false,
-        inheritHeaderLevel: options?.inheritHeaderLevel ?? 0
+        inheritHeaderLevel: options?.inheritHeaderLevel ?? 0,
+        isInitialPlaceholder: options?.isInitialPlaceholder ?? false
       };
 
       // Compute depth for a node based on parent chain
@@ -1802,7 +1808,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       };
 
       // First pass: Add all nodes to SharedNodeStore
-      // Auto-detect source: empty text nodes are placeholders (viewer), others are from database
+      // For initial placeholder: skip persistence (ephemeral until content added)
+      // For database nodes: mark as persisted (already in database)
+      // For other nodes: persist normally
       const databaseSource = { type: 'database' as const, reason: 'initialization' };
       const viewerSource = {
         type: 'viewer' as const,
@@ -1814,7 +1822,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const isPlaceholder = node.nodeType === 'text' && node.content.trim() === '';
         const source = isPlaceholder ? viewerSource : databaseSource;
 
-        sharedNodeStore.setNode(node, source);
+        // Only skip persistence for initial viewer placeholder (when no children exist)
+        // All other nodes (including blank nodes created during editing) persist immediately
+        const skipPersistence = defaults.isInitialPlaceholder && isPlaceholder;
+
+        sharedNodeStore.setNode(node, source, skipPersistence);
         _uiState[node.id] = createDefaultUIState(node.id, {
           depth: 0, // Will be computed in second pass
           expanded: defaults.expanded,

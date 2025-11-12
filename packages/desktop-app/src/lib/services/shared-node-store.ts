@@ -647,21 +647,23 @@ export class SharedNodeStore {
       this.persistedNodeIds.add(node.id);
     }
 
-    // Check if node is a placeholder (node with only type-specific prefix, no actual content)
-    const isPlaceholder = isPlaceholderNode(node);
-    const isPlaceholderFromViewer = isPlaceholder && source.type === 'viewer' && isNewNode;
-
     // Phase 2.4: Persist to database
-    // IMPORTANT: For NEW nodes from viewer, persist immediately (including empty ones!)
+    // IMPORTANT: For NEW nodes from viewer, persist immediately (including blank nodes!)
     // For UPDATES from viewer, skip persistence - BaseNodeViewer handles with debouncing
     // This ensures createNode() persistence works while avoiding duplicate writes on updates
     //
-    // EXCEPTION: Placeholders should persist nodeType but NOT content (to avoid backend validation errors)
+    // Phase 1 of Issue #479: Eliminate ephemeral nodes during editing
+    // - Only skip persistence when explicitly requested via skipPersistence flag
+    // - This flag is ONLY true for initial viewer placeholder (when no children exist)
+    // - All other blank nodes (created via Enter key, etc.) persist immediately
     const persistBehavior = this.determinePersistenceBehavior(source, options);
-    if (!isPlaceholderFromViewer && persistBehavior.shouldPersist) {
+    if (persistBehavior.shouldPersist) {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
       if (shouldPersist) {
+        // Check if node is a placeholder (for specialized handling, not for skipping persistence)
+        const isPlaceholder = isPlaceholderNode(node);
+
         // Delegate to PersistenceCoordinator
         const dependencies: Array<string | (() => Promise<void>)> = [];
 

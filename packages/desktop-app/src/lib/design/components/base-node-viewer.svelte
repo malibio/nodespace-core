@@ -790,7 +790,8 @@
           nodeManager.initializeNodes([viewerPlaceholder], {
             expanded: true,
             autoFocus: true,
-            inheritHeaderLevel: 0
+            inheritHeaderLevel: 0,
+            isInitialPlaceholder: true
           });
         } else {
           // Reuse existing placeholder(s) from previous viewer instance
