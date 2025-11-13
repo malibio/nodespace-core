@@ -380,7 +380,11 @@ async fn update_node(
         )
         .await?;
 
-    tracing::info!("✅ Updated node: {} (new version: {})", id, updated_node.version);
+    tracing::info!(
+        "✅ Updated node: {} (new version: {})",
+        id,
+        updated_node.version
+    );
     Ok(Json(updated_node))
     // Write lock is automatically released when _write_guard goes out of scope
 }
