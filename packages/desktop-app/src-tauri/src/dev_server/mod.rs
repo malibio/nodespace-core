@@ -37,6 +37,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 
+use nodespace_core::operations::NodeOperations;
 use nodespace_core::services::NodeEmbeddingService;
 use nodespace_core::{DatabaseService, NodeService};
 
@@ -94,6 +95,7 @@ type SharedService<T> = Arc<RwLock<Arc<T>>>;
 pub struct AppState {
     pub db: SharedService<DatabaseService>,
     pub node_service: SharedService<NodeService>,
+    pub node_operations: SharedService<NodeOperations>,
     pub embedding_service: SharedService<NodeEmbeddingService>,
     pub write_lock: Arc<Mutex<()>>,
 }
@@ -171,6 +173,7 @@ fn cors_layer() -> CorsLayer {
 ///
 /// * `db` - Database service instance
 /// * `node_service` - Node service instance
+/// * `node_operations` - Node operations instance (with OCC enforcement)
 /// * `embedding_service` - Embedding service instance
 /// * `port` - Port to listen on (typically 3001)
 ///
@@ -180,12 +183,14 @@ fn cors_layer() -> CorsLayer {
 pub async fn start_server(
     db: SharedService<DatabaseService>,
     node_service: SharedService<NodeService>,
+    node_operations: SharedService<NodeOperations>,
     embedding_service: SharedService<NodeEmbeddingService>,
     port: u16,
 ) -> anyhow::Result<()> {
     let state = AppState {
         db,
         node_service,
+        node_operations,
         embedding_service,
         write_lock: Arc::new(Mutex::new(())),
     };
