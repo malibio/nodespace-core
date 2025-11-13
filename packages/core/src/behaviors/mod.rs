@@ -296,28 +296,26 @@ impl NodeBehavior for TextNodeBehavior {
         "text"
     }
 
-    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Backend validates data integrity: empty nodes are rejected.
-        // Frontend manages placeholder UX: empty nodes stay in memory until content added.
+    fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
+        // Issue #479 Phase 1: Allow blank text nodes
+        // Changed behavior: Backend now accepts blank text nodes
         //
-        // Architecture:
-        // - Frontend: Creates placeholder nodes in _nodes Map when user presses Enter
-        // - Frontend: Only sends nodes to backend AFTER user adds content
-        // - Backend: Enforces data integrity by rejecting empty content
+        // Architecture Change (Issue #479):
+        // - Frontend: Persists blank nodes immediately (with 500ms debounce)
+        // - Backend: Accepts blank text nodes (user responsible for managing them)
+        // - User Experience: Users can create blank nodes via Enter key, burden is on user to maintain or delete
         //
-        // This separation ensures:
-        // 1. Good UX: Users can create nodes via Enter key
-        // 2. Data integrity: Database only contains meaningful content
-        // 3. Clear contract: Frontend handles placeholders, backend validates data
+        // This change:
+        // 1. Eliminates ephemeral-during-editing behavior
+        // 2. Prevents UNIQUE constraint violations when indenting blank nodes
+        // 3. Simplifies frontend persistence logic (Phase 2 will remove deferred update queue)
         //
-        // Unicode Validation:
-        // - Uses is_empty_or_whitespace() to handle Unicode whitespace (U+200B, U+00A0, etc.)
-        // - Rust's char.is_whitespace() correctly identifies all Unicode whitespace
-        if is_empty_or_whitespace(&node.content) {
-            return Err(NodeValidationError::MissingField(
-                "Text nodes must have content".to_string(),
-            ));
-        }
+        // Previous behavior (before Issue #479):
+        // - Backend rejected blank nodes with validation error
+        // - Frontend had to manage ephemeral nodes until content was added
+        // - Caused database constraint issues during indent operations
+
+        // Blank text nodes are now allowed - no validation required
         Ok(())
     }
 

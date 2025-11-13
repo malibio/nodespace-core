@@ -766,16 +766,15 @@
         const existingChildren = sharedNodeStore.getNodesForParent(nodeId);
 
         if (existingChildren.length === 0) {
-          // No children at all - create viewer-local placeholder
-          // This placeholder will be added to sharedNodeStore by initializeNodes()
-          // It becomes a real persisted node only when content is added
-          // CRITICAL: parentId must be null so it's NOT visible to other viewers
+          // No children at all - create initial placeholder
+          // Issue #479 Phase 1: This placeholder is now ephemeral (skipPersistence=true)
+          // but if user adds content, it will persist with correct parentId
           const placeholderId = globalThis.crypto.randomUUID();
           viewerPlaceholder = {
             id: placeholderId,
             nodeType: 'text',
             content: '',
-            parentId: null, // No parent - viewer-local only until content is typed
+            parentId: nodeId, // Set to viewer's container so if persisted, it's properly parented
             containerNodeId: null,
             beforeSiblingId: null,
             createdAt: new Date().toISOString(),
@@ -1499,7 +1498,7 @@
         id: placeholderId,
         nodeType: 'text',
         content: '',
-        parentId: null, // Viewer-local only
+        parentId: nodeId, // Issue #479: Set to viewer's container so if persisted, it's properly parented
         containerNodeId: null,
         beforeSiblingId: null,
         createdAt: new Date().toISOString(),
@@ -1510,10 +1509,12 @@
       };
 
       // Initialize NodeManager with the placeholder
+      // Issue #479: Mark as initial placeholder to skip persistence until content is added
       nodeManager.initializeNodes([viewerPlaceholder], {
         expanded: true,
         autoFocus: false, // Don't steal focus when auto-creating
-        inheritHeaderLevel: 0
+        inheritHeaderLevel: 0,
+        isInitialPlaceholder: true // Mark as ephemeral until user adds content
       });
     }
     // Clear placeholder when real children exist
