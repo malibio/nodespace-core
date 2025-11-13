@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document analyzes the cost implications of our core architectural decision to use **Turso embedded replicas** versus the alternative **Supabase** approach for NodeSpace's data synchronization and collaboration features.
+This document analyzes the cost implications of our core architectural decision to use **SurrealDB embedded replicas** versus the alternative **Supabase** approach for NodeSpace's data synchronization and collaboration features.
 
 ## Executive Summary
 

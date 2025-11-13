@@ -12,7 +12,7 @@ The NodeSpace Business Logic Layer provides the core data management, node opera
 - **Clear boundaries**: Business logic vs AI/ML services
 
 ### 2. Local-First Data Architecture
-- **Embedded Turso database**: SQLite-compatible with native vector search
+- **Embedded SurrealDB**: SQLite-compatible with native vector search
 - **Offline-complete**: Full functionality without network dependency
 - **Sync-ready**: Architecture prepared for multi-device synchronization
 
