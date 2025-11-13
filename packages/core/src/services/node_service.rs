@@ -1612,7 +1612,6 @@ impl NodeService {
         container_node_id: &str,
     ) -> Result<Vec<Node>, NodeServiceError> {
         let filter = NodeFilter::new().with_container_node_id(container_node_id.to_string());
-
         self.query_nodes(filter).await
     }
 

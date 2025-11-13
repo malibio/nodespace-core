@@ -528,15 +528,23 @@
   // This watcher awaits contentSavePhasePromise to ensure new nodes are saved
   // before structural updates reference them. This prevents FOREIGN KEY errors.
   //
-  // IMPORTANT: saveNodeWithParent() saves BOTH content AND structure
-  // This means new nodes don't need a separate structural update - they're already persisted
-  // This watcher only handles structural changes to EXISTING nodes (indent, outdent, reorder)
+  // ISSUE #479: Track PERSISTED structure vs in-memory structure
+  // When Enter+Tab happens rapidly, node is created with wrong parentId, then
+  // immediately indented in SharedNodeStore. The structural watcher must detect
+  // this mismatch and persist the correction.
   // ============================================================================
   // previousStructure is updated in three places (all necessary):
   // 1. Deletion watcher (line ~218): Cleans up beforeSiblingId references to deleted nodes
-  // 2. This watcher (line ~388): Tracks unchanged nodes to prevent redundant updates
+  // 2. This watcher (line ~388): Tracks nodes on first sight
   // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
   let previousStructure = new Map<
+    string,
+    { parentId: string | null; beforeSiblingId: string | null }
+  >();
+
+  // Track what structure was actually persisted to database (#479)
+  // This allows detecting when in-memory state differs from persisted state
+  let persistedStructure = new Map<
     string,
     { parentId: string | null; beforeSiblingId: string | null }
   >();
@@ -610,10 +618,9 @@
     }> = [];
 
     for (const node of visibleNodes) {
-      // Skip placeholder nodes
-      if (node.isPlaceholder) {
-        continue;
-      }
+      // Issue #479: Do NOT skip placeholder nodes in structural watcher
+      // isPlaceholder is a UI-only property for viewer styling
+      // All structural changes must be persisted regardless of placeholder status
 
       const currentStructure = {
         parentId: node.parentId,
@@ -621,13 +628,28 @@
       };
 
       const prevStructure = previousStructure.get(node.id);
+      const persisted = persistedStructure.get(node.id);
 
-      if (
+      // Issue #479: Check if current structure differs from what was persisted
+      // This catches cases where Tab indent happened after node was created but before structural watcher ran
+      const needsPersistenceCorrection =
+        persisted &&
+        (persisted.parentId !== currentStructure.parentId ||
+          persisted.beforeSiblingId !== currentStructure.beforeSiblingId);
+
+      if (needsPersistenceCorrection) {
+        // Current in-memory structure differs from persisted - fix database
+        updates.push({
+          nodeId: node.id,
+          parentId: node.parentId,
+          beforeSiblingId: node.beforeSiblingId
+        });
+      } else if (
         prevStructure &&
         (prevStructure.parentId !== currentStructure.parentId ||
           prevStructure.beforeSiblingId !== currentStructure.beforeSiblingId)
       ) {
-        // Structural change detected - queue for persistence
+        // Normal structural change detected - queue for persistence
         updates.push({
           nodeId: node.id,
           parentId: node.parentId,
@@ -635,9 +657,15 @@
         });
       } else {
         // No change detected OR new node - update tracking to current state
-        // New nodes have their structure saved via saveNodeWithParent() in content save watcher
-        // So we can safely track them here to avoid redundant structural updates
         trackStructureChange(node.id, currentStructure);
+        // Issue #479: For nodes loaded from database (first time seeing), query their persisted structure
+        // Don't assume current = persisted, as Enter+Tab can create mismatch
+        if (!persisted && sharedNodeStore.isNodePersisted(node.id)) {
+          // Node exists in database - current structure IS the persisted one (loaded from DB)
+          persistedStructure.set(node.id, currentStructure);
+        }
+        // If node is NOT persisted yet (new node being created), don't track persisted structure
+        // until it actually gets persisted (handled in success callback above)
       }
     }
 
@@ -676,10 +704,13 @@
 
         // Update tracking for succeeded updates
         for (const update of result.succeeded) {
-          trackStructureChange(update.nodeId, {
+          const structure = {
             parentId: update.parentId,
             beforeSiblingId: update.beforeSiblingId
-          });
+          };
+          trackStructureChange(update.nodeId, structure);
+          // Issue #479: Track what was actually persisted to database
+          persistedStructure.set(update.nodeId, structure);
         }
 
         // Handle failed updates: rollback in-memory state and emit error event
