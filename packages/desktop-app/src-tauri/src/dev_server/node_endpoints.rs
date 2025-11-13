@@ -341,11 +341,12 @@ async fn get_node(
 /// ```
 ///
 /// Returns 409 Conflict if version mismatch (version conflict)
+/// Returns updated Node with new version to keep frontend in sync
 async fn update_node(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<UpdateNodeRequest>,
-) -> Result<StatusCode, HttpError> {
+) -> Result<Json<Node>, HttpError> {
     // Acquire write lock to serialize database writes (Issue #266)
     let _write_guard = state.write_lock.lock().await;
 
@@ -368,7 +369,8 @@ async fn update_node(
     };
 
     // Update via NodeOperations with version check
-    operations
+    // IMPORTANT: Return the updated Node so frontend can refresh its local version
+    let updated_node = operations
         .update_node(
             &id,
             request.version,
@@ -378,8 +380,8 @@ async fn update_node(
         )
         .await?;
 
-    tracing::info!("✅ Updated node: {}", id);
-    Ok(StatusCode::OK)
+    tracing::info!("✅ Updated node: {} (new version: {})", id, updated_node.version);
+    Ok(Json(updated_node))
     // Write lock is automatically released when _write_guard goes out of scope
 }
 

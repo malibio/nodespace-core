@@ -305,9 +305,10 @@ pub async fn update_node(
     id: String,
     version: i64,
     update: NodeUpdate,
-) -> Result<(), CommandError> {
+) -> Result<Node, CommandError> {
     // NodeOperations.update_node only handles content/type/properties
     // For hierarchy changes, use move_node() or reorder_node()
+    // IMPORTANT: Return the updated Node so frontend can refresh its local version
     operations
         .update_node(
             &id,
@@ -317,7 +318,6 @@ pub async fn update_node(
             update.properties,
         )
         .await
-        .map(|_| ()) // Discard the returned Node, command just needs Ok(())
         .map_err(Into::into)
 }
 
