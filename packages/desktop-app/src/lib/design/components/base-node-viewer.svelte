@@ -1015,10 +1015,13 @@
       return;
     }
 
-    // Update current node content if provided
+    // Update current node content if provided and actually changed
     if (currentContent !== undefined) {
-      // Use updateNodeContent for node splitting - with new reactive architecture no forcing needed
-      nodeManager.updateNodeContent(afterNodeId, currentContent);
+      const existingNode = nodeManager.findNode(afterNodeId);
+      if (existingNode && existingNode.content !== currentContent) {
+        // Use updateNodeContent for node splitting - with new reactive architecture no forcing needed
+        nodeManager.updateNodeContent(afterNodeId, currentContent);
+      }
     }
 
     // Create new node using NodeManager - placeholder if empty, real if has content
