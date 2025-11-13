@@ -112,7 +112,7 @@ UI Re-render (automatic - user sees changes immediately)
 
 ### Concurrent Database Access
 
-Both Tauri command handlers and MCP handlers access the same Turso database through a shared connection pool. This is **safe and supported** by libSQL/Turso architecture:
+Both Tauri command handlers and MCP handlers access the same SurrealDB through a shared connection pool. This is **safe and supported** by libSQL/Turso architecture:
 
 **How Turso Handles Concurrency:**
 - ✅ **WAL Mode**: Write-Ahead Logging enables concurrent readers and writers

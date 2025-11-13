@@ -558,12 +558,12 @@ INSERT INTO nodes (
 - Field `"amount": "number"` → Primitive type
 - Field `"line_items": "json"` → Primitive JSON type
 
-## libsql Integration Patterns
+## surrealdb Integration Patterns
 
 ### 1. Pure JSON Queries (All Entities)
 
 ```rust
-use libsql::{Database, de};
+use surrealdb::{Database, de};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -688,7 +688,7 @@ impl IndexManager {
 
 ```rust
 // Pure JSON schema means NO migrations to user machines
-impl DatabaseService {
+impl SurrealStore {
     // Initial database setup (one-time)
     pub async fn initialize_database(&self) -> Result<()> {
         self.db.execute(

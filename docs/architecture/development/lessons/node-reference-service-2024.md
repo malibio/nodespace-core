@@ -47,7 +47,7 @@ The NodeReferenceService is fully implemented with all core features from Issue 
 
 - `searchNodes(query: string, nodeType?: string): BaseNode[]`
 - `createNode(nodeType: string, content: string): BaseNode`
-- Database integration with MockDatabaseService
+- Database integration with MockSurrealStore
 - Content-based search with type filtering
 
 **6. ContentProcessor Integration**
@@ -140,7 +140,7 @@ src/lib/services/
 ├── EventTypes.ts                     # Event type definitions
 ├── EventBus.ts                       # Real-time coordination
 ├── contentProcessor.ts               # Content processing integration
-└── MockDatabaseService.ts            # Database interface
+└── MockSurrealStore.ts            # Database interface
 ```
 
 **Test Coverage:**
@@ -159,7 +159,7 @@ src/tests/services/
 - ✅ EnhancedNodeManager - Enhanced node operations
 - ✅ HierarchyService - Efficient hierarchy operations
 - ✅ NodeOperationsService - Advanced node operations
-- ✅ MockDatabaseService - Mentions array support
+- ✅ MockSurrealStore - Mentions array support
 - ✅ ContentProcessor - Enhanced content processing
 
 ## API Examples

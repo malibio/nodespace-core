@@ -603,7 +603,7 @@ project { id, budget, deadline, ... }
 
 ```rust
 async fn migrate_turso_to_surrealdb(
-    turso: &DatabaseService,
+    turso: &SurrealStore,
     surreal: &Surreal<Client>
 ) -> Result<()> {
     // 1. Fetch all nodes from Turso

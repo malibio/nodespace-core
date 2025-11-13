@@ -39,7 +39,7 @@ NodeSpace employs a **creator-first freemium model** with **local AI foundation*
 **Technical Architecture**:
 ```typescript
 interface SoloCreatorTier {
-  storage: 'Local Turso database (unlimited)',
+  storage: 'Local SurrealDB (unlimited)',
   ai: 'Local Gemma 3 inference (unlimited queries)',
   content_generation: 'Unlimited local content creation',
   research_tools: 'Unlimited research and note-taking',
