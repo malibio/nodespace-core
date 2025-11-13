@@ -767,8 +767,8 @@
 
         if (existingChildren.length === 0) {
           // No children at all - create initial placeholder
-          // Issue #479 Phase 1: This placeholder is now ephemeral (skipPersistence=true)
-          // but if user adds content, it will persist with correct parentId
+          // Issue #479 Phase 1: Placeholder is completely viewer-local (NOT added to SharedNodeStore)
+          // It's rendered via nodesToRender derived state and promoted to real node when user adds content
           const placeholderId = globalThis.crypto.randomUUID();
           viewerPlaceholder = {
             id: placeholderId,
@@ -784,14 +784,9 @@
             mentions: []
           };
 
-          // Initialize NodeManager with the local placeholder
-          // initializeNodes() will automatically add it to sharedNodeStore with skipPersistence=true
-          nodeManager.initializeNodes([viewerPlaceholder], {
-            expanded: true,
-            autoFocus: true,
-            inheritHeaderLevel: 0,
-            isInitialPlaceholder: true
-          });
+          // DON'T call initializeNodes() - keep placeholder completely viewer-local!
+          // It will be rendered by nodesToRender derived state (line 1475-1487)
+          // and promoted to real node when user adds content (line 1746-1772)
         } else {
           // Reuse existing placeholder(s) from previous viewer instance
           viewerPlaceholder = null;
@@ -1508,14 +1503,10 @@
         mentions: []
       };
 
-      // Initialize NodeManager with the placeholder
-      // Issue #479: Mark as initial placeholder to skip persistence until content is added
-      nodeManager.initializeNodes([viewerPlaceholder], {
-        expanded: true,
-        autoFocus: false, // Don't steal focus when auto-creating
-        inheritHeaderLevel: 0,
-        isInitialPlaceholder: true // Mark as ephemeral until user adds content
-      });
+      // DON'T call initializeNodes() - keep placeholder completely viewer-local!
+      // Issue #479: Placeholder should NOT be in SharedNodeStore
+      // It will be rendered by nodesToRender derived state (line 1475-1487)
+      // and promoted to real node when user adds content (line 1746-1772)
     }
     // Clear placeholder when real children exist
     else if (realChildren.length > 0 && viewerPlaceholder) {

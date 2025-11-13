@@ -1832,7 +1832,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           expanded: defaults.expanded,
           autoFocus: defaults.autoFocus,
           inheritHeaderLevel: defaults.inheritHeaderLevel,
-          isPlaceholder: false
+          // Issue #479: Mark as placeholder if it's the initial viewer placeholder
+          // This prevents the content watcher from persisting viewer-local placeholders
+          isPlaceholder: skipPersistence && isPlaceholder
         });
       }
 
