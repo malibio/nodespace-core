@@ -1029,15 +1029,15 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Invalid: empty content (backend rejects empty nodes)
+        // Issue #479: Blank text nodes are now allowed (frontend manages persistence)
         let mut empty_node = valid_node.clone();
         empty_node.content = "".to_string();
-        assert!(behavior.validate(&empty_node).is_err());
+        assert!(behavior.validate(&empty_node).is_ok());
 
-        // Invalid: whitespace-only content
+        // Issue #479: Whitespace-only content is also allowed
         let mut whitespace_node = valid_node.clone();
         whitespace_node.content = "   ".to_string();
-        assert!(behavior.validate(&whitespace_node).is_err());
+        assert!(behavior.validate(&whitespace_node).is_ok());
     }
 
     #[test]
@@ -1045,54 +1045,57 @@ mod tests {
         let behavior = TextNodeBehavior;
         let base_node = Node::new("text".to_string(), "Valid".to_string(), None, json!({}));
 
-        // Zero-width space (U+200B) - should be rejected
+        // Issue #479: All whitespace (including Unicode) is now allowed
+        // Backend no longer validates content - frontend manages blank node persistence
+
+        // Zero-width space (U+200B) - now allowed
         let mut node = base_node.clone();
         node.content = "\u{200B}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Zero-width space should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Zero-width space should be allowed per Issue #479"
         );
 
-        // Zero-width non-joiner (U+200C) - should be rejected
+        // Zero-width non-joiner (U+200C) - now allowed
         node.content = "\u{200C}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Zero-width non-joiner should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Zero-width non-joiner should be allowed per Issue #479"
         );
 
-        // Zero-width joiner (U+200D) - should be rejected
+        // Zero-width joiner (U+200D) - now allowed
         node.content = "\u{200D}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Zero-width joiner should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Zero-width joiner should be allowed per Issue #479"
         );
 
-        // Non-breaking space (U+00A0) - should be rejected
+        // Non-breaking space (U+00A0) - now allowed
         node.content = "\u{00A0}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Non-breaking space should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Non-breaking space should be allowed per Issue #479"
         );
 
-        // Line separator (U+2028) - should be rejected
+        // Line separator (U+2028) - now allowed
         node.content = "\u{2028}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Line separator should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Line separator should be allowed per Issue #479"
         );
 
-        // Paragraph separator (U+2029) - should be rejected
+        // Paragraph separator (U+2029) - now allowed
         node.content = "\u{2029}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Paragraph separator should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Paragraph separator should be allowed per Issue #479"
         );
 
-        // Mixed Unicode whitespace - should be rejected
+        // Mixed Unicode whitespace - now allowed
         node.content = "\u{200B}\u{00A0}\u{2028}".to_string();
         assert!(
-            behavior.validate(&node).is_err(),
-            "Mixed Unicode whitespace should be rejected"
+            behavior.validate(&node).is_ok(),
+            "Mixed Unicode whitespace should be allowed per Issue #479"
         );
 
         // Valid: Actual content with Unicode whitespace mixed in - should be accepted

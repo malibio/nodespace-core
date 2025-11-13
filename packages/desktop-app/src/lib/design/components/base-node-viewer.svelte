@@ -784,7 +784,8 @@
         const parentNode = await tauriNodeService.getNode(nodeId);
         if (parentNode) {
           // Add parent node to shared store so header can access it
-          sharedNodeStore.setNode(parentNode, { type: 'database', reason: 'loaded-from-db' }, true);
+          // Database source type automatically marks node as persisted
+          sharedNodeStore.setNode(parentNode, { type: 'database', reason: 'loaded-from-db' });
         }
       }
 

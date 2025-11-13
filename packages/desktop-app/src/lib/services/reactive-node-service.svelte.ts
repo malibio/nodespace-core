@@ -310,27 +310,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Get children from SharedNodeStore
       // NOTE: Parent may not exist yet (e.g., virtual date nodes) - this is OK
       const nodesFromStore = sharedNodeStore.getNodesForParent(viewParentId);
-      // DEBUG: Log what SharedNodeStore returns
-      console.log(
-        '[getVisibleNodesForParent] SharedNodeStore returned:',
-        nodesFromStore.length,
-        'nodes for parent:',
-        viewParentId?.slice(0, 8),
-        nodesFromStore.map((n) => ({
-          id: n.id.slice(0, 8),
-          content: n.content || '(blank)',
-          parentId: n.parentId?.slice(0, 8)
-        }))
-      );
       const childIds = nodesFromStore.map((n) => n.id);
       // Sort children according to beforeSiblingId linked list
       viewRoots = sortChildrenByBeforeSiblingId(childIds, viewParentId);
-      console.log(
-        '[getVisibleNodesForParent] After sorting:',
-        viewRoots.length,
-        'root nodes:',
-        viewRoots.map((id) => id.slice(0, 8))
-      );
     } else {
       viewRoots = _rootNodeIds;
     }

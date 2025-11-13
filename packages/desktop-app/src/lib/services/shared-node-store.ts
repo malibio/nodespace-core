@@ -461,8 +461,6 @@ export class SharedNodeStore {
            * Add dependency when:
            * - beforeSiblingId is set
            * - NOT already persisted to database
-           *
-           * NOTE: Placeholder check is done earlier (line 263-274) to avoid FOREIGN KEY violations
            */
           if (
             updatedNode.beforeSiblingId &&
