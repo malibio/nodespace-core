@@ -54,6 +54,22 @@ use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 
 /// Internal struct matching SurrealDB's schema with 'uuid' field
+///
+/// # Schema Evolution
+///
+/// - **v1.0** (Issue #470): Initial SurrealDB schema migration
+///   - Core node fields (uuid, node_type, content, parent_id, etc.)
+///   - Embedding vector storage
+///   - Version-based optimistic concurrency control
+///
+/// - **v1.1** (Issue #481): Advanced SurrealDB features
+///   - Added `embedding_stale` field for tracking embedding staleness
+///   - Default: `false` (backward compatible via `#[serde(default)]`)
+///   - Existing nodes without this field are treated as not stale
+///   - Automatically set to `true` when content changes, cleared when embedding regenerated
+///
+/// All new fields use `#[serde(default)]` to maintain backward compatibility with
+/// existing database records that don't have these fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SurrealNode {
     uuid: String,
@@ -1099,6 +1115,12 @@ impl SurrealStore {
     /// Updates multiple nodes in a single atomic transaction. Either all updates
     /// succeed or all fail (rollback), ensuring data consistency.
     ///
+    /// # Performance Considerations
+    ///
+    /// - **Optimal Batch Size:** 10-100 nodes (transaction overhead minimal)
+    /// - **Large Batches:** >1000 nodes may hit transaction timeout (consider chunking)
+    /// - **Validation Cost:** Pre-fetches all nodes for existence check
+    ///
     /// # Arguments
     ///
     /// * `updates` - Vector of (node_id, NodeUpdate) tuples to apply
@@ -1106,7 +1128,7 @@ impl SurrealStore {
     /// # Returns
     ///
     /// * `Ok(())` - All updates succeeded
-    /// * `Err(_)` - Transaction failed and rolled back
+    /// * `Err(_)` - Transaction failed and rolled back, or batch size exceeded limit
     ///
     /// # Examples
     ///
@@ -1135,6 +1157,16 @@ impl SurrealStore {
     pub async fn bulk_update(&self, updates: Vec<(String, NodeUpdate)>) -> Result<()> {
         if updates.is_empty() {
             return Ok(());
+        }
+
+        // Prevent excessive batch sizes that could cause transaction timeouts
+        const MAX_BATCH_SIZE: usize = 1000;
+        if updates.len() > MAX_BATCH_SIZE {
+            return Err(anyhow::anyhow!(
+                "Bulk update batch size ({}) exceeds maximum ({}). Consider chunking the updates into smaller batches.",
+                updates.len(),
+                MAX_BATCH_SIZE
+            ));
         }
 
         // Build transaction query

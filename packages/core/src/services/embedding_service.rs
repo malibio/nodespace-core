@@ -1,16 +1,28 @@
 //! Node Embedding Service
 //!
-//! **STATUS: Database tracking complete, NLP integration pending**
+//! **STATUS: Database tracking complete (Issue #481), NLP integration pending (Issue #TBD)**
 //!
-//! Database-level embedding staleness tracking implemented in Issue #481.
-//! Full embedding generation will be re-enabled in a future issue after
-//! NLP engine integration work is complete.
+//! ## What's Complete
 //!
-//! **Future Work (separate issue):**
-//! - Update constructor to take Arc<SurrealStore>
-//! - Migrate all database operations to SurrealStore methods
-//! - Implement SurrealDB-native vector search
-//! - Test embedding generation and search functionality
+//! - ✅ Database-level staleness tracking (`mark_embedding_stale`, `get_nodes_with_stale_embeddings`)
+//! - ✅ Embedding vector storage in SurrealDB (`update_embedding` method)
+//! - ✅ Atomic update operations with version control
+//! - ✅ Service stubs in place for seamless future integration
+//!
+//! ## What's Pending (Future Issue #TBD - NLP Integration)
+//!
+//! - ⏳ NLP engine integration for embedding generation
+//! - ⏳ Background batch processing of stale embeddings
+//! - ⏳ Vector similarity search implementation
+//! - ⏳ Re-enable embedding tests with SurrealStore
+//!
+//! **Migration Path:**
+//! When NLP integration is ready:
+//! 1. Update constructor to take `Arc<SurrealStore>`
+//! 2. Implement `embed_container()` using SurrealStore methods
+//! 3. Use `get_nodes_with_stale_embeddings()` for batch processing
+//! 4. Call `update_embedding()` to store generated vectors and clear stale flag
+//! 5. Implement SurrealDB-native vector search
 
 use crate::models::Node;
 use crate::services::error::NodeServiceError;
