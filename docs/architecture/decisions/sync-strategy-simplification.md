@@ -8,7 +8,7 @@ Accepted
 During architectural planning, we considered multiple sync strategies for NodeSpace:
 
 1. **User Cloud Sync**: Allow users to point their database to sync folders (iCloud, Dropbox, etc.)
-2. **Managed Cloud Sync**: Provide our own cloud sync service using Turso embedded replicas
+2. **Managed Cloud Sync**: Provide our own cloud sync service using SurrealDB embedded replicas
 3. **Hybrid Approach**: Support both user cloud and managed sync
 
 After detailed analysis of the technical complexity, user experience implications, and business model alignment, we need to make a strategic decision about which approach to implement.
@@ -55,7 +55,7 @@ We will implement **Managed Cloud Sync Only** with the following architecture:
 interface NodeSpaceTiers {
   // Tier 1: Local Only (Open Source)
   local: {
-    storage: 'Local Turso embedded only',
+    storage: 'Local SurrealDB embedded only',
     features: 'All core functionality unlimited',
     sync: 'None (single device)',
     cost: 'Free forever',
@@ -66,7 +66,7 @@ interface NodeSpaceTiers {
   cloudSync: {
     storage: 'Local Turso + Cloud Turso sync',
     features: 'Multi-device sync, cloud backup',
-    sync: 'Real-time via Turso embedded replicas',
+    sync: 'Real-time via SurrealDB embedded replicas',
     cost: 'Usage-based limits',
     target: 'Individual users wanting convenience'
   },
@@ -110,7 +110,7 @@ class CloudEnabledNodeSpace extends NodeSpaceCore {
     // Upgrade local database to include Turso cloud sync
     this.localDb = createClient({
       url: 'file:local.db',
-      syncUrl: `libsql://${this.userId}.turso.tech`,
+      syncUrl: `surrealdb://${this.userId}.turso.tech`,
       authToken: apiKey,
       syncInterval: 60000,  // Real-time sync
       encryptionKey: this.encryptionKey

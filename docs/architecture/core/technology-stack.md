@@ -2,7 +2,7 @@
 
 ## Overview
 
-NodeSpace's technology stack is carefully chosen to provide optimal performance, developer experience, and maintainability for an AI-native desktop application. The architecture centers on a **Tauri desktop application** with **embedded Turso database** and **TypeScript services**, creating a unified frontend-centric approach for sophisticated knowledge management capabilities.
+NodeSpace's technology stack is carefully chosen to provide optimal performance, developer experience, and maintainability for an AI-native desktop application. The architecture centers on a **Tauri desktop application** with **embedded SurrealDB** and **Rust/TypeScript services**, creating a unified approach for sophisticated knowledge management capabilities with direct database access and zero abstraction overhead.
 
 ## Core Architecture
 
@@ -36,13 +36,13 @@ NodeSpace's technology stack is carefully chosen to provide optimal performance,
 ```toml
 [dependencies]
 # Database layer
-libsql = "0.4"                  # Turso embedded (NOT sqlx)
+surrealdb = "2.1"               # SurrealDB embedded (RocksDB storage)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # AI Integration
-llama-cpp-rs = "0.5"            # Local LLM inference
-fastembed = "0.7"               # Embedding generation
+llama-cpp-rs = "0.5"            # Local LLM inference (future)
+fastembed = "0.7"               # Embedding generation (future)
 
 # MCP Server
 mcp-sdk = "0.1"                 # Model Context Protocol
@@ -57,10 +57,11 @@ validator = "0.18"
 ```
 
 **Rust Architecture Patterns:**
-- **Pure JSON Schema**: All entity data in JSON properties field (no ALTER TABLE migrations)
+- **Direct SurrealDB Access**: Zero abstraction overhead, single database backend
+- **Pure JSON Schema**: All entity data in JSON properties field (SCHEMALESS tables)
 - **Schema-as-Node**: Schemas stored as nodes with `node_type = "schema"`
-- **Rule-Based Indexing**: Dynamic JSON path indexes based on query frequency
-- **Auto-Reference Detection**: Primitive vs entity type detection at runtime
+- **Graph Relations**: Native SurrealDB RELATE for mentions and backlinks
+- **Optimistic Concurrency**: Version-based conflict detection
 - **MCP Exposure**: Business logic accessible to AI agents via stdio protocol
 
 ### Frontend: Svelte
@@ -207,7 +208,7 @@ pub enum AIBackend {
 - **Schema-as-Node**: Schemas stored as nodes, no dynamic table creation
 - **Rule-Based Indexing**: JSON path indexes created based on query frequency (not LLM-driven)
 - **Performance**: JSON path indexes (10-50ms) for frequently queried fields
-- **Rust Integration**: Direct libsql integration (NOT sqlx or TypeScript clients)
+- **Rust Integration**: Direct surrealdb integration (NOT sqlx or TypeScript clients)
 - **Vector Search**: Built-in F32_BLOB vector support with similarity search
 - **Sync Ready**: Embedded replicas enable seamless cloud sync (free → premium tier)
 - **SQLite Compatibility**: Standard SQL interface with JSON operations
