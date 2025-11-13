@@ -1,11 +1,12 @@
 //! Node Embedding Service
 //!
-//! **STATUS: TEMPORARILY DISABLED** (Issue #481)
+//! **STATUS: Database tracking complete, NLP integration pending**
 //!
-//! This module is temporarily stubbed out during the SurrealDB migration.
-//! Embedding generation will be re-enabled after SurrealDB integration is complete.
+//! Database-level embedding staleness tracking implemented in Issue #481.
+//! Full embedding generation will be re-enabled in a future issue after
+//! NLP engine integration work is complete.
 //!
-//! TODO(#481): Migrate embedding service to use SurrealStore instead of DatabaseService
+//! **Future Work (separate issue):**
 //! - Update constructor to take Arc<SurrealStore>
 //! - Migrate all database operations to SurrealStore methods
 //! - Implement SurrealDB-native vector search
@@ -29,23 +30,28 @@ pub struct NodeEmbeddingService {
 impl NodeEmbeddingService {
     /// Create a new NodeEmbeddingService (temporarily returns stub)
     ///
-    /// TODO(#481): Re-enable once SurrealDB integration complete
+    /// Database-level embedding staleness tracking is now implemented.
+    /// Full embedding generation will be re-enabled in a future issue.
     pub fn new(nlp_engine: Arc<EmbeddingService>) -> Self {
-        tracing::warn!(
-            "NodeEmbeddingService temporarily disabled during SurrealDB migration (Issue #481)"
+        tracing::info!(
+            "NodeEmbeddingService stubbed - embedding generation pending future NLP integration"
         );
         Self { nlp_engine }
     }
 
     /// Stub: Embed container
+    ///
+    /// Database tracking ready - full implementation pending future issue
     pub fn embed_container(&self, _node: &Node) -> Result<(), NodeServiceError> {
-        tracing::warn!("Embedding generation temporarily disabled (Issue #481)");
+        tracing::debug!("Embedding generation stub - NLP integration pending");
         Ok(())
     }
 
     /// Stub: Batch embed containers
+    ///
+    /// Database tracking ready - full implementation pending future issue
     pub fn batch_embed_containers(&self, _limit: Option<usize>) -> Result<usize, NodeServiceError> {
-        tracing::warn!("Batch embedding temporarily disabled (Issue #481)");
+        tracing::debug!("Batch embedding stub - NLP integration pending");
         Ok(0)
     }
 }
