@@ -11,7 +11,7 @@ This document explains the selection of **Gemma 3 4B-QAT** as the primary LLM fo
 
 NodeSpace's NLP system must support:
 
-1. **Text-to-SQL Generation** - Convert natural language queries to SQL for Turso database
+1. **Text-to-SQL Generation** - Convert natural language queries to SQL for SurrealDB
 2. **Function Calling** - Tool use and selection for various operations
 3. **Multi-Step Reasoning** - Workflow automation and orchestration (Phase 2)
 4. **Memory Efficiency** - Run on consumer hardware (desktops, laptops)

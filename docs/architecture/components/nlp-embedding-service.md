@@ -257,11 +257,11 @@ fn estimate_tokens(content: &str) -> usize {
 
 ```rust
 use nodespace_core::services::TopicEmbeddingService;
-use nodespace_core::db::DatabaseService;
+use nodespace_core::db::SurrealStore;
 use std::sync::Arc;
 
 // Initialize database and NLP engine
-let db = Arc::new(DatabaseService::new(db_path).await?);
+let db = Arc::new(SurrealStore::new(db_path).await?);
 
 // Create embedding service with defaults
 let service = TopicEmbeddingService::new_with_defaults(db)?;
@@ -323,7 +323,7 @@ CREATE TABLE nodes (
 
 -- Vector index for fast ANN search
 CREATE INDEX idx_nodes_embedding_vector
-ON nodes(libsql_vector_idx(embedding_vector));
+ON nodes(surrealdb_vector_idx(embedding_vector));
 ```
 
 ### Embedding Metadata
@@ -466,7 +466,7 @@ If migrating from an in-memory vector search implementation:
 
 1. **Remove in-memory logic** - Turso handles vector search natively
 2. **Update queries** - Use `vector_top_k()` instead of in-memory distance calculations
-3. **Add vector index** - Create `libsql_vector_idx` index for performance
+3. **Add vector index** - Create `surrealdb_vector_idx` index for performance
 4. **Test performance** - Should be faster with DiskANN algorithm
 
 ### Changing Embedding Model
