@@ -45,9 +45,9 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 │  └─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                     Data Layer                              │
-│  ├── Embedded SurrealDB (universal node schema + graph relations) │
+│  ├── Embedded SurrealDB (universal node schema + graph + vector search) │
 │  ├── File System (raw content)                              │
-│  └── NLP Engine (mistral.rs)                                │
+│  └── NLP Engine (embeddings + semantic similarity)          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
