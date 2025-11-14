@@ -102,8 +102,14 @@ pub struct SearchContainersParams {
     /// Search query text
     pub query: String,
 
-    /// Similarity threshold (0.0-1.0, lower = more similar)
-    /// Default: 0.7
+    /// Minimum similarity threshold (0.0-1.0, higher = more similar)
+    /// - 1.0 = Identical content
+    /// - 0.7-0.9 = Highly similar (semantic equivalents)
+    /// - 0.5-0.7 = Moderately similar (related topics)
+    /// - 0.3-0.5 = Loosely related
+    /// - < 0.3 = Unrelated content
+    ///
+    /// Default: 0.5 (moderate similarity)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f32>,
 
@@ -118,18 +124,21 @@ pub struct SearchContainersParams {
     pub exact: Option<bool>,
 }
 
-/// Search topics by semantic similarity
+/// Search containers by semantic similarity using vector embeddings
 ///
-/// Uses Turso's native vector search (DiskANN) for fast approximate
-/// nearest neighbors, or exact cosine distance for accurate results.
+/// Uses SurrealDB's native `vector::similarity::cosine()` function to find
+/// semantically similar nodes based on their content embeddings.
 ///
 /// # Arguments
 ///
-/// * `params` - Search parameters (query, threshold, limit, exact)
+/// * `params` - Search parameters (query, threshold, limit)
+///   - `query`: Text to search for (will be converted to embedding)
+///   - `threshold`: Minimum similarity score (0.0-1.0, default: 0.5)
+///   - `limit`: Maximum number of results (default: 20)
 ///
 /// # Returns
 ///
-/// Vector of topic nodes sorted by similarity (most similar first)
+/// Vector of nodes sorted by similarity score descending (most similar first)
 ///
 /// # Example (from frontend)
 ///
@@ -138,14 +147,13 @@ pub struct SearchContainersParams {
 ///
 /// const results = await invoke('search_containers', {
 ///   params: {
-///     query: 'machine learning',
-///     threshold: 0.7,
-///     limit: 20,
-///     exact: false
+///     query: 'machine learning algorithms',
+///     threshold: 0.5,  // 0.5 = moderate similarity (default)
+///     limit: 20
 ///   }
 /// });
 ///
-/// console.log(`Found ${results.length} similar topics`);
+/// console.log(`Found ${results.length} similar nodes`);
 /// ```
 #[tauri::command]
 pub async fn search_containers(

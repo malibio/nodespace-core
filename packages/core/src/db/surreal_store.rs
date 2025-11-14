@@ -565,7 +565,7 @@ impl SurrealStore {
     /// # Errors
     /// Returns error if blob length is not divisible by 4 (invalid f32 encoding)
     fn blob_to_f32_array(blob: &[u8]) -> Result<Vec<f32>> {
-        if blob.len() % 4 != 0 {
+        if !blob.len().is_multiple_of(4) {
             return Err(anyhow::anyhow!(
                 "Invalid embedding blob: length {} not divisible by 4",
                 blob.len()
@@ -2087,17 +2087,32 @@ mod tests {
         let blob3 = EmbeddingService::to_blob(&emb3);
 
         // Create nodes
-        let node1 = Node::new("text".to_string(), similar_text_1.to_string(), None, json!({}));
+        let node1 = Node::new(
+            "text".to_string(),
+            similar_text_1.to_string(),
+            None,
+            json!({}),
+        );
         let mut created1 = store.create_node(node1).await?;
         store.update_embedding(&created1.id, &blob1).await?;
         created1.embedding_vector = Some(blob1.clone());
 
-        let node2 = Node::new("text".to_string(), similar_text_2.to_string(), None, json!({}));
+        let node2 = Node::new(
+            "text".to_string(),
+            similar_text_2.to_string(),
+            None,
+            json!({}),
+        );
         let mut created2 = store.create_node(node2).await?;
         store.update_embedding(&created2.id, &blob2).await?;
         created2.embedding_vector = Some(blob2.clone());
 
-        let node3 = Node::new("text".to_string(), dissimilar_text.to_string(), None, json!({}));
+        let node3 = Node::new(
+            "text".to_string(),
+            dissimilar_text.to_string(),
+            None,
+            json!({}),
+        );
         let mut created3 = store.create_node(node3).await?;
         store.update_embedding(&created3.id, &blob3).await?;
         created3.embedding_vector = Some(blob3);
