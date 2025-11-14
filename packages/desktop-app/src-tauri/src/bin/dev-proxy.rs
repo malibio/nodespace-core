@@ -364,13 +364,21 @@ async fn get_mentioning_containers(
 async fn get_schema(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Option<Node>> {
+) -> ApiResult<serde_json::Value> {
     // Get the schema node (schemas are stored as nodes with id = node_type)
-    let schema = state
+    let schema_node = state
         .node_service
         .get_node(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(schema))
+    // Return just the properties (SchemaDefinition), not the whole node
+    // Frontend expects SchemaDefinition, not Node
+    match schema_node {
+        Some(node) => Ok(Json(node.properties)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("Schema not found: {}", id),
+        )),
+    }
 }
