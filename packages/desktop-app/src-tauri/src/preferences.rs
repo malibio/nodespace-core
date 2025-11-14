@@ -4,6 +4,7 @@
 //! Preferences are stored in platform-specific config directory.
 
 use std::path::PathBuf;
+
 use tauri::{AppHandle, Manager};
 use tokio::fs;
 
