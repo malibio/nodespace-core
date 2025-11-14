@@ -364,7 +364,6 @@ impl Node {
     /// Returns `ValidationError` if:
     /// - `id` is empty
     /// - `node_type` is empty
-    /// - `content` is empty
     /// - `properties` is not a JSON object
     /// - Node references itself as parent, root, or sibling (circular reference)
     ///
@@ -390,9 +389,9 @@ impl Node {
             return Err(ValidationError::MissingField("node_type".to_string()));
         }
 
-        if self.content.is_empty() {
-            return Err(ValidationError::MissingField("content".to_string()));
-        }
+        // Allow blank content for text nodes (users can create blank nodes during editing)
+        // This is valid behavior - blank nodes are created by pressing Enter and are
+        // intended to be filled in by the user or deleted if left empty.
 
         if !self.properties.is_object() {
             return Err(ValidationError::InvalidProperties(
@@ -1219,6 +1218,7 @@ mod tests {
 
     #[test]
     fn test_node_validation_empty_content() {
+        // Blank content is now allowed (users can create blank nodes during editing)
         let mut node = Node::new(
             "text".to_string(),
             "Valid content".to_string(),
@@ -1227,10 +1227,8 @@ mod tests {
         );
         node.content = String::new();
 
-        assert!(matches!(
-            node.validate(),
-            Err(ValidationError::MissingField(_))
-        ));
+        // Should validate successfully - blank nodes are valid
+        assert!(node.validate().is_ok());
     }
 
     #[test]
