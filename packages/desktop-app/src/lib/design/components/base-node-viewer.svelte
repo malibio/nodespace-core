@@ -761,6 +761,35 @@
     }
   });
 
+  /**
+   * Helper function to promote a viewer-local placeholder to a real node
+   * Extracts core Node properties without UI state (depth, children, expanded)
+   *
+   * @param placeholder - The viewer-local placeholder node
+   * @param nodeId - The parent node ID
+   * @param overrides - Content and/or nodeType to override from placeholder
+   * @returns Promoted node with core properties only
+   */
+  function promotePlaceholderToNode(
+    placeholder: Node,
+    nodeId: string,
+    overrides: { content?: string; nodeType?: string }
+  ): Node {
+    return {
+      id: placeholder.id,
+      nodeType: overrides.nodeType ?? placeholder.nodeType,
+      content: overrides.content ?? placeholder.content,
+      parentId: nodeId,
+      containerNodeId: placeholder.containerNodeId,
+      beforeSiblingId: placeholder.beforeSiblingId,
+      version: placeholder.version,
+      createdAt: placeholder.createdAt,
+      modifiedAt: new Date().toISOString(),
+      properties: placeholder.properties,
+      mentions: placeholder.mentions || []
+    };
+  }
+
   async function loadChildrenForParent(nodeId: string) {
     try {
       // Set loading flag to prevent watchers from triggering during initial load
@@ -1718,20 +1747,9 @@
                     nodeId
                   ) {
                     // Promote placeholder to real node by assigning parent and adding to store
-                    // Only copy core Node properties, not UI state (depth, children, expanded, etc.)
-                    const promotedNode: Node = {
-                      id: viewerPlaceholder.id,
-                      nodeType: viewerPlaceholder.nodeType,
-                      content,
-                      parentId: nodeId,
-                      containerNodeId: viewerPlaceholder.containerNodeId,
-                      beforeSiblingId: viewerPlaceholder.beforeSiblingId,
-                      version: viewerPlaceholder.version,
-                      createdAt: viewerPlaceholder.createdAt,
-                      modifiedAt: new Date().toISOString(),
-                      properties: viewerPlaceholder.properties,
-                      mentions: viewerPlaceholder.mentions || []
-                    };
+                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
+                      content
+                    });
 
                     // Add to shared store (in-memory only, don't persist yet)
                     // Subsequent typing will trigger updateNodeContent() which handles persistence
@@ -1804,20 +1822,10 @@
                       e.detail.nodeType
                     );
                     // Promote placeholder to real node with the new type
-                    // Only copy core Node properties, not UI state (depth, children, expanded, etc.)
-                    const promotedNode: Node = {
-                      id: viewerPlaceholder.id,
-                      nodeType: e.detail.nodeType,
+                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
                       content: node.content || '',
-                      parentId: nodeId,
-                      containerNodeId: viewerPlaceholder.containerNodeId,
-                      beforeSiblingId: viewerPlaceholder.beforeSiblingId,
-                      version: viewerPlaceholder.version,
-                      createdAt: viewerPlaceholder.createdAt,
-                      modifiedAt: new Date().toISOString(),
-                      properties: viewerPlaceholder.properties,
-                      mentions: viewerPlaceholder.mentions || []
-                    };
+                      nodeType: e.detail.nodeType
+                    });
 
                     // Add to store and trigger persistence
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
@@ -1907,20 +1915,10 @@
                       e.detail.nodeType
                     );
                     // Promote placeholder to real node with the new type
-                    // Only copy core Node properties, not UI state (depth, children, expanded, etc.)
-                    const promotedNode: Node = {
-                      id: viewerPlaceholder.id,
-                      nodeType: e.detail.nodeType,
+                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
                       content: node.content || '',
-                      parentId: nodeId,
-                      containerNodeId: viewerPlaceholder.containerNodeId,
-                      beforeSiblingId: viewerPlaceholder.beforeSiblingId,
-                      version: viewerPlaceholder.version,
-                      createdAt: viewerPlaceholder.createdAt,
-                      modifiedAt: new Date().toISOString(),
-                      properties: viewerPlaceholder.properties,
-                      mentions: viewerPlaceholder.mentions || []
-                    };
+                      nodeType: e.detail.nodeType
+                    });
 
                     // Add to store and trigger persistence
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
