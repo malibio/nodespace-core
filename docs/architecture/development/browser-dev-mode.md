@@ -47,7 +47,7 @@ The application will automatically use `HttpAdapter` in browser mode.
 
 - **Server**: `http://127.0.0.1:8000`
 - **Namespace**: `nodespace`
-- **Database**: `dev`
+- **Database**: `nodes`
 - **Username**: `root`
 - **Password**: `root`
 
@@ -96,7 +96,7 @@ Download from: https://surrealdb.com/surrealist
 **Connection Settings:**
 - **Endpoint**: `http://127.0.0.1:8000`
 - **Namespace**: `nodespace`
-- **Database**: `dev`
+- **Database**: `nodes`
 - **Username**: `root`
 - **Password**: `root`
 
