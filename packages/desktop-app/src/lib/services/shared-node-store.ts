@@ -619,6 +619,18 @@ export class SharedNodeStore {
     this.versions.set(node.id, this.getNextVersion(node.id));
     this.notifySubscribers(node.id, node, source);
 
+    // Emit event for HierarchyService cache invalidation
+    // When a new node is added (placeholder promotion), hierarchical relationships change
+    // and depth caches must be invalidated
+    eventBus.emit({
+      type: 'node:updated',
+      namespace: 'lifecycle',
+      source: source.type,
+      nodeId: node.id,
+      updateType: 'hierarchy', // New nodes affect structure (parent-child relationships)
+      newValue: node
+    } as never);
+
     // Determine persistence behavior using new explicit API
     const options: UpdateOptions = { skipPersistence };
     const { shouldMarkAsPersisted } = this.determinePersistenceBehavior(source, options);
