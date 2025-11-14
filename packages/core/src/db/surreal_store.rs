@@ -234,7 +234,7 @@ impl SurrealStore<Client> {
     ///
     /// # Arguments
     ///
-    /// * `endpoint` - SurrealDB server URL (e.g., "http://127.0.0.1:8000")
+    /// * `endpoint` - SurrealDB server address (e.g., "127.0.0.1:8000")
     /// * `namespace` - Database namespace (e.g., "nodespace")
     /// * `database` - Database name (e.g., "nodes")
     /// * `username` - Auth username (e.g., "root")
@@ -248,7 +248,7 @@ impl SurrealStore<Client> {
     /// #[tokio::main]
     /// async fn main() -> anyhow::Result<()> {
     ///     let store = SurrealStore::new_http(
-    ///         "http://127.0.0.1:8000",
+    ///         "127.0.0.1:8000",
     ///         "nodespace",
     ///         "nodes",
     ///         "root",
