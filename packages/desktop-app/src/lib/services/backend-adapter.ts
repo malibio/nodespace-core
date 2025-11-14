@@ -1511,7 +1511,44 @@ export class HttpAdapter implements BackendAdapter {
         }
       );
 
-      return await this.handleResponse<SchemaDefinition>(response);
+      const schema = await this.handleResponse<{
+        is_core: boolean;
+        version: number;
+        description: string;
+        fields: Array<{
+          name: string;
+          type: string;
+          protection: string;
+          core_values?: string[];
+          user_values?: string[];
+          indexed: boolean;
+          required?: boolean;
+          extensible?: boolean;
+          default?: unknown;
+          description?: string;
+          item_type?: string;
+        }>;
+      }>(response);
+
+      // Convert from snake_case (stored in DB) to camelCase (TypeScript)
+      return {
+        isCore: schema.is_core,
+        version: schema.version,
+        description: schema.description,
+        fields: schema.fields.map((field) => ({
+          name: field.name,
+          type: field.type,
+          protection: field.protection as 'core' | 'user' | 'system',
+          coreValues: field.core_values,
+          userValues: field.user_values,
+          indexed: field.indexed,
+          required: field.required,
+          extensible: field.extensible,
+          default: field.default,
+          description: field.description,
+          itemType: field.item_type
+        }))
+      };
     });
   }
 

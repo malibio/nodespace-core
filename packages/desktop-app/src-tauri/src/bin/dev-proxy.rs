@@ -376,9 +376,6 @@ async fn get_schema(
     // Frontend expects SchemaDefinition, not Node
     match schema_node {
         Some(node) => Ok(Json(node.properties)),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            format!("Schema not found: {}", id),
-        )),
+        None => Err((StatusCode::NOT_FOUND, format!("Schema not found: {}", id))),
     }
 }
