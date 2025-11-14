@@ -831,15 +831,14 @@
           // Get viewer's node to inherit correct container
           const viewerNode = sharedNodeStore.getNode(nodeId);
 
-          // Determine container: if parent has containerNodeId, use it; otherwise parent IS the container
+          // Inherit container: use parent's containerNodeId if available, otherwise parent IS the container
           const inheritedContainer = viewerNode?.containerNodeId ?? nodeId;
 
           viewerPlaceholder = {
             id: placeholderId,
             nodeType: 'text',
             content: '',
-            parentId: nodeId, // Set to viewer's node so if persisted, it's properly parented
-            // Inherit container from viewer's node (children inherit parent's container, not use parent as container)
+            parentId: nodeId,
             containerNodeId: inheritedContainer,
             beforeSiblingId: null,
             createdAt: new Date().toISOString(),
