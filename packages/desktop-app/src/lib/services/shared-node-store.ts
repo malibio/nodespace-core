@@ -496,7 +496,20 @@ export class SharedNodeStore {
                   const currentVersion = currentNode?.version ?? 1;
 
                   try {
-                    await tauriNodeService.updateNode(nodeId, currentVersion, updatePayload);
+                    // CRITICAL: Capture updated node to get new version from backend
+                    // This prevents version conflicts on subsequent updates
+                    const updatedNodeFromBackend = await tauriNodeService.updateNode(
+                      nodeId,
+                      currentVersion,
+                      updatePayload
+                    );
+
+                    // Update local node with backend version
+                    const localNode = this.nodes.get(nodeId);
+                    if (localNode && updatedNodeFromBackend) {
+                      localNode.version = updatedNodeFromBackend.version;
+                      this.nodes.set(nodeId, localNode);
+                    }
                   } catch (updateError) {
                     // If UPDATE fails because node doesn't exist, try CREATE instead
                     // This handles cases where persistedNodeIds is out of sync (page reload, database reset)
