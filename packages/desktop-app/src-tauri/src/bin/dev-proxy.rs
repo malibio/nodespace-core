@@ -69,8 +69,43 @@ struct MentionRequest {
     pub target_id: String,
 }
 
-/// Create node request (frontend sends node without timestamps/version)
-/// The backend is responsible for adding these fields
+/// Create node request for POST /api/nodes endpoint
+///
+/// The frontend sends a partial node representation containing only the business data.
+/// The backend is responsible for adding infrastructure fields (timestamps, version).
+///
+/// # Field Semantics
+///
+/// - `id`: Optional UUID. If omitted, backend generates a new UUID.
+///   For deterministic IDs (e.g., date nodes use "YYYY-MM-DD"),
+///   the frontend MUST provide this field.
+/// - `node_type`: Required. Must be a registered node type (e.g., "text", "task", "date").
+/// - `content`: Primary text content. MAY be empty string (Issue #484 - blank nodes allowed).
+/// - `parent_id`: Optional parent node for hierarchical relationships.
+/// - `container_node_id`: Optional container for spatial/collection relationships.
+/// - `before_sibling_id`: Optional sibling for ordering within parent.
+/// - `properties`: Schema-driven JSON properties. Backend applies default values if schema exists.
+/// - `embedding_vector`: Optional vector for semantic search (currently unused).
+/// - `mentions`: Outgoing references to other nodes. `mentioned_by` is computed server-side
+///   and NOT accepted here (it's the inverse relationship).
+///
+/// # Validation
+///
+/// Backend performs two-stage validation:
+/// 1. Core behavior validation (via `NodeService.behaviors.validate_node()`)
+/// 2. Schema validation (via `NodeService.validate_node_against_schema()`)
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "nodeType": "text",
+///   "content": "",
+///   "parentId": "550e8400-e29b-41d4-a716-446655440000",
+///   "properties": {},
+///   "mentions": []
+/// }
+/// ```
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateNodeRequest {
