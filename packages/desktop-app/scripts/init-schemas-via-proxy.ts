@@ -7,7 +7,7 @@
  * Flow:
  * 1. Wait for dev-proxy health check (http://localhost:3001/health)
  * 2. Create 7 core schema nodes via POST /api/nodes
- * 3. Each schema is a special node with node_type="schema"
+ * 3. Each schema is a special node with nodeType="schema"
  *
  * Run this script after dev-proxy is running (dev:proxy in concurrent dev mode).
  *
@@ -27,21 +27,21 @@ const RETRY_DELAY_MS = 1000;
 
 interface CreateNodeRequest {
   id?: string;
-  node_type: string;
+  nodeType: string;
   content: string;
-  parent_id?: string;
-  container_node_id?: string;
-  before_sibling_id?: string;
+  parentId?: string | null;
+  containerNodeId?: string | null;
+  beforeSiblingId?: string | null;
   properties?: Record<string, unknown>;
 }
 
 interface CreateNodeResponse {
   id: string;
-  node_type: string;
+  nodeType: string;
   content: string;
   version: number;
-  created_at: string;
-  modified_at: string;
+  createdAt: string;
+  modifiedAt: string;
   properties?: Record<string, unknown>;
 }
 
@@ -107,7 +107,7 @@ async function checkSchemasExist(): Promise<boolean> {
     // If we get the task schema back, schemas are already seeded
     if (response.ok) {
       const node = await response.json();
-      return node.node_type === 'schema';
+      return node.nodeType === 'schema';
     }
     return false;
   } catch {
@@ -132,7 +132,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  📝 Creating task schema...');
   await createSchemaNode({
     id: 'task',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Task',
     properties: {
       is_core: true,
@@ -202,7 +202,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  📅 Creating date schema...');
   await createSchemaNode({
     id: 'date',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Date',
     properties: {
       is_core: true,
@@ -216,7 +216,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  📄 Creating text schema...');
   await createSchemaNode({
     id: 'text',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Text',
     properties: {
       is_core: true,
@@ -230,7 +230,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  🔤 Creating header schema...');
   await createSchemaNode({
     id: 'header',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Header',
     properties: {
       is_core: true,
@@ -244,7 +244,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  💻 Creating code-block schema...');
   await createSchemaNode({
     id: 'code-block',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Code Block',
     properties: {
       is_core: true,
@@ -258,7 +258,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  💬 Creating quote-block schema...');
   await createSchemaNode({
     id: 'quote-block',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Quote Block',
     properties: {
       is_core: true,
@@ -272,7 +272,7 @@ async function seedCoreSchemas(): Promise<void> {
   console.log('  🔢 Creating ordered-list schema...');
   await createSchemaNode({
     id: 'ordered-list',
-    node_type: 'schema',
+    nodeType: 'schema',
     content: 'Ordered List',
     properties: {
       is_core: true,

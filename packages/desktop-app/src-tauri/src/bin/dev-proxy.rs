@@ -79,28 +79,21 @@ async fn main() -> anyhow::Result<()> {
     // Connect to SurrealDB HTTP server (must be running on port 8000)
     // IMPORTANT: Uses HTTP client mode, NOT embedded RocksDB
     println!("📡 Connecting to SurrealDB HTTP server on port 8000...");
-    let store = match HttpStore::new_http(
-        "127.0.0.1:8000",
-        "nodespace",
-        "nodes",
-        "root",
-        "root",
-    )
-    .await
-    {
-        Ok(s) => {
-            println!("✅ Connected to SurrealDB");
-            Arc::new(s)
-        }
-        Err(e) => {
-            eprintln!("❌ Failed to connect to SurrealDB: {}", e);
-            eprintln!("   Make sure SurrealDB server is running:");
-            eprintln!("   bun run dev:db");
-            eprintln!("\n   Or check if port 8000 is available:");
-            eprintln!("   lsof -i :8000");
-            return Err(e);
-        }
-    };
+    let store =
+        match HttpStore::new_http("127.0.0.1:8000", "nodespace", "nodes", "root", "root").await {
+            Ok(s) => {
+                println!("✅ Connected to SurrealDB");
+                Arc::new(s)
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to connect to SurrealDB: {}", e);
+                eprintln!("   Make sure SurrealDB server is running:");
+                eprintln!("   bun run dev:db");
+                eprintln!("\n   Or check if port 8000 is available:");
+                eprintln!("   lsof -i :8000");
+                return Err(e);
+            }
+        };
 
     // Initialize NodeService with all business logic
     // NodeService has ALL the logic (virtual dates, schema backfill, etc.)
