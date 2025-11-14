@@ -290,9 +290,10 @@ let results = store.search_by_embedding(&query_blob, limit, threshold).await?;
 ```
 
 **Performance Characteristics**:
-- 1,000 nodes: < 100ms (tested)
-- 10,000 nodes: < 500ms (tested)
-- 100,000 nodes: < 2 seconds (estimated, linear scan without index)
+- 1,000 nodes: < 1500ms (measured ~950ms, linear scan)
+- 10,000 nodes: < 15s (estimated ~9.5s, linear scan)
+- 100,000 nodes: < 2.5 minutes (estimated, linear scan without index)
+- Note: Current implementation uses O(n) linear scan without vector indexes
 
 **Similarity Score Interpretation**:
 - `1.0` = Identical content
