@@ -1006,7 +1006,11 @@ impl NodeOperations {
 
                         match self
                             .node_service
-                            .update_with_version_check(&next_sibling.id, fresh.version, chain_fix.clone())
+                            .update_with_version_check(
+                                &next_sibling.id,
+                                fresh.version,
+                                chain_fix.clone(),
+                            )
                             .await
                         {
                             Ok(_) => break,
