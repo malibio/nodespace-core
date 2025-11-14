@@ -798,12 +798,20 @@
           // Issue #479 Phase 1: Placeholder is completely viewer-local (NOT added to SharedNodeStore)
           // It's rendered via nodesToRender derived state and promoted to real node when user adds content
           const placeholderId = globalThis.crypto.randomUUID();
+
+          // Get viewer's node to inherit correct container
+          const viewerNode = sharedNodeStore.getNode(nodeId);
+
+          // Determine container: if parent has containerNodeId, use it; otherwise parent IS the container
+          const inheritedContainer = viewerNode?.containerNodeId ?? nodeId;
+
           viewerPlaceholder = {
             id: placeholderId,
             nodeType: 'text',
             content: '',
-            parentId: nodeId, // Set to viewer's container so if persisted, it's properly parented
-            containerNodeId: nodeId, // Same as parentId - viewer's nodeId is the container
+            parentId: nodeId, // Set to viewer's node so if persisted, it's properly parented
+            // Inherit container from viewer's node (children inherit parent's container, not use parent as container)
+            containerNodeId: inheritedContainer,
             beforeSiblingId: null,
             createdAt: new Date().toISOString(),
             modifiedAt: new Date().toISOString(),
@@ -1710,11 +1718,19 @@
                     nodeId
                   ) {
                     // Promote placeholder to real node by assigning parent and adding to store
+                    // Only copy core Node properties, not UI state (depth, children, expanded, etc.)
                     const promotedNode: Node = {
-                      ...viewerPlaceholder,
+                      id: viewerPlaceholder.id,
+                      nodeType: viewerPlaceholder.nodeType,
                       content,
                       parentId: nodeId,
-                      containerNodeId: nodeId
+                      containerNodeId: viewerPlaceholder.containerNodeId,
+                      beforeSiblingId: viewerPlaceholder.beforeSiblingId,
+                      version: viewerPlaceholder.version,
+                      createdAt: viewerPlaceholder.createdAt,
+                      modifiedAt: new Date().toISOString(),
+                      properties: viewerPlaceholder.properties,
+                      mentions: viewerPlaceholder.mentions || []
                     };
 
                     // Add to shared store (in-memory only, don't persist yet)
@@ -1788,12 +1804,19 @@
                       e.detail.nodeType
                     );
                     // Promote placeholder to real node with the new type
+                    // Only copy core Node properties, not UI state (depth, children, expanded, etc.)
                     const promotedNode: Node = {
-                      ...viewerPlaceholder,
+                      id: viewerPlaceholder.id,
+                      nodeType: e.detail.nodeType,
                       content: node.content || '',
                       parentId: nodeId,
-                      containerNodeId: nodeId,
-                      nodeType: e.detail.nodeType
+                      containerNodeId: viewerPlaceholder.containerNodeId,
+                      beforeSiblingId: viewerPlaceholder.beforeSiblingId,
+                      version: viewerPlaceholder.version,
+                      createdAt: viewerPlaceholder.createdAt,
+                      modifiedAt: new Date().toISOString(),
+                      properties: viewerPlaceholder.properties,
+                      mentions: viewerPlaceholder.mentions || []
                     };
 
                     // Add to store and trigger persistence
@@ -1884,12 +1907,19 @@
                       e.detail.nodeType
                     );
                     // Promote placeholder to real node with the new type
+                    // Only copy core Node properties, not UI state (depth, children, expanded, etc.)
                     const promotedNode: Node = {
-                      ...viewerPlaceholder,
+                      id: viewerPlaceholder.id,
+                      nodeType: e.detail.nodeType,
                       content: node.content || '',
                       parentId: nodeId,
-                      containerNodeId: nodeId,
-                      nodeType: e.detail.nodeType
+                      containerNodeId: viewerPlaceholder.containerNodeId,
+                      beforeSiblingId: viewerPlaceholder.beforeSiblingId,
+                      version: viewerPlaceholder.version,
+                      createdAt: viewerPlaceholder.createdAt,
+                      modifiedAt: new Date().toISOString(),
+                      properties: viewerPlaceholder.properties,
+                      mentions: viewerPlaceholder.mentions || []
                     };
 
                     // Add to store and trigger persistence
