@@ -83,6 +83,12 @@ impl EmbeddingProcessor {
     }
 
     /// Internal helper to process a batch of stale embeddings
+    ///
+    /// Uses `None` for batch limit to process ALL stale nodes in a single run.
+    /// This is intentional for background processing: the task runs periodically
+    /// (every 30 seconds), not per-request, so we want to catch up on the full
+    /// backlog each time. For bounded processing, callers should use the service
+    /// directly with an explicit limit.
     async fn process_batch(service: &Arc<NodeEmbeddingService>) -> Result<usize, NodeServiceError> {
         match service.batch_embed_containers(None).await {
             Ok(0) => {
