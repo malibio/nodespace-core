@@ -2168,7 +2168,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Ignore by default due to long execution time
     async fn test_search_performance_10k_nodes() -> Result<()> {
         let (store, _temp_dir) = create_test_store().await?;
 
