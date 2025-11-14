@@ -79,12 +79,23 @@ async function waitForProxy(): Promise<void> {
  * Create a schema node via dev-proxy
  */
 async function createSchemaNode(request: CreateNodeRequest): Promise<CreateNodeResponse> {
+  // Add required timestamp fields
+  const now = new Date().toISOString();
+  const fullRequest = {
+    ...request,
+    createdAt: now,
+    modifiedAt: now,
+    version: 1,
+    mentions: [],
+    mentionedBy: []
+  };
+
   const response = await globalThis.fetch(`${PROXY_URL}/api/nodes`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(request)
+    body: JSON.stringify(fullRequest)
   });
 
   if (!response.ok) {

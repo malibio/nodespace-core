@@ -12,7 +12,7 @@
     "dev:proxy": "cd src-tauri && cargo run --bin dev-proxy",
     "dev:db:init": "bun run scripts/init-schemas-via-proxy.ts",
     "dev:frontend": "bunx vite dev",
-    "dev": "bun run dev:check && bunx concurrently --kill-others --names 'DB,Proxy,Init,UI' --prefix-colors 'blue,yellow,magenta,green' 'bun run dev:db' 'sleep 2 && bun run dev:proxy' 'sleep 4 && bun run dev:db:init' 'sleep 6 && bun run dev:frontend'",
+    "dev": "bun run dev:check && bunx concurrently --success first --names 'DB,Proxy,UI' --prefix-colors 'blue,yellow,green' 'bun run dev:db' 'sleep 2 && bun run dev:proxy' 'sleep 4 && bun run dev:db:init && sleep 2 && bun run dev:frontend'",
     "dev:web": "bunx vite dev --port 1421",
     "build": "bunx vite build",
     "test": "bunx vitest run",
