@@ -8,7 +8,8 @@ Unified vector embedding service using Candle + ONNX for semantic search across 
 - **Metal GPU Acceleration**: Optimized performance on macOS with automatic CPU fallback
 - **Efficient Caching**: LRU cache with automatic eviction for <5ms cache hits
 - **Batch Operations**: Efficient batch embedding generation
-- **Turso Integration**: F32_BLOB format for direct database storage
+- **SurrealDB Integration**: Native storage as Vec<f32> with binary blob external API
+- **Vector Similarity Search**: Semantic discovery using cosine similarity (0.0-1.0 scale)
 
 ## Architecture
 
