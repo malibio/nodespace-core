@@ -2169,6 +2169,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_performance_10k_nodes() -> Result<()> {
+        // Skip this test unless RUN_LONG_TESTS=1 is set
+        // Reason: Test takes ~10 minutes total (10K node creation + search)
+        // The search itself is fast (~9.5s), but setup is slow
+        if std::env::var("RUN_LONG_TESTS").unwrap_or_default() != "1" {
+            eprintln!("Skipping 10K performance test (set RUN_LONG_TESTS=1 to run)");
+            return Ok(());
+        }
+
         let (store, _temp_dir) = create_test_store().await?;
 
         // Create 10,000 nodes with embeddings
