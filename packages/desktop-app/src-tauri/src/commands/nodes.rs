@@ -306,17 +306,11 @@ pub async fn update_node(
     version: i64,
     update: NodeUpdate,
 ) -> Result<Node, CommandError> {
-    // NodeOperations.update_node only handles content/type/properties
-    // For hierarchy changes, use move_node() or reorder_node()
+    // Use update_node_with_hierarchy to handle both content AND hierarchy changes
+    // This orchestrates move_node(), reorder_node(), and content updates as needed
     // IMPORTANT: Return the updated Node so frontend can refresh its local version
     operations
-        .update_node(
-            &id,
-            version,
-            update.content,
-            update.node_type,
-            update.properties,
-        )
+        .update_node_with_hierarchy(&id, version, update)
         .await
         .map_err(Into::into)
 }

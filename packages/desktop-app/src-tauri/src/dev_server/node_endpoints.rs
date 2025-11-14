@@ -370,14 +370,9 @@ async fn update_node(
 
     // Update via NodeOperations with version check
     // IMPORTANT: Return the updated Node so frontend can refresh its local version
+    // Use update_node_with_hierarchy to handle both content AND hierarchy changes
     let updated_node = operations
-        .update_node(
-            &id,
-            request.version,
-            request.update.content,
-            request.update.node_type,
-            request.update.properties,
-        )
+        .update_node_with_hierarchy(&id, request.version, request.update)
         .await?;
 
     tracing::info!(
