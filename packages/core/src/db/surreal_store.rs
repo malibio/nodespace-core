@@ -82,7 +82,8 @@ struct SurrealNode {
     created_at: String,
     modified_at: String,
     properties: Value,
-    embedding_vector: Option<Vec<u8>>,
+    #[serde(default)]
+    embedding_vector: Option<Vec<f32>>,
     #[serde(default)]
     embedding_stale: bool,
     #[serde(default)]
@@ -93,6 +94,14 @@ struct SurrealNode {
 
 impl From<SurrealNode> for Node {
     fn from(sn: SurrealNode) -> Self {
+        // Convert f32 vector back to binary blob (Vec<u8>) for Node struct
+        let embedding_vector = sn.embedding_vector.map(|floats| {
+            floats
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect::<Vec<u8>>()
+        });
+
         Node {
             id: sn.uuid,
             node_type: sn.node_type,
@@ -108,7 +117,7 @@ impl From<SurrealNode> for Node {
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
             properties: sn.properties,
-            embedding_vector: sn.embedding_vector,
+            embedding_vector,
             mentions: sn.mentions,
             mentioned_by: sn.mentioned_by,
         }
@@ -516,9 +525,48 @@ impl SurrealStore {
 }
 
 impl SurrealStore {
+    /// Convert binary blob embedding to f32 array for SurrealDB vector functions
+    ///
+    /// Embeddings are stored as Vec<u8> (bytes), but SurrealDB vector functions
+    /// require Vec<f32>. This performs the conversion.
+    ///
+    /// # Arguments
+    /// * `blob` - Binary embedding data (384 dimensions * 4 bytes = 1536 bytes)
+    ///
+    /// # Returns
+    /// Vec<f32> with 384 elements
+    ///
+    /// # Errors
+    /// Returns error if blob length is not divisible by 4 (invalid f32 encoding)
+    fn blob_to_f32_array(blob: &[u8]) -> Result<Vec<f32>> {
+        if !blob.len().is_multiple_of(4) {
+            return Err(anyhow::anyhow!(
+                "Invalid embedding blob: length {} not divisible by 4",
+                blob.len()
+            ));
+        }
+
+        let float_count = blob.len() / 4;
+        let mut floats = Vec::with_capacity(float_count);
+
+        for chunk in blob.chunks_exact(4) {
+            let bytes: [u8; 4] = chunk.try_into().unwrap();
+            floats.push(f32::from_le_bytes(bytes));
+        }
+
+        Ok(floats)
+    }
+
     pub async fn create_node(&self, node: Node) -> Result<Node> {
         // Generate SurrealDB Record ID
         let record_id = Self::to_record_id(&node.node_type, &node.id);
+
+        // Convert embedding blob to f32 array if present
+        let embedding_f32 = node
+            .embedding_vector
+            .as_ref()
+            .map(|blob| Self::blob_to_f32_array(blob))
+            .transpose()?;
 
         // Insert into universal nodes table
         let query = "
@@ -551,7 +599,7 @@ impl SurrealStore {
             .bind(("created_at", node.created_at.to_rfc3339()))
             .bind(("modified_at", node.modified_at.to_rfc3339()))
             .bind(("properties", node.properties.clone()))
-            .bind(("embedding_vector", node.embedding_vector.clone()))
+            .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to create node in universal table")?;
 
@@ -624,6 +672,14 @@ impl SurrealStore {
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
         let updated_properties = update.properties.unwrap_or(current.properties.clone());
 
+        // Convert embedding blob to f32 if provided
+        let embedding_f32 = update
+            .embedding_vector
+            .flatten()
+            .as_ref()
+            .map(|blob| Self::blob_to_f32_array(blob))
+            .transpose()?;
+
         self.db
             .query(query)
             .bind(("uuid", id.to_string()))
@@ -633,7 +689,7 @@ impl SurrealStore {
             .bind(("container_node_id", update.container_node_id.flatten()))
             .bind(("before_sibling_id", update.before_sibling_id.flatten()))
             .bind(("properties", updated_properties))
-            .bind(("embedding_vector", update.embedding_vector.flatten()))
+            .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to update node")?;
 
@@ -715,6 +771,14 @@ impl SurrealStore {
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
         let updated_properties = update.properties.unwrap_or(current.properties.clone());
 
+        // Convert embedding blob to f32 if provided
+        let embedding_f32 = update
+            .embedding_vector
+            .flatten()
+            .as_ref()
+            .map(|blob| Self::blob_to_f32_array(blob))
+            .transpose()?;
+
         let mut response = self
             .db
             .query(query)
@@ -726,7 +790,7 @@ impl SurrealStore {
             .bind(("container_node_id", update.container_node_id.flatten()))
             .bind(("before_sibling_id", update.before_sibling_id.flatten()))
             .bind(("properties", updated_properties))
-            .bind(("embedding_vector", update.embedding_vector.flatten()))
+            .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to update node with version check")?;
 
@@ -1268,10 +1332,13 @@ impl SurrealStore {
     }
 
     pub async fn update_embedding(&self, node_id: &str, embedding: &[u8]) -> Result<()> {
+        // Convert binary blob to f32 array for SurrealDB vector functions
+        let embedding_f32 = Self::blob_to_f32_array(embedding)?;
+
         self.db
             .query("UPDATE nodes SET embedding_vector = $embedding, embedding_stale = false WHERE uuid = $uuid;")
             .bind(("uuid", node_id.to_string()))
-            .bind(("embedding", embedding.to_vec()))
+            .bind(("embedding", embedding_f32))
             .await
             .context("Failed to update embedding")?;
 
@@ -1359,12 +1426,120 @@ impl SurrealStore {
         Ok(surreal_nodes.into_iter().map(Into::into).collect())
     }
 
-    pub fn search_by_embedding(&self, _embedding: &[u8], _limit: i64) -> Result<Vec<(Node, f64)>> {
-        // SurrealDB doesn't have built-in vector similarity functions yet
-        // This is a placeholder implementation that needs to be enhanced
-        // For now, return empty results with a warning
-        tracing::warn!("Vector similarity search not yet implemented for SurrealDB");
-        Ok(Vec::new())
+    /// Search for nodes by embedding similarity using SurrealDB's native vector functions
+    ///
+    /// Converts the query embedding from binary blob to f32 array, then uses
+    /// SurrealDB's `vector::similarity::cosine()` to find semantically similar nodes.
+    ///
+    /// # Arguments
+    /// * `embedding` - Query embedding as binary blob (from EmbeddingService::to_blob)
+    /// * `limit` - Maximum number of results to return
+    /// * `threshold` - Optional minimum similarity score (0.0-1.0, default: 0.5)
+    ///
+    /// # Returns
+    /// Vector of (Node, similarity_score) tuples, sorted by similarity descending
+    pub async fn search_by_embedding(
+        &self,
+        embedding: &[u8],
+        limit: i64,
+        threshold: Option<f64>,
+    ) -> Result<Vec<(Node, f64)>> {
+        // Convert binary blob to f32 array for SurrealDB
+        let query_vector = Self::blob_to_f32_array(embedding)?;
+
+        // Default threshold: 0.5 (moderate similarity)
+        let min_similarity = threshold.unwrap_or(0.5);
+
+        // SurrealDB query using vector::similarity::cosine
+        // We need to explicitly select fields to avoid deserialization issues with the computed similarity field
+        // Use COALESCE to handle NONE values for array fields
+        let query = r#"
+            SELECT
+                uuid,
+                node_type,
+                content,
+                parent_id,
+                container_node_id,
+                before_sibling_id,
+                version,
+                created_at,
+                modified_at,
+                properties,
+                embedding_vector,
+                embedding_stale OR false AS embedding_stale,
+                mentions OR [] AS mentions,
+                mentioned_by OR [] AS mentioned_by,
+                vector::similarity::cosine(embedding_vector, $query_vector) AS similarity
+            FROM nodes
+            WHERE embedding_vector != NONE
+              AND vector::similarity::cosine(embedding_vector, $query_vector) > $threshold
+            ORDER BY similarity DESC
+            LIMIT $limit;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("query_vector", query_vector))
+            .bind(("threshold", min_similarity))
+            .bind(("limit", limit))
+            .await
+            .context("Failed to execute vector similarity search")?;
+
+        // Deserialize response with similarity scores
+        #[derive(Debug, Deserialize)]
+        struct NodeWithSimilarity {
+            uuid: String,
+            node_type: String,
+            content: String,
+            #[serde(default)]
+            parent_id: Option<String>,
+            #[serde(default)]
+            container_node_id: Option<String>,
+            #[serde(default)]
+            before_sibling_id: Option<String>,
+            version: i64,
+            created_at: String,
+            modified_at: String,
+            properties: Value,
+            #[serde(default)]
+            embedding_vector: Option<Vec<f32>>,
+            #[serde(default)]
+            embedding_stale: bool,
+            #[serde(default)]
+            mentions: Vec<String>,
+            #[serde(default)]
+            mentioned_by: Vec<String>,
+            similarity: f64,
+        }
+
+        let results: Vec<NodeWithSimilarity> = response
+            .take(0)
+            .context("Failed to extract similarity search results")?;
+
+        // Convert to (Node, f64) tuples
+        Ok(results
+            .into_iter()
+            .map(|nws| {
+                let surreal_node = SurrealNode {
+                    uuid: nws.uuid,
+                    node_type: nws.node_type,
+                    content: nws.content,
+                    parent_id: nws.parent_id,
+                    container_node_id: nws.container_node_id,
+                    before_sibling_id: nws.before_sibling_id,
+                    version: nws.version,
+                    created_at: nws.created_at,
+                    modified_at: nws.modified_at,
+                    properties: nws.properties,
+                    embedding_vector: nws.embedding_vector,
+                    embedding_stale: nws.embedding_stale,
+                    mentions: nws.mentions,
+                    mentioned_by: nws.mentioned_by,
+                };
+                (surreal_node.into(), nws.similarity)
+            })
+            .collect())
     }
 
     /// Atomic bulk update using SurrealDB transactions
@@ -1470,6 +1645,15 @@ impl SurrealStore {
             let updated_node_type = update.node_type.clone().unwrap_or(current.node_type);
             let updated_properties = update.properties.clone().unwrap_or(current.properties);
 
+            // Convert embedding blob to f32 if provided
+            let embedding_f32 = update
+                .embedding_vector
+                .clone()
+                .flatten()
+                .as_ref()
+                .map(|blob| Self::blob_to_f32_array(blob))
+                .transpose()?;
+
             query_builder = query_builder
                 .bind((format!("uuid_{}", idx), id.clone()))
                 .bind((format!("content_{}", idx), updated_content))
@@ -1487,10 +1671,7 @@ impl SurrealStore {
                     update.before_sibling_id.clone().flatten(),
                 ))
                 .bind((format!("properties_{}", idx), updated_properties))
-                .bind((
-                    format!("embedding_vector_{}", idx),
-                    update.embedding_vector.clone().flatten(),
-                ));
+                .bind((format!("embedding_vector_{}", idx), embedding_f32));
         }
 
         query_builder
@@ -1614,6 +1795,285 @@ mod tests {
         let fetched = store.get_schema("task").await?;
         assert!(fetched.is_some());
         assert_eq!(fetched.unwrap(), schema);
+
+        Ok(())
+    }
+
+    // Vector Similarity Search Tests
+
+    #[test]
+    fn test_blob_to_f32_conversion() {
+        // Valid embedding: 3 floats (12 bytes)
+        let floats = [1.0f32, 2.5f32, -0.5f32];
+        let blob: Vec<u8> = floats.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        let result = SurrealStore::blob_to_f32_array(&blob).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], 1.0);
+        assert_eq!(result[1], 2.5);
+        assert_eq!(result[2], -0.5);
+    }
+
+    #[test]
+    fn test_blob_to_f32_invalid_length() {
+        // Invalid blob: 13 bytes (not divisible by 4)
+        let invalid_blob = vec![0u8; 13];
+
+        let result = SurrealStore::blob_to_f32_array(&invalid_blob);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not divisible by 4"));
+    }
+
+    #[tokio::test]
+    async fn test_search_empty_database() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Create a dummy embedding (384 floats)
+        let query_vector = vec![0.5f32; 384];
+        let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        // Search empty database
+        let results = store.search_by_embedding(&query_blob, 10, None).await?;
+
+        assert_eq!(results.len(), 0, "Empty database should return no results");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search_with_similar_nodes() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Create nodes with different embeddings
+        let base_vector = vec![1.0f32; 384];
+        let similar_vector = vec![0.99f32; 384]; // Very similar
+        let dissimilar_vector = vec![-1.0f32; 384]; // Opposite direction
+
+        let base_blob: Vec<u8> = base_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let similar_blob: Vec<u8> = similar_vector
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let dissimilar_blob: Vec<u8> = dissimilar_vector
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+
+        // Create nodes
+        let node1 = Node::new(
+            "text".to_string(),
+            "Base content".to_string(),
+            None,
+            json!({}),
+        );
+        let mut created1 = store.create_node(node1).await?;
+        store.update_embedding(&created1.id, &similar_blob).await?;
+        created1.embedding_vector = Some(similar_blob.clone());
+
+        let node2 = Node::new(
+            "text".to_string(),
+            "Dissimilar content".to_string(),
+            None,
+            json!({}),
+        );
+        let mut created2 = store.create_node(node2).await?;
+        store
+            .update_embedding(&created2.id, &dissimilar_blob)
+            .await?;
+        created2.embedding_vector = Some(dissimilar_blob);
+
+        // Search with base embedding
+        let results = store.search_by_embedding(&base_blob, 10, None).await?;
+
+        // Should return nodes sorted by similarity (highest first)
+        assert!(!results.is_empty(), "Should find at least one similar node");
+
+        // First result should be more similar (higher score)
+        if results.len() > 1 {
+            assert!(
+                results[0].1 > results[1].1,
+                "Results should be sorted by similarity descending"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search_with_threshold_filter() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Create query vector
+        let query_vector = vec![1.0f32; 384];
+        let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        // Create node with similar embedding
+        let similar_vector = vec![0.99f32; 384];
+        let similar_blob: Vec<u8> = similar_vector
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+
+        let node = Node::new(
+            "text".to_string(),
+            "Test content".to_string(),
+            None,
+            json!({}),
+        );
+        let created = store.create_node(node).await?;
+        store.update_embedding(&created.id, &similar_blob).await?;
+
+        // Search with high threshold (0.99) - should find the node
+        let results_high_threshold = store
+            .search_by_embedding(&query_blob, 10, Some(0.9))
+            .await?;
+        assert!(
+            !results_high_threshold.is_empty(),
+            "Should find node with similarity > 0.9"
+        );
+
+        // Search with very high threshold (0.999) - might not find it
+        let results_very_high = store
+            .search_by_embedding(&query_blob, 10, Some(0.999))
+            .await?;
+        // This test is lenient because exact similarity depends on normalization
+        assert!(
+            results_very_high.len() <= results_high_threshold.len(),
+            "Higher threshold should return fewer or equal results"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search_respects_limit() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Create 5 nodes with embeddings
+        let base_vector = vec![1.0f32; 384];
+        let blob: Vec<u8> = base_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        for i in 0..5 {
+            let node = Node::new(
+                "text".to_string(),
+                format!("Content {}", i),
+                None,
+                json!({}),
+            );
+            let created = store.create_node(node).await?;
+            store.update_embedding(&created.id, &blob).await?;
+        }
+
+        // Search with limit of 3
+        let results = store.search_by_embedding(&blob, 3, Some(0.5)).await?;
+
+        assert!(
+            results.len() <= 3,
+            "Should respect limit parameter (expected <= 3, got {})",
+            results.len()
+        );
+
+        Ok(())
+    }
+
+    // Performance Benchmark Tests
+
+    #[tokio::test]
+    #[ignore] // Ignore by default due to long execution time (data creation)
+    async fn test_search_performance_1k_nodes() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Create 1,000 nodes with embeddings
+        let base_vector = vec![1.0f32; 384];
+        let blob: Vec<u8> = base_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        tracing::info!("Creating 1,000 nodes for performance test...");
+        for i in 0..1000 {
+            let node = Node::new(
+                "text".to_string(),
+                format!("Performance test content {}", i),
+                None,
+                json!({}),
+            );
+            let created = store.create_node(node).await?;
+            store.update_embedding(&created.id, &blob).await?;
+
+            if i % 100 == 0 {
+                tracing::info!("Created {} nodes", i);
+            }
+        }
+
+        tracing::info!("Starting performance benchmark...");
+
+        // Measure search time (after data is created)
+        let start = std::time::Instant::now();
+        let results = store.search_by_embedding(&blob, 20, Some(0.5)).await?;
+        let elapsed = start.elapsed();
+
+        tracing::info!(
+            "Search completed in {:?} with {} results",
+            elapsed,
+            results.len()
+        );
+
+        // Performance target: < 100ms for 1,000 nodes
+        // Note: This is the search query time only, not data creation time
+        assert!(
+            elapsed.as_millis() < 100,
+            "Search should complete in < 100ms (took {:?})",
+            elapsed
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore] // Ignore by default due to long execution time
+    async fn test_search_performance_10k_nodes() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Create 10,000 nodes with embeddings
+        let base_vector = vec![1.0f32; 384];
+        let blob: Vec<u8> = base_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        tracing::info!("Creating 10,000 nodes for performance test...");
+        for i in 0..10000 {
+            let node = Node::new(
+                "text".to_string(),
+                format!("Performance test content {}", i),
+                None,
+                json!({}),
+            );
+            let created = store.create_node(node).await?;
+            store.update_embedding(&created.id, &blob).await?;
+
+            if i % 1000 == 0 {
+                tracing::info!("Created {} nodes", i);
+            }
+        }
+
+        tracing::info!("Starting performance benchmark...");
+
+        // Measure search time
+        let start = std::time::Instant::now();
+        let results = store.search_by_embedding(&blob, 20, Some(0.5)).await?;
+        let elapsed = start.elapsed();
+
+        tracing::info!(
+            "Search completed in {:?} with {} results",
+            elapsed,
+            results.len()
+        );
+
+        // Performance target: < 500ms for 10,000 nodes
+        assert!(
+            elapsed.as_millis() < 500,
+            "Search should complete in < 500ms (took {:?})",
+            elapsed
+        );
 
         Ok(())
     }

@@ -149,7 +149,8 @@ pub struct SearchContainersParams {
 /// ```
 #[tauri::command]
 pub async fn search_containers(
-    _state: State<'_, EmbeddingState>,
+    state: State<'_, EmbeddingState>,
+    node_service: State<'_, NodeService>,
     params: SearchContainersParams,
 ) -> Result<Vec<Node>, CommandError> {
     // Validate query parameter
@@ -170,11 +171,41 @@ pub async fn search_containers(
         }
     }
 
-    tracing::warn!(
-        "Semantic search temporarily disabled (Issue #481) for query: {}",
-        params.query
-    );
-    Ok(Vec::new())
+    // Generate embedding for search query
+    let query_embedding = state
+        .service
+        .nlp_engine()
+        .generate_embedding(&params.query)
+        .map_err(|e| {
+            command_error_with_details(
+                "Failed to generate query embedding".to_string(),
+                "EMBEDDING_ERROR",
+                format!("{:?}", e),
+            )
+        })?;
+
+    // Convert to binary blob
+    let query_blob = nodespace_nlp_engine::EmbeddingService::to_blob(&query_embedding);
+
+    // Search with default/custom parameters
+    let limit = params.limit.unwrap_or(20) as i64;
+    let threshold = params.threshold.map(|t| t as f64);
+
+    // Execute search
+    let store = node_service.store();
+    let results = store
+        .search_by_embedding(&query_blob, limit, threshold)
+        .await
+        .map_err(|e| {
+            command_error_with_details(
+                "Vector search failed".to_string(),
+                "DATABASE_ERROR",
+                format!("{:?}", e),
+            )
+        })?;
+
+    // Return only nodes (discard similarity scores for now)
+    Ok(results.into_iter().map(|(node, _score)| node).collect())
 }
 
 /// Update embedding for a topic node immediately
