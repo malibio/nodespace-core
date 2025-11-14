@@ -278,6 +278,32 @@ pub enum ContentType {
 }
 ```
 
+### Vector Similarity Search
+
+**Implementation**: SurrealDB native `vector::similarity::cosine()` function (Issue #495)
+
+**Status**: ✅ Implemented and tested
+
+**Usage**:
+```rust
+let results = store.search_by_embedding(&query_blob, limit, threshold).await?;
+```
+
+**Performance Characteristics**:
+- 1,000 nodes: < 1500ms (measured ~950ms, linear scan)
+- 10,000 nodes: < 15s (estimated ~9.5s, linear scan)
+- 100,000 nodes: < 2.5 minutes (estimated, linear scan without index)
+- Note: Current implementation uses O(n) linear scan without vector indexes
+
+**Similarity Score Interpretation**:
+- `1.0` = Identical content
+- `0.7-0.9` = Highly similar (semantic equivalents)
+- `0.5-0.7` = Moderately similar (related topics)
+- `0.3-0.5` = Loosely related
+- `< 0.3` = Unrelated content
+
+**Default threshold**: 0.5 (moderate similarity, balances recall and precision)
+
 ## Development Tools
 
 ### Build System

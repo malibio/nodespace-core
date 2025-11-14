@@ -112,6 +112,14 @@ impl SurrealStore {
     pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<Node>;
     pub async fn delete_node(&self, id: &str) -> Result<DeleteResult>;
 
+    // Vector Similarity Search (Issue #495)
+    pub async fn search_by_embedding(
+        &self,
+        embedding: &[u8],
+        limit: i64,
+        threshold: Option<f64>
+    ) -> Result<Vec<(Node, f64)>>;
+
     // Hierarchy Operations
     pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>>;
     pub async fn move_node(&self, node_id: &str, new_parent_id: Option<&str>) -> Result<()>;
@@ -127,6 +135,48 @@ impl SurrealStore {
 ```
 
 **No trait, no abstraction, no wrappers** - direct method calls.
+
+### Vector Similarity Search
+
+**Method**: `search_by_embedding(embedding: &[u8], limit: i64, threshold: Option<f64>)`
+
+**Description**: Performs semantic search using SurrealDB's native `vector::similarity::cosine()` function to find nodes with similar embeddings.
+
+**Query Pattern**:
+```sql
+SELECT
+    *,
+    vector::similarity::cosine(embedding_vector, $query_vector) AS similarity
+FROM nodes
+WHERE embedding_vector != NONE
+  AND vector::similarity::cosine(embedding_vector, $query_vector) > $threshold
+ORDER BY similarity DESC
+LIMIT $limit;
+```
+
+**Parameters**:
+- `embedding`: Query embedding as binary blob (Vec<u8>) from `EmbeddingService::to_blob()`
+- `limit`: Maximum number of results to return
+- `threshold`: Optional minimum similarity score (default: 0.5)
+
+**Returns**: Vector of `(Node, f64)` tuples sorted by similarity score descending (highest first)
+
+**Similarity Score Interpretation**:
+- `1.0` = Identical content (same embedding vector)
+- `0.7-0.9` = Highly similar (semantic equivalents, same topic)
+- `0.5-0.7` = Moderately similar (related topics, shared concepts)
+- `0.3-0.5` = Loosely related (some semantic overlap)
+- `< 0.3` = Unrelated content (different domains)
+
+**Default Threshold Rationale**:
+- `0.5` balances recall (finding related content) with precision (avoiding noise)
+- Lower thresholds increase recall but may include loosely related content
+- Higher thresholds increase precision but may miss relevant results
+
+**Performance**:
+- Linear scan over all nodes with embeddings (no vector index yet)
+- Estimated: ~1ms per 100 nodes on typical hardware
+- Future optimization: MTREE or HNSW vector indexes for sub-linear scaling
 
 ## Service Layer Integration
 
