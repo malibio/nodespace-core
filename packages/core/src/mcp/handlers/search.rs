@@ -48,8 +48,8 @@ pub struct SearchContainersParams {
 /// let result = handle_search_containers(&embedding_service, params).await?;
 /// // Returns top 10 most relevant containers
 /// ```
-pub async fn handle_search_containers(
-    service: &Arc<NodeEmbeddingService>,
+pub fn handle_search_containers(
+    _service: &Arc<NodeEmbeddingService>,
     params: Value,
 ) -> Result<Value, MCPError> {
     // Parse parameters
@@ -81,16 +81,11 @@ pub async fn handle_search_containers(
         ));
     }
 
-    // Execute search using existing NodeEmbeddingService methods
-    let results = if exact {
-        service
-            .exact_search_containers(&params.query, threshold, limit)
-            .await
-    } else {
-        service
-            .search_containers(&params.query, threshold, limit)
-            .await
-    };
+    // Semantic search pending NLP integration (database tracking now complete)
+    // Returning empty results until full embedding generation is re-enabled
+    tracing::info!("Semantic search pending NLP integration - database tracking complete");
+    let results: Result<Vec<crate::models::Node>, crate::services::error::NodeServiceError> =
+        Ok(Vec::new());
 
     // Map service errors to appropriate MCP errors with granular messages
     let nodes = results.map_err(|e| {

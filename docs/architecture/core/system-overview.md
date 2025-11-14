@@ -2,13 +2,13 @@
 
 ## Executive Summary
 
-NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded Turso database** and **TypeScript services**, providing a unified frontend-centric approach. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
+NodeSpace is an AI-native knowledge management system built around a hierarchical block-node interface. The architecture is centered on a **Tauri desktop application** with **embedded SurrealDB** and **TypeScript services**, providing a unified frontend-centric approach. The system supports multiple node types (Text, Task, AI Chat, Entity, PDF, Query) with real-time updates, natural language interactions, and sophisticated validation rules.
 
 ### Key Architectural Decisions
 
 - **Framework**: Svelte + Tauri desktop application with frontend-centric architecture
-- **Core Services**: TypeScript services (migrated from Rust) with embedded Turso database
-- **Data Architecture**: Local-first with embedded Turso + managed cloud sync for collaboration ([ADR-017](../decisions/017-sync-strategy-simplification.md))
+- **Core Services**: Rust services with direct SurrealDB access + TypeScript frontend services
+- **Data Architecture**: Local-first with embedded SurrealDB + managed cloud sync for collaboration ([ADR-017](../decisions/017-sync-strategy-simplification.md))
 - **Node Types**: Core types (Text, Task, AI Chat, Entity, Query) + extensible plugin system
 - **Future Extensions**: Workflow Canvas System for visual AI workflow creation (Phase 1.5 - see [Workflow Canvas System](../components/workflow-canvas-system.md))
 - **AI Integration**: Native LLM integration for CRUD operations, validation, and content generation
@@ -45,7 +45,7 @@ NodeSpace is an AI-native knowledge management system built around a hierarchica
 │  └─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                     Data Layer                              │
-│  ├── Embedded Turso (universal node schema with vector search) │
+│  ├── Embedded SurrealDB (universal node schema + graph relations) │
 │  ├── File System (raw content)                              │
 │  └── NLP Engine (mistral.rs)                                │
 └─────────────────────────────────────────────────────────────┘
@@ -149,7 +149,7 @@ nodespace-code-node/               # Code plugin repository
 
 ## Data Architecture Strategy
 
-NodeSpace employs a **local-first data architecture** with **Turso embedded database** and **managed cloud sync** for optimal AI-native knowledge management.
+NodeSpace employs a **local-first data architecture** with **SurrealDB embedded database** and **managed cloud sync** for optimal AI-native knowledge management.
 
 ### Local-First Design Principles
 

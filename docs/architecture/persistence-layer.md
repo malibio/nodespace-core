@@ -4,6 +4,19 @@
 
 NodeSpace's persistence layer coordinates asynchronous database operations with FOREIGN KEY constraint enforcement and multi-source update handling. This document describes the three-tier architecture for managing node persistence.
 
+### Key Principle: No Ephemeral Nodes During Editing
+
+**All nodes created by user actions persist immediately** (with 500ms debounce for content changes).
+
+The only exception is the **viewer-local placeholder** shown in BaseNodeViewer when a parent has no children. This placeholder:
+- Never enters SharedNodeStore (purely UI concern)
+- Never persists to database
+- Is promoted to a real node when user adds content
+
+This design eliminates an entire class of persistence bugs (UNIQUE constraint violations, deferred update complexity) while maintaining identical UX.
+
+**See:** ADR 023 - Eliminate Ephemeral Nodes During Editing
+
 ## Architecture Diagram
 
 ```

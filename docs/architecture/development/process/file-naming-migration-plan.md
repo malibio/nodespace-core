@@ -323,7 +323,7 @@ ComponentHydrationSystem.ts → componentHydrationSystem.ts
 DeveloperInspector.ts → developerInspector.ts
 EnhancedNodeManager.ts → enhancedNodeManager.ts
 HierarchyService.ts → hierarchyService.ts
-MockDatabaseService.ts → mockDatabaseService.ts
+MockSurrealStore.ts → mockSurrealStore.ts
 NodeManager.ts → nodeManager.ts
 NodeOperationsService.ts → nodeOperationsService.ts
 NodeReferenceService.ts → nodeReferenceService.ts
@@ -369,7 +369,7 @@ git mv ComponentHydrationSystem.ts componentHydrationSystem.ts
 git mv DeveloperInspector.ts developerInspector.ts
 git mv EnhancedNodeManager.ts enhancedNodeManager.ts
 git mv HierarchyService.ts hierarchyService.ts
-git mv MockDatabaseService.ts mockDatabaseService.ts
+git mv MockSurrealStore.ts mockSurrealStore.ts
 git mv NodeManager.ts nodeManager.ts
 git mv NodeOperationsService.ts nodeOperationsService.ts
 git mv NodeReferenceService.ts nodeReferenceService.ts
@@ -402,7 +402,7 @@ find packages/desktop-app/src -name "*.ts" -o -name "*.svelte" | xargs sed -i ''
   -e 's|DeveloperInspector\.ts|developerInspector.ts|g' \
   -e 's|EnhancedNodeManager\.ts|enhancedNodeManager.ts|g' \
   -e 's|HierarchyService\.ts|hierarchyService.ts|g' \
-  -e 's|MockDatabaseService\.ts|mockDatabaseService.ts|g' \
+  -e 's|MockSurrealStore\.ts|mockSurrealStore.ts|g' \
   -e 's|NodeManager\.ts|nodeManager.ts|g' \
   -e 's|NodeOperationsService\.ts|nodeOperationsService.ts|g' \
   -e 's|NodeReferenceService\.ts|nodeReferenceService.ts|g' \

@@ -173,7 +173,7 @@ NodeSpace uses rule-based index management to optimize query performance without
 
 ```rust
 pub struct IndexManager {
-    db: Arc<libsql::Database>,
+    db: Arc<surrealdb::Database>,
     index_registry: HashMap<String, IndexDefinition>,
 }
 
@@ -463,7 +463,7 @@ NodeSpace handles schema changes through lazy migration to preserve the Pure JSO
 This approach enables controlled schema evolution without ALTER TABLE operations, maintaining the desktop-safe architecture while allowing schemas to evolve over time.
 
 ### Phase 1: Current (Single User, Local)
-- Turso embedded storage (Pure JSON schema)
+- SurrealDB embedded storage (Pure JSON schema)
 - Svelte stores for UI reactivity
 - Simple CRUD operations with JSON path indexes
 - Rule-based index management
@@ -471,7 +471,7 @@ This approach enables controlled schema evolution without ALTER TABLE operations
 - Schema versioning with lazy migration support
 
 ### Phase 2: Add Sync Infrastructure (Multi-User - Premium Tier)
-- Enable Turso embedded replicas
+- Enable SurrealDB embedded replicas
 - Configure cloud sync endpoint
 - Implement conflict resolution (Turso handles replication)
 - Premium tier upsell at 100K+ nodes
@@ -485,7 +485,7 @@ This approach enables controlled schema evolution without ALTER TABLE operations
 ### Data Migration Strategy
 ```typescript
 // Pure JSON schema eliminates migration risk
-// Turso embedded replicas handle sync automatically
+// SurrealDB embedded replicas handle sync automatically
 // No schema changes needed - just enable replication
 interface TursoSyncConfig {
     enabled: boolean;
@@ -553,13 +553,13 @@ See [Issue #106](https://github.com/malibio/nodespace-core/issues/106) for compl
 
 ## Conclusion
 
-NodeSpace's local-first architecture with Turso embedded and Pure JSON schema provides the optimal foundation for AI-native knowledge management:
+NodeSpace's local-first architecture with SurrealDB embedded and Pure JSON schema provides the optimal foundation for AI-native knowledge management:
 
 1. **Immediate Performance**: All operations are local-first and instant (0.1-5ms queries)
 2. **Zero Migration Risk**: Pure JSON schema eliminates ALTER TABLE on user machines
 3. **AI-Optimized**: F32_BLOB vector storage with JSON path indexes for semantic search
 4. **Offline Capable**: Complete functionality without network dependency
-5. **Future-Ready**: Turso embedded replicas enable seamless sync (free → premium tier)
+5. **Future-Ready**: SurrealDB embedded replicas enable seamless sync (free → premium tier)
 6. **Rule-Based Intelligence**: Dynamic index management based on query patterns (not LLM)
 7. **User-Centric**: Users own and control their data completely
 8. **Safe Evolution**: Lazy migration strategy enables schema changes without desktop coordination
