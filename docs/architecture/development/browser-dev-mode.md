@@ -67,7 +67,7 @@ Data is lost when server stops. Fast, clean state for testing.
 bun run dev:db
 ```
 
-Data persists in `file://nodespace.db`. Survives server restarts.
+Data persists in `~/.nodespace/database/nodespace-dev`. Survives server restarts.
 
 ### Manual Schema Initialization
 
