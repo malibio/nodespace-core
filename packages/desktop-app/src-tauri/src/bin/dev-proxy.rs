@@ -115,6 +115,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Health check (useful for testing)
         .route("/health", get(health_check))
+        // Database initialization (no-op - already initialized on startup)
+        .route("/api/database/init", post(init_database))
         // Node CRUD endpoints
         .route("/api/nodes", post(create_node))
         .route("/api/nodes/:id", get(get_node))
@@ -172,6 +174,16 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health_check() -> &'static str {
     "OK"
+}
+
+/// Database initialization endpoint (no-op for dev-proxy)
+///
+/// The database is already initialized when dev-proxy starts, so this just
+/// returns success. This endpoint exists for frontend compatibility.
+async fn init_database() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "dbPath": "http://127.0.0.1:8000 (via dev-proxy)"
+    }))
 }
 
 async fn create_node(State(state): State<AppState>, Json(node): Json<Node>) -> ApiResult<String> {

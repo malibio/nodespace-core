@@ -1465,7 +1465,7 @@ export class HttpAdapter implements BackendAdapter {
   async getMentioningContainers(nodeId: string): Promise<string[]> {
     try {
       const response = await globalThis.fetch(
-        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentioning-containers`,
+        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentions/containers`,
         {
           method: 'GET'
         }
