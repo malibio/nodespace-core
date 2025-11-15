@@ -27,21 +27,26 @@ use axum::{
 use chrono::Utc;
 use nodespace_core::{
     db::HttpStore,
-    models::{Node, NodeFilter, NodeUpdate},
-    services::NodeService,
+    models::{
+        schema::{ProtectionLevel, SchemaDefinition, SchemaField},
+        Node, NodeFilter, NodeUpdate,
+    },
+    services::{NodeService, SchemaService},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
-// Type alias for HTTP client NodeService
+// Type alias for HTTP client types
 type HttpNodeService = NodeService<surrealdb::engine::remote::http::Client>;
+type HttpSchemaService = SchemaService<surrealdb::engine::remote::http::Client>;
 
 /// Application state shared across handlers
 #[derive(Clone)]
 struct AppState {
     node_service: Arc<HttpNodeService>,
+    schema_service: Arc<HttpSchemaService>,
 }
 
 /// Standard error response format
@@ -67,6 +72,28 @@ struct UpdateNodeRequest {
 struct MentionRequest {
     pub source_id: String,
     pub target_id: String,
+}
+
+/// Add schema field request
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddSchemaFieldRequest {
+    pub name: String,
+    pub field_type: String,
+    pub indexed: bool,
+    pub required: Option<bool>,
+    pub default: Option<serde_json::Value>,
+    pub description: Option<String>,
+    pub item_type: Option<String>,
+    pub enum_values: Option<Vec<String>>,
+    pub extensible: Option<bool>,
+}
+
+/// Extend enum field request
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtendEnumRequest {
+    pub value: String,
 }
 
 /// Create node request for POST /api/nodes endpoint
@@ -163,7 +190,15 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let state = AppState { node_service };
+    // Initialize SchemaService
+    println!("🔖 Initializing SchemaService...");
+    let schema_service = Arc::new(SchemaService::new(node_service.clone()));
+    println!("✅ SchemaService initialized");
+
+    let state = AppState {
+        node_service,
+        schema_service,
+    };
 
     // Build HTTP router
     let app = Router::new()
@@ -200,6 +235,16 @@ async fn main() -> anyhow::Result<()> {
         )
         // Schema endpoints
         .route("/api/schemas/:id", get(get_schema))
+        .route("/api/schemas/:id/fields", post(add_schema_field))
+        .route("/api/schemas/:id/fields/:name", delete(remove_schema_field))
+        .route(
+            "/api/schemas/:id/fields/:name/enum",
+            post(extend_schema_enum),
+        )
+        .route(
+            "/api/schemas/:id/fields/:name/enum/:value",
+            delete(remove_schema_enum_value),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive()); // Allow CORS from frontend (localhost:5173)
 
@@ -440,18 +485,124 @@ async fn get_mentioning_containers(
 async fn get_schema(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<serde_json::Value> {
-    // Get the schema node (schemas are stored as nodes with id = node_type)
-    let schema_node = state
-        .node_service
-        .get_node(&id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+) -> ApiResult<SchemaDefinition> {
+    // Use SchemaService for proper schema retrieval and validation
+    let schema = state.schema_service.get_schema(&id).await.map_err(|e| {
+        let error_str = e.to_string();
+        if error_str.contains("not found") {
+            (StatusCode::NOT_FOUND, error_str)
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, error_str)
+        }
+    })?;
 
-    // Return just the properties (SchemaDefinition), not the whole node
-    // Frontend expects SchemaDefinition, not Node
-    match schema_node {
-        Some(node) => Ok(Json(node.properties)),
-        None => Err((StatusCode::NOT_FOUND, format!("Schema not found: {}", id))),
-    }
+    Ok(Json(schema))
+}
+
+async fn add_schema_field(
+    State(state): State<AppState>,
+    Path(schema_id): Path<String>,
+    Json(request): Json<AddSchemaFieldRequest>,
+) -> ApiStatusResult {
+    // Build SchemaField from request
+    let field = SchemaField {
+        name: request.name,
+        field_type: request.field_type,
+        protection: ProtectionLevel::User, // Only user fields can be added
+        core_values: None,                 // User fields don't have core values
+        user_values: request.enum_values,
+        indexed: request.indexed,
+        required: request.required,
+        extensible: request.extensible,
+        default: request.default,
+        description: request.description,
+        item_type: request.item_type,
+    };
+
+    state
+        .schema_service
+        .add_field(&schema_id, field)
+        .await
+        .map_err(|e| {
+            let error_str = e.to_string();
+            if error_str.contains("not found") {
+                (StatusCode::NOT_FOUND, error_str)
+            } else if error_str.contains("already exists") || error_str.contains("validation") {
+                (StatusCode::BAD_REQUEST, error_str)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, error_str)
+            }
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_schema_field(
+    State(state): State<AppState>,
+    Path((schema_id, field_name)): Path<(String, String)>,
+) -> ApiStatusResult {
+    state
+        .schema_service
+        .remove_field(&schema_id, &field_name)
+        .await
+        .map_err(|e| {
+            let error_str = e.to_string();
+            if error_str.contains("not found") {
+                (StatusCode::NOT_FOUND, error_str)
+            } else if error_str.contains("Cannot remove") || error_str.contains("protection") {
+                (StatusCode::BAD_REQUEST, error_str)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, error_str)
+            }
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn extend_schema_enum(
+    State(state): State<AppState>,
+    Path((schema_id, field_name)): Path<(String, String)>,
+    Json(request): Json<ExtendEnumRequest>,
+) -> ApiStatusResult {
+    state
+        .schema_service
+        .extend_enum_field(&schema_id, &field_name, request.value)
+        .await
+        .map_err(|e| {
+            let error_str = e.to_string();
+            if error_str.contains("not found") {
+                (StatusCode::NOT_FOUND, error_str)
+            } else if error_str.contains("not an enum")
+                || error_str.contains("not extensible")
+                || error_str.contains("already exists")
+            {
+                (StatusCode::BAD_REQUEST, error_str)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, error_str)
+            }
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_schema_enum_value(
+    State(state): State<AppState>,
+    Path((schema_id, field_name, value)): Path<(String, String, String)>,
+) -> ApiStatusResult {
+    state
+        .schema_service
+        .remove_enum_value(&schema_id, &field_name, &value)
+        .await
+        .map_err(|e| {
+            let error_str = e.to_string();
+            if error_str.contains("not found") {
+                (StatusCode::NOT_FOUND, error_str)
+            } else if error_str.contains("Cannot remove core value") {
+                (StatusCode::BAD_REQUEST, error_str)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, error_str)
+            }
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
