@@ -7,8 +7,10 @@
  * - An interface named "Node" or ending with "Node" has a property named "type"
  * - Suggests using "nodeType" instead for clarity and consistency
  *
- * Exception: Allows "type" in interfaces clearly related to schemas, fields, or events
- * (e.g., SchemaField, EventType, etc.)
+ * Exceptions: Allows "type" in interfaces clearly related to:
+ * - Schemas and fields (e.g., SchemaField, EventType)
+ * - AST nodes (e.g., ASTNode, DocumentNode - markdown parsing structures)
+ * - Test helpers (e.g., TestNode, TestHierarchyNode - test fixtures)
  *
  * Related: Issue #507, identifier-naming-conventions.md
  */
@@ -32,15 +34,29 @@ export default {
       TSInterfaceDeclaration(node) {
         const interfaceName = node.id.name;
 
-        // Check if this is a Node-related interface
-        // Match: "Node", "*Node", but NOT "*NodeResult" or schema-related names
+        // Check if this is a NodeSpace domain interface
+        // Match: "Node", "*Node", but NOT "*NodeResult" or exceptions
+        // Exceptions: Schema/Field contexts, AST nodes (extends ASTNode), Test helpers
         const isNodeInterface = (
           interfaceName === 'Node' ||
           (interfaceName.endsWith('Node') && !interfaceName.endsWith('NodeResult'))
-        ) && !interfaceName.includes('Schema') && !interfaceName.includes('Field');
+        ) &&
+        !interfaceName.includes('Schema') &&
+        !interfaceName.includes('Field') &&
+        !interfaceName.includes('AST') &&        // Exclude ASTNode itself
+        !interfaceName.startsWith('Test');       // Exclude test helpers
 
         if (!isNodeInterface) {
           return;
+        }
+
+        // Additional check: Skip if interface extends ASTNode (markdown parsing structures)
+        const extendsASTNode = node.extends?.some(
+          ext => ext.expression?.name === 'ASTNode'
+        );
+
+        if (extendsASTNode) {
+          return; // Skip markdown AST nodes
         }
 
         // Check if interface has a property named "type"
