@@ -660,16 +660,17 @@ let field = SchemaField {
 
 ## Enforcement
 
-### ESLint Rules (Future Enhancement)
+### ESLint Rules
 
-```javascript
-// Potential custom rules to add:
-// - Enforce 'nodeType' over 'type' for Node interfaces
-// - Enforce camelCase for variables
-// - Enforce PascalCase for interfaces
-```
+**Custom Rules** (as of Issue #507):
+- ✅ **nodeType Enforcement**: Custom ESLint rule warns when Node interfaces use `type` instead of `nodeType`
+- ✅ **Filename Convention**: Enforces kebab-case for all TypeScript and Svelte files
+- ✅ **Unused Variables**: Warns about unused variables (allows underscore prefix for intentionally unused)
 
-**Current**: Manual review during PR process.
+**Standard Rules**:
+- ✅ **camelCase variables**: Enforced by TypeScript and oxlint
+- ✅ **PascalCase interfaces**: Enforced by TypeScript conventions
+- ✅ **No explicit any**: Warns about unsafe `any` types
 
 ### Quality Gates
 
@@ -689,10 +690,11 @@ Reviewers should verify:
 - [ ] Variables use camelCase (TS) or snake_case (Rust)
 - [ ] Types/Interfaces use PascalCase
 - [ ] Constants use SCREAMING_SNAKE_CASE (when appropriate)
-- [ ] Node categories use `nodeType` not `type`
-- [ ] Schema fields use `type` not `fieldType`
+- [ ] **Node interfaces use `nodeType` not `type`** (enforced by ESLint rule `nodespace/enforce-nodetype`)
+- [ ] Schema field interfaces use `type` not `fieldType` (acceptable in schema context)
 - [ ] IDs always suffixed with `Id` / `_id`
 - [ ] Serde rename attributes match TypeScript expectations
+- [ ] No ESLint `nodespace/enforce-nodetype` warnings in PR
 
 ## Quick Reference
 
