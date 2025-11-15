@@ -1106,6 +1106,104 @@ mod tests {
     }
 
     #[test]
+    fn test_header_node_behavior_validation() {
+        let behavior = HeaderNodeBehavior;
+
+        // Valid header with content
+        let valid_node = Node::new(
+            "header".to_string(),
+            "## Hello World".to_string(),
+            None,
+            json!({"headerLevel": 2}),
+        );
+        assert!(behavior.validate(&valid_node).is_ok());
+
+        // Issue #484: Blank headers are now allowed (e.g., "##" with no content)
+        let mut blank_node = valid_node.clone();
+        blank_node.content = "".to_string();
+        assert!(
+            behavior.validate(&blank_node).is_ok(),
+            "Blank header nodes should be allowed per Issue #484"
+        );
+
+        // Issue #484: Whitespace-only headers are allowed
+        let mut whitespace_node = valid_node.clone();
+        whitespace_node.content = "   ".to_string();
+        assert!(
+            behavior.validate(&whitespace_node).is_ok(),
+            "Whitespace-only header nodes should be allowed per Issue #484"
+        );
+    }
+
+    #[test]
+    fn test_code_block_behavior_validation() {
+        let behavior = CodeBlockNodeBehavior;
+
+        // Valid code block with content
+        let valid_node = Node::new(
+            "code-block".to_string(),
+            "```javascript\nconst x = 1;".to_string(),
+            None,
+            json!({"language": "javascript"}),
+        );
+        assert!(behavior.validate(&valid_node).is_ok());
+
+        // Issue #484: Blank code blocks are now allowed
+        let mut blank_node = valid_node.clone();
+        blank_node.content = "".to_string();
+        assert!(
+            behavior.validate(&blank_node).is_ok(),
+            "Blank code blocks should be allowed per Issue #484"
+        );
+
+        // Issue #484: Whitespace-only code blocks are allowed
+        let mut whitespace_node = valid_node.clone();
+        whitespace_node.content = "   ".to_string();
+        assert!(
+            behavior.validate(&whitespace_node).is_ok(),
+            "Whitespace-only code blocks should be allowed per Issue #484"
+        );
+    }
+
+    #[test]
+    fn test_quote_block_behavior_validation() {
+        let behavior = QuoteBlockNodeBehavior;
+
+        // Valid quote block with content
+        let valid_node = Node::new(
+            "quote-block".to_string(),
+            "> Hello world".to_string(),
+            None,
+            json!({}),
+        );
+        assert!(behavior.validate(&valid_node).is_ok());
+
+        // Issue #484: Blank quote blocks are now allowed (e.g., ">" with no content)
+        let mut blank_node = valid_node.clone();
+        blank_node.content = "".to_string();
+        assert!(
+            behavior.validate(&blank_node).is_ok(),
+            "Blank quote blocks should be allowed per Issue #484"
+        );
+
+        // Issue #484: Quote with just prefix and whitespace
+        let mut prefix_only_node = valid_node.clone();
+        prefix_only_node.content = ">".to_string();
+        assert!(
+            behavior.validate(&prefix_only_node).is_ok(),
+            "Quote blocks with just '>' should be allowed per Issue #484"
+        );
+
+        // Issue #484: Quote with prefix and space
+        let mut prefix_space_node = valid_node.clone();
+        prefix_space_node.content = "> ".to_string();
+        assert!(
+            behavior.validate(&prefix_space_node).is_ok(),
+            "Quote blocks with just '> ' should be allowed per Issue #484"
+        );
+    }
+
+    #[test]
     fn test_task_node_behavior_validation() {
         let behavior = TaskNodeBehavior;
 
