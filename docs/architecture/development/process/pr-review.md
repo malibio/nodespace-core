@@ -80,6 +80,10 @@ This PR has been automatically rejected due to quality gate violations:
 - [ ] **Code Quality**: All quality gates passed (verified in step 1)
 - [ ] **TypeScript**: Strict type checking with no compilation errors
 - [ ] **Svelte**: Reactivity used correctly, no component errors
+- [ ] **Naming Conventions**: Follows [Identifier Naming Conventions](../standards/identifier-naming-conventions.md)
+  - [ ] Node interfaces use `nodeType` not `type` (ESLint rule enforced)
+  - [ ] Variables use camelCase (TS) or snake_case (Rust)
+  - [ ] IDs suffixed with `Id` / `_id`
 - [ ] **Accessibility**: WCAG compliance, proper ARIA attributes where needed
 - [ ] **Error Handling**: Comprehensive error boundaries and validation
 - [ ] **Performance**: No obvious performance bottlenecks or inefficiencies
