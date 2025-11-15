@@ -364,13 +364,10 @@ impl NodeBehavior for HeaderNodeBehavior {
         "header"
     }
 
-    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Header nodes must have content (same validation as text nodes)
-        if is_empty_or_whitespace(&node.content) {
-            return Err(NodeValidationError::MissingField(
-                "Header nodes must have content".to_string(),
-            ));
-        }
+    fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
+        // Issue #484: Allow blank header nodes (e.g., "##" with no content)
+        // Similar to text nodes, headers can be created blank and filled in later
+        // Frontend manages the UX of blank headers (e.g., showing placeholder text)
         Ok(())
     }
 
@@ -519,14 +516,10 @@ impl NodeBehavior for CodeBlockNodeBehavior {
         "code-block"
     }
 
-    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Code blocks must have content
-        // Note: Frontend manages empty placeholders, backend rejects truly empty content
-        if is_empty_or_whitespace(&node.content) {
-            return Err(NodeValidationError::MissingField(
-                "Code block nodes must have content".to_string(),
-            ));
-        }
+    fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
+        // Issue #484: Allow blank code blocks (e.g., "```language" with no code)
+        // Users can create blank code blocks and fill in code later
+        // Frontend manages the UX of blank code blocks (e.g., showing placeholder text)
         Ok(())
     }
 
@@ -573,27 +566,10 @@ impl NodeBehavior for QuoteBlockNodeBehavior {
         "quote-block"
     }
 
-    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Quote blocks must have actual content beyond the "> " prefix
-        // Strip "> " or ">" from all lines and check if any content remains
-        let content_without_prefix: String = node
-            .content
-            .lines()
-            .map(|line| {
-                // Remove "> " or ">" from start of each line using strip_prefix
-                line.strip_prefix("> ")
-                    .or_else(|| line.strip_prefix('>'))
-                    .unwrap_or(line)
-            })
-            .collect::<Vec<&str>>()
-            .join("\n");
-
-        // Check if there's any actual content after stripping prefixes
-        if is_empty_or_whitespace(&content_without_prefix) {
-            return Err(NodeValidationError::MissingField(
-                "Quote block nodes must have content beyond the '> ' prefix".to_string(),
-            ));
-        }
+    fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
+        // Issue #484: Allow blank quote blocks (e.g., ">" with no content)
+        // Users can create blank quote blocks and fill in quoted text later
+        // Frontend manages the UX of blank quote blocks (e.g., showing placeholder text)
         Ok(())
     }
 
