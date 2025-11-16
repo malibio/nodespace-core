@@ -457,8 +457,6 @@
         id: newNodeId,
         content: title,
         nodeType: 'text',
-        parentId: null,
-        containerNodeId: null,
         beforeSiblingId: beforeSiblingId,
         properties: {},
         embeddingVector: null

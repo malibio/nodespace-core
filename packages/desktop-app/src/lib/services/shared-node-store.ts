@@ -228,15 +228,31 @@ export class SharedNodeStore {
 
   /**
    * Get nodes filtered by parent ID
+   *
+   * DEPRECATED: This method relied on node.parentId which no longer exists.
+   * Use backend queries instead: backendAdapter.getChildren(parentId) or backendAdapter.getNodesByContainerId(containerId)
+   * These queries use graph edges stored in the database.
    */
-  getNodesForParent(parentId: string | null): Node[] {
-    const result: Node[] = [];
-    for (const node of this.nodes.values()) {
-      if (node.parentId === parentId) {
-        result.push(node);
-      }
-    }
-    return result;
+  getNodesForParent(_parentId: string | null): Node[] {
+    throw new Error('getNodesForParent is deprecated - use backendAdapter.getChildren() or getNodesByContainerId() instead');
+  }
+
+  /**
+   * Get parent nodes for a given node
+   *
+   * NOTE: In graph-native architecture, a node can have multiple parents via different edge types.
+   * This method queries the backend for all parent relationships.
+   * For now, returns empty array as parent relationships are managed by backend graph queries.
+   *
+   * TODO: Implement backend query when parent edge traversal API is available
+   *
+   * @param _nodeId - Node ID to find parents for
+   * @returns Array of parent nodes (currently empty - requires backend API)
+   */
+  getParentsForNode(_nodeId: string): Node[] {
+    // TODO: Call backend API: backendAdapter.getParents(nodeId)
+    // For now, return empty array - parent relationships queried via backend
+    return [];
   }
 
   /**
@@ -405,8 +421,7 @@ export class SharedNodeStore {
         // Issue #479: Remove placeholder checks - all real nodes (even blank) should be persisted
         // FOREIGN KEY validation will be handled by persistence coordinator dependencies
 
-        const isStructuralChange =
-          'parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes;
+        const isStructuralChange = 'beforeSiblingId' in changes;
         const isContentChange = 'content' in changes;
         const isNodeTypeChange = 'nodeType' in changes;
         const isPropertyChange = 'properties' in changes;
@@ -430,29 +445,8 @@ export class SharedNodeStore {
           // Use debounced mode for content changes (typing), immediate for structural changes
           const dependencies: Array<string | (() => Promise<void>)> = [];
 
-          // For structural changes, ensure ENTIRE ancestor chain is persisted (FOREIGN KEY)
-          if (isStructuralChange && updatedNode.parentId) {
-            dependencies.push(async () => {
-              await this.ensureAncestorChainPersisted(updatedNode.parentId!);
-            });
-          }
-
-          /**
-           * Ensure containerNodeId is persisted (FOREIGN KEY constraint)
-           *
-           * Backend validates that containerNodeId must reference an existing node.
-           * Add dependency when:
-           * - containerNodeId is set
-           * - Different from parentId (avoids duplicate dependency)
-           * - NOT already persisted to database
-           */
-          if (
-            updatedNode.containerNodeId &&
-            updatedNode.containerNodeId !== updatedNode.parentId &&
-            !this.persistedNodeIds.has(updatedNode.containerNodeId)
-          ) {
-            dependencies.push(updatedNode.containerNodeId);
-          }
+          // Parent/container relationships are now managed via graph edges in the backend
+          // No frontend foreign key dependency tracking needed
 
           /**
            * Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
@@ -617,12 +611,11 @@ export class SharedNodeStore {
     const isNewNode = !this.persistedNodeIds.has(node.id);
 
     // Emit event for HierarchyService cache invalidation
-    // ONLY when hierarchical relationships change (parent, siblings, new nodes)
+    // ONLY when hierarchical relationships change (siblings, new nodes)
     // Content-only updates should not trigger hierarchy cache invalidation
     const existingNode = this.nodes.get(node.id);
     const isHierarchyChange =
       !existingNode ||
-      existingNode.parentId !== node.parentId ||
       existingNode.beforeSiblingId !== node.beforeSiblingId;
 
     this.nodes.set(node.id, node);
@@ -669,30 +662,6 @@ export class SharedNodeStore {
 
         // Delegate to PersistenceCoordinator
         const dependencies: Array<string | (() => Promise<void>)> = [];
-
-        // Ensure ENTIRE ancestor chain is persisted (FOREIGN KEY)
-        if (node.parentId) {
-          dependencies.push(async () => {
-            await this.ensureAncestorChainPersisted(node.parentId!);
-          });
-        }
-
-        /**
-         * Ensure containerNodeId is persisted (FOREIGN KEY constraint)
-         *
-         * Backend validates that containerNodeId must reference an existing node.
-         * Add dependency when:
-         * - containerNodeId is set
-         * - Different from parentId (avoids duplicate dependency)
-         * - NOT already persisted to database
-         */
-        if (
-          node.containerNodeId &&
-          node.containerNodeId !== node.parentId &&
-          !this.persistedNodeIds.has(node.containerNodeId)
-        ) {
-          dependencies.push(node.containerNodeId);
-        }
 
         /**
          * Ensure beforeSiblingId is persisted (FOREIGN KEY constraint)
@@ -826,8 +795,7 @@ export class SharedNodeStore {
         type: 'node:deleted',
         namespace: 'lifecycle',
         source: source.type,
-        nodeId,
-        parentId: node.parentId || undefined
+        nodeId
       } as never);
 
       // Phase 2.4: Persist deletion to database
@@ -960,58 +928,16 @@ export class SharedNodeStore {
   }
 
   /**
-   * Ensure entire ancestor chain is persisted before persisting a child node
-   * Recursively walks up the parent chain and waits for each ancestor to be persisted
+   * DEPRECATED: Ensure entire ancestor chain is persisted before persisting a child node
    *
-   * This prevents FOREIGN KEY constraint violations when creating deeply nested
-   * placeholder nodes (e.g., Grandparent → Parent → Child where all are placeholders)
+   * This method is now a no-op. Parent/child relationships are managed via graph edges
+   * in the backend, not via frontend foreign key tracking.
    *
-   * @param nodeId - Starting node ID to walk ancestors from
+   * @param _nodeId - Starting node ID to walk ancestors from (unused)
    */
-  private async ensureAncestorChainPersisted(nodeId: string): Promise<void> {
-    const node = this.nodes.get(nodeId);
-    if (!node) {
-      // Node doesn't exist in store, nothing to persist
-      return;
-    }
-
-    // Skip date nodes - backend handles their persistence (virtual or real)
-    // Frontend should never try to persist date nodes - that's backend's responsibility
-    if (node.nodeType === 'date') {
-      return;
-    }
-
-    // If node has a parent, recursively ensure parent chain is persisted first
-    if (node.parentId) {
-      await this.ensureAncestorChainPersisted(node.parentId);
-    }
-
-    // Check if node needs to be persisted
-    if (!this.persistedNodeIds.has(nodeId)) {
-      // Issue #479: No placeholder checks - all real nodes (even blank) should be persisted
-      // Force persist it now before any child operations that reference it
-
-      // Trigger persistence via PersistenceCoordinator
-      const handle = PersistenceCoordinator.getInstance().persist(
-        nodeId,
-        async () => {
-          await tauriNodeService.createNode(node);
-        },
-        { mode: 'immediate' } // Use immediate mode for structural operations
-      );
-
-      try {
-        await handle.promise;
-        // Mark as persisted on success
-        this.persistedNodeIds.add(nodeId);
-      } catch (error) {
-        console.error(`[SharedNodeStore] Failed to persist node ${nodeId}:`, error);
-        throw error;
-      }
-    } else if (this.hasPendingSave(nodeId)) {
-      // Node has a pending save operation, wait for it
-      await this.waitForNodeSaves([nodeId]);
-    }
+  private async ensureAncestorChainPersisted(_nodeId: string): Promise<void> {
+    // No-op: Backend handles parent/child relationships via graph edges
+    return Promise.resolve();
   }
 
   /**
@@ -1037,7 +963,7 @@ export class SharedNodeStore {
    * @param newlyPersistedNodeId - ID of the node that was just persisted
    */
   private updateDeferredSiblingReferences(newlyPersistedNodeId: string): void {
-    // Find all nodes in memory that have this node as their beforeSiblingId OR parentId
+    // Find all nodes in memory that have this node as their beforeSiblingId
     // but haven't persisted that reference yet (due to FOREIGN KEY constraints)
     const nodesToUpdate: Array<{ nodeId: string; changes: Partial<Node> }> = [];
 
@@ -1051,11 +977,6 @@ export class SharedNodeStore {
       // Check if this node has the newly-persisted node as beforeSiblingId
       if (node.beforeSiblingId === newlyPersistedNodeId) {
         changes.beforeSiblingId = newlyPersistedNodeId;
-      }
-
-      // Check if this node has the newly-persisted node as parentId
-      if (node.parentId === newlyPersistedNodeId) {
-        changes.parentId = newlyPersistedNodeId;
       }
 
       if (Object.keys(changes).length > 0) {
@@ -1140,17 +1061,16 @@ export class SharedNodeStore {
    *
    * @param updates - Array of structural updates
    * @param source - Update source
-   * @param viewerParentId - Viewer's parent ID (for reference validation)
+   * @param viewerParentId - Viewer's parent ID (for reference validation) - DEPRECATED, ignored
    * @returns Results with succeeded/failed updates
    */
   async updateStructuralChangesValidated(
     updates: Array<{
       nodeId: string;
-      parentId: string | null;
       beforeSiblingId: string | null;
     }>,
     source: UpdateSource,
-    viewerParentId: string | null
+    _viewerParentId: string | null
   ): Promise<{
     succeeded: typeof updates;
     failed: typeof updates;
@@ -1166,9 +1086,9 @@ export class SharedNodeStore {
         // Validate FOREIGN KEY references
         const validation = await this.validateNodeReferences(
           update.nodeId,
-          update.parentId,
+          null, // parentId parameter deprecated
           update.beforeSiblingId,
-          viewerParentId
+          null // viewerParentId deprecated
         );
 
         if (validation.errors.length > 0) {
@@ -1181,7 +1101,6 @@ export class SharedNodeStore {
         this.updateNode(
           update.nodeId,
           {
-            parentId: validation.validatedParentId,
             beforeSiblingId: validation.validatedBeforeSiblingId
           },
           source
@@ -1189,7 +1108,6 @@ export class SharedNodeStore {
 
         succeeded.push({
           ...update,
-          parentId: validation.validatedParentId,
           beforeSiblingId: validation.validatedBeforeSiblingId
         });
       } catch (error) {
@@ -1550,7 +1468,7 @@ export class SharedNodeStore {
    */
   private determineUpdateType(changes: Partial<Node>): 'content' | 'structure' | 'metadata' {
     // Structural changes take precedence
-    if ('parentId' in changes || 'beforeSiblingId' in changes || 'containerNodeId' in changes) {
+    if ('beforeSiblingId' in changes) {
       return 'structure';
     }
 
@@ -1863,22 +1781,6 @@ export class SharedNodeStore {
 
     // Use PersistenceCoordinator for coordinated persistence
     const dependencies: Array<string | (() => Promise<void>)> = [];
-
-    // Ensure parent chain is persisted (FOREIGN KEY)
-    if (finalNode.parentId) {
-      dependencies.push(async () => {
-        await this.ensureAncestorChainPersisted(finalNode.parentId!);
-      });
-    }
-
-    // Ensure containerNodeId is persisted (FOREIGN KEY)
-    if (
-      finalNode.containerNodeId &&
-      finalNode.containerNodeId !== finalNode.parentId &&
-      !this.persistedNodeIds.has(finalNode.containerNodeId)
-    ) {
-      dependencies.push(finalNode.containerNodeId);
-    }
 
     // Ensure beforeSiblingId is persisted (FOREIGN KEY)
     if (finalNode.beforeSiblingId && !this.persistedNodeIds.has(finalNode.beforeSiblingId)) {
