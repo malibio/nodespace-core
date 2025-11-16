@@ -1947,16 +1947,12 @@ mod tests {
 
         // Insert test data directly
         let db = service.node_service.store.db();
-        db.query(
-            r#"CREATE person_query_test:alice SET name = "Alice", address = { city: "NYC" }"#,
-        )
-        .await
-        .unwrap();
-        db.query(
-            r#"CREATE person_query_test:bob SET name = "Bob", address = { city: "SF" }"#,
-        )
-        .await
-        .unwrap();
+        db.query(r#"CREATE person_query_test:alice SET name = "Alice", address = { city: "NYC" }"#)
+            .await
+            .unwrap();
+        db.query(r#"CREATE person_query_test:bob SET name = "Bob", address = { city: "SF" }"#)
+            .await
+            .unwrap();
 
         // Query by nested field
         let mut result = db
@@ -2050,19 +2046,15 @@ mod tests {
 
         // Insert test data
         let db = service.node_service.store.db();
-        db.query(
-            r#"CREATE product_test:1 SET details = { category: "electronics", price: 999 }"#,
-        )
-        .await
-        .unwrap();
+        db.query(r#"CREATE product_test:1 SET details = { category: "electronics", price: 999 }"#)
+            .await
+            .unwrap();
         db.query(r#"CREATE product_test:2 SET details = { category: "books", price: 29 }"#)
             .await
             .unwrap();
-        db.query(
-            r#"CREATE product_test:3 SET details = { category: "electronics", price: 499 }"#,
-        )
-        .await
-        .unwrap();
+        db.query(r#"CREATE product_test:3 SET details = { category: "electronics", price: 499 }"#)
+            .await
+            .unwrap();
 
         // Query using indexed nested field
         let mut result = db
