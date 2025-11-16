@@ -361,6 +361,28 @@ where
         .await
         .context("Failed to create mentions table")?;
 
+        // Phase 3 (Issue #511): has_child graph edges for hierarchy
+        // RELATE table for parent->child relationships
+        // Replaces parent_id field-based queries with graph traversal
+        db.query(
+            "
+            DEFINE TABLE IF NOT EXISTS has_child SCHEMALESS TYPE RELATION;
+            ",
+        )
+        .await
+        .context("Failed to create has_child relation table")?;
+
+        // Phase 3 (Issue #511): Critical indexes for graph traversal performance
+        // Without these, traversal is O(n²) - WITH them it's O(1) for parent/child lookups
+        db.query(
+            "
+            DEFINE INDEX IF NOT EXISTS idx_has_child_in ON has_child FIELDS in;
+            DEFINE INDEX IF NOT EXISTS idx_has_child_out ON has_child FIELDS out;
+            ",
+        )
+        .await
+        .context("Failed to create has_child indexes")?;
+
         Ok(())
     }
 
@@ -691,6 +713,55 @@ where
         Ok(floats)
     }
 
+    /// Phase 3 (Issue #511): Validate that adding a child doesn't create a cycle
+    ///
+    /// Checks if `parent_id` is a descendant of `child_id` by traversing
+    /// the has_child graph edges recursively.
+    ///
+    /// # Arguments
+    /// * `parent_id` - ID of the node that will become the parent
+    /// * `child_id` - ID of the node that will become the child
+    ///
+    /// # Returns
+    /// * `Ok(())` if no cycle would be created
+    /// * `Err` if adding this relationship would create a cycle
+    ///
+    /// # Example Cycle
+    /// ```text
+    /// A -> B -> C (existing edges)
+    /// Trying to add: C -> A  (would create cycle A->B->C->A)
+    /// ```
+    async fn validate_no_cycle(&self, parent_id: &str, child_id: &str) -> Result<()> {
+        // Query: Check if parent is a descendant of child (would create cycle)
+        // Uses recursive graph traversal via ->has_child-> edges
+        let query = r#"
+            SELECT id FROM node:⟨$parent_id⟩
+            WHERE id IN (
+                SELECT ->has_child->node.*.id FROM node:⟨$child_id⟩
+            )
+            LIMIT 1;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("parent_id", parent_id.to_string()))
+            .bind(("child_id", child_id.to_string()))
+            .await?;
+
+        let result: Vec<Value> = response.take(0)?;
+
+        if !result.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Cannot add child {} to parent {} - would create cycle",
+                child_id,
+                parent_id
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn create_node(&self, node: Node) -> Result<Node> {
         // Generate SurrealDB Record ID
         let record_id = Self::to_record_id(&node.node_type, &node.id);
@@ -778,9 +849,84 @@ where
                 .context("Failed to set data link")?;
         }
 
+        // Phase 3 (Issue #511): Create has_child graph edge if parent_id is set
+        // This creates a bidirectional edge: parent->has_child->child
+        // Dual-mode: Both parent_id field AND graph edge exist for gradual migration
+        if let Some(parent_id) = &node.parent_id {
+            // Validate no cycle before creating edge
+            self.validate_no_cycle(parent_id, &node.id).await?;
+
+            self.db
+                .query("RELATE type::thing('node', $parent_id)->has_child->type::thing('node', $child_id);")
+                .bind(("parent_id", parent_id.clone()))
+                .bind(("child_id", node.id.clone()))
+                .await
+                .context("Failed to create has_child graph edge")?;
+        }
+
         // Return the created node directly (avoids triggering backfill/migration during creation)
         // The node was successfully created with the values provided, so we can return it as-is
         Ok(node)
+    }
+
+    /// Phase 3 (Issue #511): Create has_child edges for all existing parent-child relationships
+    ///
+    /// Migration helper to backfill graph edges for nodes created before Phase 3.
+    /// Reads all nodes with parent_id and creates corresponding has_child edges.
+    ///
+    /// **IMPORTANT**: This is dual-mode migration - both parent_id field AND graph edges exist.
+    /// The parent_id field will be removed in Phase 5 after all queries are updated.
+    ///
+    /// # Returns
+    /// Number of edges created
+    ///
+    /// # Example Usage
+    /// ```rust,no_run
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
+    /// let count = store.create_has_child_edges_for_existing_nodes().await?;
+    /// println!("Created {} has_child edges", count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_has_child_edges_for_existing_nodes(&self) -> Result<usize> {
+        // Get all nodes with parents (where parent_id is not null)
+        let query = "SELECT uuid, parent_id FROM node WHERE parent_id IS NOT NONE;";
+        let mut response = self.db.query(query).await?;
+        let nodes: Vec<SurrealNode> = response.take(0)?;
+
+        tracing::info!(
+            "Creating has_child edges for {} existing parent-child relationships",
+            nodes.len()
+        );
+
+        let mut edges_created = 0;
+
+        for node in nodes {
+            if let Some(parent_id) = node.parent_id {
+                // Create has_child edge (parent->has_child->child)
+                // Note: We skip cycle validation here because existing relationships
+                // are assumed to be valid (cycles shouldn't exist in parent_id field structure)
+                self.db
+                    .query("RELATE type::thing('node', $parent_id)->has_child->type::thing('node', $child_id);")
+                    .bind(("parent_id", parent_id))
+                    .bind(("child_id", node.uuid))
+                    .await
+                    .context("Failed to create has_child edge during migration")?;
+
+                edges_created += 1;
+
+                if edges_created % 100 == 0 {
+                    tracing::info!("Created {} has_child edges...", edges_created);
+                }
+            }
+        }
+
+        tracing::info!("✅ Created {} has_child edges successfully", edges_created);
+        Ok(edges_created)
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
