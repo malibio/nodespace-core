@@ -324,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/query", post(query_nodes))
         .route(
             "/api/nodes/by-container/:container_id",
-            get(get_nodes_by_container),
+            get(get_children_by_parent),
         )
         // Mention endpoints
         .route("/api/mentions", post(create_mention))
@@ -495,13 +495,15 @@ async fn query_nodes(
     Ok(Json(nodes))
 }
 
-async fn get_nodes_by_container(
+async fn get_children_by_parent(
     State(state): State<AppState>,
-    Path(container_id): Path<String>,
+    Path(parent_id): Path<String>,
 ) -> ApiResult<Vec<Node>> {
+    // Phase 5 (Issue #511): Use get_children instead of get_nodes_by_container_id
+    // Graph edges replace container_node_id field
     let nodes = state
         .node_service
-        .get_nodes_by_container_id(&container_id)
+        .get_children(&parent_id)
         .await
         .map_err(map_node_service_error)?;
 

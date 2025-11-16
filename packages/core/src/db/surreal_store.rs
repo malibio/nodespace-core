@@ -325,7 +325,7 @@ where
         // Phase 6 (Issue #511): Only create type tables for types with properties
         // Types without properties (text, date, header, code_block, quote_block, ordered_list)
         // don't need separate tables - all data is in the node table
-        let core_types_with_properties = ["task"];
+        let core_types_with_properties = ["task", "schema"];
 
         for node_type in core_types_with_properties {
             db.query(format!(
@@ -749,8 +749,9 @@ where
             .await
             .context("Failed to create node in universal table")?;
 
-        // Insert into type-specific table only for task type with properties
-        if node.node_type == "task"
+        // Insert into type-specific table for types with properties (task, schema)
+        let types_with_properties = ["task", "schema"];
+        if types_with_properties.contains(&node.node_type.as_str())
             && !node
                 .properties
                 .as_object()

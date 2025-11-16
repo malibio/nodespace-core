@@ -1,0 +1,21 @@
+#V2
+INFO FOR DB;
+-- Show database info
+INFO FOR DB;
+-- Show schemas (should have 7 schema nodes)
+SELECT * FROM node WHERE type = 'schema';
+-- Verify only node and task tables exist
+SELECT count() AS total_nodes FROM node GROUP ALL;
+SELECT count() AS total_tasks FROM task GROUP ALL;
+-- Check what's in the node table
+SELECT * FROM node WHERE id = type::thing('node', '2025-11-16') LIMIT 1;
+-- Check for has_child edges
+SELECT * FROM has_child LIMIT 5;
+-- Check if date schema node exists and its structure
+SELECT * FROM node WHERE id = type::thing('node', 'date') LIMIT 1;
+-- Check all schema nodes and their structure
+SELECT * FROM node WHERE type = 'schema';
+-- Check if there's a 'schema' type table
+SELECT * FROM schema LIMIT 3;
+-- Check if date node has a data link
+SELECT id, type, content, data FROM node WHERE id = type::thing('node', 'date');
