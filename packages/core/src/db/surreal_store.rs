@@ -959,6 +959,10 @@ where
         // Create has_child graph edge if parent_id is set
         // This establishes the parent-child relationship in the graph
         if let Some(parent_id) = &node.parent_id {
+            // Validate that this relationship won't create a cycle
+            // CRITICAL: Prevents infinite loops in tree traversal
+            self.validate_no_cycle(parent_id, &node.id).await?;
+
             tracing::debug!("Creating has_child edge: {} -> {}", parent_id, node.id);
             // Create Thing record IDs (not strings) for RELATE statement
             use surrealdb::sql::Thing;
@@ -1548,8 +1552,88 @@ where
         Ok(surreal_nodes.into_iter().map(Into::into).collect())
     }
 
+    /// Validate that creating a parent-child relationship won't create a cycle
+    ///
+    /// **Purpose**: Prevents cyclic references in the node hierarchy tree.
+    ///
+    /// **Example Cycle**: A→B→C→A (adding A as child of C would create this)
+    ///
+    /// **Impact if not validated**:
+    /// - Infinite loops in tree traversal queries
+    /// - Stack overflow in recursive operations
+    /// - Data corruption in hierarchy
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - Proposed parent node ID
+    /// * `child_id` - Proposed child node ID
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if no cycle would be created, `Err` if cycle detected
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Valid: A→B, B→C (adding C as child of B)
+    /// validate_no_cycle("B", "C").await?; // ✓ OK
+    ///
+    /// // Invalid: A→B→C, trying to add A as child of C
+    /// validate_no_cycle("C", "A").await?; // ✗ Error: would create cycle A→B→C→A
+    /// ```
+    async fn validate_no_cycle(&self, parent_id: &str, child_id: &str) -> Result<()> {
+        use surrealdb::sql::Thing;
+
+        // Check if parent is a descendant of child
+        // If so, creating this edge would create a cycle
+        let child_thing = Thing::from(("node".to_string(), child_id.to_string()));
+
+        // Query: Get all descendants of child node recursively
+        // Then check if parent is in that list
+        // Using subquery to get all nodes reachable from child via has_child edges
+        let query = "
+            SELECT * FROM type::thing('node', $parent_id)
+            WHERE id IN (
+                SELECT VALUE out FROM has_child WHERE in = $child_thing
+                UNION
+                SELECT VALUE out.->has_child[WHERE true].out FROM has_child WHERE in = $child_thing
+            )
+            LIMIT 1;
+        ";
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("parent_id", parent_id.to_string()))
+            .bind(("child_thing", child_thing))
+            .await
+            .context("Failed to check for cycles")?;
+
+        let results: Vec<SurrealNode> = response
+            .take(0)
+            .context("Failed to parse cycle check results")?;
+
+        if !results.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Cannot create parent-child relationship: would create cycle. \
+                Node '{}' is a descendant of node '{}', so '{}' cannot be a parent of '{}'.",
+                parent_id,
+                child_id,
+                parent_id,
+                child_id
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn move_node(&self, id: &str, new_parent_id: Option<&str>) -> Result<()> {
         use surrealdb::sql::Thing;
+
+        // Validate that moving won't create a cycle
+        if let Some(parent_id) = new_parent_id {
+            self.validate_no_cycle(parent_id, id).await?;
+        }
 
         // Delete existing parent edge
         let child_thing = Thing::from(("node".to_string(), id.to_string()));
