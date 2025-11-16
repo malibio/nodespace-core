@@ -1612,14 +1612,11 @@ where
 
         // Query: Get all descendants of child node recursively
         // Then check if parent is in that list
-        // Using SurrealDB recursive graph traversal syntax to check ALL descendant levels
-        // The `{..}` syntax means unbounded recursive traversal (any depth)
-        // Pattern: start_node.{..}(->edge->target_table).@ collects all nodes at each recursion level
+        // Using SurrealDB recursive graph traversal syntax (v2.1+) to check ALL descendant levels
+        // The `{..+collect}` syntax means unbounded recursive traversal collecting unique nodes
         // This will detect cycles at any level: A→B (direct), A→B→C (3-node), A→B→C→D (4-node), etc.
         let query = "
-            LET $descendants = (
-                SELECT VALUE id FROM $child_thing.{..}(->has_child->node).@
-            );
+            LET $descendants = $child_thing.{..+collect}->has_child->node;
             SELECT * FROM type::thing('node', $parent_id)
             WHERE id IN $descendants
             LIMIT 1;
