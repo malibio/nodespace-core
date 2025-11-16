@@ -98,27 +98,19 @@ describe('BaseNodeViewer cache optimization', () => {
     const parent = createMockNode('parent-id', 'date');
     const children = [createMockNode('child-1', 'text', 'parent-id')];
 
-    // Mock database response by pre-loading nodes (simulates database layer)
-    store.setNode(parent, { type: 'database', reason: 'loaded-from-db' });
-    for (const child of children) {
-      store.setNode(child, { type: 'database', reason: 'loaded-from-db' });
-    }
-
-    // Clear cache to simulate cache miss
-    store.clearAll();
-
-    // Spy on loadChildrenForParent
-    const loadSpy = vi.spyOn(store, 'loadChildrenForParent');
-
-    // Re-add parent but not children (cache miss scenario)
+    // Start with only parent in cache (no children - true cache miss)
     store.setNode(parent, { type: 'database', reason: 'loaded-from-db' });
 
-    // Re-populate store to simulate database fetch result
-    for (const child of children) {
-      store.setNode(child, { type: 'database', reason: 'loaded-from-db' });
-    }
+    // Mock loadChildrenForParent to simulate database fetch
+    const loadSpy = vi.spyOn(store, 'loadChildrenForParent').mockImplementation(async () => {
+      // Simulate database returning children and adding them to store
+      for (const child of children) {
+        store.setNode(child, { type: 'database', reason: 'loaded-from-db' });
+      }
+      return children;
+    });
 
-    // Simulate cache-first loading logic
+    // Simulate cache-first loading logic from BaseNodeViewer
     const cached = store.getNodesForParent('parent-id');
 
     let allNodes: Node[];
@@ -126,13 +118,13 @@ describe('BaseNodeViewer cache optimization', () => {
       // Cache hit - use immediately
       allNodes = cached;
     } else {
-      // Cache miss - fetch from database
+      // Cache miss - fetch from database (should take this path)
       allNodes = await store.loadChildrenForParent('parent-id');
     }
 
-    // Since we re-populated the store above, this will be a cache hit
-    // For a true cache miss test, we'd need to mock the actual database layer
-    // For now, verify the logic path works correctly
+    // Verify cache miss triggered database fetch
+    expect(loadSpy).toHaveBeenCalledTimes(1);
+    expect(loadSpy).toHaveBeenCalledWith('parent-id');
     expect(allNodes.length).toBe(1);
     expect(allNodes[0].id).toBe('child-1');
 
