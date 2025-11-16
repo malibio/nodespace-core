@@ -1144,7 +1144,7 @@ where
             response
                 .take(0)
                 .context("Failed to extract children from response")?
-        } else{
+        } else {
             // Root nodes: nodes that have NO incoming has_child edges
             // Use count(<-has_child) = 0 to find nodes without parents
             let mut response = self
