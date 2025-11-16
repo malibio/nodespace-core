@@ -229,6 +229,9 @@ where
         // Update schema node
         self.update_schema(schema_id, schema).await?;
 
+        // Sync schema changes to database
+        self.sync_schema_to_database(schema_id).await?;
+
         Ok(())
     }
 
@@ -294,6 +297,9 @@ where
 
         // Update schema node
         self.update_schema(schema_id, schema).await?;
+
+        // Sync schema changes to database
+        self.sync_schema_to_database(schema_id).await?;
 
         Ok(())
     }
@@ -387,6 +393,9 @@ where
         // Update schema node
         self.update_schema(schema_id, schema).await?;
 
+        // Sync schema changes to database
+        self.sync_schema_to_database(schema_id).await?;
+
         Ok(())
     }
 
@@ -458,6 +467,10 @@ where
 
                 // Update schema node
                 self.update_schema(schema_id, schema).await?;
+
+                // Sync schema changes to database
+                self.sync_schema_to_database(schema_id).await?;
+
                 return Ok(());
             }
         }
