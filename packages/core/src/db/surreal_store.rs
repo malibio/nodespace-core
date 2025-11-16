@@ -109,9 +109,10 @@ struct SurrealNode {
     mentions: Vec<String>,
     mentioned_by: Vec<String>,
     // Graph-native architecture fields (Issue #511)
-    // When NOT fetched: data = "task:uuid" (string link)
-    // When FETCH data: data = {id: "task:uuid", ...properties} (object with properties)
-    data: Option<Value>,  // Record link OR fetched record content
+    // Note: data field is skipped during deserialization due to FETCH complications
+    // Properties will be fetched separately when needed
+    #[serde(skip_deserializing)]
+    data: Option<Value>, // Placeholder - properties fetched separately
     variants: Value,      // Type history map {task: "task:uuid", text: null}
     _schema_version: i64, // Universal schema version
 }
@@ -814,9 +815,9 @@ where
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         // Direct record ID lookup (O(1) primary key access)
-        // Uses SurrealDB record ID: node:⟨uuid⟩
-        // FETCH data: Hydrates the record link in the 'data' field
-        let query = "SELECT * FROM type::thing('node', $id) FETCH data;";
+        // Note: We don't use FETCH data because it causes deserialization issues
+        // with the polymorphic data field (Thing vs Object)
+        let query = "SELECT * FROM type::thing('node', $id);";
         let mut response = self
             .db
             .query(query)
@@ -828,7 +829,49 @@ where
             .take(0)
             .context("Failed to extract query results")?;
 
-        Ok(surreal_nodes.into_iter().map(Into::into).next())
+        let mut node_opt: Option<Node> = surreal_nodes.into_iter().map(Into::into).next();
+
+        // If node exists and has properties (types: task, schema), fetch them separately
+        if let Some(ref mut node) = node_opt {
+            let types_with_properties = ["task", "schema"];
+            if types_with_properties.contains(&node.node_type.as_str()) {
+                // Fetch properties using SQL query, excluding 'id' field to avoid Thing deserialization issues
+                // SELECT * OMIT id gets all fields except the id (which is a Thing type that can't deserialize to JSON)
+                let props_query = format!(
+                    "SELECT * OMIT id FROM type::thing('{}', $id);",
+                    node.node_type
+                );
+                let mut props_response = self
+                    .db
+                    .query(&props_query)
+                    .bind(("id", id.to_string()))
+                    .await;
+
+                let result: Option<serde_json::Value> = match props_response {
+                    Ok(ref mut response) => {
+                        let raw: Result<
+                            Vec<std::collections::HashMap<String, serde_json::Value>>,
+                            _,
+                        > = response.take(0);
+                        match raw {
+                            Ok(records) => records
+                                .into_iter()
+                                .next()
+                                .map(|map| serde_json::Value::Object(map.into_iter().collect())),
+                            Err(_) => None,
+                        }
+                    }
+                    Err(_) => None,
+                };
+
+                if let Some(props) = result {
+                    // Properties already exclude 'id' due to OMIT in query
+                    node.properties = props;
+                }
+            }
+        }
+
+        Ok(node_opt)
     }
 
     pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<Node> {
@@ -1462,13 +1505,16 @@ where
     }
 
     pub async fn get_schema(&self, node_type: &str) -> Result<Option<Value>> {
-        let schema_id = format!("schema:{}", node_type);
+        // Schema nodes use simple IDs (just the node type name, e.g., "date")
+        // They're differentiated by node_type = "schema"
+        let schema_id = node_type.to_string();
         let node = self.get_node(&schema_id).await?;
         Ok(node.map(|n| n.properties))
     }
 
     pub async fn update_schema(&self, node_type: &str, schema: &Value) -> Result<()> {
-        let schema_id = format!("schema:{}", node_type);
+        // Schema nodes use simple IDs (just the node type name, e.g., "date")
+        let schema_id = node_type.to_string();
 
         // Check if schema node exists
         if self.get_node(&schema_id).await?.is_some() {
@@ -1692,7 +1738,7 @@ where
             mentions: Vec<String>,
             #[serde(default)]
             mentioned_by: Vec<String>,
-            #[serde(default)]
+            #[serde(skip_deserializing)]
             data: Option<Value>,
             #[serde(default)]
             variants: Value,
