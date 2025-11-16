@@ -51,3 +51,6 @@ SELECT * FROM node WHERE id NOT IN (SELECT VALUE ->node FROM has_child) LIMIT 5;
 DELETE node:test_parent;
 DELETE node:test_child1;
 DELETE node:test_child2;
+SELECT * FROM task LIMIT 5;
+INFO FOR DB;
+SELECT * FROM node LIMIT 3;

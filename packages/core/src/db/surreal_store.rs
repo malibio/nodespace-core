@@ -774,7 +774,17 @@ where
                 .is_empty()
         {
             // Store properties directly in type-specific table (flattened)
-            let props = node.properties.clone();
+            let mut props = node.properties.clone();
+
+            // TODO: Frontend may send nested {task: {status: ...}} from old architecture
+            // Unwrap if present to maintain compatibility until frontend is refactored
+            if let Some(obj) = props.as_object() {
+                if let Some(nested) = obj.get(&node.node_type) {
+                    if let Some(nested_obj) = nested.as_object() {
+                        props = serde_json::Value::Object(nested_obj.clone());
+                    }
+                }
+            }
 
             self.db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
@@ -854,14 +864,32 @@ where
                             _,
                         > = response.take(0);
                         match raw {
-                            Ok(records) => records
-                                .into_iter()
-                                .next()
-                                .map(|map| serde_json::Value::Object(map.into_iter().collect())),
-                            Err(_) => None,
+                            Ok(records) => {
+                                let props_opt = records.into_iter().next().map(|map| {
+                                    tracing::debug!(
+                                        "Raw properties from {}: {:?}",
+                                        node.node_type,
+                                        map
+                                    );
+                                    serde_json::Value::Object(map.into_iter().collect())
+                                });
+                                tracing::debug!(
+                                    "get_node({}) - properties after conversion: {:?}",
+                                    id,
+                                    props_opt
+                                );
+                                props_opt
+                            }
+                            Err(e) => {
+                                tracing::warn!("get_node({}) - failed to deserialize: {:?}", id, e);
+                                None
+                            }
                         }
                     }
-                    Err(_) => None,
+                    Err(e) => {
+                        tracing::warn!("get_node({}) - query failed: {:?}", id, e);
+                        None
+                    }
                 };
 
                 if let Some(props) = result {
@@ -914,17 +942,31 @@ where
             .context("Failed to update node")?;
 
         // If properties were provided and node type has type-specific table, update it
-        if let Some(updated_props) = update.properties {
+        if let Some(mut updated_props) = update.properties {
             let types_with_properties = ["task", "schema"];
             if types_with_properties.contains(&updated_node_type.as_str()) {
-                // Update or create record in type-specific table
+                // TODO: Frontend sends nested {task: {status: ...}} from old architecture
+                // This unwrapping is a temporary bridge until frontend is refactored to send flat properties
+                // Proper fix: Frontend should send {status: "OPEN"} not {task: {status: "OPEN"}}
+                if let Some(obj) = updated_props.as_object() {
+                    if let Some(nested) = obj.get(&updated_node_type) {
+                        if let Some(nested_obj) = nested.as_object() {
+                            updated_props = serde_json::Value::Object(nested_obj.clone());
+                        }
+                    }
+                }
+
+                // UPSERT with MERGE to preserve existing spoke data on type reconversions
+                // Scenario: text→task creates task:uuid, task→text preserves it, text→task reconnects
+                // MERGE ensures old task properties (priority, due_date) aren't lost on reconversion
+                // Only adds missing defaults, preserves user-set values
                 self.db
-                    .query("UPDATE type::thing($table, $id) CONTENT $properties;")
+                    .query("UPSERT type::thing($table, $id) MERGE $properties;")
                     .bind(("table", updated_node_type.clone()))
                     .bind(("id", id.to_string()))
                     .bind(("properties", updated_props))
                     .await
-                    .context("Failed to update properties in type-specific table")?;
+                    .context("Failed to upsert properties in type-specific table")?;
 
                 // Ensure data link exists (in case this is a type change)
                 self.db
