@@ -215,52 +215,6 @@ impl From<SurrealNode> for Node {
     }
 }
 
-/// Unwrap legacy nested property format from frontend
-///
-/// **Problem**: Frontend (pre-refactor) sends nested properties:
-/// ```json
-/// {"task": {"status": "OPEN", "priority": "HIGH"}}
-/// ```
-///
-/// **Expected**: Flat properties for direct storage in type tables:
-/// ```json
-/// {"status": "OPEN", "priority": "HIGH"}
-/// ```
-///
-/// **Workaround**: This function unwraps the nested format if detected.
-///
-/// **Deprecation**: This is a temporary compatibility layer. Frontend should be
-/// refactored to send flat properties directly. Remove this function once frontend
-/// is updated.
-///
-/// **TODO**: Remove by 2025-12-15 (tracked in Issue #515)
-///
-/// # Arguments
-///
-/// * `props` - Property value (may be nested or flat)
-/// * `node_type` - Type of node (e.g., "task", "schema")
-///
-/// # Returns
-///
-/// Flat property value suitable for direct storage
-fn unwrap_legacy_property_format(props: Value, node_type: &str) -> Value {
-    // Check if properties are nested under node type key
-    if let Some(obj) = props.as_object() {
-        if let Some(nested) = obj.get(node_type) {
-            if let Some(nested_obj) = nested.as_object() {
-                // Unwrap: {task: {status: "OPEN"}} -> {status: "OPEN"}
-                tracing::warn!(
-                    "Received nested property format for type '{}' - this format is deprecated. \
-                    Frontend should send flat properties directly.",
-                    node_type
-                );
-                return Value::Object(nested_obj.clone());
-            }
-        }
-    }
-    props
-}
-
 /// Batch fetch properties for multiple nodes of the same type
 ///
 /// **Purpose**: Avoid N+1 query pattern when fetching properties for multiple nodes.
@@ -937,14 +891,11 @@ where
                 .is_empty()
         {
             // Store properties directly in type-specific table (flattened)
-            // Unwrap legacy nested format if present (frontend compatibility)
-            let props = unwrap_legacy_property_format(node.properties.clone(), &node.node_type);
-
             self.db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
                 .bind(("table", node.node_type.clone()))
                 .bind(("id", node.id.clone()))
-                .bind(("properties", props))
+                .bind(("properties", node.properties.clone()))
                 .await
                 .context("Failed to create node in type-specific table")?;
 
@@ -1109,9 +1060,6 @@ where
         // If properties were provided and node type has type-specific table, update it
         if let Some(updated_props) = update.properties {
             if TYPES_WITH_PROPERTIES.contains(&updated_node_type.as_str()) {
-                // Unwrap legacy nested format if present (frontend compatibility)
-                let props = unwrap_legacy_property_format(updated_props, &updated_node_type);
-
                 // UPSERT with MERGE to preserve existing spoke data on type reconversions
                 // Scenario: text→task creates task:uuid, task→text preserves it, text→task reconnects
                 // MERGE ensures old task properties (priority, due_date) aren't lost on reconversion
@@ -1120,7 +1068,7 @@ where
                     .query("UPSERT type::thing($table, $id) MERGE $properties;")
                     .bind(("table", updated_node_type.clone()))
                     .bind(("id", id.to_string()))
-                    .bind(("properties", props))
+                    .bind(("properties", updated_props))
                     .await
                     .context("Failed to upsert properties in type-specific table")?;
 
