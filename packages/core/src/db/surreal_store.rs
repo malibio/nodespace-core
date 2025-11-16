@@ -395,8 +395,9 @@ where
 
         // Check if schemas already exist by trying to get one
         // If any schema exists, assume all are seeded (they're created atomically)
+        // Phase 4 (Issue #511): Use record ID for schema lookup
         let task_exists = db
-            .query("SELECT * FROM node WHERE uuid = 'task' LIMIT 1")
+            .query("SELECT * FROM type::thing('node', 'task') LIMIT 1")
             .await
             .context("Failed to check for existing schemas")?
             .take::<Option<SurrealNode>>(0)
