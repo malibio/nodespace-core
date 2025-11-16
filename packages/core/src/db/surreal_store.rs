@@ -70,6 +70,12 @@ use surrealdb::Surreal;
 ///   - Existing nodes without this field are treated as not stale
 ///   - Automatically set to `true` when content changes, cleared when embedding regenerated
 ///
+/// - **v1.2** (Issue #511 Phase 1): Graph-native architecture preparation
+///   - Added `data` field: Optional record link to type-specific table (replaces properties field)
+///   - Added `variants` field: Type history for lossless type switching
+///   - Added `_schema_version` field: Universal versioning (moved from type tables)
+///   - Table renamed from `nodes` to `node` (singular, consistent naming)
+///
 /// # Embedding Storage Architecture (Issue #495)
 ///
 /// Embeddings use a **hybrid storage architecture** with different representations
@@ -118,6 +124,13 @@ struct SurrealNode {
     mentions: Vec<String>,
     #[serde(default)]
     mentioned_by: Vec<String>,
+    // Phase 1 fields (Issue #511) - all use #[serde(default)] for backward compatibility
+    #[serde(default)]
+    data: Option<String>, // Record link to type-specific table (e.g., "task:uuid")
+    #[serde(default)]
+    variants: Value, // Type history map {task: "task:uuid", text: null}
+    #[serde(default)]
+    _schema_version: i64, // Universal schema version (default: 1)
 }
 
 impl From<SurrealNode> for Node {
@@ -301,19 +314,23 @@ impl<C> SurrealStore<C>
 where
     C: surrealdb::Connection,
 {
-    /// Initialize database schema (universal nodes table + core type tables)
+    /// Initialize database schema (universal node table + core type tables)
     ///
     /// Creates SCHEMALESS tables for flexible property handling while maintaining
     /// core field structure.
+    ///
+    /// # Phase 1 (Issue #511)
+    /// - Table name: `node` (singular, consistent naming)
+    /// - New fields: data, variants, _schema_version (initialized on creation)
     async fn initialize_schema(db: &Arc<Surreal<Db>>) -> Result<()> {
-        // Universal nodes table - SCHEMALESS for maximum flexibility
+        // Universal node table (singular) - SCHEMALESS for maximum flexibility
         db.query(
             "
-            DEFINE TABLE IF NOT EXISTS nodes SCHEMALESS;
+            DEFINE TABLE IF NOT EXISTS node SCHEMALESS;
             ",
         )
         .await
-        .context("Failed to create universal nodes table")?;
+        .context("Failed to create universal node table")?;
 
         // Core type tables - SCHEMALESS for user extensibility
         let core_types = [
@@ -357,7 +374,7 @@ where
         // Check if schemas already exist by trying to get one
         // If any schema exists, assume all are seeded (they're created atomically)
         let task_exists = db
-            .query("SELECT * FROM nodes WHERE uuid = 'task' LIMIT 1")
+            .query("SELECT * FROM node WHERE uuid = 'task' LIMIT 1")
             .await
             .context("Failed to check for existing schemas")?
             .take::<Option<SurrealNode>>(0)
@@ -685,7 +702,7 @@ where
             .map(|blob| Self::blob_to_f32_array(blob))
             .transpose()?;
 
-        // Insert into universal nodes table
+        // Insert into universal node table
         let query = "
             CREATE type::thing($table, $id) CONTENT {
                 uuid: $uuid,
@@ -698,13 +715,22 @@ where
                 created_at: $created_at,
                 modified_at: $modified_at,
                 properties: $properties,
-                embedding_vector: $embedding_vector
+                embedding_vector: $embedding_vector,
+                data: $data,
+                variants: $variants,
+                _schema_version: $_schema_version
             };
         ";
 
+        // Phase 1 (Issue #511): Initialize new fields
+        // - data: Will be set when creating type-specific record (if properties exist)
+        // - variants: Empty object {} for new nodes
+        // - _schema_version: Default to 1
+        let variants_value = serde_json::json!({});
+
         self.db
             .query(query)
-            .bind(("table", "nodes"))
+            .bind(("table", "node"))
             .bind(("id", record_id.clone()))
             .bind(("uuid", node.id.clone()))
             .bind(("node_type", node.node_type.clone()))
@@ -717,6 +743,9 @@ where
             .bind(("modified_at", node.modified_at.to_rfc3339()))
             .bind(("properties", node.properties.clone()))
             .bind(("embedding_vector", embedding_f32))
+            .bind(("data", None::<String>)) // Will be set below if type has properties
+            .bind(("variants", variants_value))
+            .bind(("_schema_version", 1i64))
             .await
             .context("Failed to create node in universal table")?;
 
@@ -739,6 +768,15 @@ where
                 .bind(("properties", props))
                 .await
                 .context("Failed to create node in type-specific table")?;
+
+            // Phase 1 (Issue #511): Set data field to link to type-specific record
+            // Use record ID directly instead of WHERE clause for better performance
+            self.db
+                .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);")
+                .bind(("id", node.id.clone()))
+                .bind(("type_table", node.node_type.clone()))
+                .await
+                .context("Failed to set data link")?;
         }
 
         // Return the created node directly (avoids triggering backfill/migration during creation)
@@ -748,7 +786,7 @@ where
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         // Query by UUID field
-        let query = "SELECT * FROM nodes WHERE uuid = $uuid LIMIT 1;";
+        let query = "SELECT * FROM node WHERE uuid = $uuid LIMIT 1;";
         let mut response = self
             .db
             .query(query)
@@ -772,7 +810,7 @@ where
 
         // Build update query for universal table by UUID
         let query = "
-            UPDATE nodes SET
+            UPDATE node SET
                 content = $content,
                 node_type = $node_type,
                 parent_id = $parent_id,
@@ -870,7 +908,7 @@ where
         // Build atomic update query with version check
         // SurrealDB's UPDATE returns the updated records
         let query = "
-            UPDATE nodes SET
+            UPDATE node SET
                 content = $content,
                 node_type = $node_type,
                 parent_id = $parent_id,
@@ -936,7 +974,7 @@ where
         let transaction_query = "
             BEGIN TRANSACTION;
             DELETE type::thing($table, $id);
-            DELETE FROM nodes WHERE uuid = $uuid;
+            DELETE FROM node WHERE uuid = $uuid;
             DELETE mentions WHERE in.uuid = $uuid OR out.uuid = $uuid;
             COMMIT TRANSACTION;
         ";
@@ -1065,11 +1103,11 @@ where
         };
 
         let sql = match (&where_clause, query.limit) {
-            (None, None) => "SELECT * FROM nodes;".to_string(),
-            (None, Some(_)) => "SELECT * FROM nodes LIMIT $limit;".to_string(),
-            (Some(clause), None) => format!("SELECT * FROM nodes WHERE {};", clause),
+            (None, None) => "SELECT * FROM node;".to_string(),
+            (None, Some(_)) => "SELECT * FROM node LIMIT $limit;".to_string(),
+            (Some(clause), None) => format!("SELECT * FROM node WHERE {};", clause),
             (Some(clause), Some(_)) => {
-                format!("SELECT * FROM nodes WHERE {} LIMIT $limit;", clause)
+                format!("SELECT * FROM node WHERE {} LIMIT $limit;", clause)
             }
         };
 
@@ -1092,9 +1130,9 @@ where
 
     pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>> {
         let (query, has_parent) = if parent_id.is_some() {
-            ("SELECT * FROM nodes WHERE parent_id = $parent_id;", true)
+            ("SELECT * FROM node WHERE parent_id = $parent_id;", true)
         } else {
-            ("SELECT * FROM nodes WHERE parent_id IS NONE;", false)
+            ("SELECT * FROM node WHERE parent_id IS NONE;", false)
         };
 
         let mut query_builder = self.db.query(query);
@@ -1111,7 +1149,7 @@ where
     }
 
     pub async fn get_nodes_by_container(&self, container_id: &str) -> Result<Vec<Node>> {
-        let query = "SELECT * FROM nodes WHERE container_node_id = $container_id;";
+        let query = "SELECT * FROM node WHERE container_node_id = $container_id;";
         let mut response = self
             .db
             .query(query)
@@ -1131,9 +1169,9 @@ where
         limit: Option<i64>,
     ) -> Result<Vec<Node>> {
         let sql = if limit.is_some() {
-            "SELECT * FROM nodes WHERE content CONTAINS $search_query LIMIT $limit;"
+            "SELECT * FROM node WHERE content CONTAINS $search_query LIMIT $limit;"
         } else {
-            "SELECT * FROM nodes WHERE content CONTAINS $search_query;"
+            "SELECT * FROM node WHERE content CONTAINS $search_query;"
         };
 
         let mut query_builder = self
@@ -1154,7 +1192,7 @@ where
 
     pub async fn move_node(&self, id: &str, new_parent_id: Option<&str>) -> Result<()> {
         self.db
-            .query("UPDATE nodes SET parent_id = $parent_id WHERE uuid = $uuid;")
+            .query("UPDATE node SET parent_id = $parent_id WHERE uuid = $uuid;")
             .bind(("uuid", id.to_string()))
             .bind(("parent_id", new_parent_id.map(|s| s.to_string())))
             .await
@@ -1165,7 +1203,7 @@ where
 
     pub async fn reorder_node(&self, id: &str, new_before_sibling_id: Option<&str>) -> Result<()> {
         self.db
-            .query("UPDATE nodes SET before_sibling_id = $before_sibling_id WHERE uuid = $uuid;")
+            .query("UPDATE node SET before_sibling_id = $before_sibling_id WHERE uuid = $uuid;")
             .bind(("uuid", id.to_string()))
             .bind((
                 "before_sibling_id",
@@ -1428,9 +1466,9 @@ where
 
     pub async fn get_nodes_without_embeddings(&self, limit: Option<i64>) -> Result<Vec<Node>> {
         let sql = if limit.is_some() {
-            "SELECT * FROM nodes WHERE embedding_vector IS NONE LIMIT $limit;"
+            "SELECT * FROM node WHERE embedding_vector IS NONE LIMIT $limit;"
         } else {
-            "SELECT * FROM nodes WHERE embedding_vector IS NONE;"
+            "SELECT * FROM node WHERE embedding_vector IS NONE;"
         };
 
         let mut query_builder = self.db.query(sql);
@@ -1453,7 +1491,7 @@ where
         let embedding_f32 = Self::blob_to_f32_array(embedding)?;
 
         self.db
-            .query("UPDATE nodes SET embedding_vector = $embedding, embedding_stale = false WHERE uuid = $uuid;")
+            .query("UPDATE node SET embedding_vector = $embedding, embedding_stale = false WHERE uuid = $uuid;")
             .bind(("uuid", node_id.to_string()))
             .bind(("embedding", embedding_f32))
             .await
@@ -1487,7 +1525,7 @@ where
     /// ```
     pub async fn mark_embedding_stale(&self, node_id: &str) -> Result<()> {
         self.db
-            .query("UPDATE nodes SET embedding_stale = true WHERE uuid = $uuid;")
+            .query("UPDATE node SET embedding_stale = true WHERE uuid = $uuid;")
             .bind(("uuid", node_id.to_string()))
             .await
             .context("Failed to mark embedding as stale")?;
@@ -1523,9 +1561,9 @@ where
     /// ```
     pub async fn get_nodes_with_stale_embeddings(&self, limit: Option<i64>) -> Result<Vec<Node>> {
         let sql = if limit.is_some() {
-            "SELECT * FROM nodes WHERE embedding_stale = true LIMIT $limit;"
+            "SELECT * FROM node WHERE embedding_stale = true LIMIT $limit;"
         } else {
-            "SELECT * FROM nodes WHERE embedding_stale = true;"
+            "SELECT * FROM node WHERE embedding_stale = true;"
         };
 
         let mut query_builder = self.db.query(sql);
@@ -1587,7 +1625,7 @@ where
                 mentions OR [] AS mentions,
                 mentioned_by OR [] AS mentioned_by,
                 vector::similarity::cosine(embedding_vector, $query_vector) AS similarity
-            FROM nodes
+            FROM node
             WHERE embedding_vector != NONE
               AND vector::similarity::cosine(embedding_vector, $query_vector) > $threshold
             ORDER BY similarity DESC
@@ -1653,6 +1691,9 @@ where
                     embedding_stale: nws.embedding_stale,
                     mentions: nws.mentions,
                     mentioned_by: nws.mentioned_by,
+                    data: None, // Phase 1 (Issue #511): Not used in similarity search
+                    variants: serde_json::json!({}), // Phase 1 (Issue #511): Not used in similarity search
+                    _schema_version: 1, // Phase 1 (Issue #511): Default version
                 };
                 (surreal_node.into(), nws.similarity)
             })
@@ -1729,7 +1770,7 @@ where
 
             // Generate the UPDATE statement
             let update_stmt = format!(
-                "UPDATE nodes SET
+                "UPDATE node SET
                     content = $content_{idx},
                     node_type = $node_type_{idx},
                     parent_id = $parent_id_{idx},
