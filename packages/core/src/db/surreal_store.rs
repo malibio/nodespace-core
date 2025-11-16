@@ -1612,12 +1612,15 @@ where
 
         // Query: Get all descendants of child node recursively
         // Then check if parent is in that list
-        // Using subquery to get all nodes reachable from child via has_child edges
+        // Using recursive graph traversal to check ALL descendant levels (not just immediate children)
+        // The `->has_child<-.*` syntax means: follow has_child edges recursively to any depth
+        // This will detect cycles at any level: A→B (direct), A→B→C (3-node), A→B→C→D (4-node), etc.
         let query = "
+            LET $descendants = (
+                SELECT VALUE out FROM $child_thing->has_child<-.*
+            );
             SELECT * FROM type::thing('node', $parent_id)
-            WHERE id IN (
-                SELECT VALUE id FROM $child_thing->has_child
-            )
+            WHERE id IN $descendants
             LIMIT 1;
         ";
 
