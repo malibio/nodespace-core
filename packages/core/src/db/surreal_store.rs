@@ -1616,9 +1616,7 @@ where
         let query = "
             SELECT * FROM type::thing('node', $parent_id)
             WHERE id IN (
-                SELECT VALUE out FROM has_child WHERE in = $child_thing
-                UNION
-                SELECT VALUE out.->has_child[WHERE true].out FROM has_child WHERE in = $child_thing
+                SELECT VALUE id FROM $child_thing->has_child
             )
             LIMIT 1;
         ";

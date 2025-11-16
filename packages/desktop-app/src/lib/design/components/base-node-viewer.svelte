@@ -41,13 +41,20 @@
      * @default 'default'
      */
     tabId = 'default',
-    onTitleChange
+    onTitleChange,
+    /**
+     * Disable automatic title updates from node content.
+     * Used when parent component handles title (e.g., DateNodeViewer uses date-based title)
+     * @default false
+     */
+    disableTitleUpdates = false
   }: {
     header?: Snippet;
     nodeId?: string | null;
     tabId?: string;
     onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void; // In type for interface, not used by BaseNodeViewer
+    disableTitleUpdates?: boolean;
   } = $props();
 
   // Get nodeManager from shared context
@@ -99,6 +106,10 @@
     // Removed setViewParentId - now pass nodeId directly to visibleNodes()
 
     if (nodeId) {
+      // Capture disableTitleUpdates at effect creation time (not in async callback)
+      // This prevents stale closure issues when component is destroyed before callback fires
+      const shouldDisableTitleUpdates = disableTitleUpdates;
+
       // Load children asynchronously - this will load the parent node first
       loadChildrenForParent(nodeId).then(() => {
         // After loading completes, initialize header content and update tab title
@@ -110,7 +121,10 @@
         currentViewedNode = node || null;
 
         // Update tab title after node is loaded
-        updateTabTitle(headerContent);
+        // Skip if parent component manages the title (e.g., DateNodeViewer)
+        if (!shouldDisableTitleUpdates) {
+          updateTabTitle(headerContent);
+        }
       });
     } else {
       // Clear when no nodeId
