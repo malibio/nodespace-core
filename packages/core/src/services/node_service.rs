@@ -1844,11 +1844,12 @@ where
             return Ok(migrated_nodes);
         }
 
-        // Handle container_node_id filter using dedicated method
+        // Handle container_node_id filter using parent-child edges (get_children)
+        // container_node_id is now represented as parent-child relationships via has_child edges
         if let Some(ref container_id) = filter.container_node_id {
             let nodes = self
                 .store
-                .get_nodes_by_container(container_id)
+                .get_children(Some(container_id))
                 .await
                 .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 

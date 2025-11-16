@@ -5,16 +5,18 @@
 //!
 //! # Architecture
 //!
-//! SurrealStore uses a **hybrid dual-table architecture**:
-//! 1. **Universal `nodes` table** - Common metadata, embeddings, hierarchy
-//! 2. **Type-specific tables** - Type-safe schemas per entity (`task`, `text`, etc.)
+//! SurrealStore uses a **graph-native architecture** (Issue #511):
+//! 1. **Universal `node` table** - All node data with record IDs, graph edges for hierarchy
+//! 2. **Type-specific tables** - Optional tables for types with properties (currently: `task`)
+//! 3. **Graph edges** - `has_child` edges for parent-child relationships
 //!
 //! # Design Principles
 //!
 //! 1. **Embedded RocksDB**: Desktop-only backend using `kv-rocksdb` engine
 //! 2. **SCHEMALESS Mode**: Core tables use SCHEMALESS for dynamic properties
-//! 3. **Record IDs**: Native SurrealDB format `table:uuid` (type embedded in ID)
-//! 4. **Direct Access**: No abstraction layers, SurrealStore used directly by services
+//! 3. **Record IDs**: Native SurrealDB format `node:uuid` (type embedded in ID)
+//! 4. **Graph Edges**: Hierarchy via `has_child` edges (no parent_id/container_node_id fields)
+//! 5. **Direct Access**: No abstraction layers, SurrealStore used directly by services
 //!
 //! # Performance Targets (from PoC)
 //!
@@ -55,26 +57,26 @@ use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 
-/// Internal struct matching SurrealDB's schema with 'uuid' field
+/// Internal struct matching SurrealDB's schema
 ///
 /// # Schema Evolution
 ///
 /// - **v1.0** (Issue #470): Initial SurrealDB schema migration
-///   - Core node fields (uuid, node_type, content, parent_id, etc.)
-///   - Embedding vector storage
+///   - Core node fields with embedding vector storage
 ///   - Version-based optimistic concurrency control
 ///
 /// - **v1.1** (Issue #481): Advanced SurrealDB features
 ///   - Added `embedding_stale` field for tracking embedding staleness
-///   - Default: `false` (backward compatible via `#[serde(default)]`)
-///   - Existing nodes without this field are treated as not stale
-///   - Automatically set to `true` when content changes, cleared when embedding regenerated
+///   - Automatically set when content changes, cleared when embedding regenerated
 ///
-/// - **v1.2** (Issue #511 Phase 1): Graph-native architecture preparation
-///   - Added `data` field: Optional record link to type-specific table (replaces properties field)
+/// - **v1.2** (Issue #511): Graph-native architecture
+///   - Removed `uuid`, `parent_id`, `container_node_id`, `properties` fields
+///   - Added `data` field: Optional record link to type-specific table
 ///   - Added `variants` field: Type history for lossless type switching
-///   - Added `_schema_version` field: Universal versioning (moved from type tables)
-///   - Table renamed from `nodes` to `node` (singular, consistent naming)
+///   - Added `_schema_version` field: Universal versioning
+///   - Table renamed from `nodes` to `node` (singular)
+///   - Hierarchy via `has_child` graph edges only
+///   - Only `task` type table exists (other types are schema-only)
 ///
 /// # Embedding Storage Architecture (Issue #495)
 ///
@@ -89,48 +91,27 @@ use surrealdb::Surreal;
 ///   - Required by SurrealDB's `vector::similarity::cosine()` function
 ///   - Enables native vector operations without conversion overhead
 ///
-/// ## Conversion Points
-///
-/// **Write Path** (Vec<u8> → Vec<f32>):
-/// - `create_node()`: Lines 568-569 via `blob_to_f32_array()`
-/// - `update_node()`: Lines 676-681 via `blob_to_f32_array()`
-/// - `update_embedding()`: Lines 1335-1336 via `blob_to_f32_array()`
-///
-/// **Read Path** (Vec<f32> → Vec<u8>):
-/// - `From<SurrealNode> for Node`: Lines 98-103 via `f32::to_le_bytes()`
-///
 /// This dual representation optimizes for both external compatibility (binary blobs)
 /// and internal query performance (native f32 arrays).
-///
-/// All new fields use `#[serde(default)]` to maintain backward compatibility with
-/// existing database records that don't have these fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SurrealNode {
-    uuid: String,
+    // Record ID is stored in the 'id' field returned by SurrealDB (e.g., node:⟨uuid⟩)
+    id: Thing, // SurrealDB record ID (table:id format)
+    #[serde(rename = "type")]
     node_type: String,
     content: String,
-    parent_id: Option<String>,
-    container_node_id: Option<String>,
     before_sibling_id: Option<String>,
     version: i64,
     created_at: String,
     modified_at: String,
-    properties: Value,
-    #[serde(default)]
     embedding_vector: Option<Vec<f32>>,
-    #[serde(default)]
     embedding_stale: bool,
-    #[serde(default)]
     mentions: Vec<String>,
-    #[serde(default)]
     mentioned_by: Vec<String>,
-    // Phase 1 fields (Issue #511) - all use #[serde(default)] for backward compatibility
-    #[serde(default)]
+    // Graph-native architecture fields (Issue #511)
     data: Option<String>, // Record link to type-specific table (e.g., "task:uuid")
-    #[serde(default)]
-    variants: Value, // Type history map {task: "task:uuid", text: null}
-    #[serde(default)]
-    _schema_version: i64, // Universal schema version (default: 1)
+    variants: Value,      // Type history map {task: "task:uuid", text: null}
+    _schema_version: i64, // Universal schema version
 }
 
 impl From<SurrealNode> for Node {
@@ -143,12 +124,21 @@ impl From<SurrealNode> for Node {
                 .collect::<Vec<u8>>()
         });
 
+        // Extract UUID from Thing record ID (e.g., node:⟨uuid⟩ -> uuid)
+        let id = match &sn.id.id {
+            Id::String(s) => {
+                // Format is "node:uuid", extract the UUID part
+                s.split(':').nth(1).unwrap_or(s).to_string()
+            }
+            _ => sn.id.id.to_string(),
+        };
+
         Node {
-            id: sn.uuid,
+            id,
             node_type: sn.node_type,
             content: sn.content,
-            parent_id: sn.parent_id,
-            container_node_id: sn.container_node_id,
+            parent_id: None,         // Removed - use graph edges instead
+            container_node_id: None, // Removed - use graph edges instead
             before_sibling_id: sn.before_sibling_id,
             version: sn.version,
             created_at: DateTime::parse_from_rfc3339(&sn.created_at)
@@ -157,7 +147,7 @@ impl From<SurrealNode> for Node {
             modified_at: DateTime::parse_from_rfc3339(&sn.modified_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            properties: sn.properties,
+            properties: serde_json::json!({}), // Removed - use data link instead
             embedding_vector,
             mentions: sn.mentions,
             mentioned_by: sn.mentioned_by,
@@ -319,7 +309,7 @@ where
     /// Creates SCHEMALESS tables for flexible property handling while maintaining
     /// core field structure.
     ///
-    /// # Phase 1 (Issue #511)
+    /// # Graph-Native Architecture (Issue #511)
     /// - Table name: `node` (singular, consistent naming)
     /// - New fields: data, variants, _schema_version (initialized on creation)
     async fn initialize_schema(db: &Arc<Surreal<Db>>) -> Result<()> {
@@ -332,18 +322,12 @@ where
         .await
         .context("Failed to create universal node table")?;
 
-        // Core type tables - SCHEMALESS for user extensibility
-        let core_types = [
-            "task",
-            "text",
-            "date",
-            "header",
-            "code_block",
-            "quote_block",
-            "ordered_list",
-        ];
+        // Phase 6 (Issue #511): Only create type tables for types with properties
+        // Types without properties (text, date, header, code_block, quote_block, ordered_list)
+        // don't need separate tables - all data is in the node table
+        let core_types_with_properties = ["task"];
 
-        for node_type in core_types {
+        for node_type in core_types_with_properties {
             db.query(format!(
                 "DEFINE TABLE IF NOT EXISTS {} SCHEMALESS;",
                 node_type
@@ -361,7 +345,7 @@ where
         .await
         .context("Failed to create mentions table")?;
 
-        // Phase 3 (Issue #511): has_child graph edges for hierarchy
+        // has_child graph edges for hierarchy
         // RELATE table for parent->child relationships
         // Replaces parent_id field-based queries with graph traversal
         db.query(
@@ -372,7 +356,7 @@ where
         .await
         .context("Failed to create has_child relation table")?;
 
-        // Phase 3 (Issue #511): Critical indexes for graph traversal performance
+        // Critical indexes for graph traversal performance
         // Without these, traversal is O(n²) - WITH them it's O(1) for parent/child lookups
         db.query(
             "
@@ -395,7 +379,7 @@ where
 
         // Check if schemas already exist by trying to get one
         // If any schema exists, assume all are seeded (they're created atomically)
-        // Phase 4 (Issue #511): Use record ID for schema lookup
+        // Use record ID for schema lookup
         let task_exists = db
             .query("SELECT * FROM type::thing('node', 'task') LIMIT 1")
             .await
@@ -714,59 +698,7 @@ where
         Ok(floats)
     }
 
-    /// Phase 3 (Issue #511): Validate that adding a child doesn't create a cycle
-    ///
-    /// Checks if `parent_id` is a descendant of `child_id` by traversing
-    /// the has_child graph edges recursively.
-    ///
-    /// # Arguments
-    /// * `parent_id` - ID of the node that will become the parent
-    /// * `child_id` - ID of the node that will become the child
-    ///
-    /// # Returns
-    /// * `Ok(())` if no cycle would be created
-    /// * `Err` if adding this relationship would create a cycle
-    ///
-    /// # Example Cycle
-    /// ```text
-    /// A -> B -> C (existing edges)
-    /// Trying to add: C -> A  (would create cycle A->B->C->A)
-    /// ```
-    async fn validate_no_cycle(&self, parent_id: &str, child_id: &str) -> Result<()> {
-        // Query: Check if parent is a descendant of child (would create cycle)
-        // Uses recursive graph traversal via ->has_child-> edges
-        let query = r#"
-            SELECT id FROM node:⟨$parent_id⟩
-            WHERE id IN (
-                SELECT ->has_child->node.*.id FROM node:⟨$child_id⟩
-            )
-            LIMIT 1;
-        "#;
-
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("parent_id", parent_id.to_string()))
-            .bind(("child_id", child_id.to_string()))
-            .await?;
-
-        let result: Vec<Value> = response.take(0)?;
-
-        if !result.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Cannot add child {} to parent {} - would create cycle",
-                child_id,
-                parent_id
-            ));
-        }
-
-        Ok(())
-    }
-
     pub async fn create_node(&self, node: Node) -> Result<Node> {
-        // Generate SurrealDB Record ID
-        let record_id = Self::to_record_id(&node.node_type, &node.id);
-
         // Convert embedding blob to f32 array if present
         let embedding_f32 = node
             .embedding_vector
@@ -774,62 +706,58 @@ where
             .map(|blob| Self::blob_to_f32_array(blob))
             .transpose()?;
 
-        // Insert into universal node table
+        // Insert into universal node table (graph-native architecture)
+        // Record ID format: node:uuid (constructed by type::thing)
         let query = "
             CREATE type::thing($table, $id) CONTENT {
-                uuid: $uuid,
-                node_type: $node_type,
+                type: $node_type,
                 content: $content,
-                parent_id: $parent_id,
-                container_node_id: $container_node_id,
                 before_sibling_id: $before_sibling_id,
                 version: $version,
                 created_at: $created_at,
                 modified_at: $modified_at,
-                properties: $properties,
                 embedding_vector: $embedding_vector,
+                embedding_stale: $embedding_stale,
+                mentions: $mentions,
+                mentioned_by: $mentioned_by,
                 data: $data,
                 variants: $variants,
                 _schema_version: $_schema_version
             };
         ";
 
-        // Phase 1 (Issue #511): Initialize new fields
-        // - data: Will be set when creating type-specific record (if properties exist)
-        // - variants: Empty object {} for new nodes
-        // - _schema_version: Default to 1
+        // Initialize graph-native fields
         let variants_value = serde_json::json!({});
 
         self.db
             .query(query)
             .bind(("table", "node"))
-            .bind(("id", record_id.clone()))
-            .bind(("uuid", node.id.clone()))
+            .bind(("id", node.id.clone())) // Just the UUID, type::thing will construct node:uuid
             .bind(("node_type", node.node_type.clone()))
             .bind(("content", node.content.clone()))
-            .bind(("parent_id", node.parent_id.clone()))
-            .bind(("container_node_id", node.container_node_id.clone()))
             .bind(("before_sibling_id", node.before_sibling_id.clone()))
             .bind(("version", node.version))
             .bind(("created_at", node.created_at.to_rfc3339()))
             .bind(("modified_at", node.modified_at.to_rfc3339()))
-            .bind(("properties", node.properties.clone()))
             .bind(("embedding_vector", embedding_f32))
+            .bind(("embedding_stale", false))
+            .bind(("mentions", Vec::<String>::new()))
+            .bind(("mentioned_by", Vec::<String>::new()))
             .bind(("data", None::<String>)) // Will be set below if type has properties
             .bind(("variants", variants_value))
             .bind(("_schema_version", 1i64))
             .await
             .context("Failed to create node in universal table")?;
 
-        // Insert into type-specific table (if properties exist)
-        if !node
-            .properties
-            .as_object()
-            .unwrap_or(&serde_json::Map::new())
-            .is_empty()
+        // Insert into type-specific table only for task type with properties
+        if node.node_type == "task"
+            && !node
+                .properties
+                .as_object()
+                .unwrap_or(&serde_json::Map::new())
+                .is_empty()
         {
-            // Phase 2 (Issue #511): Store properties directly (flattened)
-            // Do NOT add uuid or _schema_version - those belong in node table only
+            // Store properties directly in type-specific table (flattened)
             let props = node.properties.clone();
 
             self.db
@@ -840,8 +768,7 @@ where
                 .await
                 .context("Failed to create node in type-specific table")?;
 
-            // Phase 1 (Issue #511): Set data field to link to type-specific record
-            // Use record ID directly instead of WHERE clause for better performance
+            // Set data field to link to type-specific record
             self.db
                 .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);")
                 .bind(("id", node.id.clone()))
@@ -850,88 +777,12 @@ where
                 .context("Failed to set data link")?;
         }
 
-        // Phase 3 (Issue #511): Create has_child graph edge if parent_id is set
-        // This creates a bidirectional edge: parent->has_child->child
-        // Dual-mode: Both parent_id field AND graph edge exist for gradual migration
-        if let Some(parent_id) = &node.parent_id {
-            // Validate no cycle before creating edge
-            self.validate_no_cycle(parent_id, &node.id).await?;
-
-            self.db
-                .query("RELATE type::thing('node', $parent_id)->has_child->type::thing('node', $child_id);")
-                .bind(("parent_id", parent_id.clone()))
-                .bind(("child_id", node.id.clone()))
-                .await
-                .context("Failed to create has_child graph edge")?;
-        }
-
-        // Return the created node directly (avoids triggering backfill/migration during creation)
-        // The node was successfully created with the values provided, so we can return it as-is
+        // Return the created node directly
         Ok(node)
     }
 
-    /// Phase 3 (Issue #511): Create has_child edges for all existing parent-child relationships
-    ///
-    /// Migration helper to backfill graph edges for nodes created before Phase 3.
-    /// Reads all nodes with parent_id and creates corresponding has_child edges.
-    ///
-    /// **IMPORTANT**: This is dual-mode migration - both parent_id field AND graph edges exist.
-    /// The parent_id field will be removed in Phase 5 after all queries are updated.
-    ///
-    /// # Returns
-    /// Number of edges created
-    ///
-    /// # Example Usage
-    /// ```rust,no_run
-    /// # use nodespace_core::db::SurrealStore;
-    /// # use std::path::PathBuf;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
-    /// let count = store.create_has_child_edges_for_existing_nodes().await?;
-    /// println!("Created {} has_child edges", count);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn create_has_child_edges_for_existing_nodes(&self) -> Result<usize> {
-        // Get all nodes with parents (where parent_id is not null)
-        let query = "SELECT uuid, parent_id FROM node WHERE parent_id IS NOT NONE;";
-        let mut response = self.db.query(query).await?;
-        let nodes: Vec<SurrealNode> = response.take(0)?;
-
-        tracing::info!(
-            "Creating has_child edges for {} existing parent-child relationships",
-            nodes.len()
-        );
-
-        let mut edges_created = 0;
-
-        for node in nodes {
-            if let Some(parent_id) = node.parent_id {
-                // Create has_child edge (parent->has_child->child)
-                // Note: We skip cycle validation here because existing relationships
-                // are assumed to be valid (cycles shouldn't exist in parent_id field structure)
-                self.db
-                    .query("RELATE type::thing('node', $parent_id)->has_child->type::thing('node', $child_id);")
-                    .bind(("parent_id", parent_id))
-                    .bind(("child_id", node.uuid))
-                    .await
-                    .context("Failed to create has_child edge during migration")?;
-
-                edges_created += 1;
-
-                if edges_created % 100 == 0 {
-                    tracing::info!("Created {} has_child edges...", edges_created);
-                }
-            }
-        }
-
-        tracing::info!("✅ Created {} has_child edges successfully", edges_created);
-        Ok(edges_created)
-    }
-
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
-        // Phase 4 (Issue #511): Direct record ID lookup (O(1) primary key access)
+        // Direct record ID lookup (O(1) primary key access)
         // Uses SurrealDB record ID: node:⟨uuid⟩
         // FETCH data: Hydrates the record link in the 'data' field
         let query = "SELECT * FROM type::thing('node', $id) FETCH data;";
@@ -956,23 +807,19 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-        // Phase 4 (Issue #511): Update using record ID (O(1) primary key access)
+        // Update using record ID (O(1) primary key access)
         let query = "
             UPDATE type::thing('node', $id) SET
                 content = $content,
-                node_type = $node_type,
-                parent_id = $parent_id,
-                container_node_id = $container_node_id,
+                type = $node_type,
                 before_sibling_id = $before_sibling_id,
                 modified_at = time::now(),
                 version = version + 1,
-                properties = $properties,
                 embedding_vector = $embedding_vector;
         ";
 
         let updated_content = update.content.unwrap_or(current.content);
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
-        let updated_properties = update.properties.unwrap_or(current.properties.clone());
 
         // Convert embedding blob to f32 if provided
         let embedding_f32 = update
@@ -987,10 +834,7 @@ where
             .bind(("id", id.to_string()))
             .bind(("content", updated_content))
             .bind(("node_type", updated_node_type))
-            .bind(("parent_id", update.parent_id.flatten()))
-            .bind(("container_node_id", update.container_node_id.flatten()))
             .bind(("before_sibling_id", update.before_sibling_id.flatten()))
-            .bind(("properties", updated_properties))
             .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to update node")?;
@@ -1052,18 +896,15 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-        // Phase 4 (Issue #511): Atomic update with version check using record ID
+        // Atomic update with version check using record ID
         // SurrealDB's UPDATE returns the updated records
         let query = "
             UPDATE type::thing('node', $id) SET
                 content = $content,
-                node_type = $node_type,
-                parent_id = $parent_id,
-                container_node_id = $container_node_id,
+                type = $node_type,
                 before_sibling_id = $before_sibling_id,
                 modified_at = time::now(),
                 version = version + 1,
-                properties = $properties,
                 embedding_vector = $embedding_vector
             WHERE version = $expected_version
             RETURN AFTER;
@@ -1071,7 +912,6 @@ where
 
         let updated_content = update.content.unwrap_or(current.content);
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
-        let updated_properties = update.properties.unwrap_or(current.properties.clone());
 
         // Convert embedding blob to f32 if provided
         let embedding_f32 = update
@@ -1088,10 +928,7 @@ where
             .bind(("expected_version", expected_version))
             .bind(("content", updated_content))
             .bind(("node_type", updated_node_type))
-            .bind(("parent_id", update.parent_id.flatten()))
-            .bind(("container_node_id", update.container_node_id.flatten()))
             .bind(("before_sibling_id", update.before_sibling_id.flatten()))
-            .bind(("properties", updated_properties))
             .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to update node with version check")?;
@@ -1117,7 +954,7 @@ where
             None => return Ok(DeleteResult { existed: false }),
         };
 
-        // Phase 4 (Issue #511): Delete using record IDs and graph edges
+        // Delete using record IDs and graph edges
         // Use transaction for atomicity (all or nothing)
         let transaction_query = "
             BEGIN TRANSACTION;
@@ -1209,28 +1046,20 @@ where
                 }
             }
 
-            // Apply include_containers_and_tasks filter if specified
-            // Phase 4 (Issue #511): Check parent_id instead of container_node_id
-            // (parent_id still exists during dual-mode migration, will be removed in Phase 5)
-            if let Some(true) = query.include_containers_and_tasks {
-                nodes.retain(|n| n.node_type == "task" || n.parent_id.is_none());
-            }
+            // Note: include_containers_and_tasks filter not applicable for semantic search
+            // (would require additional graph query to check hierarchy)
 
             return Ok(nodes);
         }
 
         // Handle content_contains query
         if let Some(ref search_query) = query.content_contains {
-            let mut nodes = self
+            let nodes = self
                 .search_nodes_by_content(search_query, query.limit.map(|l| l as i64))
                 .await?;
 
-            // Apply include_containers_and_tasks filter if specified
-            // Phase 4 (Issue #511): Check parent_id instead of container_node_id
-            // (parent_id still exists during dual-mode migration, will be removed in Phase 5)
-            if let Some(true) = query.include_containers_and_tasks {
-                nodes.retain(|n| n.node_type == "task" || n.parent_id.is_none());
-            }
+            // Note: include_containers_and_tasks filter not applicable for content search
+            // (would require additional graph query to check hierarchy)
 
             return Ok(nodes);
         }
@@ -1239,12 +1068,12 @@ where
         let mut conditions = Vec::new();
 
         if query.node_type.is_some() {
-            conditions.push("node_type = $node_type".to_string());
+            conditions.push("type = $node_type".to_string());
         }
 
         if let Some(true) = query.include_containers_and_tasks {
-            // Phase 4 (Issue #511): Include tasks OR root nodes (no incoming has_child edges)
-            conditions.push("(node_type = 'task' OR !EXISTS(<-has_child<-node))".to_string());
+            // Include tasks OR root nodes (no incoming has_child edges)
+            conditions.push("(type = 'task' OR !EXISTS(<-has_child<-node))".to_string());
         }
 
         // Build SQL query
@@ -1281,7 +1110,7 @@ where
     }
 
     pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>> {
-        // Phase 4 (Issue #511): Use graph edges for hierarchy traversal
+        // Use graph edges for hierarchy traversal
         let (query, has_parent) = if parent_id.is_some() {
             // Query children using has_child graph edge
             // FETCH data: Hydrates the record link in the 'data' field
@@ -1301,21 +1130,6 @@ where
         let surreal_nodes: Vec<SurrealNode> = response
             .take(0)
             .context("Failed to extract children from response")?;
-        Ok(surreal_nodes.into_iter().map(Into::into).collect())
-    }
-
-    pub async fn get_nodes_by_container(&self, container_id: &str) -> Result<Vec<Node>> {
-        let query = "SELECT * FROM node WHERE container_node_id = $container_id;";
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("container_id", container_id.to_string()))
-            .await
-            .context("Failed to get nodes by container")?;
-
-        let surreal_nodes: Vec<SurrealNode> = response
-            .take(0)
-            .context("Failed to extract nodes by container from response")?;
         Ok(surreal_nodes.into_iter().map(Into::into).collect())
     }
 
@@ -1347,19 +1161,28 @@ where
     }
 
     pub async fn move_node(&self, id: &str, new_parent_id: Option<&str>) -> Result<()> {
-        // Phase 4 (Issue #511): Update using record ID
+        // Delete existing parent edge
         self.db
-            .query("UPDATE type::thing('node', $id) SET parent_id = $parent_id;")
+            .query("DELETE <-has_child<-node WHERE out = type::thing('node', $id);")
             .bind(("id", id.to_string()))
-            .bind(("parent_id", new_parent_id.map(|s| s.to_string())))
             .await
-            .context("Failed to move node")?;
+            .context("Failed to delete existing parent edge")?;
+
+        // Create new parent edge if parent is specified
+        if let Some(parent_id) = new_parent_id {
+            self.db
+                .query("RELATE type::thing('node', $parent_id)->has_child->type::thing('node', $child_id);")
+                .bind(("parent_id", parent_id.to_string()))
+                .bind(("child_id", id.to_string()))
+                .await
+                .context("Failed to create new parent edge")?;
+        }
 
         Ok(())
     }
 
     pub async fn reorder_node(&self, id: &str, new_before_sibling_id: Option<&str>) -> Result<()> {
-        // Phase 4 (Issue #511): Update using record ID
+        // Update using record ID
         self.db
             .query("UPDATE type::thing('node', $id) SET before_sibling_id = $before_sibling_id;")
             .bind(("id", id.to_string()))
@@ -1648,7 +1471,7 @@ where
         // Convert binary blob to f32 array for SurrealDB vector functions
         let embedding_f32 = Self::blob_to_f32_array(embedding)?;
 
-        // Phase 4 (Issue #511): Update using record ID
+        // Update using record ID
         self.db
             .query("UPDATE type::thing('node', $id) SET embedding_vector = $embedding, embedding_stale = false;")
             .bind(("id", node_id.to_string()))
@@ -1683,7 +1506,7 @@ where
     /// # }
     /// ```
     pub async fn mark_embedding_stale(&self, node_id: &str) -> Result<()> {
-        // Phase 4 (Issue #511): Update using record ID
+        // Update using record ID
         self.db
             .query("UPDATE type::thing('node', $id) SET embedding_stale = true;")
             .bind(("id", node_id.to_string()))
@@ -1804,19 +1627,15 @@ where
         // Deserialize response with similarity scores
         #[derive(Debug, Deserialize)]
         struct NodeWithSimilarity {
-            uuid: String,
+            id: Thing,
+            #[serde(rename = "type")]
             node_type: String,
             content: String,
-            #[serde(default)]
-            parent_id: Option<String>,
-            #[serde(default)]
-            container_node_id: Option<String>,
             #[serde(default)]
             before_sibling_id: Option<String>,
             version: i64,
             created_at: String,
             modified_at: String,
-            properties: Value,
             #[serde(default)]
             embedding_vector: Option<Vec<f32>>,
             #[serde(default)]
@@ -1825,6 +1644,12 @@ where
             mentions: Vec<String>,
             #[serde(default)]
             mentioned_by: Vec<String>,
+            #[serde(default)]
+            data: Option<String>,
+            #[serde(default)]
+            variants: Value,
+            #[serde(default)]
+            _schema_version: i64,
             similarity: f64,
         }
 
@@ -1837,23 +1662,20 @@ where
             .into_iter()
             .map(|nws| {
                 let surreal_node = SurrealNode {
-                    uuid: nws.uuid,
+                    id: nws.id,
                     node_type: nws.node_type,
                     content: nws.content,
-                    parent_id: nws.parent_id,
-                    container_node_id: nws.container_node_id,
                     before_sibling_id: nws.before_sibling_id,
                     version: nws.version,
                     created_at: nws.created_at,
                     modified_at: nws.modified_at,
-                    properties: nws.properties,
                     embedding_vector: nws.embedding_vector,
                     embedding_stale: nws.embedding_stale,
                     mentions: nws.mentions,
                     mentioned_by: nws.mentioned_by,
-                    data: None, // Phase 1 (Issue #511): Not used in similarity search
-                    variants: serde_json::json!({}), // Phase 1 (Issue #511): Not used in similarity search
-                    _schema_version: 1,              // Phase 1 (Issue #511): Default version
+                    data: nws.data,
+                    variants: nws.variants,
+                    _schema_version: nws._schema_version,
                 };
                 (surreal_node.into(), nws.similarity)
             })
@@ -1928,17 +1750,14 @@ where
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-            // Phase 4 (Issue #511): Generate UPDATE statement using record ID
+            // Generate UPDATE statement using record ID
             let update_stmt = format!(
                 "UPDATE type::thing('node', $id_{idx}) SET
                     content = $content_{idx},
-                    node_type = $node_type_{idx},
-                    parent_id = $parent_id_{idx},
-                    container_node_id = $container_node_id_{idx},
+                    type = $node_type_{idx},
                     before_sibling_id = $before_sibling_id_{idx},
                     modified_at = time::now(),
                     version = version + 1,
-                    properties = $properties_{idx},
                     embedding_vector = $embedding_vector_{idx};",
                 idx = idx
             );
@@ -1960,7 +1779,6 @@ where
 
             let updated_content = update.content.clone().unwrap_or(current.content);
             let updated_node_type = update.node_type.clone().unwrap_or(current.node_type);
-            let updated_properties = update.properties.clone().unwrap_or(current.properties);
 
             // Convert embedding blob to f32 if provided
             let embedding_f32 = update
@@ -1976,18 +1794,9 @@ where
                 .bind((format!("content_{}", idx), updated_content))
                 .bind((format!("node_type_{}", idx), updated_node_type))
                 .bind((
-                    format!("parent_id_{}", idx),
-                    update.parent_id.clone().flatten(),
-                ))
-                .bind((
-                    format!("container_node_id_{}", idx),
-                    update.container_node_id.clone().flatten(),
-                ))
-                .bind((
                     format!("before_sibling_id_{}", idx),
                     update.before_sibling_id.clone().flatten(),
                 ))
-                .bind((format!("properties_{}", idx), updated_properties))
                 .bind((format!("embedding_vector_{}", idx), embedding_f32));
         }
 
