@@ -930,14 +930,16 @@ where
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
-        // Query by UUID field
-        let query = "SELECT * FROM node WHERE uuid = $uuid LIMIT 1;";
+        // Phase 4 (Issue #511): Direct record ID lookup (O(1) primary key access)
+        // Uses SurrealDB record ID: node:⟨uuid⟩
+        // FETCH data: Hydrates the record link in the 'data' field
+        let query = "SELECT * FROM type::thing('node', $id) FETCH data;";
         let mut response = self
             .db
             .query(query)
-            .bind(("uuid", id.to_string()))
+            .bind(("id", id.to_string()))
             .await
-            .context("Failed to query node by UUID")?;
+            .context("Failed to query node by record ID")?;
 
         let surreal_nodes: Vec<SurrealNode> = response
             .take(0)
@@ -953,9 +955,9 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-        // Build update query for universal table by UUID
+        // Phase 4 (Issue #511): Update using record ID (O(1) primary key access)
         let query = "
-            UPDATE node SET
+            UPDATE type::thing('node', $id) SET
                 content = $content,
                 node_type = $node_type,
                 parent_id = $parent_id,
@@ -964,8 +966,7 @@ where
                 modified_at = time::now(),
                 version = version + 1,
                 properties = $properties,
-                embedding_vector = $embedding_vector
-            WHERE uuid = $uuid;
+                embedding_vector = $embedding_vector;
         ";
 
         let updated_content = update.content.unwrap_or(current.content);
@@ -982,7 +983,7 @@ where
 
         self.db
             .query(query)
-            .bind(("uuid", id.to_string()))
+            .bind(("id", id.to_string()))
             .bind(("content", updated_content))
             .bind(("node_type", updated_node_type))
             .bind(("parent_id", update.parent_id.flatten()))
@@ -1050,10 +1051,10 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-        // Build atomic update query with version check
+        // Phase 4 (Issue #511): Atomic update with version check using record ID
         // SurrealDB's UPDATE returns the updated records
         let query = "
-            UPDATE node SET
+            UPDATE type::thing('node', $id) SET
                 content = $content,
                 node_type = $node_type,
                 parent_id = $parent_id,
@@ -1063,7 +1064,7 @@ where
                 version = version + 1,
                 properties = $properties,
                 embedding_vector = $embedding_vector
-            WHERE uuid = $uuid AND version = $expected_version
+            WHERE version = $expected_version
             RETURN AFTER;
         ";
 
@@ -1082,7 +1083,7 @@ where
         let mut response = self
             .db
             .query(query)
-            .bind(("uuid", id.to_string()))
+            .bind(("id", id.to_string()))
             .bind(("expected_version", expected_version))
             .bind(("content", updated_content))
             .bind(("node_type", updated_node_type))
@@ -1115,12 +1116,14 @@ where
             None => return Ok(DeleteResult { existed: false }),
         };
 
+        // Phase 4 (Issue #511): Delete using record IDs and graph edges
         // Use transaction for atomicity (all or nothing)
         let transaction_query = "
             BEGIN TRANSACTION;
             DELETE type::thing($table, $id);
-            DELETE FROM node WHERE uuid = $uuid;
-            DELETE mentions WHERE in.uuid = $uuid OR out.uuid = $uuid;
+            DELETE type::thing('node', $id);
+            DELETE mentions WHERE in = type::thing('node', $id) OR out = type::thing('node', $id);
+            DELETE has_child WHERE in = type::thing('node', $id) OR out = type::thing('node', $id);
             COMMIT TRANSACTION;
         ";
 
@@ -1128,7 +1131,6 @@ where
             .query(transaction_query)
             .bind(("table", node.node_type.clone()))
             .bind(("id", node.id.clone()))
-            .bind(("uuid", node.id.clone()))
             .await
             .context("Failed to delete node and relations")?;
 
@@ -1207,8 +1209,10 @@ where
             }
 
             // Apply include_containers_and_tasks filter if specified
+            // Phase 4 (Issue #511): Check parent_id instead of container_node_id
+            // (parent_id still exists during dual-mode migration, will be removed in Phase 5)
             if let Some(true) = query.include_containers_and_tasks {
-                nodes.retain(|n| n.node_type == "task" || n.container_node_id.is_none());
+                nodes.retain(|n| n.node_type == "task" || n.parent_id.is_none());
             }
 
             return Ok(nodes);
@@ -1221,8 +1225,10 @@ where
                 .await?;
 
             // Apply include_containers_and_tasks filter if specified
+            // Phase 4 (Issue #511): Check parent_id instead of container_node_id
+            // (parent_id still exists during dual-mode migration, will be removed in Phase 5)
             if let Some(true) = query.include_containers_and_tasks {
-                nodes.retain(|n| n.node_type == "task" || n.container_node_id.is_none());
+                nodes.retain(|n| n.node_type == "task" || n.parent_id.is_none());
             }
 
             return Ok(nodes);
@@ -1236,8 +1242,8 @@ where
         }
 
         if let Some(true) = query.include_containers_and_tasks {
-            // Include tasks OR nodes without container (top-level/containers)
-            conditions.push("(node_type = 'task' OR container_node_id IS NONE)".to_string());
+            // Phase 4 (Issue #511): Include tasks OR root nodes (no incoming has_child edges)
+            conditions.push("(node_type = 'task' OR !EXISTS(<-has_child<-node))".to_string());
         }
 
         // Build SQL query
@@ -1274,10 +1280,14 @@ where
     }
 
     pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>> {
+        // Phase 4 (Issue #511): Use graph edges for hierarchy traversal
         let (query, has_parent) = if parent_id.is_some() {
-            ("SELECT * FROM node WHERE parent_id = $parent_id;", true)
+            // Query children using has_child graph edge
+            // FETCH data: Hydrates the record link in the 'data' field
+            ("SELECT ->has_child->node.* FROM type::thing('node', $parent_id) FETCH data ORDER BY before_sibling_id;", true)
         } else {
-            ("SELECT * FROM node WHERE parent_id IS NONE;", false)
+            // Root nodes: nodes that have NO incoming has_child edges
+            ("SELECT * FROM node WHERE !EXISTS(<-has_child<-node) FETCH data ORDER BY before_sibling_id;", false)
         };
 
         let mut query_builder = self.db.query(query);
@@ -1336,9 +1346,10 @@ where
     }
 
     pub async fn move_node(&self, id: &str, new_parent_id: Option<&str>) -> Result<()> {
+        // Phase 4 (Issue #511): Update using record ID
         self.db
-            .query("UPDATE node SET parent_id = $parent_id WHERE uuid = $uuid;")
-            .bind(("uuid", id.to_string()))
+            .query("UPDATE type::thing('node', $id) SET parent_id = $parent_id;")
+            .bind(("id", id.to_string()))
             .bind(("parent_id", new_parent_id.map(|s| s.to_string())))
             .await
             .context("Failed to move node")?;
@@ -1347,9 +1358,10 @@ where
     }
 
     pub async fn reorder_node(&self, id: &str, new_before_sibling_id: Option<&str>) -> Result<()> {
+        // Phase 4 (Issue #511): Update using record ID
         self.db
-            .query("UPDATE node SET before_sibling_id = $before_sibling_id WHERE uuid = $uuid;")
-            .bind(("uuid", id.to_string()))
+            .query("UPDATE type::thing('node', $id) SET before_sibling_id = $before_sibling_id;")
+            .bind(("id", id.to_string()))
             .bind((
                 "before_sibling_id",
                 new_before_sibling_id.map(|s| s.to_string()),
@@ -1635,9 +1647,10 @@ where
         // Convert binary blob to f32 array for SurrealDB vector functions
         let embedding_f32 = Self::blob_to_f32_array(embedding)?;
 
+        // Phase 4 (Issue #511): Update using record ID
         self.db
-            .query("UPDATE node SET embedding_vector = $embedding, embedding_stale = false WHERE uuid = $uuid;")
-            .bind(("uuid", node_id.to_string()))
+            .query("UPDATE type::thing('node', $id) SET embedding_vector = $embedding, embedding_stale = false;")
+            .bind(("id", node_id.to_string()))
             .bind(("embedding", embedding_f32))
             .await
             .context("Failed to update embedding")?;
@@ -1669,9 +1682,10 @@ where
     /// # }
     /// ```
     pub async fn mark_embedding_stale(&self, node_id: &str) -> Result<()> {
+        // Phase 4 (Issue #511): Update using record ID
         self.db
-            .query("UPDATE node SET embedding_stale = true WHERE uuid = $uuid;")
-            .bind(("uuid", node_id.to_string()))
+            .query("UPDATE type::thing('node', $id) SET embedding_stale = true;")
+            .bind(("id", node_id.to_string()))
             .await
             .context("Failed to mark embedding as stale")?;
 
@@ -1913,9 +1927,9 @@ where
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-            // Generate the UPDATE statement
+            // Phase 4 (Issue #511): Generate UPDATE statement using record ID
             let update_stmt = format!(
-                "UPDATE node SET
+                "UPDATE type::thing('node', $id_{idx}) SET
                     content = $content_{idx},
                     node_type = $node_type_{idx},
                     parent_id = $parent_id_{idx},
@@ -1924,8 +1938,7 @@ where
                     modified_at = time::now(),
                     version = version + 1,
                     properties = $properties_{idx},
-                    embedding_vector = $embedding_vector_{idx}
-                WHERE uuid = $uuid_{idx};",
+                    embedding_vector = $embedding_vector_{idx};",
                 idx = idx
             );
             transaction_parts.push(update_stmt);
@@ -1958,7 +1971,7 @@ where
                 .transpose()?;
 
             query_builder = query_builder
-                .bind((format!("uuid_{}", idx), id.clone()))
+                .bind((format!("id_{}", idx), id.clone()))
                 .bind((format!("content_{}", idx), updated_content))
                 .bind((format!("node_type_{}", idx), updated_node_type))
                 .bind((
