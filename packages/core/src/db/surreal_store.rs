@@ -778,6 +778,22 @@ where
                 .context("Failed to set data link")?;
         }
 
+        // Create has_child graph edge if parent_id is set
+        // This establishes the parent-child relationship in the graph
+        if let Some(parent_id) = &node.parent_id {
+            // Create Thing record IDs (not strings) for RELATE statement
+            use surrealdb::sql::Thing;
+            let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
+            let child_thing = Thing::from(("node".to_string(), node.id.clone()));
+
+            self.db
+                .query("RELATE $parent_thing->has_child->$child_thing;")
+                .bind(("parent_thing", parent_thing))
+                .bind(("child_thing", child_thing))
+                .await
+                .context("Failed to create parent-child edge")?;
+        }
+
         // Return the created node directly
         Ok(node)
     }
@@ -1112,25 +1128,38 @@ where
 
     pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>> {
         // Use graph edges for hierarchy traversal
-        let (query, has_parent) = if parent_id.is_some() {
-            // Query children using has_child graph edge
-            // ORDER BY must come before FETCH in SurrealQL
-            ("SELECT ->has_child->node.* FROM type::thing('node', $parent_id) ORDER BY before_sibling_id FETCH data;", true)
-        } else {
+        let surreal_nodes: Vec<SurrealNode> = if let Some(parent_id) = parent_id {
+            // Create Thing record ID for parent node
+            use surrealdb::sql::Thing;
+            let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
+
+            // Use a subquery to find child IDs from has_child edges, then fetch the nodes
+            let mut response = self
+                .db
+                .query("SELECT * FROM node WHERE id IN (SELECT VALUE out FROM has_child WHERE in = $parent_thing) FETCH data;")
+                .bind(("parent_thing", parent_thing))
+                .await
+                .context("Failed to get children")?;
+
+            response
+                .take(0)
+                .context("Failed to extract children from response")?
+        } else{
             // Root nodes: nodes that have NO incoming has_child edges
-            ("SELECT * FROM node WHERE !EXISTS(<-has_child<-node) ORDER BY before_sibling_id FETCH data;", false)
+            // Use count(<-has_child) = 0 to find nodes without parents
+            let mut response = self
+                .db
+                .query("SELECT * FROM node WHERE count(<-has_child) = 0 FETCH data;")
+                .await
+                .context("Failed to get root nodes")?;
+
+            response
+                .take(0)
+                .context("Failed to extract root nodes from response")?
         };
 
-        let mut query_builder = self.db.query(query);
-
-        if has_parent {
-            query_builder = query_builder.bind(("parent_id", parent_id.unwrap().to_string()));
-        }
-
-        let mut response = query_builder.await.context("Failed to get children")?;
-        let surreal_nodes: Vec<SurrealNode> = response
-            .take(0)
-            .context("Failed to extract children from response")?;
+        // Sort by before_sibling_id in-memory (topological sort of linked list)
+        // TODO: Implement proper linked list ordering
         Ok(surreal_nodes.into_iter().map(Into::into).collect())
     }
 
@@ -1162,19 +1191,23 @@ where
     }
 
     pub async fn move_node(&self, id: &str, new_parent_id: Option<&str>) -> Result<()> {
+        use surrealdb::sql::Thing;
+
         // Delete existing parent edge
+        let child_thing = Thing::from(("node".to_string(), id.to_string()));
         self.db
-            .query("DELETE <-has_child<-node WHERE out = type::thing('node', $id);")
-            .bind(("id", id.to_string()))
+            .query("DELETE has_child WHERE out = $child_thing;")
+            .bind(("child_thing", child_thing.clone()))
             .await
             .context("Failed to delete existing parent edge")?;
 
         // Create new parent edge if parent is specified
         if let Some(parent_id) = new_parent_id {
+            let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
             self.db
-                .query("RELATE type::thing('node', $parent_id)->has_child->type::thing('node', $child_id);")
-                .bind(("parent_id", parent_id.to_string()))
-                .bind(("child_id", id.to_string()))
+                .query("RELATE $parent_thing->has_child->$child_thing;")
+                .bind(("parent_thing", parent_thing))
+                .bind(("child_thing", child_thing))
                 .await
                 .context("Failed to create new parent edge")?;
         }
