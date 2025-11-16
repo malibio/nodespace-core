@@ -231,7 +231,9 @@ impl From<SurrealNode> for Node {
 ///
 /// **Deprecation**: This is a temporary compatibility layer. Frontend should be
 /// refactored to send flat properties directly. Remove this function once frontend
-/// is updated (tracked in frontend refactor issue).
+/// is updated.
+///
+/// **TODO**: Remove by 2025-12-15 (tracked in Issue #515)
 ///
 /// # Arguments
 ///
@@ -1443,9 +1445,17 @@ where
         // Convert to nodes
         let mut nodes: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
 
-        // Populate parent_id and container_node_id for frontend compatibility
-        // In graph architecture, these are derived from the query context, not stored
+        // DEPRECATED: Populate parent_id and container_node_id for frontend compatibility
+        // These fields violate graph-native architecture and will be removed.
+        // TODO: Remove by 2025-12-15 (tracked in Issue #514)
+        // Frontend should use graph edges instead: GET /api/nodes/{id}/children
+        // In graph architecture, hierarchy is derived from edges, not stored in fields
         if let Some(pid) = parent_id_value {
+            tracing::warn!(
+                "Reconstructing deprecated parent_id/container_node_id fields. \
+                These fields will be removed in Issue #514. \
+                Frontend should migrate to graph edge queries."
+            );
             for node in &mut nodes {
                 node.parent_id = Some(pid.clone());
                 node.container_node_id = Some(pid.clone());
@@ -1494,6 +1504,106 @@ where
         // Sort by before_sibling_id in-memory (topological sort of linked list)
         // TODO: Implement proper linked list ordering
         Ok(nodes)
+    }
+
+    /// Get entire node tree recursively in a SINGLE query
+    ///
+    /// This method leverages SurrealDB's recursive graph traversal to fetch
+    /// a node and ALL its descendants at all levels in one database query.
+    ///
+    /// # Performance
+    ///
+    /// - **1 query** regardless of tree depth/size (vs N queries for manual traversal)
+    /// - Ideal for: outline view, export, tree visualization
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - ID of the root node to fetch tree from
+    ///
+    /// # Returns
+    ///
+    /// Returns root node with nested `children` arrays at all levels.
+    /// Each node includes properties fetched from type-specific tables.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// // Get entire tree in ONE query:
+    /// let tree = store.get_node_tree("root-uuid").await?;
+    /// // tree.children[0].children[0]... (fully nested)
+    /// ```
+    ///
+    /// # Implementation Note
+    ///
+    /// Uses SurrealDB's `@` recursive projection operator:
+    /// ```sql
+    /// SELECT id, title,
+    ///   ->has_child->node.{
+    ///     id, title,
+    ///     children: ->has_child->node.@  -- '@' repeats this projection recursively
+    ///   } AS children
+    /// FROM node:root_uuid;
+    /// ```
+    pub async fn get_node_tree(&self, root_id: &str) -> Result<Option<serde_json::Value>> {
+        use surrealdb::sql::Thing;
+
+        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
+
+        // Recursive query with @ operator for infinite depth traversal
+        let query = "
+            SELECT
+                id,
+                type,
+                content,
+                before_sibling_id,
+                version,
+                created_at,
+                modified_at,
+                embedding_vector,
+                embedding_stale,
+                mentions,
+                mentioned_by,
+                data,
+                variants,
+                _schema_version,
+                ->has_child->node.{
+                    id,
+                    type,
+                    content,
+                    before_sibling_id,
+                    version,
+                    created_at,
+                    modified_at,
+                    embedding_vector,
+                    embedding_stale,
+                    mentions,
+                    mentioned_by,
+                    data,
+                    variants,
+                    _schema_version,
+                    children: ->has_child->node.@
+                } AS children
+            FROM $root_thing
+            FETCH data;
+        ";
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("root_thing", root_thing))
+            .await
+            .context("Failed to fetch node tree")?;
+
+        let results: Vec<serde_json::Value> = response
+            .take(0)
+            .context("Failed to parse node tree results")?;
+
+        if results.is_empty() {
+            return Ok(None);
+        }
+
+        // Return the tree as raw JSON (frontend can deserialize as needed)
+        Ok(Some(results[0].clone()))
     }
 
     pub async fn search_nodes_by_content(
