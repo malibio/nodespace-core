@@ -276,7 +276,6 @@ fn unwrap_legacy_property_format(props: Value, node_type: &str) -> Value {
 /// # Returns
 ///
 /// HashMap mapping node ID to its properties
-#[allow(dead_code)] // TODO: Integrate into get_children() to fix N+1 query pattern
 async fn batch_fetch_properties<C: surrealdb::Connection>(
     db: &Surreal<C>,
     node_type: &str,
@@ -1453,70 +1452,42 @@ where
             }
         }
 
-        // Manually fetch properties for nodes that have them (same logic as get_node)
-        let types_with_properties = ["task", "schema"];
+        // Batch fetch properties for nodes that have them
+        // Performance: 100 nodes with properties = 2-3 queries (vs 101 with N+1 pattern)
+        use std::collections::HashMap;
 
-        // Group nodes by type to batch fetch properties
-        for node in &mut nodes {
-            if types_with_properties.contains(&node.node_type.as_str()) {
-                // Fetch properties using SQL query, excluding 'id' field
-                let props_query = format!(
-                    "SELECT * OMIT id FROM type::thing('{}', $id);",
-                    node.node_type
-                );
-                let mut props_response = self
-                    .db
-                    .query(&props_query)
-                    .bind(("id", node.id.clone()))
-                    .await;
+        // Group nodes by type for batch fetching
+        let mut nodes_by_type: HashMap<String, Vec<String>> = HashMap::new();
+        for node in &nodes {
+            if TYPES_WITH_PROPERTIES.contains(&node.node_type.as_str()) {
+                nodes_by_type
+                    .entry(node.node_type.clone())
+                    .or_default()
+                    .push(node.id.clone());
+            }
+        }
 
-                let result: Option<serde_json::Value> = match props_response {
-                    Ok(ref mut response) => {
-                        let raw: Result<
-                            Vec<std::collections::HashMap<String, serde_json::Value>>,
-                            _,
-                        > = response.take(0);
-                        match raw {
-                            Ok(records) => {
-                                let map: serde_json::Value = records
-                                    .into_iter()
-                                    .next()
-                                    .map(|m| {
-                                        serde_json::to_value(m).unwrap_or(serde_json::Value::Null)
-                                    })
-                                    .unwrap_or(serde_json::Value::Null);
-                                tracing::debug!(
-                                    "get_children({:?}) - properties after conversion: {:?}",
-                                    node.id,
-                                    map
-                                );
-                                Some(map)
-                            }
-                            Err(e) => {
-                                tracing::debug!(
-                                    "Failed to deserialize properties for node {} (type: {}): {}",
-                                    node.id,
-                                    node.node_type,
-                                    e
-                                );
-                                None
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            "Failed to fetch properties for node {} (type: {}): {}",
-                            node.id,
-                            node.node_type,
-                            e
-                        );
-                        None
-                    }
-                };
-
-                if let Some(props) = result {
-                    node.properties = props;
+        // Batch fetch properties for each type
+        let mut all_properties: HashMap<String, Value> = HashMap::new();
+        for (node_type, node_ids) in nodes_by_type {
+            match batch_fetch_properties(&self.db, &node_type, &node_ids).await {
+                Ok(props_map) => {
+                    all_properties.extend(props_map);
                 }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to batch fetch properties for type '{}': {}",
+                        node_type,
+                        e
+                    );
+                }
+            }
+        }
+
+        // Hydrate properties into nodes
+        for node in &mut nodes {
+            if let Some(props) = all_properties.get(&node.id) {
+                node.properties = props.clone();
             }
         }
 
