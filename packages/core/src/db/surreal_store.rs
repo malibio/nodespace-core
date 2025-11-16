@@ -756,10 +756,9 @@ where
             .unwrap_or(&serde_json::Map::new())
             .is_empty()
         {
-            let mut props = node.properties.clone();
-            if let Some(obj) = props.as_object_mut() {
-                obj.insert("uuid".to_string(), serde_json::json!(node.id));
-            }
+            // Phase 2 (Issue #511): Store properties directly (flattened)
+            // Do NOT add uuid or _schema_version - those belong in node table only
+            let props = node.properties.clone();
 
             self.db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
@@ -1693,7 +1692,7 @@ where
                     mentioned_by: nws.mentioned_by,
                     data: None, // Phase 1 (Issue #511): Not used in similarity search
                     variants: serde_json::json!({}), // Phase 1 (Issue #511): Not used in similarity search
-                    _schema_version: 1, // Phase 1 (Issue #511): Default version
+                    _schema_version: 1,              // Phase 1 (Issue #511): Default version
                 };
                 (surreal_node.into(), nws.similarity)
             })
