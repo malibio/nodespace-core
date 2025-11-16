@@ -1114,11 +1114,11 @@ where
         // Use graph edges for hierarchy traversal
         let (query, has_parent) = if parent_id.is_some() {
             // Query children using has_child graph edge
-            // FETCH data: Hydrates the record link in the 'data' field
-            ("SELECT ->has_child->node.* FROM type::thing('node', $parent_id) FETCH data ORDER BY before_sibling_id;", true)
+            // ORDER BY must come before FETCH in SurrealQL
+            ("SELECT ->has_child->node.* FROM type::thing('node', $parent_id) ORDER BY before_sibling_id FETCH data;", true)
         } else {
             // Root nodes: nodes that have NO incoming has_child edges
-            ("SELECT * FROM node WHERE !EXISTS(<-has_child<-node) FETCH data ORDER BY before_sibling_id;", false)
+            ("SELECT * FROM node WHERE !EXISTS(<-has_child<-node) ORDER BY before_sibling_id FETCH data;", false)
         };
 
         let mut query_builder = self.db.query(query);

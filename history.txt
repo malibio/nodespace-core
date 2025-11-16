@@ -19,3 +19,4 @@ SELECT * FROM node WHERE type = 'schema';
 SELECT * FROM schema LIMIT 3;
 -- Check if date node has a data link
 SELECT id, type, content, data FROM node WHERE id = type::thing('node', 'date');
+-- Test the actual query that get_children runs
