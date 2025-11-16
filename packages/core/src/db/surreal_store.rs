@@ -1393,17 +1393,10 @@ where
         // Convert to nodes
         let mut nodes: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
 
-        // DEPRECATED: Populate parent_id and container_node_id for frontend compatibility
-        // These fields violate graph-native architecture and will be removed.
-        // TODO: Remove by 2025-12-15 (tracked in Issue #514)
-        // Frontend should use graph edges instead: GET /api/nodes/{id}/children
+        // Populate parent_id and container_node_id for frontend compatibility
+        // TODO(Issue #514): Remove these fields and use graph edges directly
         // In graph architecture, hierarchy is derived from edges, not stored in fields
         if let Some(pid) = parent_id_value {
-            tracing::warn!(
-                "Reconstructing deprecated parent_id/container_node_id fields. \
-                These fields will be removed in Issue #514. \
-                Frontend should migrate to graph edge queries."
-            );
             for node in &mut nodes {
                 node.parent_id = Some(pid.clone());
                 node.container_node_id = Some(pid.clone());
