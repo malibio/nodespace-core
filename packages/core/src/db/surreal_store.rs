@@ -57,6 +57,15 @@ use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 
+/// Types that require type-specific tables for storing properties
+///
+/// - `task`: Has properties (priority, status, due_date, assignee, etc.)
+/// - `schema`: Has properties (is_core, fields, version, etc.)
+///
+/// Other types (text, date, header, code_block, quote_block, ordered_list) store
+/// all data in the universal `node` table's `content` field.
+const TYPES_WITH_PROPERTIES: &[&str] = &["task", "schema"];
+
 /// Internal struct matching SurrealDB's schema
 ///
 /// # Schema Evolution
@@ -109,8 +118,33 @@ struct SurrealNode {
     mentions: Vec<String>,
     mentioned_by: Vec<String>,
     // Graph-native architecture fields (Issue #511)
-    // Note: data field is skipped during deserialization due to FETCH complications
-    // Properties will be fetched separately when needed
+    /// FETCH data Limitation (Issue #511):
+    ///
+    /// **Problem**: SurrealDB's Thing type cannot be deserialized to `serde_json::Value`.
+    ///
+    /// **Root Cause**: When using `SELECT * FROM node FETCH data`, the `data` field can be:
+    /// - A String (record link): `"task:uuid"`  when not fetched
+    /// - An Object (fetched record): `{id: Thing, priority: "HIGH", ...}` when FETCH succeeds
+    ///
+    /// The `id` field in the fetched object is a SurrealDB `Thing` type, which serde_json
+    /// cannot deserialize to `Value`, causing:
+    /// ```
+    /// Error: invalid type: enum, expected any valid JSON value
+    /// ```
+    ///
+    /// **Attempted Solutions**:
+    /// 1. ❌ Option<Value> - Fails with Thing deserialization error
+    /// 2. ❌ Custom deserializer - Complex, error-prone
+    /// 3. ✅ Skip + manual fetch with OMIT id - Current workaround
+    ///
+    /// **Workaround**: Use `#[serde(skip_deserializing)]` and manually fetch properties
+    /// with `SELECT * OMIT id` to exclude the Thing-typed id field.
+    ///
+    /// **Performance Impact**: Creates N+1 query pattern (see get_children implementation).
+    /// Batch fetching added to mitigate this issue.
+    ///
+    /// **Future**: Investigate SurrealDB support for FETCH with field exclusion:
+    /// `SELECT * FROM node FETCH data.* OMIT data.id;`
     #[serde(skip_deserializing)]
     data: Option<Value>, // Placeholder - properties fetched separately
     variants: Value,      // Type history map {task: "task:uuid", text: null}
@@ -179,6 +213,124 @@ impl From<SurrealNode> for Node {
             mentioned_by: sn.mentioned_by,
         }
     }
+}
+
+/// Unwrap legacy nested property format from frontend
+///
+/// **Problem**: Frontend (pre-refactor) sends nested properties:
+/// ```json
+/// {"task": {"status": "OPEN", "priority": "HIGH"}}
+/// ```
+///
+/// **Expected**: Flat properties for direct storage in type tables:
+/// ```json
+/// {"status": "OPEN", "priority": "HIGH"}
+/// ```
+///
+/// **Workaround**: This function unwraps the nested format if detected.
+///
+/// **Deprecation**: This is a temporary compatibility layer. Frontend should be
+/// refactored to send flat properties directly. Remove this function once frontend
+/// is updated (tracked in frontend refactor issue).
+///
+/// # Arguments
+///
+/// * `props` - Property value (may be nested or flat)
+/// * `node_type` - Type of node (e.g., "task", "schema")
+///
+/// # Returns
+///
+/// Flat property value suitable for direct storage
+fn unwrap_legacy_property_format(props: Value, node_type: &str) -> Value {
+    // Check if properties are nested under node type key
+    if let Some(obj) = props.as_object() {
+        if let Some(nested) = obj.get(node_type) {
+            if let Some(nested_obj) = nested.as_object() {
+                // Unwrap: {task: {status: "OPEN"}} -> {status: "OPEN"}
+                tracing::warn!(
+                    "Received nested property format for type '{}' - this format is deprecated. \
+                    Frontend should send flat properties directly.",
+                    node_type
+                );
+                return Value::Object(nested_obj.clone());
+            }
+        }
+    }
+    props
+}
+
+/// Batch fetch properties for multiple nodes of the same type
+///
+/// **Purpose**: Avoid N+1 query pattern when fetching properties for multiple nodes.
+///
+/// **Performance**:
+/// - Old: 100 nodes = 100 individual queries
+/// - New: 100 nodes = 1 batch query per type
+///
+/// # Arguments
+///
+/// * `db` - SurrealDB connection
+/// * `node_type` - Type of nodes (e.g., "task", "schema")
+/// * `node_ids` - Vector of node IDs to fetch properties for
+///
+/// # Returns
+///
+/// HashMap mapping node ID to its properties
+#[allow(dead_code)] // TODO: Integrate into get_children() to fix N+1 query pattern
+async fn batch_fetch_properties<C: surrealdb::Connection>(
+    db: &Surreal<C>,
+    node_type: &str,
+    node_ids: &[String],
+) -> Result<std::collections::HashMap<String, Value>> {
+    if node_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    // Build array of Thing IDs for the WHERE IN clause
+    let thing_ids: Vec<Thing> = node_ids
+        .iter()
+        .map(|id| Thing::from((node_type.to_string(), id.clone())))
+        .collect();
+
+    // Batch query strategy: Query properties with WHERE IN for efficiency
+    // We select all fields but need to handle the id separately since it's a Thing type
+    // Workaround: Query with id, convert to string, then build properties without id
+    let query = format!("SELECT * FROM {} WHERE id IN $ids;", node_type);
+
+    let mut response = db
+        .query(&query)
+        .bind(("ids", thing_ids))
+        .await
+        .with_context(|| format!("Failed to batch fetch properties for type '{}'", node_type))?;
+
+    // Deserialize as generic Values to extract id as string
+    let records: Vec<Value> = response.take(0).with_context(|| {
+        format!(
+            "Failed to parse batch property results for type '{}'",
+            node_type
+        )
+    })?;
+
+    // Convert to HashMap keyed by node ID (extracted from Thing)
+    let mut result = std::collections::HashMap::new();
+    for record in records {
+        if let Some(obj) = record.as_object() {
+            // Extract id as string (format: "task:uuid" -> "uuid")
+            if let Some(id_value) = obj.get("id") {
+                if let Some(id_str) = id_value.as_str() {
+                    // Parse Thing ID: "task:uuid" -> "uuid"
+                    let node_id = id_str.split(':').nth(1).unwrap_or(id_str).to_string();
+
+                    // Create properties object without the 'id' field
+                    let mut props = obj.clone();
+                    props.remove("id");
+                    result.insert(node_id, Value::Object(props));
+                }
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 /// SurrealStore implements NodeStore trait for SurrealDB backend
@@ -776,8 +928,7 @@ where
             .context("Failed to create node in universal table")?;
 
         // Insert into type-specific table for types with properties (task, schema)
-        let types_with_properties = ["task", "schema"];
-        if types_with_properties.contains(&node.node_type.as_str())
+        if TYPES_WITH_PROPERTIES.contains(&node.node_type.as_str())
             && !node
                 .properties
                 .as_object()
@@ -785,17 +936,8 @@ where
                 .is_empty()
         {
             // Store properties directly in type-specific table (flattened)
-            let mut props = node.properties.clone();
-
-            // TODO: Frontend may send nested {task: {status: ...}} from old architecture
-            // Unwrap if present to maintain compatibility until frontend is refactored
-            if let Some(obj) = props.as_object() {
-                if let Some(nested) = obj.get(&node.node_type) {
-                    if let Some(nested_obj) = nested.as_object() {
-                        props = serde_json::Value::Object(nested_obj.clone());
-                    }
-                }
-            }
+            // Unwrap legacy nested format if present (frontend compatibility)
+            let props = unwrap_legacy_property_format(node.properties.clone(), &node.node_type);
 
             self.db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
@@ -831,7 +973,10 @@ where
                 .context("Failed to create parent-child edge")?;
             tracing::debug!("Successfully created has_child edge");
         } else {
-            tracing::debug!("No parent_id set for node {}, skipping edge creation", node.id);
+            tracing::debug!(
+                "No parent_id set for node {}, skipping edge creation",
+                node.id
+            );
         }
 
         // Return the created node directly
@@ -957,19 +1102,10 @@ where
             .context("Failed to update node")?;
 
         // If properties were provided and node type has type-specific table, update it
-        if let Some(mut updated_props) = update.properties {
-            let types_with_properties = ["task", "schema"];
-            if types_with_properties.contains(&updated_node_type.as_str()) {
-                // TODO: Frontend sends nested {task: {status: ...}} from old architecture
-                // This unwrapping is a temporary bridge until frontend is refactored to send flat properties
-                // Proper fix: Frontend should send {status: "OPEN"} not {task: {status: "OPEN"}}
-                if let Some(obj) = updated_props.as_object() {
-                    if let Some(nested) = obj.get(&updated_node_type) {
-                        if let Some(nested_obj) = nested.as_object() {
-                            updated_props = serde_json::Value::Object(nested_obj.clone());
-                        }
-                    }
-                }
+        if let Some(updated_props) = update.properties {
+            if TYPES_WITH_PROPERTIES.contains(&updated_node_type.as_str()) {
+                // Unwrap legacy nested format if present (frontend compatibility)
+                let props = unwrap_legacy_property_format(updated_props, &updated_node_type);
 
                 // UPSERT with MERGE to preserve existing spoke data on type reconversions
                 // Scenario: text→task creates task:uuid, task→text preserves it, text→task reconnects
@@ -979,7 +1115,7 @@ where
                     .query("UPSERT type::thing($table, $id) MERGE $properties;")
                     .bind(("table", updated_node_type.clone()))
                     .bind(("id", id.to_string()))
-                    .bind(("properties", updated_props))
+                    .bind(("properties", props))
                     .await
                     .context("Failed to upsert properties in type-specific table")?;
 
@@ -1341,18 +1477,23 @@ where
                                 let map: serde_json::Value = records
                                     .into_iter()
                                     .next()
-                                    .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
+                                    .map(|m| {
+                                        serde_json::to_value(m).unwrap_or(serde_json::Value::Null)
+                                    })
                                     .unwrap_or(serde_json::Value::Null);
                                 tracing::debug!(
                                     "get_children({:?}) - properties after conversion: {:?}",
-                                    node.id, map
+                                    node.id,
+                                    map
                                 );
                                 Some(map)
                             }
                             Err(e) => {
                                 tracing::debug!(
                                     "Failed to deserialize properties for node {} (type: {}): {}",
-                                    node.id, node.node_type, e
+                                    node.id,
+                                    node.node_type,
+                                    e
                                 );
                                 None
                             }
@@ -1361,7 +1502,9 @@ where
                     Err(e) => {
                         tracing::debug!(
                             "Failed to fetch properties for node {} (type: {}): {}",
-                            node.id, node.node_type, e
+                            node.id,
+                            node.node_type,
+                            e
                         );
                         None
                     }
