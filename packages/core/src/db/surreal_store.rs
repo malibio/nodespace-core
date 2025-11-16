@@ -928,7 +928,9 @@ where
 
                 // Ensure data link exists (in case this is a type change)
                 self.db
-                    .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);")
+                    .query(
+                        "UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);",
+                    )
                     .bind(("id", id.to_string()))
                     .bind(("type_table", updated_node_type))
                     .await
