@@ -1863,4 +1863,340 @@ mod tests {
 
         assert!(result.is_ok(), "User type table should use SCHEMALESS mode");
     }
+
+    #[tokio::test]
+    async fn test_query_nested_field_simple() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Create person schema with nested address field
+        let schema = SchemaDefinition {
+            is_core: false,
+            version: 1,
+            description: "Person with address".to_string(),
+            fields: vec![
+                SchemaField {
+                    name: "name".to_string(),
+                    field_type: "string".to_string(),
+                    protection: ProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(true),
+                    extensible: None,
+                    default: None,
+                    description: Some("Person name".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "address".to_string(),
+                    field_type: "object".to_string(),
+                    protection: ProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some("Address".to_string()),
+                    item_type: None,
+                    fields: Some(vec![SchemaField {
+                        name: "city".to_string(),
+                        field_type: "string".to_string(),
+                        protection: ProtectionLevel::User,
+                        core_values: None,
+                        user_values: None,
+                        indexed: true, // Index for queries
+                        required: Some(false),
+                        extensible: None,
+                        default: None,
+                        description: Some("City".to_string()),
+                        item_type: None,
+                        fields: None,
+                        item_fields: None,
+                    }]),
+                    item_fields: None,
+                },
+            ],
+        };
+
+        let schema_node = Node {
+            id: "person_query_test".to_string(),
+            node_type: "schema".to_string(),
+            content: "Person".to_string(),
+            parent_id: None,
+            container_node_id: None,
+            before_sibling_id: None,
+            version: 1,
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            properties: serde_json::to_value(&schema).unwrap(),
+            embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
+        };
+
+        service.node_service.create_node(schema_node).await.unwrap();
+
+        // Sync schema to database
+        service
+            .sync_schema_to_database("person_query_test")
+            .await
+            .unwrap();
+
+        // Insert test data directly
+        let db = service.node_service.store.db();
+        db.query(
+            r#"CREATE person_query_test:alice SET name = "Alice", address = { city: "NYC" }"#,
+        )
+        .await
+        .unwrap();
+        db.query(
+            r#"CREATE person_query_test:bob SET name = "Bob", address = { city: "SF" }"#,
+        )
+        .await
+        .unwrap();
+
+        // Query by nested field
+        let mut result = db
+            .query("SELECT * FROM person_query_test WHERE address.city = 'NYC'")
+            .await
+            .unwrap();
+
+        let records: Vec<serde_json::Value> = result.take(0).unwrap();
+        assert_eq!(records.len(), 1, "Should find one person in NYC");
+        assert_eq!(records[0]["name"], "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_query_nested_field_with_index() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Create schema with indexed nested field
+        let schema = SchemaDefinition {
+            is_core: false,
+            version: 1,
+            description: "Product with details".to_string(),
+            fields: vec![SchemaField {
+                name: "details".to_string(),
+                field_type: "object".to_string(),
+                protection: ProtectionLevel::User,
+                core_values: None,
+                user_values: None,
+                indexed: false,
+                required: Some(false),
+                extensible: None,
+                default: None,
+                description: None,
+                item_type: None,
+                fields: Some(vec![
+                    SchemaField {
+                        name: "category".to_string(),
+                        field_type: "string".to_string(),
+                        protection: ProtectionLevel::User,
+                        core_values: None,
+                        user_values: None,
+                        indexed: true, // Indexed for fast queries
+                        required: Some(false),
+                        extensible: None,
+                        default: None,
+                        description: None,
+                        item_type: None,
+                        fields: None,
+                        item_fields: None,
+                    },
+                    SchemaField {
+                        name: "price".to_string(),
+                        field_type: "number".to_string(),
+                        protection: ProtectionLevel::User,
+                        core_values: None,
+                        user_values: None,
+                        indexed: false,
+                        required: Some(false),
+                        extensible: None,
+                        default: None,
+                        description: None,
+                        item_type: None,
+                        fields: None,
+                        item_fields: None,
+                    },
+                ]),
+                item_fields: None,
+            }],
+        };
+
+        let schema_node = Node {
+            id: "product_test".to_string(),
+            node_type: "schema".to_string(),
+            content: "Product".to_string(),
+            parent_id: None,
+            container_node_id: None,
+            before_sibling_id: None,
+            version: 1,
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            properties: serde_json::to_value(&schema).unwrap(),
+            embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
+        };
+
+        service.node_service.create_node(schema_node).await.unwrap();
+        service
+            .sync_schema_to_database("product_test")
+            .await
+            .unwrap();
+
+        // Insert test data
+        let db = service.node_service.store.db();
+        db.query(
+            r#"CREATE product_test:1 SET details = { category: "electronics", price: 999 }"#,
+        )
+        .await
+        .unwrap();
+        db.query(r#"CREATE product_test:2 SET details = { category: "books", price: 29 }"#)
+            .await
+            .unwrap();
+        db.query(
+            r#"CREATE product_test:3 SET details = { category: "electronics", price: 499 }"#,
+        )
+        .await
+        .unwrap();
+
+        // Query using indexed nested field
+        let mut result = db
+            .query("SELECT * FROM product_test WHERE details.category = 'electronics'")
+            .await
+            .unwrap();
+
+        let records: Vec<serde_json::Value> = result.take(0).unwrap();
+        assert_eq!(records.len(), 2, "Should find two electronics products");
+    }
+
+    #[tokio::test]
+    async fn test_query_deeply_nested_fields() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Create schema with deeply nested structure (address.coordinates.lat)
+        let schema = SchemaDefinition {
+            is_core: false,
+            version: 1,
+            description: "Location with nested coordinates".to_string(),
+            fields: vec![SchemaField {
+                name: "address".to_string(),
+                field_type: "object".to_string(),
+                protection: ProtectionLevel::User,
+                core_values: None,
+                user_values: None,
+                indexed: false,
+                required: Some(false),
+                extensible: None,
+                default: None,
+                description: None,
+                item_type: None,
+                fields: Some(vec![
+                    SchemaField {
+                        name: "city".to_string(),
+                        field_type: "string".to_string(),
+                        protection: ProtectionLevel::User,
+                        core_values: None,
+                        user_values: None,
+                        indexed: false,
+                        required: Some(false),
+                        extensible: None,
+                        default: None,
+                        description: None,
+                        item_type: None,
+                        fields: None,
+                        item_fields: None,
+                    },
+                    SchemaField {
+                        name: "coordinates".to_string(),
+                        field_type: "object".to_string(),
+                        protection: ProtectionLevel::User,
+                        core_values: None,
+                        user_values: None,
+                        indexed: false,
+                        required: Some(false),
+                        extensible: None,
+                        default: None,
+                        description: None,
+                        item_type: None,
+                        fields: Some(vec![
+                            SchemaField {
+                                name: "lat".to_string(),
+                                field_type: "number".to_string(),
+                                protection: ProtectionLevel::User,
+                                core_values: None,
+                                user_values: None,
+                                indexed: true, // Index deep nested field
+                                required: Some(false),
+                                extensible: None,
+                                default: None,
+                                description: None,
+                                item_type: None,
+                                fields: None,
+                                item_fields: None,
+                            },
+                            SchemaField {
+                                name: "lng".to_string(),
+                                field_type: "number".to_string(),
+                                protection: ProtectionLevel::User,
+                                core_values: None,
+                                user_values: None,
+                                indexed: false,
+                                required: Some(false),
+                                extensible: None,
+                                default: None,
+                                description: None,
+                                item_type: None,
+                                fields: None,
+                                item_fields: None,
+                            },
+                        ]),
+                        item_fields: None,
+                    },
+                ]),
+                item_fields: None,
+            }],
+        };
+
+        let schema_node = Node {
+            id: "location_test".to_string(),
+            node_type: "schema".to_string(),
+            content: "Location".to_string(),
+            parent_id: None,
+            container_node_id: None,
+            before_sibling_id: None,
+            version: 1,
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            properties: serde_json::to_value(&schema).unwrap(),
+            embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
+        };
+
+        service.node_service.create_node(schema_node).await.unwrap();
+        service
+            .sync_schema_to_database("location_test")
+            .await
+            .unwrap();
+
+        // Insert test data with deeply nested structure
+        let db = service.node_service.store.db();
+        db.query(r#"CREATE location_test:nyc SET address = { city: "NYC", coordinates: { lat: 40.7, lng: -74.0 } }"#).await.unwrap();
+        db.query(r#"CREATE location_test:sf SET address = { city: "SF", coordinates: { lat: 37.8, lng: -122.4 } }"#).await.unwrap();
+
+        // Query by deeply nested field (address.coordinates.lat)
+        let mut result = db
+            .query("SELECT * FROM location_test WHERE address.coordinates.lat > 38")
+            .await
+            .unwrap();
+
+        let records: Vec<serde_json::Value> = result.take(0).unwrap();
+        assert_eq!(records.len(), 1, "Should find one location with lat > 38");
+        assert_eq!(records[0]["address"]["city"], "NYC");
+    }
 }
