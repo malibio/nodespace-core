@@ -327,7 +327,6 @@
     failedNodeIds: Set<string>,
     failedUpdates: Array<{
       nodeId: string;
-      parentId: string | null;
       beforeSiblingId: string | null;
     }>
   ) {
@@ -560,14 +559,14 @@
   // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
   let previousStructure = new Map<
     string,
-    { parentId: string | null; beforeSiblingId: string | null }
+    { beforeSiblingId: string | null }
   >();
 
   // Track what structure was actually persisted to database (#479)
   // This allows detecting when in-memory state differs from persisted state
   let persistedStructure = new Map<
     string,
-    { parentId: string | null; beforeSiblingId: string | null }
+    { beforeSiblingId: string | null }
   >();
 
   // Reverse index: Map from beforeSiblingId -> Set of node IDs that reference it
@@ -611,7 +610,7 @@
    */
   function trackStructureChange(
     nodeId: string,
-    newStructure: { parentId: string | null; beforeSiblingId: string | null }
+    newStructure: { beforeSiblingId: string | null }
   ): void {
     const oldStructure = previousStructure.get(nodeId);
     previousStructure.set(nodeId, newStructure);
@@ -634,7 +633,6 @@
     // Collect all structural changes first
     const updates: Array<{
       nodeId: string;
-      parentId: string | null;
       beforeSiblingId: string | null;
     }> = [];
 
@@ -697,7 +695,6 @@
         // Wait for any pending content saves to complete
         const nodeIdsToWaitFor: string[] = [];
         for (const update of updates) {
-          if (update.parentId) nodeIdsToWaitFor.push(update.parentId);
           if (update.beforeSiblingId) nodeIdsToWaitFor.push(update.beforeSiblingId);
         }
 
@@ -707,7 +704,6 @@
         const validUpdates = updates.filter(
           (update) =>
             !failedNodeIds.has(update.nodeId) &&
-            (!update.parentId || !failedNodeIds.has(update.parentId)) &&
             (!update.beforeSiblingId || !failedNodeIds.has(update.beforeSiblingId))
         );
 
