@@ -841,8 +841,17 @@
         }
       }
 
-      // Then load children from database
-      const allNodes = await sharedNodeStore.loadChildrenForParent(nodeId);
+      // Cache-first loading strategy: Check cache before hitting database
+      const cached = sharedNodeStore.getNodesForParent(nodeId);
+
+      let allNodes: Node[];
+      if (cached && cached.length > 0) {
+        // Cache hit - use immediately (no database call!)
+        allNodes = cached;
+      } else {
+        // Cache miss - fetch from database
+        allNodes = await sharedNodeStore.loadChildrenForParent(nodeId);
+      }
 
       // Check if we have any nodes at all
       if (allNodes.length === 0) {
