@@ -399,6 +399,8 @@ async fn create_node(
 ) -> ApiResult<String> {
     // Convert CreateNodeRequest to Node by adding timestamps and version
     // The frontend sends a partial node without these fields
+    tracing::debug!("create_node request: parent_id={:?}, container_node_id={:?}", req.parent_id, req.container_node_id);
+
     let now = Utc::now();
     let node = Node {
         id: req.id.unwrap_or_else(|| Uuid::new_v4().to_string()),

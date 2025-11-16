@@ -140,13 +140,22 @@ impl From<SurrealNode> for Node {
         // When FETCH data: data = {id: "task:uuid", ...properties}
         // Extract all fields except 'id' as properties
         let properties = if let Some(Value::Object(ref obj)) = sn.data {
-            tracing::debug!("FETCH data populated for node {}: data has {} fields", id, obj.len());
+            tracing::debug!(
+                "FETCH data populated for node {}: data has {} fields",
+                id,
+                obj.len()
+            );
             // Remove the 'id' field and use remaining fields as properties
             let mut props = obj.clone();
             props.remove("id");
             Value::Object(props)
         } else {
-            tracing::debug!("FETCH data NOT populated for node {} (type: {}): data = {:?}", id, sn.node_type, sn.data);
+            tracing::debug!(
+                "FETCH data NOT populated for node {} (type: {}): data = {:?}",
+                id,
+                sn.node_type,
+                sn.data
+            );
             serde_json::json!({})
         };
 
@@ -808,6 +817,7 @@ where
         // Create has_child graph edge if parent_id is set
         // This establishes the parent-child relationship in the graph
         if let Some(parent_id) = &node.parent_id {
+            tracing::debug!("Creating has_child edge: {} -> {}", parent_id, node.id);
             // Create Thing record IDs (not strings) for RELATE statement
             use surrealdb::sql::Thing;
             let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
@@ -819,6 +829,9 @@ where
                 .bind(("child_thing", child_thing))
                 .await
                 .context("Failed to create parent-child edge")?;
+            tracing::debug!("Successfully created has_child edge");
+        } else {
+            tracing::debug!("No parent_id set for node {}, skipping edge creation", node.id);
         }
 
         // Return the created node directly
@@ -1254,39 +1267,115 @@ where
 
     pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>> {
         // Use graph edges for hierarchy traversal
-        let surreal_nodes: Vec<SurrealNode> = if let Some(parent_id) = parent_id {
+        // Note: We don't use FETCH data because it causes deserialization issues (same as get_node)
+        let (surreal_nodes, parent_id_value) = if let Some(parent_id) = parent_id {
             // Create Thing record ID for parent node
             use surrealdb::sql::Thing;
             let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
 
-            // Use a subquery to find child IDs from has_child edges, then fetch the nodes
+            // Query without FETCH - we'll manually fetch properties afterward
             let mut response = self
                 .db
-                .query("SELECT * FROM node WHERE id IN (SELECT VALUE out FROM has_child WHERE in = $parent_thing) FETCH data;")
+                .query("SELECT * FROM node WHERE id IN (SELECT VALUE out FROM has_child WHERE in = $parent_thing);")
                 .bind(("parent_thing", parent_thing))
                 .await
                 .context("Failed to get children")?;
 
-            response
+            let nodes: Vec<SurrealNode> = response
                 .take(0)
-                .context("Failed to extract children from response")?
+                .context("Failed to extract children from response")?;
+
+            (nodes, Some(parent_id.to_string()))
         } else {
             // Root nodes: nodes that have NO incoming has_child edges
-            // Use count(<-has_child) = 0 to find nodes without parents
             let mut response = self
                 .db
-                .query("SELECT * FROM node WHERE count(<-has_child) = 0 FETCH data;")
+                .query("SELECT * FROM node WHERE count(<-has_child) = 0;")
                 .await
                 .context("Failed to get root nodes")?;
 
-            response
+            let nodes: Vec<SurrealNode> = response
                 .take(0)
-                .context("Failed to extract root nodes from response")?
+                .context("Failed to extract root nodes from response")?;
+
+            (nodes, None)
         };
+
+        // Convert to nodes
+        let mut nodes: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
+
+        // Populate parent_id and container_node_id for frontend compatibility
+        // In graph architecture, these are derived from the query context, not stored
+        if let Some(pid) = parent_id_value {
+            for node in &mut nodes {
+                node.parent_id = Some(pid.clone());
+                node.container_node_id = Some(pid.clone());
+            }
+        }
+
+        // Manually fetch properties for nodes that have them (same logic as get_node)
+        let types_with_properties = ["task", "schema"];
+
+        // Group nodes by type to batch fetch properties
+        for node in &mut nodes {
+            if types_with_properties.contains(&node.node_type.as_str()) {
+                // Fetch properties using SQL query, excluding 'id' field
+                let props_query = format!(
+                    "SELECT * OMIT id FROM type::thing('{}', $id);",
+                    node.node_type
+                );
+                let mut props_response = self
+                    .db
+                    .query(&props_query)
+                    .bind(("id", node.id.clone()))
+                    .await;
+
+                let result: Option<serde_json::Value> = match props_response {
+                    Ok(ref mut response) => {
+                        let raw: Result<
+                            Vec<std::collections::HashMap<String, serde_json::Value>>,
+                            _,
+                        > = response.take(0);
+                        match raw {
+                            Ok(records) => {
+                                let map: serde_json::Value = records
+                                    .into_iter()
+                                    .next()
+                                    .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
+                                    .unwrap_or(serde_json::Value::Null);
+                                tracing::debug!(
+                                    "get_children({:?}) - properties after conversion: {:?}",
+                                    node.id, map
+                                );
+                                Some(map)
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    "Failed to deserialize properties for node {} (type: {}): {}",
+                                    node.id, node.node_type, e
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "Failed to fetch properties for node {} (type: {}): {}",
+                            node.id, node.node_type, e
+                        );
+                        None
+                    }
+                };
+
+                if let Some(props) = result {
+                    node.properties = props;
+                }
+            }
+        }
 
         // Sort by before_sibling_id in-memory (topological sort of linked list)
         // TODO: Implement proper linked list ordering
-        Ok(surreal_nodes.into_iter().map(Into::into).collect())
+        Ok(nodes)
     }
 
     pub async fn search_nodes_by_content(
