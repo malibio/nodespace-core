@@ -109,7 +109,9 @@ struct SurrealNode {
     mentions: Vec<String>,
     mentioned_by: Vec<String>,
     // Graph-native architecture fields (Issue #511)
-    data: Option<String>, // Record link to type-specific table (e.g., "task:uuid")
+    // When NOT fetched: data = "task:uuid" (string link)
+    // When FETCH data: data = {id: "task:uuid", ...properties} (object with properties)
+    data: Option<Value>,  // Record link OR fetched record content
     variants: Value,      // Type history map {task: "task:uuid", text: null}
     _schema_version: i64, // Universal schema version
 }
@@ -133,6 +135,18 @@ impl From<SurrealNode> for Node {
             _ => sn.id.id.to_string(),
         };
 
+        // Extract properties from data field if it's an object (populated by FETCH data)
+        // When FETCH data: data = {id: "task:uuid", ...properties}
+        // Extract all fields except 'id' as properties
+        let properties = if let Some(Value::Object(ref obj)) = sn.data {
+            // Remove the 'id' field and use remaining fields as properties
+            let mut props = obj.clone();
+            props.remove("id");
+            Value::Object(props)
+        } else {
+            serde_json::json!({})
+        };
+
         Node {
             id,
             node_type: sn.node_type,
@@ -147,7 +161,7 @@ impl From<SurrealNode> for Node {
             modified_at: DateTime::parse_from_rfc3339(&sn.modified_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            properties: serde_json::json!({}), // Removed - use data link instead
+            properties,
             embedding_vector,
             mentions: sn.mentions,
             mentioned_by: sn.mentioned_by,
@@ -1679,7 +1693,7 @@ where
             #[serde(default)]
             mentioned_by: Vec<String>,
             #[serde(default)]
-            data: Option<String>,
+            data: Option<Value>,
             #[serde(default)]
             variants: Value,
             #[serde(default)]
