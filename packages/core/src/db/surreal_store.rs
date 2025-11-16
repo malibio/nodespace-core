@@ -907,11 +907,34 @@ where
             .query(query)
             .bind(("id", id.to_string()))
             .bind(("content", updated_content))
-            .bind(("node_type", updated_node_type))
+            .bind(("node_type", updated_node_type.clone()))
             .bind(("before_sibling_id", update.before_sibling_id.flatten()))
             .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to update node")?;
+
+        // If properties were provided and node type has type-specific table, update it
+        if let Some(updated_props) = update.properties {
+            let types_with_properties = ["task", "schema"];
+            if types_with_properties.contains(&updated_node_type.as_str()) {
+                // Update or create record in type-specific table
+                self.db
+                    .query("UPDATE type::thing($table, $id) CONTENT $properties;")
+                    .bind(("table", updated_node_type.clone()))
+                    .bind(("id", id.to_string()))
+                    .bind(("properties", updated_props))
+                    .await
+                    .context("Failed to update properties in type-specific table")?;
+
+                // Ensure data link exists (in case this is a type change)
+                self.db
+                    .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);")
+                    .bind(("id", id.to_string()))
+                    .bind(("type_table", updated_node_type))
+                    .await
+                    .context("Failed to set data link")?;
+            }
+        }
 
         // Fetch and return updated node
         self.get_node(id)
