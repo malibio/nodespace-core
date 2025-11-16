@@ -140,11 +140,13 @@ impl From<SurrealNode> for Node {
         // When FETCH data: data = {id: "task:uuid", ...properties}
         // Extract all fields except 'id' as properties
         let properties = if let Some(Value::Object(ref obj)) = sn.data {
+            tracing::debug!("FETCH data populated for node {}: data has {} fields", id, obj.len());
             // Remove the 'id' field and use remaining fields as properties
             let mut props = obj.clone();
             props.remove("id");
             Value::Object(props)
         } else {
+            tracing::debug!("FETCH data NOT populated for node {} (type: {}): data = {:?}", id, sn.node_type, sn.data);
             serde_json::json!({})
         };
 
