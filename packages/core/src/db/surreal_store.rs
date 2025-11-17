@@ -184,6 +184,7 @@ struct SurrealNode {
     /// `SELECT * FROM node FETCH data.* OMIT data.id;`
     #[serde(skip_deserializing)]
     data: Option<Value>, // Placeholder - properties fetched separately
+    #[serde(skip_deserializing, default)]
     variants: Value, // Type history map {task: "task:uuid", text: null}
     /// Properties field stores user-defined properties for types without dedicated tables
     /// For types with dedicated tables (task, schema), this contains _schema_version only
@@ -1030,8 +1031,8 @@ where
                 -- Link node to type-specific record
                 UPDATE $node_id SET data = $type_id;
 
-                -- Create parent-child edge
-                RELATE $node_id->has_child->$parent_id;
+                -- Create parent-child edge (parent->has_child->child)
+                RELATE $parent_id->has_child->$node_id;
 
                 COMMIT TRANSACTION;
             "#
@@ -1058,8 +1059,8 @@ where
                     properties: $properties
                 };
 
-                -- Create parent-child edge
-                RELATE $node_id->has_child->$parent_id;
+                -- Create parent-child edge (parent->has_child->child)
+                RELATE $parent_id->has_child->$node_id;
 
                 COMMIT TRANSACTION;
             "#
@@ -2238,8 +2239,8 @@ where
                 -- Update sibling ordering
                 UPDATE $node_id SET before_sibling_id = $before_sibling_id;
 
-                -- Create new parent edge
-                RELATE $node_id->has_child->$parent_id;
+                -- Create new parent edge (parent->has_child->child)
+                RELATE $parent_id->has_child->$node_id;
 
                 COMMIT TRANSACTION;
             "#
@@ -3400,6 +3401,10 @@ mod tests {
     async fn test_create_child_node_atomic_rollback_on_failure() -> Result<()> {
         let (store, _temp_dir) = create_test_store().await?;
 
+        // Count initial nodes (seeded core schemas: task, date, text, header, code-block, quote-block, ordered-list = 7)
+        let initial_nodes = store.query_nodes(NodeQuery::new()).await?;
+        let initial_count = initial_nodes.len();
+
         // Try to create child with non-existent parent (should fail)
         let result = store
             .create_child_node_atomic("non-existent-parent", "text", "Child", json!({}), None)
@@ -3407,12 +3412,14 @@ mod tests {
 
         assert!(result.is_err());
 
-        // Verify no orphan nodes were created
-        let all_nodes = store.query_nodes(NodeQuery::new()).await?;
+        // Verify no new nodes were created (orphan nodes would increase the count)
+        let final_nodes = store.query_nodes(NodeQuery::new()).await?;
         assert_eq!(
-            all_nodes.len(),
-            0,
-            "No nodes should exist after failed transaction"
+            final_nodes.len(),
+            initial_count,
+            "No nodes should be created after failed transaction - expected {} nodes, got {}",
+            initial_count,
+            final_nodes.len()
         );
 
         Ok(())
