@@ -2,7 +2,7 @@
 
 use nodespace_core::operations::{CreateNodeParams, NodeOperationError, NodeOperations};
 use nodespace_core::services::SchemaService;
-use nodespace_core::{Node, NodeQuery, NodeService, NodeServiceError, NodeUpdate};
+use nodespace_core::{Node, NodeQuery, NodeService, NodeServiceError, NodeUpdate, SurrealStore};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -418,6 +418,50 @@ pub async fn move_node(
         .move_node(&node_id, version, new_parent_id.as_deref())
         .await
         .map_err(Into::into)
+}
+
+/// Atomically move a node to a new parent with new sibling position
+///
+/// Performs a single database transaction that:
+/// - Deletes the old parent-child edge
+/// - Updates the node's before_sibling_id field
+/// - Creates the new parent-child edge (if new parent specified)
+///
+/// This ensures database consistency without race conditions.
+///
+/// # Arguments
+/// * `store` - SurrealStore instance from Tauri state
+/// * `node_id` - ID of the node to move
+/// * `new_parent_id` - New parent (None = root node)
+/// * `new_before_sibling_id` - New position in sibling chain
+///
+/// # Returns
+/// * `Ok(())` - Move completed successfully
+/// * `Err(CommandError)` - Error if move validation fails
+///
+/// # Example Frontend Usage
+/// ```typescript
+/// await invoke('move_node_atomic', {
+///   nodeId: 'node-123',
+///   newParentId: 'parent-456',
+///   newBeforeSiblingId: 'node-789'
+/// });
+/// ```
+#[tauri::command]
+pub async fn move_node_atomic(
+    store: State<'_, SurrealStore>,
+    node_id: String,
+    new_parent_id: Option<String>,
+    new_before_sibling_id: Option<String>,
+) -> Result<(), CommandError> {
+    store
+        .move_node_atomic(&node_id, new_parent_id.as_deref(), new_before_sibling_id.as_deref())
+        .await
+        .map_err(|e| CommandError {
+            message: format!("Atomic move failed: {}", e),
+            code: "ATOMIC_MOVE_ERROR".to_string(),
+            details: Some(format!("{:?}", e)),
+        })
 }
 
 /// Reorder a node by changing its sibling position
