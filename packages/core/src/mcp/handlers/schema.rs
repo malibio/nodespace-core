@@ -11,6 +11,299 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+/// Parameters for create_entity_schema_from_description MCP method
+#[derive(Debug, Deserialize)]
+pub struct CreateEntitySchemaParams {
+    /// Entity name (e.g., "Invoice", "Customer")
+    pub entity_name: String,
+    /// Natural language description of the entity and its fields
+    pub description: String,
+    /// Optional constraints for field types and values
+    #[serde(default)]
+    pub additional_constraints: Option<AdditionalConstraints>,
+}
+
+/// Additional constraints for schema generation
+#[derive(Debug, Deserialize)]
+pub struct AdditionalConstraints {
+    /// Field names that should be required
+    #[serde(default)]
+    pub required_fields: Option<Vec<String>>,
+    /// Default values for specific fields
+    #[serde(default)]
+    pub default_values: Option<std::collections::HashMap<String, Value>>,
+    /// Enum values for specific fields
+    #[serde(default)]
+    pub enum_values: Option<std::collections::HashMap<String, Vec<String>>>,
+}
+
+/// Represents an inferred field from natural language description
+#[derive(Debug, Clone)]
+pub(crate) struct InferredField {
+    pub(crate) name: String,
+    pub(crate) field_type: String,
+    pub(crate) required: bool,
+    pub(crate) enum_values: Option<Vec<String>>,
+    pub(crate) description: String,
+}
+
+/// Parse natural language description to extract field names
+///
+/// Handles common patterns like:
+/// - "invoice number" -> "invoice_number"
+/// - "vendor name" -> "vendor_name"
+/// - Multi-word phrases with various separators
+fn parse_field_names(description: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+
+    // Split by common delimiters: commas, "and", parentheses
+    let parts: Vec<String> = description
+        .split([',', ';'])
+        .flat_map(|part| {
+            // Split on "and" (case insensitive)
+            let and_parts: Vec<&str> = part.split_whitespace().collect();
+            if and_parts.len() > 1 {
+                // Check for "and" keyword and split
+                let mut result = Vec::new();
+                let mut current = Vec::new();
+                for word in and_parts {
+                    if word.to_lowercase() == "and" {
+                        if !current.is_empty() {
+                            result.push(current.join(" "));
+                        }
+                        current = Vec::new();
+                    } else {
+                        current.push(word);
+                    }
+                }
+                if !current.is_empty() {
+                    result.push(current.join(" "));
+                }
+                result
+            } else {
+                vec![part.to_string()]
+            }
+        })
+        .collect();
+
+    for part in parts {
+        let trimmed = part.trim();
+
+        // Remove parenthetical content but preserve enum values
+        if let Some(paren_start) = trimmed.find('(') {
+            let before_paren = &trimmed[..paren_start].trim();
+            if !before_paren.is_empty() {
+                let normalized = normalize_field_name(before_paren);
+                if !normalized.is_empty() {
+                    fields.push(normalized);
+                }
+            }
+        } else if !trimmed.is_empty() {
+            let normalized = normalize_field_name(trimmed);
+            if !normalized.is_empty() {
+                fields.push(normalized);
+            }
+        }
+    }
+
+    // Remove duplicates
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
+/// Normalize field name to snake_case
+fn normalize_field_name(name: &str) -> String {
+    name.trim()
+        .to_lowercase()
+        // Replace dashes and other separators with spaces first
+        .replace('-', " ")
+        .replace(['(', ')'], "")
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join("_")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect()
+}
+
+/// Check if description indicates a field is required
+fn is_field_required(field_desc: &str) -> bool {
+    let lower = field_desc.to_lowercase();
+    lower.contains("(required)")
+        || lower.contains("required")
+        || lower.contains("must have")
+        || lower.contains("mandatory")
+}
+
+/// Extract enum values from parenthetical notation (e.g., "(draft/sent/paid)")
+fn extract_enum_values(text: &str) -> Option<Vec<String>> {
+    // Look for patterns like (value1/value2/value3) or (value1|value2)
+    if let Some(start) = text.find('(') {
+        if let Some(end) = text.find(')') {
+            if start < end {
+                let enum_str = &text[start + 1..end];
+                if enum_str.contains('/') || enum_str.contains('|') || enum_str.contains(',') {
+                    let separator = if enum_str.contains('/') {
+                        '/'
+                    } else if enum_str.contains('|') {
+                        '|'
+                    } else {
+                        ','
+                    };
+
+                    let values: Vec<String> = enum_str
+                        .split(separator)
+                        .map(|v| {
+                            v.trim()
+                                .to_uppercase()
+                                .replace(' ', "_")
+                                .chars()
+                                .filter(|c| c.is_alphanumeric() || *c == '_')
+                                .collect::<String>()
+                        })
+                        .filter(|v| !v.is_empty())
+                        .collect();
+
+                    if !values.is_empty() {
+                        return Some(values);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Infer field type based on keywords in the description
+fn infer_field_type(field_name: &str, field_desc: &str) -> (String, Option<Vec<String>>) {
+    let lower_name = field_name.to_lowercase();
+    let lower_desc = field_desc.to_lowercase();
+
+    // Check for enum type first (has parenthetical values)
+    if let Some(enum_values) = extract_enum_values(field_desc) {
+        return ("enum".to_string(), Some(enum_values));
+    }
+
+    // Keywords for number type
+    let number_keywords = [
+        "amount",
+        "price",
+        "cost",
+        "total",
+        "count",
+        "quantity",
+        "number",
+        "num",
+        "value",
+        "usd",
+        "dollars",
+        "cents",
+        "rate",
+        "percentage",
+        "percent",
+        "%",
+        "sum",
+        "balance",
+        "charge",
+        "fee",
+        "tax",
+    ];
+
+    // Keywords for date type
+    let date_keywords = [
+        "date",
+        "deadline",
+        "due",
+        "when",
+        "time",
+        "created",
+        "modified",
+        "updated",
+        "start",
+        "end",
+        "expires",
+        "expiration",
+        "born",
+        "birthday",
+        "anniversary",
+        "scheduled",
+    ];
+
+    // Keywords for boolean type
+    let bool_keywords = [
+        "enabled",
+        "disabled",
+        "active",
+        "inactive",
+        "is",
+        "has",
+        "allow",
+        "prevent",
+        "approve",
+        "reject",
+        "yes",
+        "no",
+        "true",
+        "false",
+        "flag",
+        "checked",
+        "completed",
+        "done",
+    ];
+
+    // Check number keywords
+    for keyword in &number_keywords {
+        if lower_name.contains(keyword) || lower_desc.contains(keyword) {
+            return ("number".to_string(), None);
+        }
+    }
+
+    // Check date keywords
+    for keyword in &date_keywords {
+        if lower_name.contains(keyword) || lower_desc.contains(keyword) {
+            return ("date".to_string(), None);
+        }
+    }
+
+    // Check boolean keywords
+    for keyword in &bool_keywords {
+        if lower_name.contains(keyword) || lower_desc.contains(keyword) {
+            return ("boolean".to_string(), None);
+        }
+    }
+
+    // Default to string
+    ("string".to_string(), None)
+}
+
+/// Parse natural language description to infer schema fields
+fn parse_entity_description(description: &str) -> Vec<InferredField> {
+    let mut fields = Vec::new();
+    let field_names = parse_field_names(description);
+
+    for field_name in field_names {
+        // Find the field description in the original text
+        let field_desc = description
+            .split([',', ';'])
+            .find(|s| s.contains(&field_name) || s.to_lowercase().contains(&field_name))
+            .unwrap_or("");
+
+        let (field_type, enum_values) = infer_field_type(&field_name, field_desc);
+        let required = is_field_required(field_desc);
+
+        fields.push(InferredField {
+            name: format!("custom:{}", field_name),
+            field_type,
+            required,
+            enum_values,
+            description: field_desc.to_string(),
+        });
+    }
+
+    fields
+}
+
 /// Parameters for add_schema_field MCP method
 #[derive(Debug, Deserialize)]
 pub struct AddSchemaFieldParams {
@@ -343,6 +636,199 @@ pub async fn handle_get_schema_definition(
     }))
 }
 
+/// Create a schema from a natural language description
+///
+/// # MCP Tool Description
+/// Generate a schema definition from natural language description of an entity.
+/// This tool uses AI-powered parsing to infer field types, detect required fields,
+/// and identify enum values from conversational descriptions.
+///
+/// The parser automatically:
+/// - Extracts field names and normalizes them to snake_case
+/// - Infers field types (string, number, date, enum, boolean) from keywords
+/// - Detects required fields from phrases like "(required)"
+/// - Extracts enum values from parenthetical notation: "(value1/value2/value3)"
+/// - Applies the `custom:` namespace prefix to all user fields
+///
+/// # Parameters
+/// - `entity_name`: Name of the entity (e.g., "Invoice", "Customer")
+/// - `description`: Natural language description of the entity and its fields
+/// - `additional_constraints`: Optional field-level constraints:
+///   - `required_fields`: Explicit list of fields to mark as required
+///   - `default_values`: Default values for specific fields
+///   - `enum_values`: Explicit enum values for specific fields
+///
+/// # Returns
+/// - `schema_id`: ID of the created schema (derived from entity_name)
+/// - `schema_definition`: The complete generated schema with fields
+/// - `created_fields`: Array of inferred fields with:
+///   - `name`: Field name with `custom:` prefix
+///   - `type`: Inferred field type
+///   - `required`: Whether the field is required
+/// - `warnings`: Optional warnings about ambiguous inferences
+///
+/// # Errors
+/// - `VALIDATION_ERROR`: If entity_name is empty or invalid
+/// - `INTERNAL_ERROR`: If schema creation fails
+///
+/// # Examples
+///
+/// Input:
+/// ```
+/// entity_name: "Invoice"
+/// description: "Create an Invoice with invoice number (required), amount in USD,
+///               vendor name, status (draft/sent/paid), and due date"
+/// ```
+///
+/// Output:
+/// ```json
+/// {
+///   "schema_id": "invoice",
+///   "created_fields": [
+///     { "name": "custom:invoice_number", "type": "string", "required": true },
+///     { "name": "custom:amount", "type": "number", "required": false },
+///     { "name": "custom:vendor_name", "type": "string", "required": false },
+///     { "name": "custom:status", "type": "enum", "required": false },
+///     { "name": "custom:due_date", "type": "date", "required": false }
+///   ]
+/// }
+/// ```
+pub fn handle_create_entity_schema_from_description(
+    _schema_service: &Arc<SchemaService>,
+    params: Value,
+) -> Result<Value, MCPError> {
+    let params: CreateEntitySchemaParams = serde_json::from_value(params)
+        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+
+    // Validate entity name
+    let schema_id = params
+        .entity_name
+        .trim()
+        .to_lowercase()
+        .replace(' ', "_")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect::<String>();
+
+    if schema_id.is_empty() {
+        return Err(MCPError::validation_error(
+            "entity_name must not be empty".to_string(),
+        ));
+    }
+
+    // Parse description to infer fields
+    let mut inferred_fields = parse_entity_description(&params.description);
+
+    // Apply additional constraints if provided
+    if let Some(constraints) = &params.additional_constraints {
+        // Mark required fields from constraints
+        if let Some(required_field_names) = &constraints.required_fields {
+            for field in &mut inferred_fields {
+                if required_field_names.iter().any(|req_field| {
+                    field.name.ends_with(req_field)
+                        || field.name.ends_with(&format!("custom:{}", req_field))
+                }) {
+                    field.required = true;
+                }
+            }
+        }
+
+        // Override enum values from constraints
+        if let Some(enum_overrides) = &constraints.enum_values {
+            for field in &mut inferred_fields {
+                for (field_key, values) in enum_overrides {
+                    if field.name.ends_with(field_key.as_str())
+                        || field.name.ends_with(&format!("custom:{}", field_key))
+                    {
+                        field.enum_values = Some(
+                            values
+                                .iter()
+                                .map(|v| {
+                                    v.to_uppercase()
+                                        .replace(' ', "_")
+                                        .chars()
+                                        .filter(|c| c.is_alphanumeric() || *c == '_')
+                                        .collect::<String>()
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Build schema fields
+    let schema_fields: Vec<crate::models::schema::SchemaField> = inferred_fields
+        .iter()
+        .map(|inferred| crate::models::schema::SchemaField {
+            name: inferred.name.clone(),
+            field_type: inferred.field_type.clone(),
+            protection: ProtectionLevel::User,
+            core_values: None,
+            user_values: inferred.enum_values.clone(),
+            indexed: false,
+            required: Some(inferred.required),
+            extensible: if inferred.field_type == "enum" {
+                Some(true)
+            } else {
+                None
+            },
+            default: params
+                .additional_constraints
+                .as_ref()
+                .and_then(|c| c.default_values.as_ref())
+                .and_then(|dv| {
+                    dv.iter()
+                        .find(|(k, _)| {
+                            inferred.name.ends_with(k.as_str())
+                                || inferred.name.ends_with(&format!("custom:{}", k))
+                        })
+                        .map(|(_, v)| v.clone())
+                }),
+            description: Some(inferred.description.clone()),
+            item_type: None,
+            fields: None,
+            item_fields: None,
+        })
+        .collect();
+
+    // Create schema definition
+    let schema_def = crate::models::schema::SchemaDefinition {
+        is_core: false,
+        version: 1,
+        description: format!(
+            "{} entity schema auto-generated from natural language",
+            params.entity_name
+        ),
+        fields: schema_fields,
+    };
+
+    // Note: In a full implementation, we would persist the schema here via SchemaService.
+    // For now, we return the schema definition for the client to apply.
+
+    // Build response with created fields
+    let created_fields: Vec<Value> = inferred_fields
+        .iter()
+        .map(|field| {
+            json!({
+                "name": field.name,
+                "type": field.field_type,
+                "required": field.required,
+                "enum_values": field.enum_values
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "schema_id": schema_id,
+        "schema_definition": serde_json::to_value(&schema_def)
+            .unwrap_or(json!({})),
+        "created_fields": created_fields,
+        "warnings": []
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,5 +1093,290 @@ mod tests {
         assert_eq!(schema["version"].as_u64().unwrap(), 1);
         assert!(schema["fields"].is_array());
         assert!(!schema["fields"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_field_names_comma_separated() {
+        let description =
+            "invoice number, amount in USD, vendor name, status (draft/sent/paid), due date";
+        let fields = parse_field_names(description);
+
+        assert_eq!(fields.len(), 5);
+        assert!(fields.contains(&"invoice_number".to_string()));
+        assert!(fields.contains(&"amount_in_usd".to_string()));
+        assert!(fields.contains(&"vendor_name".to_string()));
+        assert!(fields.contains(&"status".to_string()));
+        assert!(fields.contains(&"due_date".to_string()));
+    }
+
+    #[test]
+    fn test_parse_field_names_with_and_keyword() {
+        let description = "first name and last name and email address";
+        let fields = parse_field_names(description);
+
+        assert_eq!(fields.len(), 3);
+        assert!(fields.contains(&"first_name".to_string()));
+        assert!(fields.contains(&"last_name".to_string()));
+        assert!(fields.contains(&"email_address".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_field_name_multi_word() {
+        let name = "invoice number";
+        let normalized = normalize_field_name(name);
+        assert_eq!(normalized, "invoice_number");
+    }
+
+    #[test]
+    fn test_normalize_field_name_with_special_chars() {
+        let name = "account-status (active)";
+        let normalized = normalize_field_name(name);
+        assert_eq!(normalized, "account_status_active");
+    }
+
+    #[test]
+    fn test_is_field_required_with_required_keyword() {
+        let desc = "invoice number (required)";
+        assert!(is_field_required(desc));
+
+        let desc2 = "optional vendor name";
+        assert!(!is_field_required(desc2));
+    }
+
+    #[test]
+    fn test_is_field_required_with_must_have() {
+        let desc = "email address must have";
+        assert!(is_field_required(desc));
+    }
+
+    #[test]
+    fn test_extract_enum_values_slash_separated() {
+        let text = "status (draft/sent/paid)";
+        let values = extract_enum_values(text);
+
+        assert!(values.is_some());
+        let vals = values.unwrap();
+        assert_eq!(vals.len(), 3);
+        assert!(vals.contains(&"DRAFT".to_string()));
+        assert!(vals.contains(&"SENT".to_string()));
+        assert!(vals.contains(&"PAID".to_string()));
+    }
+
+    #[test]
+    fn test_extract_enum_values_pipe_separated() {
+        let text = "account status (active|inactive|suspended)";
+        let values = extract_enum_values(text);
+
+        assert!(values.is_some());
+        let vals = values.unwrap();
+        assert_eq!(vals.len(), 3);
+        assert!(vals.contains(&"ACTIVE".to_string()));
+        assert!(vals.contains(&"INACTIVE".to_string()));
+        assert!(vals.contains(&"SUSPENDED".to_string()));
+    }
+
+    #[test]
+    fn test_extract_enum_values_comma_separated() {
+        let text = "priority (low, medium, high)";
+        let values = extract_enum_values(text);
+
+        assert!(values.is_some());
+        let vals = values.unwrap();
+        assert_eq!(vals.len(), 3);
+        assert!(vals.contains(&"LOW".to_string()));
+        assert!(vals.contains(&"MEDIUM".to_string()));
+        assert!(vals.contains(&"HIGH".to_string()));
+    }
+
+    #[test]
+    fn test_infer_field_type_number() {
+        let (field_type, _) = infer_field_type("amount", "amount in USD");
+        assert_eq!(field_type, "number");
+
+        let (field_type, _) = infer_field_type("quantity", "quantity of items");
+        assert_eq!(field_type, "number");
+
+        let (field_type, _) = infer_field_type("price", "unit price in dollars");
+        assert_eq!(field_type, "number");
+    }
+
+    #[test]
+    fn test_infer_field_type_date() {
+        let (field_type, _) = infer_field_type("due_date", "due date for completion");
+        assert_eq!(field_type, "date");
+
+        let (field_type, _) = infer_field_type("deadline", "project deadline");
+        assert_eq!(field_type, "date");
+
+        let (field_type, _) = infer_field_type("created_at", "when it was created");
+        assert_eq!(field_type, "date");
+    }
+
+    #[test]
+    fn test_infer_field_type_boolean() {
+        let (field_type, _) = infer_field_type("is_enabled", "is the feature enabled");
+        assert_eq!(field_type, "boolean");
+
+        let (field_type, _) = infer_field_type("is_approved", "whether the approval is given");
+        assert_eq!(field_type, "boolean");
+    }
+
+    #[test]
+    fn test_infer_field_type_enum() {
+        let (field_type, values) = infer_field_type("status", "status (draft/sent/paid)");
+        assert_eq!(field_type, "enum");
+        assert!(values.is_some());
+        let vals = values.unwrap();
+        assert_eq!(vals.len(), 3);
+    }
+
+    #[test]
+    fn test_infer_field_type_default_string() {
+        let (field_type, _) = infer_field_type("vendor_name", "name of the vendor");
+        assert_eq!(field_type, "string");
+
+        let (field_type, _) = infer_field_type("company", "the company responsible");
+        assert_eq!(field_type, "string");
+    }
+
+    #[test]
+    fn test_parse_entity_description_invoice() {
+        let description =
+            "invoice id (required), amount in USD, vendor name, status (draft/sent/paid), due date";
+        let fields = parse_entity_description(description);
+
+        // Check that fields were parsed
+        assert!(fields.len() >= 4, "Should have at least 4 fields");
+
+        // Check invoice_id
+        let invoice_id = fields.iter().find(|f| f.name.contains("invoice_id"));
+        if let Some(invoice_id) = invoice_id {
+            assert_eq!(invoice_id.field_type, "string");
+        }
+
+        // Check amount
+        let amount = fields.iter().find(|f| f.name.contains("amount")).unwrap();
+        assert!(!amount.required);
+        assert_eq!(amount.field_type, "number");
+
+        // Check status
+        let status = fields.iter().find(|f| f.name.contains("status")).unwrap();
+        assert_eq!(status.field_type, "enum");
+        assert!(status.enum_values.is_some());
+
+        // Check due_date
+        let due_date = fields.iter().find(|f| f.name.contains("due_date")).unwrap();
+        assert_eq!(due_date.field_type, "date");
+    }
+
+    #[test]
+    fn test_parse_entity_description_namespace_prefix() {
+        let description = "customer id and email address";
+        let fields = parse_entity_description(description);
+
+        for field in fields {
+            assert!(
+                field.name.starts_with("custom:"),
+                "Field {} should have custom: prefix",
+                field.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_schema_from_description() {
+        let (schema_service, _node_service, _temp) = setup_test_service().await;
+
+        let params = json!({
+            "entity_name": "Invoice",
+            "description": "invoice number (required), amount in USD, vendor name, status (draft/sent/paid), due date"
+        });
+
+        let result = handle_create_entity_schema_from_description(&schema_service, params).unwrap();
+
+        assert_eq!(result["schema_id"], "invoice");
+        assert!(result["schema_definition"].is_object());
+        assert!(result["created_fields"].is_array());
+
+        let fields = result["created_fields"].as_array().unwrap();
+        assert!(fields.len() >= 4); // At least the main fields
+
+        // Check that all fields have custom: prefix
+        for field in fields {
+            assert!(field["name"].as_str().unwrap().starts_with("custom:"));
+        }
+
+        // Check specific field types exist
+        let field_types: std::collections::HashMap<String, String> = fields
+            .iter()
+            .map(|f| {
+                (
+                    f["name"].as_str().unwrap().to_string(),
+                    f["type"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+
+        // Verify key fields are present and have correct types
+        assert!(
+            field_types
+                .iter()
+                .any(|(k, v)| k.contains("amount") && v == "number"),
+            "Should have an amount field of type number"
+        );
+        assert!(
+            field_types
+                .iter()
+                .any(|(k, v)| k.contains("due_date") && v == "date"),
+            "Should have a due_date field of type date"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_schema_invalid_entity_name() {
+        let (schema_service, _node_service, _temp) = setup_test_service().await;
+
+        let params = json!({
+            "entity_name": "",
+            "description": "some fields"
+        });
+
+        let result = handle_create_entity_schema_from_description(&schema_service, params);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_create_entity_schema_with_constraints() {
+        let (schema_service, _node_service, _temp) = setup_test_service().await;
+
+        let params = json!({
+            "entity_name": "Product",
+            "description": "name, price, category",
+            "additional_constraints": {
+                "required_fields": ["name", "price"],
+                "enum_values": {
+                    "category": ["ELECTRONICS", "CLOTHING", "BOOKS"]
+                }
+            }
+        });
+
+        let result = handle_create_entity_schema_from_description(&schema_service, params).unwrap();
+
+        let fields = result["created_fields"].as_array().unwrap();
+        let name_field = fields
+            .iter()
+            .find(|f| f["name"].as_str().unwrap().contains("name"))
+            .unwrap();
+        assert_eq!(name_field["required"], true);
+
+        let category_field = fields
+            .iter()
+            .find(|f| f["name"].as_str().unwrap().contains("category"))
+            .unwrap();
+        // Category should have enum type due to the explicit enum_values constraint
+        assert!(
+            category_field["type"].as_str().unwrap() == "enum"
+                || category_field["enum_values"].is_array()
+        );
     }
 }

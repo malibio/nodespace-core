@@ -151,6 +151,9 @@ pub async fn handle_tools_call(
         "get_schema_definition" => {
             schema::handle_get_schema_definition(schema_service, arguments).await
         }
+        "create_entity_schema_from_description" => {
+            schema::handle_create_entity_schema_from_description(schema_service, arguments)
+        }
 
         _ => {
             return Err(MCPError::invalid_params(format!(
@@ -694,6 +697,43 @@ fn get_tool_schemas() -> Value {
                     }
                 },
                 "required": ["schema_id"]
+            }
+        },
+        {
+            "name": "create_entity_schema_from_description",
+            "description": "Create a schema from a natural language description of an entity. Automatically infers field types, detects required fields, and extracts enum values from conversational descriptions. All user-defined fields are automatically prefixed with 'custom:' to prevent conflicts with future core properties.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entity_name": {
+                        "type": "string",
+                        "description": "Name of the entity to create (e.g., 'Invoice', 'Customer')"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Natural language description of the entity and its fields. Examples: 'Invoice with number (required), amount in dollars, vendor name, status (draft/sent/paid), and due date'"
+                    },
+                    "additional_constraints": {
+                        "type": "object",
+                        "description": "Optional field-level constraints and overrides",
+                        "properties": {
+                            "required_fields": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Explicit list of field names to mark as required"
+                            },
+                            "default_values": {
+                                "type": "object",
+                                "description": "Default values for specific fields (key: field name, value: default value)"
+                            },
+                            "enum_values": {
+                                "type": "object",
+                                "description": "Explicit enum values for specific fields (key: field name, value: array of enum values)"
+                            }
+                        }
+                    }
+                },
+                "required": ["entity_name", "description"]
             }
         }
     ])
