@@ -161,6 +161,10 @@ describe('SharedNodeStore', () => {
       store.setNode(node2, viewerSource);
       store.setNode(node3, viewerSource);
 
+      // Populate cache to simulate backend hierarchy data
+      // (Graph-native architecture stores hierarchy as edges, not in Node fields)
+      store.updateChildrenCache(null, ['node-1', 'node-2', 'node-3']);
+
       const allNodes = store.getNodesForParent(null);
       expect(allNodes).toHaveLength(3);
       expect(allNodes.map((n) => n.id)).toContain('node-1');
@@ -176,6 +180,10 @@ describe('SharedNodeStore', () => {
       store.setNode(root1, viewerSource);
       store.setNode(root2, viewerSource);
       store.setNode(root3, viewerSource);
+
+      // Populate cache to simulate backend hierarchy data
+      // (Graph-native architecture: parentId removed, hierarchy stored as SurrealDB edges)
+      store.updateChildrenCache(null, ['root-1', 'root-2', 'root-3']);
 
       const roots = store.getNodesForParent(null);
       expect(roots).toHaveLength(3);
