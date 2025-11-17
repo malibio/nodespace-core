@@ -66,6 +66,34 @@ use surrealdb::Surreal;
 /// all data in the universal `node` table's `content` field.
 const TYPES_WITH_PROPERTIES: &[&str] = &["task", "schema"];
 
+/// All valid node types that can be used in SurrealDB queries
+/// Used to validate node_type parameters and prevent SQL injection
+const VALID_NODE_TYPES: &[&str] = &["text", "date", "header", "code_block", "quote_block", "ordered_list", "task", "schema"];
+
+/// Validates a node type against the whitelist of valid types
+///
+/// This prevents SQL injection attacks where malicious node_type values could
+/// alter query semantics. All node_type parameters used in dynamic queries
+/// must be validated with this function before use.
+///
+/// # Arguments
+/// * `node_type` - The node type string to validate
+///
+/// # Returns
+/// * `Ok(())` if the node_type is in the valid types list
+/// * `Err(...)` if the node_type is not recognized
+fn validate_node_type(node_type: &str) -> Result<()> {
+    if VALID_NODE_TYPES.contains(&node_type) {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Invalid node type: '{}'. Valid types are: {}",
+            node_type,
+            VALID_NODE_TYPES.join(", ")
+        ))
+    }
+}
+
 /// Internal struct matching SurrealDB's schema
 ///
 /// # Schema Evolution
@@ -935,6 +963,9 @@ where
     ) -> Result<Node> {
         use uuid::Uuid;
 
+        // Validate node type to prevent SQL injection
+        validate_node_type(node_type)?;
+
         // Generate node ID and convert parameters to owned strings for 'static lifetime
         let node_id = Uuid::new_v4().to_string();
         let parent_id = parent_id.to_string();
@@ -959,19 +990,16 @@ where
         let props_with_schema = properties.as_object().cloned().unwrap_or_default();
         let has_type_table = TYPES_WITH_PROPERTIES.contains(&node_type.as_str());
 
-        // Build atomic transaction query using Record ID literal format
+        // Build atomic transaction query using quoted Record IDs with parameter binding
         // This ensures ALL operations succeed or ALL fail
-        // Note: Inside transactions, we must use Record ID literals like 'node:uuid'
-        // instead of type::thing() function calls
+        // Record IDs with hyphens must be quoted in backticks: `node:uuid-with-hyphens`
         let transaction_query = if has_type_table && !props_with_schema.is_empty() {
             // For types with dedicated tables (task, schema)
-            // Use format string to construct Record ID literals
-            format!(
-                r#"
+            r#"
                 BEGIN TRANSACTION;
 
                 -- Create node in universal table
-                CREATE node:{} CONTENT {{
+                CREATE $node_id CONTENT {
                     type: $node_type,
                     content: $content,
                     before_sibling_id: $before_sibling_id,
@@ -983,31 +1011,28 @@ where
                     mentions: [],
                     mentioned_by: [],
                     data: NONE,
-                    variants: {{}},
+                    variants: {},
                     properties: $properties
-                }};
+                };
 
                 -- Create type-specific record
-                CREATE {{node_type}}:{} CONTENT $properties;
+                CREATE $type_id CONTENT $properties;
 
                 -- Link node to type-specific record
-                UPDATE node:{} SET data = {{node_type}}:{};
+                UPDATE $node_id SET data = $type_id;
 
                 -- Create parent-child edge
-                RELATE node:{}->has_child->node:{};
+                RELATE $node_id->has_child->$parent_id;
 
                 COMMIT TRANSACTION;
-                "#,
-                node_id, node_id, node_id, node_id, parent_id, node_id
-            )
+            "#.to_string()
         } else {
             // For types without dedicated tables (text, date, etc.)
-            format!(
-                r#"
+            r#"
                 BEGIN TRANSACTION;
 
                 -- Create node in universal table
-                CREATE node:{} CONTENT {{
+                CREATE $node_id CONTENT {
                     type: $node_type,
                     content: $content,
                     before_sibling_id: $before_sibling_id,
@@ -1019,32 +1044,40 @@ where
                     mentions: [],
                     mentioned_by: [],
                     data: NONE,
-                    variants: {{}},
+                    variants: {},
                     properties: $properties
-                }};
+                };
 
                 -- Create parent-child edge
-                RELATE node:{}->has_child->node:{};
+                RELATE $node_id->has_child->$parent_id;
 
                 COMMIT TRANSACTION;
-                "#,
-                node_id, parent_id, node_id
-            )
+            "#.to_string()
         };
+
+        // Construct Thing objects for Record IDs
+        // Thing format: table name paired with ID
+        let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
+        let parent_thing = surrealdb::sql::Thing::from(("node".to_string(), parent_id.clone()));
+        let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id.clone()));
 
         // Execute transaction
         self.db
             .query(transaction_query)
-            .bind(("id", node_id.clone()))
+            .bind(("node_id", node_thing))
+            .bind(("parent_id", parent_thing))
+            .bind(("type_id", type_thing))
             .bind(("node_type", node_type.clone()))
             .bind(("content", content.clone()))
             .bind(("before_sibling_id", before_sibling_id.clone()))
             .bind(("created_at", created_at.clone()))
             .bind(("modified_at", modified_at.clone()))
             .bind(("properties", Value::Object(props_with_schema.clone())))
-            .bind(("parent_id", parent_id.clone()))
             .await
-            .context("Failed to execute atomic create_child_node transaction")?;
+            .context(format!(
+                "Failed to create child node '{}' under parent '{}'",
+                node_id, parent_id
+            ))?;
 
         // Construct and return the created node
         Ok(Node {
@@ -1306,6 +1339,9 @@ where
         new_type: &str,
         new_properties: Value,
     ) -> Result<Node> {
+        // Validate new_type to prevent SQL injection
+        validate_node_type(new_type)?;
+
         // Convert parameters to owned strings for 'static lifetime
         let node_id = node_id.to_string();
         let new_type = new_type.to_string();
@@ -1338,40 +1374,36 @@ where
         let props_with_schema = new_properties.as_object().cloned().unwrap_or_default();
         let has_new_type_table = TYPES_WITH_PROPERTIES.contains(&new_type.as_str());
 
-        // Build atomic transaction using Record ID literal format
+        // Build atomic transaction using Thing parameters
         let transaction_query = if has_new_type_table && !props_with_schema.is_empty() {
             // New type has properties table
-            format!(
-                r#"
+            r#"
                 BEGIN TRANSACTION;
 
                 -- Update node type and variants map
-                UPDATE node:{} SET
+                UPDATE $node_id SET
                     type = $new_type,
                     modified_at = $modified_at,
                     version = version + 1,
                     variants[$old_type] = $old_type_record,
-                    variants[$new_type] = {{new_type}}:{},
+                    variants[$new_type] = $new_type_id,
                     properties = $properties;
 
                 -- Create new type-specific record
-                CREATE {{new_type}}:{} CONTENT $properties;
+                CREATE $new_type_id CONTENT $properties;
 
                 -- Update data link to point to new type-specific record
-                UPDATE node:{} SET data = {{new_type}}:{};
+                UPDATE $node_id SET data = $new_type_id;
 
                 COMMIT TRANSACTION;
-                "#,
-                node_id, node_id, node_id, node_id, node_id
-            )
+            "#.to_string()
         } else {
             // New type doesn't have properties table
-            format!(
-                r#"
+            r#"
                 BEGIN TRANSACTION;
 
                 -- Update node type and variants map
-                UPDATE node:{} SET
+                UPDATE $node_id SET
                     type = $new_type,
                     modified_at = $modified_at,
                     version = version + 1,
@@ -1381,15 +1413,18 @@ where
                     data = NONE;
 
                 COMMIT TRANSACTION;
-                "#,
-                node_id
-            )
+            "#.to_string()
         };
+
+        // Construct Thing objects for Record IDs
+        let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
+        let new_type_thing = surrealdb::sql::Thing::from((new_type.clone(), node_id.clone()));
 
         // Execute transaction
         self.db
             .query(transaction_query)
-            .bind(("id", node_id.clone()))
+            .bind(("node_id", node_thing))
+            .bind(("new_type_id", new_type_thing))
             .bind(("new_type", new_type.clone()))
             .bind(("old_type", old_type.clone()))
             .bind(("old_type_record", old_type_record))
@@ -1397,12 +1432,15 @@ where
             .bind(("modified_at", modified_at))
             .bind(("properties", Value::Object(props_with_schema)))
             .await
-            .context("Failed to execute atomic switch_node_type transaction")?;
+            .context(format!(
+                "Failed to switch node '{}' type from '{}' to '{}'",
+                node_id, old_type, new_type
+            ))?;
 
         // Fetch and return updated node
         self.get_node(&node_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch"))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))
     }
 
     /// Update a node with version check (optimistic locking)
@@ -1576,37 +1614,43 @@ where
             None => return Ok(DeleteResult { existed: false }),
         };
 
-        // Build atomic cascade delete transaction using Record ID literal format
+        // Build atomic cascade delete transaction using Thing parameters
         // This ensures ALL related data is deleted or NOTHING is deleted
-        let _node_type = node.node_type.clone(); // Used in comment below
+        let node_type = node.node_type.clone();
         let node_id = node.id.clone();
 
-        let transaction_query = format!(
-            r#"
+        let transaction_query = r#"
             BEGIN TRANSACTION;
 
             -- Delete type-specific record (if exists)
-            DELETE {{node_type}}:{};
+            DELETE $type_id;
 
             -- Delete node from universal table
-            DELETE node:{};
+            DELETE $node_id;
 
             -- Delete all has_child edges (incoming and outgoing)
-            DELETE has_child WHERE in = node:{} OR out = node:{};
+            DELETE has_child WHERE in = $node_id OR out = $node_id;
 
             -- Delete all mention edges (incoming and outgoing)
-            DELETE mentions WHERE in = node:{} OR out = node:{};
+            DELETE mentions WHERE in = $node_id OR out = $node_id;
 
             COMMIT TRANSACTION;
-            "#,
-            node_id, node_id, node_id, node_id, node_id, node_id
-        );
+        "#.to_string();
+
+        // Construct Thing objects for Record IDs
+        let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
+        let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id.clone()));
 
         // Execute transaction
         self.db
             .query(&transaction_query)
+            .bind(("node_id", node_thing))
+            .bind(("type_id", type_thing))
             .await
-            .context("Failed to execute atomic cascade delete transaction")?;
+            .context(format!(
+                "Failed to delete node '{}' (type: {}) with cascade",
+                node_id, node_type
+            ))?;
 
         Ok(DeleteResult { existed: true })
     }
@@ -2165,50 +2209,58 @@ where
             self.validate_no_cycle(parent_id, &node_id).await?;
         }
 
-        // Build atomic transaction query using Record ID literal format
-        let transaction_query = if let Some(ref parent_id) = new_parent_id {
+        // Build atomic transaction query using Thing parameters
+        let transaction_query = if new_parent_id.is_some() {
             // Move to new parent
-            format!(
-                r#"
+            r#"
                 BEGIN TRANSACTION;
 
                 -- Delete old parent edge
-                DELETE has_child WHERE out = node:{};
+                DELETE has_child WHERE out = $node_id;
 
                 -- Update sibling ordering
-                UPDATE node:{} SET before_sibling_id = $before_sibling_id;
+                UPDATE $node_id SET before_sibling_id = $before_sibling_id;
 
                 -- Create new parent edge
-                RELATE node:{}->has_child->node:{};
+                RELATE $node_id->has_child->$parent_id;
 
                 COMMIT TRANSACTION;
-                "#,
-                node_id, node_id, parent_id, node_id
-            )
+            "#.to_string()
         } else {
             // Make root node (delete parent edge only)
-            format!(
-                r#"
+            r#"
                 BEGIN TRANSACTION;
 
                 -- Delete old parent edge
-                DELETE has_child WHERE out = node:{};
+                DELETE has_child WHERE out = $node_id;
 
                 -- Update sibling ordering
-                UPDATE node:{} SET before_sibling_id = $before_sibling_id;
+                UPDATE $node_id SET before_sibling_id = $before_sibling_id;
 
                 COMMIT TRANSACTION;
-                "#,
-                node_id, node_id
-            )
+            "#.to_string()
         };
 
+        // Construct Thing objects for Record IDs
+        let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
+        let parent_thing = new_parent_id.as_ref().map(|pid| {
+            surrealdb::sql::Thing::from(("node".to_string(), pid.clone()))
+        });
+
         // Execute transaction
-        self.db
-            .query(&transaction_query)
+        let mut query_builder = self.db.query(&transaction_query).bind(("node_id", node_thing));
+
+        if let Some(parent_thing) = parent_thing {
+            query_builder = query_builder.bind(("parent_id", parent_thing));
+        }
+
+        query_builder
             .bind(("before_sibling_id", new_before_sibling_id.clone()))
             .await
-            .context("Failed to execute atomic move_node transaction")?;
+            .context(format!(
+                "Failed to move node '{}' to parent '{:?}'",
+                node_id, new_parent_id
+            ))?;
 
         Ok(())
     }
