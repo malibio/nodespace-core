@@ -3700,18 +3700,40 @@ mod tests {
             ))
             .await?;
 
-        // Measure create_child_node_atomic performance
-        let start = std::time::Instant::now();
-        let _child = store
-            .create_child_node_atomic(&parent.id, "text", "Child", json!({}), None)
-            .await?;
-        let create_elapsed = start.elapsed();
+        // Measure create_child_node_atomic performance with multiple iterations
+        // to account for variance and get statistically reliable results
+        const ITERATIONS: usize = 20;
+        let mut measurements = Vec::with_capacity(ITERATIONS);
 
-        // Performance target: <15ms for create (from Issue #532)
+        for i in 0..ITERATIONS {
+            let start = std::time::Instant::now();
+            let _child = store
+                .create_child_node_atomic(
+                    &parent.id,
+                    "text",
+                    &format!("Child{}", i),
+                    json!({}),
+                    None,
+                )
+                .await?;
+            measurements.push(start.elapsed());
+        }
+
+        // Calculate P95 percentile (95th percentile of measurements)
+        measurements.sort();
+        let p95_index = (ITERATIONS * 95) / 100;
+        let p95_latency = measurements[p95_index];
+
+        // Performance target: P95 <15ms for atomic operations (from Issue #532)
+        // P95 percentile is more reliable than single measurements for performance validation
         assert!(
-            create_elapsed.as_millis() < 15,
-            "create_child_node_atomic should complete in <15ms, took {:?}",
-            create_elapsed
+            p95_latency.as_millis() < 15,
+            "create_child_node_atomic P95 latency should be <15ms, got {:?}. Measurements (ms): {:?}",
+            p95_latency,
+            measurements
+                .iter()
+                .map(|d| d.as_millis())
+                .collect::<Vec<_>>()
         );
 
         Ok(())
