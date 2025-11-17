@@ -29,6 +29,15 @@ import { sharedNodeStore } from '$lib/services/shared-node-store';
  * ```
  */
 export function registerChildWithParent(parentId: string, childId: string): void {
+  // Validate parent exists in store
+  const parent = sharedNodeStore.getNode(parentId);
+  if (!parent) {
+    console.warn(
+      `[registerChildWithParent] Parent ${parentId} not found in store, skipping cache update`
+    );
+    return;
+  }
+
   // Get existing children (if any)
   const existingChildren = sharedNodeStore.getNodesForParent(parentId).map((n) => n.id);
 

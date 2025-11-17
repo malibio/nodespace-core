@@ -30,6 +30,7 @@ import { TestNodeBuilder } from '../utils/test-node-builder';
 import { getBackendAdapter, HttpAdapter } from '$lib/services/backend-adapter';
 import type { BackendAdapter } from '$lib/services/backend-adapter';
 import { sharedNodeStore } from '$lib/services/shared-node-store';
+import { registerChildWithParent } from '$lib/utils/node-hierarchy';
 
 describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
   let dbPath: string | null;
@@ -274,5 +275,60 @@ describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
     expect(childrenAfter.length).toBe(1);
     expect(childrenAfter[0].id).toBe(placeholderId);
     expect(childrenAfter[0].content).toBe('New content');
+  });
+
+  it('should handle invalid parent ID gracefully (via registerChildWithParent helper)', () => {
+    const validChild = {
+      ...TestNodeBuilder.text('Child node').build(),
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
+    };
+
+    sharedNodeStore.setNode(validChild, {
+      type: 'viewer' as const,
+      viewerId: 'test-viewer'
+    });
+
+    // Try to register child with non-existent parent
+    // Should not throw, just log warning
+    expect(() => {
+      registerChildWithParent('non-existent-parent-id', validChild.id);
+    }).not.toThrow();
+
+    // Verify child was NOT added to non-existent parent's cache
+    const children = sharedNodeStore.getNodesForParent('non-existent-parent-id');
+    expect(children.length).toBe(0);
+  });
+
+  it('should prevent duplicate child registration', () => {
+    const parent = {
+      ...TestNodeBuilder.date('2025-01-15').build(),
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
+    };
+    const child = {
+      ...TestNodeBuilder.text('Child').build(),
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
+    };
+
+    sharedNodeStore.setNode(parent, {
+      type: 'viewer' as const,
+      viewerId: 'test-viewer'
+    });
+
+    sharedNodeStore.setNode(child, {
+      type: 'viewer' as const,
+      viewerId: 'test-viewer'
+    });
+
+    // Register child twice
+    registerChildWithParent(parent.id, child.id);
+    registerChildWithParent(parent.id, child.id);
+
+    // Should only appear once
+    const children = sharedNodeStore.getNodesForParent(parent.id);
+    expect(children.length).toBe(1);
+    expect(children[0].id).toBe(child.id);
   });
 });

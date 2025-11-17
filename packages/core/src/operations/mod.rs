@@ -624,9 +624,9 @@ where
                 .await?;
 
             // Business Rule 4: Validate parent-container consistency
-            // TODO(Issue #XXX): Re-enable after fixing container_node_id vs get_container_id() mismatch
+            // TODO(#533): Re-enable after container concept cleanup and hierarchy migration
             // The validation fails because get_container_id() traverses parent chain (returning root),
-            // while container_node_id is the explicit parameter passed. Need architectural decision.
+            // while container_node_id is the explicit parameter passed. Issue #533 will remove container concept.
             // self.validate_parent_container_consistency(
             //     params.parent_id.as_deref(),
             //     &resolved_container,
@@ -1613,7 +1613,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Validation disabled until container_node_id architecture is fixed"]
+    #[ignore = "TODO(#533): Re-enable after container concept cleanup"]
     async fn test_parent_container_mismatch_error() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
