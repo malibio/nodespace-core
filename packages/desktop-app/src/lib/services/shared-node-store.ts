@@ -255,6 +255,16 @@ export class SharedNodeStore {
    */
   getNodesForParent(parentId: string | null): Node[] {
     const cacheKey = parentId || '__root__';
+
+    // Development-mode cache miss warning
+    if (import.meta.env.DEV && !this.childrenCache.has(cacheKey)) {
+      console.warn(
+        `[SharedNodeStore] Cache miss for parent "${parentId || 'root'}". ` +
+        `Call loadChildren(${JSON.stringify(parentId)}) first to populate cache. ` +
+        `Returning empty array.`
+      );
+    }
+
     const childIds = this.childrenCache.get(cacheKey) || [];
     return childIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
   }

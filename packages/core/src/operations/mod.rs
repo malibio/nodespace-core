@@ -675,10 +675,18 @@ impl NodeOperations {
             embedding_vector: None,
         };
 
+        // GRAPH-NATIVE ARCHITECTURE: Parent-child relationships are graph edges, not fields
+        //
+        // Step 1: Create the node record (no hierarchy information)
         let created_id = self.node_service.create_node(node).await?;
 
-        // Create parent edge if parent_id was specified
-        // This establishes the has_child graph edge: parent->has_child->child
+        // Step 2: Establish parent-child relationship via graph edge (if parent specified)
+        //
+        // CRITICAL: This creates a `has_child` edge in SurrealDB's graph database.
+        // The Node struct has NO parent_id field (removed in Issue #514 graph migration).
+        // Parent relationships are queried via graph traversal, not field lookups.
+        //
+        // Pattern: parent->has_child->child (SurrealDB RELATE edge)
         if let Some(parent_id) = final_parent_id {
             self.node_service
                 .move_node(&created_id, Some(parent_id.as_str()))
