@@ -382,44 +382,6 @@ pub async fn delete_node(
         .map_err(Into::into)
 }
 
-/// Move a node to a new parent
-///
-/// Uses NodeOperations to enforce business rules for hierarchy changes.
-/// Validates parent-container consistency and updates container_node_id.
-///
-/// # Arguments
-/// * `operations` - NodeOperations instance from Tauri state
-/// * `node_id` - ID of the node to move
-/// * `new_parent_id` - Optional new parent ID (None makes it a root node)
-///
-/// # Returns
-/// * `Ok(())` - Node moved successfully
-/// * `Err(CommandError)` - Error if move validation fails
-///
-/// # Errors
-/// Returns error if:
-/// - Node doesn't exist
-/// - New parent doesn't exist
-/// - Container node cannot be moved (containers must remain at root)
-/// - Parent-container consistency check fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// await invoke('move_node', { nodeId: 'node-123', newParentId: 'parent-456' });
-/// ```
-#[tauri::command]
-pub async fn move_node(
-    operations: State<'_, NodeOperations>,
-    node_id: String,
-    version: i64,
-    new_parent_id: Option<String>,
-) -> Result<(), CommandError> {
-    operations
-        .move_node(&node_id, version, new_parent_id.as_deref())
-        .await
-        .map_err(Into::into)
-}
-
 /// Atomically move a node to a new parent with new sibling position
 ///
 /// Performs a single database transaction that:
@@ -441,25 +403,29 @@ pub async fn move_node(
 ///
 /// # Example Frontend Usage
 /// ```typescript
-/// await invoke('move_node_atomic', {
+/// await invoke('move_node', {
 ///   nodeId: 'node-123',
 ///   newParentId: 'parent-456',
 ///   newBeforeSiblingId: 'node-789'
 /// });
 /// ```
 #[tauri::command]
-pub async fn move_node_atomic(
+pub async fn move_node(
     store: State<'_, SurrealStore>,
     node_id: String,
     new_parent_id: Option<String>,
     new_before_sibling_id: Option<String>,
 ) -> Result<(), CommandError> {
     store
-        .move_node_atomic(&node_id, new_parent_id.as_deref(), new_before_sibling_id.as_deref())
+        .move_node(
+            &node_id,
+            new_parent_id.as_deref(),
+            new_before_sibling_id.as_deref(),
+        )
         .await
         .map_err(|e| CommandError {
-            message: format!("Atomic move failed: {}", e),
-            code: "ATOMIC_MOVE_ERROR".to_string(),
+            message: format!("Move failed: {}", e),
+            code: "MOVE_ERROR".to_string(),
             details: Some(format!("{:?}", e)),
         })
 }

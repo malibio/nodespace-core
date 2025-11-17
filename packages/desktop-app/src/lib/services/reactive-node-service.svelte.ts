@@ -1002,7 +1002,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // - Creates the new parent-child edge
     // This eliminates the race condition that caused duplicate keys in the render cache
     try {
-      await backendAdapter.moveNodeAtomic(nodeId, targetParentId, beforeSiblingId);
+      await backendAdapter.moveNode(nodeId, targetParentId, beforeSiblingId);
     } catch (error) {
       // Silently ignore:
       // - 404 errors (node not persisted yet)

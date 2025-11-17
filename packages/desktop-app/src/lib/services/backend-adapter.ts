@@ -202,7 +202,7 @@ export interface BackendAdapter {
    * @param newParentId - New parent ID (null for root)
    * @param newBeforeSiblingId - New position in sibling chain
    */
-  moveNodeAtomic(
+  moveNode(
     nodeId: string,
     newParentId: string | null,
     newBeforeSiblingId: string | null
@@ -553,20 +553,20 @@ export class TauriAdapter implements BackendAdapter {
     }
   }
 
-  async moveNodeAtomic(
+  async moveNode(
     nodeId: string,
     newParentId: string | null,
     newBeforeSiblingId: string | null
   ): Promise<void> {
     try {
-      await invoke('move_node_atomic', {
+      await invoke('move_node', {
         nodeId,
         newParentId,
         newBeforeSiblingId
       });
     } catch (error) {
       const err = toError(error);
-      throw new NodeOperationError(err.message, nodeId, 'moveNodeAtomic');
+      throw new NodeOperationError(err.message, nodeId, 'moveNode');
     }
   }
 
@@ -1254,14 +1254,14 @@ export class HttpAdapter implements BackendAdapter {
     }
   }
 
-  async moveNodeAtomic(
+  async moveNode(
     nodeId: string,
     newParentId: string | null,
     newBeforeSiblingId: string | null
   ): Promise<void> {
     try {
       const response = await globalThis.fetch(
-        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/move-atomic`,
+        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/move`,
         {
           method: 'POST',
           headers: {
@@ -1275,7 +1275,7 @@ export class HttpAdapter implements BackendAdapter {
       }
     } catch (error) {
       const err = toError(error);
-      throw new NodeOperationError(err.message, nodeId, 'moveNodeAtomic');
+      throw new NodeOperationError(err.message, nodeId, 'moveNode');
     }
   }
 

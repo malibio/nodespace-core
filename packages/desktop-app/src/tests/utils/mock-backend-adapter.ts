@@ -270,7 +270,7 @@ export class MockBackendAdapter implements BackendAdapter {
   /**
    * Atomically move a node to a new parent with new sibling position
    */
-  async moveNodeAtomic(
+  async moveNode(
     nodeId: string,
     _newParentId: string | null,
     _newBeforeSiblingId: string | null
