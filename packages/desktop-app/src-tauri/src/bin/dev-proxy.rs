@@ -760,9 +760,7 @@ async fn get_mentioning_containers(
 /// # Implementation Note
 /// Returns schemas as SchemaDefinition objects (not tuples). The frontend
 /// expects an array of schema objects with `id` and other properties.
-async fn get_all_schemas(
-    State(state): State<AppState>,
-) -> ApiResult<Vec<SchemaDefinition>> {
+async fn get_all_schemas(State(state): State<AppState>) -> ApiResult<Vec<SchemaDefinition>> {
     let schemas = state
         .schema_service
         .get_all_schemas()
@@ -771,10 +769,8 @@ async fn get_all_schemas(
 
     // Convert Vec<(String, SchemaDefinition)> to Vec<SchemaDefinition>
     // The tuple format is internal to SchemaService; the HTTP API returns objects
-    let schema_list: Vec<SchemaDefinition> = schemas
-        .into_iter()
-        .map(|(_id, schema)| schema)
-        .collect();
+    let schema_list: Vec<SchemaDefinition> =
+        schemas.into_iter().map(|(_id, schema)| schema).collect();
 
     Ok(Json(schema_list))
 }
