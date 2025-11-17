@@ -88,8 +88,8 @@ describe('Sibling Chain Integrity', () => {
     const firstChildren: string[] = [];
     const reachable = new Set<string>();
 
-    // Get all siblings for this parent (now all nodes since parentId removed)
-    const siblings = Array.from(service.nodes.values()).map((n) => n.id);
+    // Get siblings for this specific parent (not all nodes)
+    const siblings = sharedNodeStore.getNodesForParent(parentId).map((n) => n.id);
 
     if (siblings.length === 0) {
       return { valid: true, errors: [], firstChildren: [], reachable, total: 0 };
@@ -112,7 +112,7 @@ describe('Sibling Chain Integrity', () => {
     if (firstChildren.length === 0) {
       errors.push(`No first child found for parent ${parentId || 'root'}`);
     } else if (firstChildren.length > 1) {
-      errors.push(`Multiple first children: ${firstChildren.join(', ')}`);
+      errors.push(`Multiple first children for parent ${parentId || 'root'}: ${firstChildren.join(', ')}`);
     }
 
     // If we have a valid first child, follow the chain
@@ -167,6 +167,9 @@ describe('Sibling Chain Integrity', () => {
     });
 
     service.initializeNodes([node1]);
+
+    // Populate hierarchy cache (node-1 is a root-level node)
+    sharedNodeStore.updateChildrenCache(null, ['node-1']);
 
     // Act: Create multiple nodes
     const node2Id = service.createNode('node-1', 'Second', 'text');
@@ -295,6 +298,8 @@ describe('Sibling Chain Integrity', () => {
 
     // Populate hierarchy cache (all nodes are root-level siblings)
     sharedNodeStore.updateChildrenCache(null, ['node-1', 'node-2', 'node-3']);
+    // Also populate children cache for node-1 (initially empty, will receive node-2)
+    sharedNodeStore.updateChildrenCache('node-1', []);
 
     // Act: Indent node-2
     service.indentNode('node-2');
@@ -366,6 +371,8 @@ describe('Sibling Chain Integrity', () => {
     // Populate hierarchy cache
     sharedNodeStore.updateChildrenCache(null, ['parent']); // parent is root
     sharedNodeStore.updateChildrenCache('parent', ['child-1', 'child-2']); // children of parent
+    // Also populate children cache for child-1 (initially empty, will receive child-2 after outdent)
+    sharedNodeStore.updateChildrenCache('child-1', []);
 
     // Act: Outdent child-1
     service.outdentNode('child-1');
