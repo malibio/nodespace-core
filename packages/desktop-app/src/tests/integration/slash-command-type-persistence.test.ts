@@ -65,12 +65,37 @@ const mockTaskSchema: SchemaDefinition = {
   ]
 };
 
-// Mock the schema service's extractDefaults method for testing
+// Empty schema definition for node types without schemas
+const emptySchema: SchemaDefinition = {
+  isCore: false,
+  version: 1,
+  description: 'Empty schema for testing',
+  fields: []
+};
+
+// Mock the schema service's methods for testing
 vi.spyOn(schemaService, 'getSchema').mockImplementation(async (schemaId: string) => {
   if (schemaId === 'task') {
     return mockTaskSchema;
   }
-  throw new Error(`Schema not found: ${schemaId}`);
+  // Return empty schema for other types instead of throwing
+  // This prevents console warnings during tests
+  return emptySchema;
+});
+
+// Mock extractDefaults to return the schema defaults immediately (synchronous)
+vi.spyOn(schemaService, 'extractDefaults').mockImplementation((schemaId: string) => {
+  if (schemaId === 'task') {
+    // Return defaults in the same format as the real implementation
+    return {
+      task: {
+        status: 'todo',
+        priority: 'medium'
+      }
+    };
+  }
+  // Graceful degradation for other schema types (no defaults)
+  return {};
 });
 
 describe('Slash Command Type Persistence', () => {
@@ -380,17 +405,126 @@ describe('Slash Command Type Persistence', () => {
 
       store.setNode(placeholderNode, viewerSource);
 
-      // Convert to task
+      // Convert to task - should apply schema defaults immediately
       reactiveService.updateNodeType(placeholderNode.id, 'task');
+
+      // Check if defaults were applied immediately (synchronous)
+      let node = store.getNode(placeholderNode.id);
+
+      expect(node?.properties).toHaveProperty('task');
+      expect((node?.properties.task as Record<string, unknown>)).toHaveProperty('status');
+      expect((node?.properties.task as Record<string, unknown>).status).toBe('todo');
+      expect((node?.properties.task as Record<string, unknown>)).toHaveProperty('priority');
+      expect((node?.properties.task as Record<string, unknown>).priority).toBe('medium');
+
+      // Update content and verify defaults persist
       await sleep(50);
       reactiveService.updateNodeContent(placeholderNode.id, 'My task');
-
       await sleep(600);
 
       const persisted = store.getNode(placeholderNode.id);
+
       expect(persisted?.properties).toHaveProperty('task');
-      expect(persisted?.properties.task).toHaveProperty('status');
-      expect(persisted?.properties.task).toHaveProperty('priority');
+      expect((persisted?.properties.task as Record<string, unknown>)).toHaveProperty('status');
+      expect((persisted?.properties.task as Record<string, unknown>).status).toBe('todo');
+      expect((persisted?.properties.task as Record<string, unknown>)).toHaveProperty('priority');
+      expect((persisted?.properties.task as Record<string, unknown>).priority).toBe('medium');
+    });
+
+    it('should merge defaults with existing properties without overwriting', () => {
+      // Test that existing properties take precedence over defaults
+      const nodeWithProperties: Node = {
+        id: 'merge-test-1',
+        nodeType: 'text',
+        content: '',
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {
+          task: {
+            status: 'in-progress', // User-set value (should NOT be overwritten)
+            customField: 'my custom data'
+          }
+        },
+        mentions: []
+      };
+
+      store.setNode(nodeWithProperties, viewerSource);
+
+      // Convert to task - should merge defaults without overwriting
+      reactiveService.updateNodeType(nodeWithProperties.id, 'task');
+
+      const node = store.getNode(nodeWithProperties.id);
+
+      // User's status should be preserved
+      expect((node?.properties.task as Record<string, unknown>).status).toBe('in-progress');
+      // Default priority should be added
+      expect((node?.properties.task as Record<string, unknown>).priority).toBe('medium');
+      // Custom field should be preserved
+      expect((node?.properties.task as Record<string, unknown>).customField).toBe('my custom data');
+    });
+
+    it('should handle node types without schemas gracefully', () => {
+      // Test that converting to a type without a schema works without errors
+      const placeholderNode: Node = {
+        id: 'no-schema-test-1',
+        nodeType: 'text',
+        content: '',
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {},
+        mentions: []
+      };
+
+      store.setNode(placeholderNode, viewerSource);
+
+      // Convert to a type without a schema (mock returns empty)
+      reactiveService.updateNodeType(placeholderNode.id, 'header');
+
+      const node = store.getNode(placeholderNode.id);
+
+      // Should still update nodeType
+      expect(node?.nodeType).toBe('header');
+      // Properties should remain empty (no defaults available)
+      expect(node?.properties).toEqual({});
+    });
+
+    it('should work with empty existing properties namespace', () => {
+      // Test that defaults are applied when properties object exists but namespace is empty
+      const nodeWithEmptyNamespace: Node = {
+        id: 'empty-namespace-test-1',
+        nodeType: 'text',
+        content: '',
+        beforeSiblingId: null,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {
+          someOtherNamespace: {
+            data: 'unrelated'
+          }
+        },
+        mentions: []
+      };
+
+      store.setNode(nodeWithEmptyNamespace, viewerSource);
+
+      // Convert to task
+      reactiveService.updateNodeType(nodeWithEmptyNamespace.id, 'task');
+
+      const node = store.getNode(nodeWithEmptyNamespace.id);
+
+      // Should have schema defaults for task
+      expect(node?.properties).toHaveProperty('task');
+      expect((node?.properties.task as Record<string, unknown>)).toHaveProperty('status', 'todo');
+      expect((node?.properties.task as Record<string, unknown>)).toHaveProperty('priority', 'medium');
+      // Should preserve other namespaces
+      expect((node?.properties.someOtherNamespace as Record<string, unknown>)).toEqual({
+        data: 'unrelated'
+      });
     });
   });
 });

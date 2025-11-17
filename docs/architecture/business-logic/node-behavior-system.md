@@ -49,6 +49,93 @@ if let Some(schema) = schema_service.get_schema(&node.node_type)? {
 | **User Extensions** | `user` | ✅ Yes | custom:estimatedHours, custom:tags |
 | **Custom Types** | N/A | ✅ Yes | recipe, workout (no hardcoded behavior) |
 
+### Schema Defaults During Type Conversion
+
+When nodes are converted between types (via slash commands or pattern detection), the system automatically applies default property values from the target node type's schema:
+
+#### How It Works
+
+1. **Conversion Trigger**: User converts a node type using:
+   - Slash commands (`/task`, `/header`, etc.)
+   - Pattern detection (typing `[ ] ` converts to task)
+
+2. **Default Extraction**: System extracts default values from schema:
+   ```typescript
+   // Example schema with defaults
+   {
+     id: 'task',
+     fields: [
+       { name: 'status', type: 'enum', default: 'todo' },
+       { name: 'priority', type: 'enum', default: 'medium' },
+       { name: 'estimatedHours', type: 'number' }  // No default
+     ]
+   }
+   ```
+
+3. **Property Merging**: Defaults are merged with existing properties:
+   ```typescript
+   // Before conversion (text node with custom data)
+   properties: {
+     someData: { customField: 'value' }
+   }
+
+   // After conversion to 'task'
+   properties: {
+     task: {
+       status: 'todo',       // ← Applied from schema default
+       priority: 'medium'    // ← Applied from schema default
+     },
+     someData: { customField: 'value' }  // ← Preserved
+   }
+   ```
+
+#### Merge Behavior (Non-Destructive)
+
+The system follows a **non-destructive merge strategy** to preserve user data:
+
+- ✅ **Schema defaults are applied** for new properties
+- ✅ **Existing user values are preserved** (never overwritten)
+- ✅ **Optional fields without defaults are NOT created**
+- ✅ **Other property namespaces are preserved**
+
+```typescript
+// Example: User has already set status to 'in-progress'
+// Before conversion
+properties: {
+  task: {
+    status: 'in-progress',  // User-set value
+    customField: 'data'
+  }
+}
+
+// After re-conversion to 'task'
+properties: {
+  task: {
+    status: 'in-progress',  // ← PRESERVED (not overwritten)
+    priority: 'medium',     // ← ADDED (from default)
+    customField: 'data'     // ← PRESERVED
+  }
+}
+```
+
+#### Implementation Details
+
+- **Location**: `ReactiveNodeService.updateNodeType()`
+- **Performance**: Synchronous operation using schema cache (no async delay)
+- **Graceful Degradation**: If schema not found, conversion proceeds without defaults
+- **Cache-Based**: Uses LRU cache in `SchemaService` for instant access
+
+#### When Defaults Are Applied
+
+| Conversion Method | Defaults Applied? | Notes |
+|------------------|-------------------|-------|
+| Slash Commands | ✅ Yes | `/task`, `/header`, etc. |
+| Pattern Detection | ✅ Yes | `[ ] `, `# `, etc. |
+| Programmatic API | ✅ Yes | `updateNodeType()` call |
+| Initial Creation | ❌ No | Handled separately by node creation logic |
+
+See [Schema Service Documentation](../../lib/services/schema-service.ts) for schema default configuration.
+
 ### Why This Approach?
 
 The hybrid model provides:
