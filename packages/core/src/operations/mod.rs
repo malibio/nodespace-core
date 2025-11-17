@@ -547,7 +547,8 @@ where
         }
 
         // Validate parent exists (if provided) - fail fast on broken hierarchies
-        self.validate_parent_hierarchy(params.parent_id.as_deref()).await?;
+        self.validate_parent_hierarchy(params.parent_id.as_deref())
+            .await?;
 
         // Business Rule 1: Determine if this node IS a container (root) based on hierarchy
         // A node is a container/root if it has NO parent
