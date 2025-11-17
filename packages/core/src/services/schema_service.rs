@@ -794,8 +794,9 @@ where
             let db = self.node_service.store.db();
 
             // Define field in database
+            // Wrap field_path in backticks to support namespaced field names with colons
             let define_field_query = format!(
-                "DEFINE FIELD IF NOT EXISTS {} ON {} TYPE {};",
+                "DEFINE FIELD IF NOT EXISTS `{}` ON {} TYPE {};",
                 field_path, table, db_type
             );
 
@@ -950,18 +951,22 @@ where
         };
 
         // Build index name: idx_{table}_{field_path_with_underscores}
+        // Replace colons with underscores in the index name since SurrealDB doesn't support colons in index names
         let index_name = format!(
             "idx_{}_{}",
             table,
-            field_path.replace('.', "_").replace("[*]", "_arr")
+            field_path
+                .replace([':', '.'], "_")
+                .replace("[*]", "_arr")
         );
 
         // Get database connection
         let db = self.node_service.store.db();
 
         // Create index
+        // Wrap field_path in backticks to support namespaced field names with colons
         let define_index_query = format!(
-            "DEFINE INDEX IF NOT EXISTS {} ON {} FIELDS {};",
+            "DEFINE INDEX IF NOT EXISTS {} ON {} FIELDS `{}`;",
             index_name, table, field_path
         );
 
