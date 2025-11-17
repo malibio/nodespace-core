@@ -10,6 +10,7 @@
   import { onMount, onDestroy, getContext } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
+  import { registerChildWithParent } from '$lib/utils/node-hierarchy';
   import { pluginRegistry } from '$lib/components/viewers/index';
   import BaseNode from '$lib/design/components/base-node.svelte';
   import BacklinksPanel from '$lib/design/components/backlinks-panel.svelte';
@@ -1770,8 +1771,7 @@
                     // 1. Backend: SurrealDB has_child edges
                     // 2. Frontend: SharedNodeStore children/parents cache
                     // Without this, the promoted node is orphaned and disappears from the UI
-                    const existingChildren = sharedNodeStore.getNodesForParent(nodeId).map(n => n.id);
-                    sharedNodeStore.updateChildrenCache(nodeId, [...existingChildren, promotedNode.id]);
+                    registerChildWithParent(nodeId, promotedNode.id);
 
                     // Clear viewer placeholder - now using real node from store
                     viewerPlaceholder = null;
@@ -1849,8 +1849,7 @@
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                     // CRITICAL FIX (Issue #528): Update children cache to establish parent-child relationship
-                    const existingChildren = sharedNodeStore.getNodesForParent(nodeId).map(n => n.id);
-                    sharedNodeStore.updateChildrenCache(nodeId, [...existingChildren, promotedNode.id]);
+                    registerChildWithParent(nodeId, promotedNode.id);
 
                     viewerPlaceholder = null;
                   } else {
@@ -1947,8 +1946,7 @@
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                     // CRITICAL FIX (Issue #528): Update children cache to establish parent-child relationship
-                    const existingChildren = sharedNodeStore.getNodesForParent(nodeId).map(n => n.id);
-                    sharedNodeStore.updateChildrenCache(nodeId, [...existingChildren, promotedNode.id]);
+                    registerChildWithParent(nodeId, promotedNode.id);
 
                     viewerPlaceholder = null;
                   } else {
