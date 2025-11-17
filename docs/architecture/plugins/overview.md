@@ -16,6 +16,13 @@ This directory contains comprehensive documentation for NodeSpace's plugin syste
 - Performance characteristics and testing strategy
 - Migration from fragmented to unified system
 
+⚡ **[Schema Auto-Registration](./schema-auto-registration.md)** *(New - November 2024)*
+- Automatic plugin creation from custom entity schemas
+- Phase 1: Startup registration (implemented)
+- Phase 2: Runtime hot-reload (planned)
+- Display name humanization and priority system
+- Comprehensive testing and performance optimizations
+
 🔧 **[External Development Guide](./external-development-guide.md)** *(New)*
 - Step-by-step guide for creating custom plugins
 - Current development process and best practices
@@ -46,8 +53,9 @@ This directory contains comprehensive documentation for NodeSpace's plugin syste
 
 ### For Current Plugin Development
 1. **Start Here**: [External Development Guide](./external-development-guide.md)
-2. **Architecture Details**: [Unified Plugin Registry](./unified-plugin-registry.md)
-3. **Legacy Reference**: [Plugin Architecture](./plugin-architecture.md)
+2. **Schema-Based Plugins**: [Schema Auto-Registration](./schema-auto-registration.md)
+3. **Architecture Details**: [Unified Plugin Registry](./unified-plugin-registry.md)
+4. **Legacy Reference**: [Plugin Architecture](./plugin-architecture.md)
 
 ### For Future Planning
 1. **Requirements**: [Future Requirements](./future-requirements.md)
@@ -82,8 +90,10 @@ This directory contains comprehensive documentation for NodeSpace's plugin syste
 | Component | Status | Documentation |
 |-----------|--------|---------------|
 | Unified Registry | ✅ Complete | [unified-plugin-registry.md](./unified-plugin-registry.md) |
+| Schema Auto-Registration (Phase 1) | ✅ Complete | [schema-auto-registration.md](./schema-auto-registration.md) |
 | Core Plugins | ✅ Complete | [external-development-guide.md](./external-development-guide.md) |
 | External Dev Guide | ✅ Complete | [external-development-guide.md](./external-development-guide.md) |
+| Schema Hot-Reload (Phase 2) | 🔄 Planned | [schema-auto-registration.md](./schema-auto-registration.md) |
 | Plugin Manager | ❌ Planned | [future-requirements.md](./future-requirements.md) |
 | Runtime Loading | ❌ Planned | [future-requirements.md](./future-requirements.md) |
 
