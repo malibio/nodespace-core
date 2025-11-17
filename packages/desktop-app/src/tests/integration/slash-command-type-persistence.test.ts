@@ -18,12 +18,14 @@
  * Part of issue #424: Fix node type conversions persistence
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createReactiveNodeService } from '../../lib/services/reactive-node-service.svelte';
 import { SharedNodeStore } from '../../lib/services/shared-node-store';
 import { PersistenceCoordinator } from '../../lib/services/persistence-coordinator.svelte';
 import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
+import { schemaService } from '../../lib/services/schema-service';
+import type { SchemaDefinition } from '../../lib/types/schema';
 
 /**
  * Helper to wait for debounce + persistence
@@ -31,6 +33,45 @@ import type { UpdateSource } from '../../lib/types/update-protocol';
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Mock task schema for tests
+ */
+const mockTaskSchema: SchemaDefinition = {
+  isCore: true,
+  version: 1,
+  description: 'Task node schema',
+  fields: [
+    {
+      name: 'status',
+      type: 'enum',
+      protection: 'core',
+      default: 'todo',
+      indexed: true,
+      required: false,
+      coreValues: ['todo', 'in-progress', 'done'],
+      description: 'Task status'
+    },
+    {
+      name: 'priority',
+      type: 'enum',
+      protection: 'core',
+      default: 'medium',
+      indexed: true,
+      required: false,
+      coreValues: ['low', 'medium', 'high'],
+      description: 'Task priority'
+    }
+  ]
+};
+
+// Mock the schema service's extractDefaults method for testing
+vi.spyOn(schemaService, 'getSchema').mockImplementation(async (schemaId: string) => {
+  if (schemaId === 'task') {
+    return mockTaskSchema;
+  }
+  throw new Error(`Schema not found: ${schemaId}`);
+});
 
 describe('Slash Command Type Persistence', () => {
   let reactiveService: ReturnType<typeof createReactiveNodeService>;
@@ -323,9 +364,8 @@ describe('Slash Command Type Persistence', () => {
   });
 
   describe('Schema Defaults Applied', () => {
-    it.skip('should apply task schema defaults when converting to task', async () => {
-      // TODO: Schema defaults not yet implemented - tracked in Issue #427
-      // This test is skipped until schema default application is implemented
+    it('should apply task schema defaults when converting to task', async () => {
+      // Issue #427: Schema defaults are now applied when converting node types
       const placeholderNode: Node = {
         id: 'schema-test-1',
         nodeType: 'text',

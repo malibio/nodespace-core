@@ -482,6 +482,52 @@ export class SchemaService {
 
     return field.protection === 'user';
   }
+
+  /**
+   * Extract default values from a schema definition.
+   *
+   * Creates a properties object with default values for all fields in the schema
+   * that have defaults defined. Only fields with non-undefined default values are
+   * included in the result.
+   *
+   * @param schemaId - Schema ID to extract defaults from
+   * @returns Object with structure { [schemaId]: { fieldName: defaultValue } }
+   *          Returns empty object if schema has no fields with defaults
+   * @throws {SchemaOperationError} If schema not found
+   *
+   * @example
+   * ```typescript
+   * // Task schema with defaults:
+   * // { task: { status: { default: 'todo' }, priority: { default: 'medium' } } }
+   *
+   * const defaults = await service.extractDefaults('task');
+   * // Returns: { task: { status: 'todo', priority: 'medium' } }
+   *
+   * // Merge with existing properties
+   * const merged = { ...node.properties, ...defaults };
+   * ```
+   */
+  async extractDefaults(schemaId: string): Promise<Record<string, unknown>> {
+    const schema = await this.getSchema(schemaId);
+
+    // Build properties object with namespace (schemaId)
+    const defaults: Record<string, unknown> = {};
+    const fieldsWithDefaults: Record<string, unknown> = {};
+
+    // Iterate through fields and collect those with defaults
+    for (const field of schema.fields) {
+      if (field.default !== undefined && field.default !== null) {
+        fieldsWithDefaults[field.name] = field.default;
+      }
+    }
+
+    // Only create the namespace if there are defaults
+    if (Object.keys(fieldsWithDefaults).length > 0) {
+      defaults[schemaId] = fieldsWithDefaults;
+    }
+
+    return defaults;
+  }
 }
 
 /**

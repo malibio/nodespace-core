@@ -30,6 +30,7 @@ import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { backendAdapter } from './backend-adapter';
+import { schemaService } from './schema-service';
 
 export interface NodeManagerEvents {
   focusRequested: (nodeId: string, position?: number) => void;
@@ -627,17 +628,52 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // CRITICAL: Include content with nodeType update to ensure backend persistence works
     // Some backends may not support updating nodeType alone
-    const updatePayload = { nodeType, content: node.content };
-    // Skip conflict detection for nodeType changes - they are always intentional conversions
-    sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource, {
-      skipConflictDetection: true
-    });
+    const updatePayload: Partial<Node> = { nodeType, content: node.content };
 
-    // Focus is managed by BaseNodeViewer during conversions
-    // Do not override cursor position here
+    // Issue #427: Apply schema defaults when converting node types
+    // Extract defaults from the new node type's schema and merge with existing properties
+    // Use Promise.resolve() to handle the async operation without blocking the sync API
+    Promise.resolve()
+      .then(async () => {
+        try {
+          const schemaDefaults = await schemaService.extractDefaults(nodeType);
 
-    emitNodeUpdated(nodeId, 'nodeType', nodeType);
-    scheduleContentProcessing(nodeId, node.content);
+          // Merge defaults with existing properties (don't overwrite user data)
+          const mergedProperties = {
+            ...node.properties,
+            ...schemaDefaults
+          };
+
+          // Only update properties if there are defaults to apply
+          if (Object.keys(schemaDefaults).length > 0) {
+            updatePayload.properties = mergedProperties;
+          }
+
+          return true;
+        } catch (error) {
+          // If schema not found, just proceed without defaults
+          console.warn(`[updateNodeType] Failed to extract schema defaults for ${nodeType}:`, error);
+          return false;
+        }
+      })
+      .then(() => {
+        // Skip conflict detection for nodeType changes - they are always intentional conversions
+        sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource, {
+          skipConflictDetection: true
+        });
+
+        emitNodeUpdated(nodeId, 'nodeType', nodeType);
+        scheduleContentProcessing(nodeId, node.content);
+      })
+      .catch((error) => {
+        // Fallback error handling
+        console.error(`[updateNodeType] Unexpected error:`, error);
+        sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource, {
+          skipConflictDetection: true
+        });
+        emitNodeUpdated(nodeId, 'nodeType', nodeType);
+        scheduleContentProcessing(nodeId, node.content);
+      });
   }
 
   function updateNodeMentions(nodeId: string, mentions: string[]): void {
