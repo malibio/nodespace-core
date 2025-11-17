@@ -92,13 +92,15 @@ async fn validate_node_type(
     }
 }
 
-/// Create a new node (Text, Task, or Date only)
+/// Create a new node of any type with a registered schema
 ///
 /// Uses NodeOperations business logic layer to enforce data integrity rules.
+/// Node type must have a corresponding schema defined in the system.
 ///
 /// # Arguments
 /// * `operations` - NodeOperations instance from Tauri state
-/// * `node` - Node data to create (must have node_type: text|task|date)
+/// * `schema_service` - SchemaService instance for validating node type
+/// * `node` - Node data to create (node_type must have a schema)
 ///
 /// # Returns
 /// * `Ok(String)` - ID of the created node
@@ -106,7 +108,7 @@ async fn validate_node_type(
 ///
 /// # Errors
 /// Returns error if:
-/// - Node type is not one of: text, task, date
+/// - Node type schema doesn't exist (create schema first)
 /// - Business rule validation fails (container requirements, sibling chains, etc.)
 /// - Database operation fails
 ///
@@ -173,6 +175,7 @@ pub struct SaveNodeWithParentInput {
 ///
 /// Uses NodeOperations to create container with business rule enforcement.
 /// Container nodes are root-level nodes that can contain other nodes.
+/// Node type must have a corresponding schema defined in the system.
 /// NodeOperations ensures they have:
 /// - parent_id = None
 /// - container_node_id = None (they ARE containers)
@@ -181,6 +184,7 @@ pub struct SaveNodeWithParentInput {
 /// # Arguments
 /// * `operations` - NodeOperations instance from Tauri state
 /// * `service` - NodeService for mention relationship creation
+/// * `schema_service` - SchemaService instance for validating node type
 /// * `input` - Container node data
 ///
 /// # Returns
