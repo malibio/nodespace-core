@@ -713,8 +713,9 @@ where
         table: &'a str,
         field: &'a SchemaField,
         parent_path: Option<&'a str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), NodeServiceError>> + 'a>>
-    {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), NodeServiceError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             // Build full field path (e.g., "address.city")
             let field_path = if let Some(parent) = parent_path {

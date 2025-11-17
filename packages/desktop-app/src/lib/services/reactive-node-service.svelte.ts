@@ -443,6 +443,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.setNode(newNode, viewerSource, skipPersistence);
     _uiState[nodeId] = newUIState;
 
+    // CRITICAL: Update children cache when creating a new node
+    // This keeps the cache synchronized with the actual hierarchy
+    sharedNodeStore.addChildToCache(newParentId, nodeId);
+
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
     if (shouldFocusNewNode) {
@@ -1012,6 +1016,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     invalidateSortedChildrenCache(currentParentId); // Old parent
     invalidateSortedChildrenCache(targetParentId); // New parent
 
+    // CRITICAL: Update children cache when moving node to new parent
+    // Remove from old parent, add to new parent
+    sharedNodeStore.removeChildFromCache(currentParentId, nodeId);
+    sharedNodeStore.addChildToCache(targetParentId, nodeId);
+
     // Ensure the target parent is expanded to show the newly indented child
     // This prevents the parent from appearing collapsed after indent
     setExpanded(targetParentId, true);
@@ -1225,8 +1234,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     invalidateSortedChildrenCache(newParentId); // New parent
     invalidateSortedChildrenCache(nodeId); // Outdented node (now has new children)
 
-    // If siblings were transferred as children, expand the outdented node to show them
+    // CRITICAL: Update children cache when outdenting
+    // Remove from old parent, add to new parent
+    sharedNodeStore.removeChildFromCache(oldParentId, nodeId);
+    sharedNodeStore.addChildToCache(newParentId, nodeId);
+
+    // Also update cache for siblings that became children of the outdented node
     if (siblingsBelow.length > 0) {
+      for (const siblingId of siblingsBelow) {
+        sharedNodeStore.removeChildFromCache(oldParentId, siblingId);
+        sharedNodeStore.addChildToCache(nodeId, siblingId);
+      }
       setExpanded(nodeId, true);
     }
 
@@ -1317,6 +1335,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // NOTE: parentId and containerNodeId removed - hierarchy managed by backend via parent_of edges
       sharedNodeStore.updateNode(child.id, updates, viewerSource);
 
+      // CRITICAL: Update children cache when promoting children to new parent
+      sharedNodeStore.removeChildFromCache(nodeId, child.id);
+      sharedNodeStore.addChildToCache(newParentForChildren, child.id);
+
       // CRITICAL: If promoting to root level, add to _rootNodeIds
       // Must reassign (not mutate) for Svelte 5 reactivity
       if (newParentForChildren === null && !_rootNodeIds.includes(child.id)) {
@@ -1362,10 +1384,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return;
 
+    // Determine parent BEFORE deleting the node
+    const parents = sharedNodeStore.getParentsForNode(nodeId);
+    const parentId = parents.length > 0 ? parents[0].id : null;
+
     cleanupDebouncedOperations(nodeId);
 
     // Remove node from sibling chain BEFORE deletion to prevent orphans
     removeFromSiblingChain(nodeId);
+
+    // CRITICAL: Update children cache to remove this node from its parent
+    sharedNodeStore.removeChildFromCache(parentId, nodeId);
 
     sharedNodeStore.deleteNode(nodeId, viewerSource);
     delete _uiState[nodeId];
@@ -1376,8 +1405,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds = _rootNodeIds.filter((id) => id !== nodeId);
     }
 
-    // NOTE: No longer invalidating parent cache since parentId is removed
-    // Hierarchy is now managed through HierarchyService
+    // Invalidate sorted children cache for this node and its children
     invalidateSortedChildrenCache(nodeId);
 
     events.nodeDeleted(nodeId);

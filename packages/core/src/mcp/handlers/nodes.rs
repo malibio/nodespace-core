@@ -672,8 +672,8 @@ pub async fn handle_insert_child_at_index(
     // In graph-native architecture, traverse up to find the container
     let container_node_id = operations
         .get_container_id(&params.parent_id)
+        .await
         .ok()
-        .flatten()
         .or_else(|| Some(params.parent_id.clone())); // Default to parent as container
 
     // 6. Create node using pointer-based operation
@@ -737,16 +737,16 @@ pub async fn handle_move_child_to_index(
         .ok_or_else(|| MCPError::invalid_params(format!("Node '{}' not found", params.node_id)))?;
 
     // Get parent using graph traversal
-    // TODO: This is a temporary workaround - get_parent_id needs proper implementation
-    // For now, we require clients to provide parent_id context
-    let parent_id = match operations.get_parent_id(&params.node_id) {
-        Ok(Some(id)) => id,
-        _ => {
-            return Err(MCPError::invalid_params(
-                "Cannot determine parent - move_child_to_index temporarily disabled in graph-native refactor".to_string()
-            ));
-        }
-    };
+    let parent_id = operations
+        .get_parent_id(&params.node_id)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to get parent: {}", e)))?
+        .ok_or_else(|| {
+            MCPError::invalid_params(format!(
+                "Node '{}' has no parent (is a root node) - cannot reorder",
+                params.node_id
+            ))
+        })?;
 
     // 2. Get all siblings in current order (excluding the node being moved)
     let all_children = get_children_ordered(operations, &parent_id, false).await?;

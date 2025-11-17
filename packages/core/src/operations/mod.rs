@@ -584,7 +584,7 @@ impl NodeOperations {
         // (not just because its type CAN be a container)
         let is_container_node = params.parent_id.is_none() && params.container_node_id.is_none();
 
-        let (final_parent_id, final_container_id, final_sibling_id) = if is_container_node {
+        let (final_parent_id, _final_container_id, final_sibling_id) = if is_container_node {
             // This node IS a container - validate that its type allows being a container
             if !Self::can_be_container_type(&params.node_type) {
                 return Err(NodeOperationError::invalid_container_type(
@@ -678,24 +678,22 @@ impl NodeOperations {
         let created_id = self.node_service.create_node(node).await?;
 
         // Create parent edge if parent_id was specified
+        // This establishes the has_child graph edge: parent->has_child->child
         if let Some(parent_id) = final_parent_id {
-            // TODO: Create parent edge using NodeService edge creation
-            // self.node_service.create_parent_edge(&created_id, &parent_id).await?;
-            tracing::warn!(
-                "Parent edge creation not yet implemented - parent_id: {}",
-                parent_id
+            self.node_service
+                .move_node(&created_id, Some(parent_id.as_str()))
+                .await?;
+            tracing::debug!(
+                "Created parent edge: {} -> has_child -> {}",
+                parent_id,
+                created_id
             );
         }
 
-        // Create container edge if container_id was specified
-        if let Some(container_id) = final_container_id {
-            // TODO: Create container edge using NodeService edge creation
-            // self.node_service.create_container_edge(&created_id, &container_id).await?;
-            tracing::warn!(
-                "Container edge creation not yet implemented - container_id: {}",
-                container_id
-            );
-        }
+        // Note: Container relationship is NOT stored as an edge.
+        // Container is determined by traversing UP the parent chain to find the root node.
+        // The final_container_id is used for validation/queries but doesn't create database edges.
+        // See NodeService::get_container_id() for the graph traversal implementation.
 
         Ok(created_id)
     }
@@ -792,25 +790,40 @@ impl NodeOperations {
 
     /// Get the parent ID of a node
     ///
-    /// TODO: Implement graph-native parent lookup using SurrealDB reverse edge traversal
-    /// Temporary placeholder returns None - MCP handlers using this will need updates
-    pub fn get_parent_id(&self, _node_id: &str) -> Result<Option<String>, NodeOperationError> {
-        // TODO: Implement with: SELECT VALUE <-parent<-node.id FROM type::thing('node', $node_id)
-        Err(NodeOperationError::InvalidOperation {
-            reason:
-                "get_parent_id not yet implemented in graph-native model - use get_children for now"
-                    .to_string(),
-        })
+    /// Uses graph-native parent lookup via SurrealDB reverse edge traversal.
+    /// Returns the parent node ID if the node has a parent, or None if it's a root node.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The node ID to get the parent for
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(parent_id))` - The node has a parent
+    /// * `Ok(None)` - The node is a root (no parent)
+    /// * `Err(_)` - Database error
+    pub async fn get_parent_id(&self, node_id: &str) -> Result<Option<String>, NodeOperationError> {
+        // Delegate to NodeService which uses graph traversal:
+        // SELECT * FROM node WHERE id IN (SELECT VALUE in FROM has_child WHERE out = $child_thing)
+        let parent_node = self.node_service.get_parent(node_id).await?;
+        Ok(parent_node.map(|node| node.id))
     }
 
     /// Get the container ID of a node
     ///
-    /// TODO: Implement graph-native container lookup
-    /// Temporary placeholder - MCP handlers using this will need updates
-    pub fn get_container_id(&self, node_id: &str) -> Result<Option<String>, NodeOperationError> {
-        // Temporary: Just return the node_id as its own container
-        // TODO: Traverse up the parent chain to find root container
-        Ok(Some(node_id.to_string()))
+    /// Traverses up the parent chain to find the root container node.
+    /// A container is a node with no parent (root of the hierarchy).
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The node ID to get the container for
+    ///
+    /// # Returns
+    ///
+    /// The container node ID (the node itself if it's already a root)
+    pub async fn get_container_id(&self, node_id: &str) -> Result<String, NodeOperationError> {
+        // Delegate to NodeService which implements the traversal algorithm
+        Ok(self.node_service.get_container_id(node_id).await?)
     }
 
     // =========================================================================
@@ -1139,19 +1152,15 @@ impl NodeOperations {
             self.node_service.get_container_id(node_id).await?
         };
 
-        // NOTE: In graph-native architecture, we would use edge operations here.
-        // For now, this is a placeholder that will need to be implemented with
-        // proper edge creation/deletion when the edge-based hierarchy is fully integrated.
+        // Delegate to NodeService to perform the edge operations:
+        // 1. Delete existing parent edge (via: DELETE has_child WHERE out = $child_thing)
+        // 2. Create new parent edge if specified (via: RELATE $parent_thing->has_child->$child_thing)
+        // Note: Container edge doesn't exist - container is determined by traversing to root
+        self.node_service.move_node(node_id, new_parent_id).await?;
 
-        // TODO: Replace with edge operations:
-        // 1. Remove old parent edge (if exists)
-        // 2. Create new parent edge (if new_parent_id is Some)
-        // 3. Update container edge if container changed
+        tracing::debug!("Moved node {} to new parent: {:?}", node_id, new_parent_id);
 
-        // Temporary: Return error indicating this needs edge-based implementation
-        Err(NodeOperationError::invalid_operation(
-            "move_node requires edge-based implementation (not yet complete)".to_string(),
-        ))
+        Ok(())
     }
 
     /// Reorder a node within its siblings
