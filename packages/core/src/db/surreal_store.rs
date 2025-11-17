@@ -68,7 +68,16 @@ const TYPES_WITH_PROPERTIES: &[&str] = &["task", "schema"];
 
 /// All valid node types that can be used in SurrealDB queries
 /// Used to validate node_type parameters and prevent SQL injection
-const VALID_NODE_TYPES: &[&str] = &["text", "date", "header", "code_block", "quote_block", "ordered_list", "task", "schema"];
+const VALID_NODE_TYPES: &[&str] = &[
+    "text",
+    "date",
+    "header",
+    "code_block",
+    "quote_block",
+    "ordered_list",
+    "task",
+    "schema",
+];
 
 /// Validates a node type against the whitelist of valid types
 ///
@@ -1025,7 +1034,8 @@ where
                 RELATE $node_id->has_child->$parent_id;
 
                 COMMIT TRANSACTION;
-            "#.to_string()
+            "#
+            .to_string()
         } else {
             // For types without dedicated tables (text, date, etc.)
             r#"
@@ -1052,7 +1062,8 @@ where
                 RELATE $node_id->has_child->$parent_id;
 
                 COMMIT TRANSACTION;
-            "#.to_string()
+            "#
+            .to_string()
         };
 
         // Construct Thing objects for Record IDs
@@ -1061,7 +1072,7 @@ where
         let parent_thing = surrealdb::sql::Thing::from(("node".to_string(), parent_id.clone()));
         let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id.clone()));
 
-        // Execute transaction
+        // Execute transaction (we don't care about the return value, just the side effects)
         self.db
             .query(transaction_query)
             .bind(("node_id", node_thing))
@@ -1074,6 +1085,7 @@ where
             .bind(("modified_at", modified_at.clone()))
             .bind(("properties", Value::Object(props_with_schema.clone())))
             .await
+            .map(|_| ())
             .context(format!(
                 "Failed to create child node '{}' under parent '{}'",
                 node_id, parent_id
@@ -1396,7 +1408,8 @@ where
                 UPDATE $node_id SET data = $new_type_id;
 
                 COMMIT TRANSACTION;
-            "#.to_string()
+            "#
+            .to_string()
         } else {
             // New type doesn't have properties table
             r#"
@@ -1413,14 +1426,15 @@ where
                     data = NONE;
 
                 COMMIT TRANSACTION;
-            "#.to_string()
+            "#
+            .to_string()
         };
 
         // Construct Thing objects for Record IDs
         let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
         let new_type_thing = surrealdb::sql::Thing::from((new_type.clone(), node_id.clone()));
 
-        // Execute transaction
+        // Execute transaction (we don't care about the return value, just the side effects)
         self.db
             .query(transaction_query)
             .bind(("node_id", node_thing))
@@ -1432,6 +1446,7 @@ where
             .bind(("modified_at", modified_at))
             .bind(("properties", Value::Object(props_with_schema)))
             .await
+            .map(|_| ())
             .context(format!(
                 "Failed to switch node '{}' type from '{}' to '{}'",
                 node_id, old_type, new_type
@@ -1635,18 +1650,20 @@ where
             DELETE mentions WHERE in = $node_id OR out = $node_id;
 
             COMMIT TRANSACTION;
-        "#.to_string();
+        "#
+        .to_string();
 
         // Construct Thing objects for Record IDs
         let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
         let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id.clone()));
 
-        // Execute transaction
+        // Execute transaction (we don't care about the return value, just the side effects)
         self.db
             .query(&transaction_query)
             .bind(("node_id", node_thing))
             .bind(("type_id", type_thing))
             .await
+            .map(|_| ())
             .context(format!(
                 "Failed to delete node '{}' (type: {}) with cascade",
                 node_id, node_type
@@ -2225,7 +2242,8 @@ where
                 RELATE $node_id->has_child->$parent_id;
 
                 COMMIT TRANSACTION;
-            "#.to_string()
+            "#
+            .to_string()
         } else {
             // Make root node (delete parent edge only)
             r#"
@@ -2238,17 +2256,22 @@ where
                 UPDATE $node_id SET before_sibling_id = $before_sibling_id;
 
                 COMMIT TRANSACTION;
-            "#.to_string()
+            "#
+            .to_string()
         };
 
         // Construct Thing objects for Record IDs
         let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
-        let parent_thing = new_parent_id.as_ref().map(|pid| {
-            surrealdb::sql::Thing::from(("node".to_string(), pid.clone()))
-        });
+        let parent_thing = new_parent_id
+            .as_ref()
+            .map(|pid| surrealdb::sql::Thing::from(("node".to_string(), pid.clone())));
 
         // Execute transaction
-        let mut query_builder = self.db.query(&transaction_query).bind(("node_id", node_thing));
+        // Execute transaction (we don't care about the return value, just the side effects)
+        let mut query_builder = self
+            .db
+            .query(&transaction_query)
+            .bind(("node_id", node_thing));
 
         if let Some(parent_thing) = parent_thing {
             query_builder = query_builder.bind(("parent_id", parent_thing));
@@ -2257,6 +2280,7 @@ where
         query_builder
             .bind(("before_sibling_id", new_before_sibling_id.clone()))
             .await
+            .map(|_| ())
             .context(format!(
                 "Failed to move node '{}' to parent '{:?}'",
                 node_id, new_parent_id
