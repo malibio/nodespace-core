@@ -955,9 +955,7 @@ where
         let index_name = format!(
             "idx_{}_{}",
             table,
-            field_path
-                .replace([':', '.'], "_")
-                .replace("[*]", "_arr")
+            field_path.replace([':', '.'], "_").replace("[*]", "_arr")
         );
 
         // Get database connection
