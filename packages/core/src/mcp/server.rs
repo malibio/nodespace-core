@@ -279,12 +279,12 @@ async fn run_http_server(
 ///
 /// Supports protocol version negotiation (2024-11-05, 2025-03-26, 2025-06-18).
 async fn handle_streamable_http_request(
-    headers: HeaderMap,
     State((services, callback, state)): State<(
         Arc<McpServices>,
         Option<ResponseCallback>,
         Arc<ServerState>,
     )>,
+    headers: HeaderMap,
     body: String,
 ) -> Result<Response, StatusCode> {
     info!("📥 Streamable HTTP request received");

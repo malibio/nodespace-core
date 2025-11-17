@@ -1021,6 +1021,20 @@ where
                     node.properties = props;
                 }
             }
+
+            // Populate parent_id and container_node_id from graph edges
+            // TODO(Issue #514): Remove these fields when frontend uses graph edges directly
+            // Query incoming has_child edge to find parent
+            let parent_query = "SELECT VALUE in FROM has_child WHERE out = type::thing('node', $id) LIMIT 1;";
+            if let Ok(mut response) = self.db.query(parent_query).bind(("id", id.to_string())).await {
+                if let Ok(parents) = response.take::<Vec<Thing>>(0) {
+                    if let Some(parent_thing) = parents.first() {
+                        let parent_id = parent_thing.id.to_string();
+                        node.parent_id = Some(parent_id.clone());
+                        node.container_node_id = Some(parent_id);
+                    }
+                }
+            }
         }
 
         Ok(node_opt)
