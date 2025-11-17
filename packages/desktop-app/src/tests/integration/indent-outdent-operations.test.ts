@@ -37,6 +37,9 @@ import type { Node } from '$lib/types';
  * After graph-native migration, hierarchy is stored as edges in backend.
  * Tests need to populate the frontend cache to enable hierarchy queries.
  *
+ * NOTE: updateChildrenCache automatically maintains parentsCache coherence.
+ * No need to manually update parentsCache - it's handled internally.
+ *
  * @param nodes - Nodes to register in cache
  * @param parentChildMap - Optional map of parentId -> childIds to establish parent-child relationships
  */
@@ -46,6 +49,7 @@ function populateHierarchyCacheForNodes(
 ) {
   if (parentChildMap) {
     // Use provided parent-child relationships
+    // updateChildrenCache automatically updates parentsCache for bidirectional lookup
     for (const [parentId, childIds] of parentChildMap.entries()) {
       sharedNodeStore.updateChildrenCache(parentId, childIds);
     }

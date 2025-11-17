@@ -156,8 +156,9 @@ export class ConflictResolver {
     const changedFields = new Set(Object.keys(yourChanges));
 
     // Empty changes with version gap = 1 don't overlap (safe to auto-merge)
-    if (changedFields.size === 0) {
-      return false;
+    // IMPORTANT: Only skip conflict if version gap is exactly 1
+    if (changedFields.size === 0 && versionGap === 1) {
+      return false; // Safe: no changes and only one version behind
     }
 
     // Content changes are most likely to overlap
