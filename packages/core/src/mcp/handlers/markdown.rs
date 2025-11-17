@@ -696,7 +696,7 @@ async fn create_node(
     node_type: &str,
     content: &str,
     parent_id: Option<String>,
-    _container_node_id: Option<String>, // Kept for backward compat but ignored (auto-derived from parent)
+    _root_node_id: Option<String>, // Deprecated - kept for backward compat but ignored (root auto-derived from parent)
     before_sibling_id: Option<String>,
 ) -> Result<String, MCPError> {
     // Create node via NodeOperations (enforces all business rules)
