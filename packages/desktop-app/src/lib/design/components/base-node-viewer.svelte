@@ -1758,6 +1758,14 @@
                     // Subsequent typing will trigger updateNodeContent() which handles persistence
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
 
+                    // CRITICAL FIX (Issue #528): Update children cache to establish parent-child relationship
+                    // After graph migration (PR #523), parent relationships are stored in:
+                    // 1. Backend: SurrealDB has_child edges
+                    // 2. Frontend: SharedNodeStore children/parents cache
+                    // Without this, the promoted node is orphaned and disappears from the UI
+                    const existingChildren = sharedNodeStore.getNodesForParent(nodeId).map(n => n.id);
+                    sharedNodeStore.updateChildrenCache(nodeId, [...existingChildren, promotedNode.id]);
+
                     // Clear viewer placeholder - now using real node from store
                     viewerPlaceholder = null;
 
@@ -1832,6 +1840,11 @@
 
                     // Add to store and trigger persistence
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                    // CRITICAL FIX (Issue #528): Update children cache to establish parent-child relationship
+                    const existingChildren = sharedNodeStore.getNodesForParent(nodeId).map(n => n.id);
+                    sharedNodeStore.updateChildrenCache(nodeId, [...existingChildren, promotedNode.id]);
+
                     viewerPlaceholder = null;
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
@@ -1925,6 +1938,11 @@
 
                     // Add to store and trigger persistence
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                    // CRITICAL FIX (Issue #528): Update children cache to establish parent-child relationship
+                    const existingChildren = sharedNodeStore.getNodesForParent(nodeId).map(n => n.id);
+                    sharedNodeStore.updateChildrenCache(nodeId, [...existingChildren, promotedNode.id]);
+
                     viewerPlaceholder = null;
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
