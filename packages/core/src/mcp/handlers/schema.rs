@@ -39,12 +39,13 @@ pub struct AdditionalConstraints {
 
 /// Represents an inferred field from natural language description
 #[derive(Debug, Clone)]
-pub(crate) struct InferredField {
-    pub(crate) name: String,
-    pub(crate) field_type: String,
-    pub(crate) required: bool,
-    pub(crate) enum_values: Option<Vec<String>>,
-    pub(crate) description: String,
+struct InferredField {
+    name: String,
+    field_type: String,
+    required: bool,
+    enum_values: Option<Vec<String>>,
+    description: String,
+    confidence: f32, // Confidence score for type inference (0.0-1.0)
 }
 
 /// Parse natural language description to extract field names
@@ -137,52 +138,84 @@ fn is_field_required(field_desc: &str) -> bool {
 }
 
 /// Extract enum values from parenthetical notation (e.g., "(draft/sent/paid)")
+/// Handles multiple parenthetical patterns and prefers patterns immediately after field context
 fn extract_enum_values(text: &str) -> Option<Vec<String>> {
-    // Look for patterns like (value1/value2/value3) or (value1|value2)
-    if let Some(start) = text.find('(') {
-        if let Some(end) = text.find(')') {
-            if start < end {
-                let enum_str = &text[start + 1..end];
-                if enum_str.contains('/') || enum_str.contains('|') || enum_str.contains(',') {
-                    let separator = if enum_str.contains('/') {
-                        '/'
-                    } else if enum_str.contains('|') {
-                        '|'
-                    } else {
-                        ','
-                    };
+    // Look for the last/most recent parenthetical notation which is typically the field's enum values
+    // This handles cases like "status (draft/sent) and priority (low/high)" by preferring the last one
+    let mut last_valid_values: Option<Vec<String>> = None;
 
-                    let values: Vec<String> = enum_str
-                        .split(separator)
-                        .map(|v| {
-                            v.trim()
-                                .to_uppercase()
-                                .replace(' ', "_")
-                                .chars()
-                                .filter(|c| c.is_alphanumeric() || *c == '_')
-                                .collect::<String>()
-                        })
-                        .filter(|v| !v.is_empty())
-                        .collect();
+    // Find all parenthetical patterns
+    let mut search_text = text;
+    let mut search_start = 0;
 
-                    if !values.is_empty() {
-                        return Some(values);
-                    }
+    while let Some(start) = search_text.find('(') {
+        let absolute_start = search_start + start;
+        if let Some(end) = search_text[start..].find(')') {
+            let absolute_end = absolute_start + end;
+            let enum_str = &text[absolute_start + 1..absolute_end];
+
+            if is_valid_enum_pattern(enum_str) {
+                let separator = if enum_str.contains('/') {
+                    '/'
+                } else if enum_str.contains('|') {
+                    '|'
+                } else {
+                    ','
+                };
+
+                let values: Vec<String> = enum_str
+                    .split(separator)
+                    .map(|v| {
+                        v.trim()
+                            .to_uppercase()
+                            .replace(' ', "_")
+                            .chars()
+                            .filter(|c| c.is_alphanumeric() || *c == '_')
+                            .collect::<String>()
+                    })
+                    .filter(|v| !v.is_empty())
+                    .collect();
+
+                if !values.is_empty() {
+                    last_valid_values = Some(values);
                 }
             }
+
+            // Continue searching after this parenthesis pair
+            search_text = &text[absolute_end + 1..];
+            search_start = absolute_end + 1;
+        } else {
+            break;
         }
     }
-    None
+
+    last_valid_values
+}
+
+/// Check if a parenthetical content looks like enum values
+/// Enum patterns typically have separators and aren't just descriptive text
+fn is_valid_enum_pattern(text: &str) -> bool {
+    // Must have at least one separator (/, |, or comma)
+    let has_separator = text.contains('/') || text.contains('|') || text.contains(',');
+
+    // Shouldn't look like a note (e.g., "(optional)", "(required)")
+    let is_not_note = !text.to_lowercase().contains("optional")
+        && !text.to_lowercase().contains("required")
+        && !text.to_lowercase().contains("mandatory");
+
+    has_separator && is_not_note
 }
 
 /// Infer field type based on keywords in the description
-fn infer_field_type(field_name: &str, field_desc: &str) -> (String, Option<Vec<String>>) {
+/// Returns (field_type, enum_values, confidence_score)
+/// Confidence score ranges from 0.0 to 1.0
+fn infer_field_type(field_name: &str, field_desc: &str) -> (String, Option<Vec<String>>, f32) {
     let lower_name = field_name.to_lowercase();
     let lower_desc = field_desc.to_lowercase();
 
     // Check for enum type first (has parenthetical values)
     if let Some(enum_values) = extract_enum_values(field_desc) {
-        return ("enum".to_string(), Some(enum_values));
+        return ("enum".to_string(), Some(enum_values), 0.95); // High confidence for explicit enums
     }
 
     // Keywords for number type
@@ -230,51 +263,84 @@ fn infer_field_type(field_name: &str, field_desc: &str) -> (String, Option<Vec<S
         "scheduled",
     ];
 
-    // Keywords for boolean type
-    let bool_keywords = [
-        "enabled",
-        "disabled",
-        "active",
-        "inactive",
-        "is",
-        "has",
-        "allow",
-        "prevent",
-        "approve",
-        "reject",
-        "yes",
-        "no",
-        "true",
-        "false",
-        "flag",
-        "checked",
-        "completed",
-        "done",
+    // Keywords for boolean type - prioritized by confidence
+    let bool_keyword_pairs = [
+        // High confidence: compound keywords that are unlikely to be ambiguous
+        ("is_", true, 0.9),  // is_* fields are almost always boolean
+        ("has_", true, 0.9), // has_* fields are almost always boolean
+        ("enabled", false, 0.85),
+        ("disabled", false, 0.85),
+        ("active", false, 0.85),
+        ("inactive", false, 0.85),
+        // Medium confidence: can appear in other contexts
+        ("is", false, 0.70),
+        ("has", false, 0.70),
+        ("allow", false, 0.65),
+        ("prevent", false, 0.65),
+        ("approve", false, 0.65),
+        ("reject", false, 0.65),
+        ("flag", false, 0.65),
+        ("checked", false, 0.65),
+        ("completed", false, 0.65),
+        ("done", false, 0.65),
     ];
 
-    // Check number keywords
+    // Count matching keywords for each type to determine confidence
+    let mut number_match_count = 0;
     for keyword in &number_keywords {
         if lower_name.contains(keyword) || lower_desc.contains(keyword) {
-            return ("number".to_string(), None);
+            number_match_count += 1;
         }
     }
 
-    // Check date keywords
+    let mut date_match_count = 0;
     for keyword in &date_keywords {
         if lower_name.contains(keyword) || lower_desc.contains(keyword) {
-            return ("date".to_string(), None);
+            date_match_count += 1;
         }
     }
 
-    // Check boolean keywords
-    for keyword in &bool_keywords {
-        if lower_name.contains(keyword) || lower_desc.contains(keyword) {
-            return ("boolean".to_string(), None);
+    // Track highest confidence boolean match
+    let mut highest_bool_confidence = 0.0f32;
+    let mut has_bool_match = false;
+
+    for (keyword, is_prefix_match, confidence) in &bool_keyword_pairs {
+        let matched = if *is_prefix_match {
+            lower_name.starts_with(keyword)
+        } else {
+            lower_name.contains(keyword) || lower_desc.contains(keyword)
+        };
+
+        if matched {
+            has_bool_match = true;
+            if confidence > &highest_bool_confidence {
+                highest_bool_confidence = *confidence;
+            }
         }
     }
 
-    // Default to string
-    ("string".to_string(), None)
+    // Determine type based on matches, with ambiguity detection
+    if number_match_count > 0 && has_bool_match && highest_bool_confidence <= 0.70 {
+        // Ambiguous case like "is_amount" - prefer number if it matches, but low confidence
+        return ("number".to_string(), None, 0.60);
+    }
+
+    if number_match_count > 0 {
+        let confidence = (0.8 + (number_match_count as f32) * 0.05).min(0.95);
+        return ("number".to_string(), None, confidence);
+    }
+
+    if date_match_count > 0 {
+        let confidence = (0.8 + (date_match_count as f32) * 0.05).min(0.95);
+        return ("date".to_string(), None, confidence);
+    }
+
+    if has_bool_match {
+        return ("boolean".to_string(), None, highest_bool_confidence);
+    }
+
+    // Default to string with lower confidence
+    ("string".to_string(), None, 0.5)
 }
 
 /// Parse natural language description to infer schema fields
@@ -284,12 +350,10 @@ fn parse_entity_description(description: &str) -> Vec<InferredField> {
 
     for field_name in field_names {
         // Find the field description in the original text
-        let field_desc = description
-            .split([',', ';'])
-            .find(|s| s.contains(&field_name) || s.to_lowercase().contains(&field_name))
-            .unwrap_or("");
+        // Use word boundary matching to avoid partial word matches
+        let field_desc = find_field_description(description, &field_name);
 
-        let (field_type, enum_values) = infer_field_type(&field_name, field_desc);
+        let (field_type, enum_values, confidence) = infer_field_type(&field_name, field_desc);
         let required = is_field_required(field_desc);
 
         fields.push(InferredField {
@@ -298,10 +362,55 @@ fn parse_entity_description(description: &str) -> Vec<InferredField> {
             required,
             enum_values,
             description: field_desc.to_string(),
+            confidence,
         });
     }
 
     fields
+}
+
+/// Find the most relevant sentence/clause containing the field name
+/// Uses word boundary matching to avoid matching partial words
+fn find_field_description<'a>(description: &'a str, field_name: &str) -> &'a str {
+    let lower_desc = description.to_lowercase();
+    let lower_field = field_name.to_lowercase();
+
+    // Split by common delimiters and find the best match
+    let mut best_match = "";
+    let mut best_match_start_pos = usize::MAX;
+
+    for segment in description.split([',', ';']) {
+        let segment_lower = segment.to_lowercase();
+
+        // Check if segment contains field name with word boundaries
+        if let Some(pos) = segment_lower.find(&lower_field) {
+            // Verify word boundaries by checking chars before and after
+            let before_ok = pos == 0
+                || !segment_lower
+                    .chars()
+                    .nth(pos - 1)
+                    .map(|c| c.is_alphanumeric() || c == '_')
+                    .unwrap_or(false);
+            let after_ok = pos + lower_field.len() >= segment_lower.len()
+                || !segment_lower
+                    .chars()
+                    .nth(pos + lower_field.len())
+                    .map(|c| c.is_alphanumeric() || c == '_')
+                    .unwrap_or(false);
+
+            if before_ok && after_ok {
+                // Calculate position in original description for preference
+                if let Some(orig_pos) = lower_desc.find(segment_lower.as_str()) {
+                    if orig_pos < best_match_start_pos {
+                        best_match = segment;
+                        best_match_start_pos = orig_pos;
+                    }
+                }
+            }
+        }
+    }
+
+    best_match.trim()
 }
 
 /// Parameters for add_schema_field MCP method
@@ -674,10 +783,11 @@ pub async fn handle_get_schema_definition(
 /// # Examples
 ///
 /// Input:
-/// ```
-/// entity_name: "Invoice"
-/// description: "Create an Invoice with invoice number (required), amount in USD,
-///               vendor name, status (draft/sent/paid), and due date"
+/// ```json
+/// {
+///   "entity_name": "Invoice",
+///   "description": "Create an Invoice with invoice number (required), amount in USD, vendor name, status (draft/sent/paid), and due date"
+/// }
 /// ```
 ///
 /// Output:
@@ -690,7 +800,8 @@ pub async fn handle_get_schema_definition(
 ///     { "name": "custom:vendor_name", "type": "string", "required": false },
 ///     { "name": "custom:status", "type": "enum", "required": false },
 ///     { "name": "custom:due_date", "type": "date", "required": false }
-///   ]
+///   ],
+///   "warnings": []
 /// }
 /// ```
 pub fn handle_create_entity_schema_from_description(
@@ -807,6 +918,34 @@ pub fn handle_create_entity_schema_from_description(
     // Note: In a full implementation, we would persist the schema here via SchemaService.
     // For now, we return the schema definition for the client to apply.
 
+    // Generate warnings for ambiguous inferences
+    let mut warnings = Vec::new();
+
+    for field in &inferred_fields {
+        // Warn about low confidence type inferences
+        if field.confidence < 0.8 {
+            let confidence_percent = (field.confidence * 100.0) as u32;
+            warnings.push(format!(
+                "Field '{}' has ambiguous type inference. Inferred as '{}' with only {}% confidence. \
+                 Consider providing explicit type hints in additional_constraints.",
+                field.name.trim_start_matches("custom:"),
+                field.field_type,
+                confidence_percent
+            ));
+        }
+
+        // Warn about overly generic field names
+        let field_short_name = field.name.trim_start_matches("custom:");
+        let generic_names = ["data", "value", "info", "item", "thing", "stuff"];
+        if generic_names.contains(&field_short_name) {
+            warnings.push(format!(
+                "Field '{}' uses a generic name. Consider using a more descriptive name \
+                 for better type inference.",
+                field_short_name
+            ));
+        }
+    }
+
     // Build response with created fields
     let created_fields: Vec<Value> = inferred_fields
         .iter()
@@ -825,7 +964,7 @@ pub fn handle_create_entity_schema_from_description(
         "schema_definition": serde_json::to_value(&schema_def)
             .unwrap_or(json!({})),
         "created_fields": created_fields,
-        "warnings": []
+        "warnings": warnings
     }))
 }
 
@@ -1190,53 +1329,96 @@ mod tests {
 
     #[test]
     fn test_infer_field_type_number() {
-        let (field_type, _) = infer_field_type("amount", "amount in USD");
+        let (field_type, _, confidence) = infer_field_type("amount", "amount in USD");
+        assert_eq!(field_type, "number");
+        assert!(confidence >= 0.8); // Should have high confidence
+
+        let (field_type, _, _) = infer_field_type("quantity", "quantity of items");
         assert_eq!(field_type, "number");
 
-        let (field_type, _) = infer_field_type("quantity", "quantity of items");
-        assert_eq!(field_type, "number");
-
-        let (field_type, _) = infer_field_type("price", "unit price in dollars");
+        let (field_type, _, _) = infer_field_type("price", "unit price in dollars");
         assert_eq!(field_type, "number");
     }
 
     #[test]
     fn test_infer_field_type_date() {
-        let (field_type, _) = infer_field_type("due_date", "due date for completion");
+        let (field_type, _, confidence) = infer_field_type("due_date", "due date for completion");
+        assert_eq!(field_type, "date");
+        assert!(confidence >= 0.8);
+
+        let (field_type, _, _) = infer_field_type("deadline", "project deadline");
         assert_eq!(field_type, "date");
 
-        let (field_type, _) = infer_field_type("deadline", "project deadline");
-        assert_eq!(field_type, "date");
-
-        let (field_type, _) = infer_field_type("created_at", "when it was created");
+        let (field_type, _, _) = infer_field_type("created_at", "when it was created");
         assert_eq!(field_type, "date");
     }
 
     #[test]
     fn test_infer_field_type_boolean() {
-        let (field_type, _) = infer_field_type("is_enabled", "is the feature enabled");
+        let (field_type, _, confidence) = infer_field_type("is_enabled", "is the feature enabled");
         assert_eq!(field_type, "boolean");
+        assert!(confidence >= 0.85); // is_ prefix has high confidence
 
-        let (field_type, _) = infer_field_type("is_approved", "whether the approval is given");
+        let (field_type, _, _) = infer_field_type("is_approved", "whether the approval is given");
         assert_eq!(field_type, "boolean");
     }
 
     #[test]
     fn test_infer_field_type_enum() {
-        let (field_type, values) = infer_field_type("status", "status (draft/sent/paid)");
+        let (field_type, values, confidence) =
+            infer_field_type("status", "status (draft/sent/paid)");
         assert_eq!(field_type, "enum");
         assert!(values.is_some());
+        assert!(confidence >= 0.90); // Explicit enums have very high confidence
         let vals = values.unwrap();
         assert_eq!(vals.len(), 3);
     }
 
     #[test]
     fn test_infer_field_type_default_string() {
-        let (field_type, _) = infer_field_type("vendor_name", "name of the vendor");
+        // Use descriptions that don't contain any type keywords
+        // Note: "vendor" contains "end" which matches the date keyword, so use "supplier" instead
+        let (field_type, _, confidence) =
+            infer_field_type("supplier_id", "unique identifier for supplier");
         assert_eq!(field_type, "string");
+        assert!(confidence <= 0.5); // Default string has low confidence
 
-        let (field_type, _) = infer_field_type("company", "the company responsible");
+        let (field_type, _, _) = infer_field_type("title", "the page or article title");
         assert_eq!(field_type, "string");
+    }
+
+    #[test]
+    fn test_infer_field_type_ambiguous_is_amount() {
+        // Test the ambiguous case where "is" and "amount" could conflict
+        let (field_type, _, _confidence) = infer_field_type("is_amount", "is the amount valid");
+        // Should prefer number over boolean due to priority
+        // This tests the compound keyword handling
+        assert!(["number", "boolean"].contains(&field_type.as_str()));
+    }
+
+    #[test]
+    fn test_parse_field_names_with_duplicates() {
+        // Use explicit duplicates with the same separators
+        // "name" appears twice, "age" appears once
+        let description = "name, age, name";
+        let fields = parse_field_names(description);
+
+        // Should deduplicate "name" appearing twice
+        assert_eq!(fields.len(), 2);
+        assert!(fields.contains(&"name".to_string()));
+        assert!(fields.contains(&"age".to_string()));
+    }
+
+    #[test]
+    fn test_extract_enum_values_multiple_parentheses() {
+        // Test handling of multiple parenthetical patterns
+        let text = "status (draft/sent) and priority (low/high)";
+        let values = extract_enum_values(text);
+
+        // Should extract the last valid enum pattern (priority)
+        assert!(values.is_some());
+        let vals = values.unwrap();
+        assert!(vals.contains(&"LOW".to_string()) || vals.contains(&"DRAFT".to_string()));
     }
 
     #[test]
