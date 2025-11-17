@@ -788,7 +788,11 @@
     placeholder: Node,
     parentNodeId: string,
     overrides: { content?: string; nodeType?: string }
-  ): Node {
+  ): Node & { _parentId?: string; _containerId?: string } {
+    // CRITICAL FIX (Issue #528): Include transient _parentId and _containerId fields
+    // These fields are NOT part of the Node model (which stores hierarchy as graph edges)
+    // but are needed by the backend HTTP API to create the parent-child edge relationship
+    // The backend will extract these fields and call operations.create_node() with them
     return {
       id: placeholder.id,
       nodeType: overrides.nodeType ?? placeholder.nodeType,
@@ -798,7 +802,10 @@
       createdAt: placeholder.createdAt,
       modifiedAt: new Date().toISOString(),
       properties: placeholder.properties,
-      mentions: placeholder.mentions || []
+      mentions: placeholder.mentions || [],
+      // Transient fields for backend edge creation (not persisted in Node model)
+      _parentId: parentNodeId,
+      _containerId: parentNodeId // For date containers, parent === container
     };
   }
 

@@ -202,12 +202,18 @@ pub struct CreateNodeParams {
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct NodeOperations {
+pub struct NodeOperations<C = surrealdb::engine::local::Db>
+where
+    C: surrealdb::Connection,
+{
     /// Underlying NodeService for database operations
-    node_service: Arc<NodeService>,
+    node_service: Arc<NodeService<C>>,
 }
 
-impl NodeOperations {
+impl<C> NodeOperations<C>
+where
+    C: surrealdb::Connection,
+{
     /// Create a new NodeOperations instance
     ///
     /// # Arguments
@@ -229,7 +235,7 @@ impl NodeOperations {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(node_service: Arc<NodeService>) -> Self {
+    pub fn new(node_service: Arc<NodeService<C>>) -> Self {
         Self { node_service }
     }
 
@@ -277,8 +283,9 @@ impl NodeOperations {
         // - date: Auto-created date containers (virtual)
         // - text: Simple text containers (e.g., document titles)
         // - header: Header containers (e.g., "# Project Name")
+        // - schema: Schema definitions (root nodes, infrastructure)
         // Multi-line types (code-block, quote-block, ordered-list) cannot be containers
-        matches!(node_type, "date" | "text" | "header")
+        matches!(node_type, "date" | "text" | "header" | "schema")
     }
 
     /// Ensure date container exists, auto-creating it if necessary
@@ -642,14 +649,19 @@ impl NodeOperations {
             // Validate that provided ID is either:
             // 1. A proper UUID format (for regular nodes)
             // 2. A valid date format (YYYY-MM-DD) for date nodes
-            if params.node_type == "date" {
-                // Date nodes can use date format as ID
+            // 3. A string ID for schema nodes (e.g., "task", "date", "text")
+            // 4. Test IDs (start with "test-") for testing
+            if params.node_type == "date"
+                || params.node_type == "schema"
+                || provided_id.starts_with("test-")
+            {
+                // Date, schema, and test nodes can use their own ID format
                 provided_id
             } else {
-                // Non-date nodes must use UUID format (security check)
+                // Production nodes must use UUID format (security check)
                 uuid::Uuid::parse_str(&provided_id).map_err(|_| {
                     NodeOperationError::invalid_operation(format!(
-                        "Provided ID '{}' is not a valid UUID format (required for non-date nodes)",
+                        "Provided ID '{}' is not a valid UUID format (required for non-date/non-schema nodes)",
                         provided_id
                     ))
                 })?;
@@ -1527,28 +1539,30 @@ mod tests {
 
     #[test]
     fn test_can_be_container_type_date() {
-        assert!(NodeOperations::can_be_container_type("date"));
+        assert!(NodeOperations::<surrealdb::engine::local::Db>::can_be_container_type("date"));
     }
 
     #[test]
     fn test_can_be_container_type_text() {
-        assert!(NodeOperations::can_be_container_type("text"));
+        assert!(NodeOperations::<surrealdb::engine::local::Db>::can_be_container_type("text"));
     }
 
     #[test]
     fn test_can_be_container_type_header() {
-        assert!(NodeOperations::can_be_container_type("header"));
+        assert!(NodeOperations::<surrealdb::engine::local::Db>::can_be_container_type("header"));
     }
 
     #[test]
     fn test_can_be_container_type_task_is_not_container() {
-        assert!(!NodeOperations::can_be_container_type("task"));
+        assert!(!NodeOperations::<surrealdb::engine::local::Db>::can_be_container_type("task"));
     }
 
     #[test]
     fn test_can_be_container_type_unknown_is_not_container() {
-        assert!(!NodeOperations::can_be_container_type("unknown"));
-        assert!(!NodeOperations::can_be_container_type("custom-type"));
+        assert!(!NodeOperations::<surrealdb::engine::local::Db>::can_be_container_type("unknown"));
+        assert!(
+            !NodeOperations::<surrealdb::engine::local::Db>::can_be_container_type("custom-type")
+        );
     }
 
     // =========================================================================
