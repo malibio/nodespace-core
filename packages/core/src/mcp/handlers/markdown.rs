@@ -899,22 +899,17 @@ fn export_node_hierarchy(
     // Recursively export children (if enabled)
     if include_children {
         // TODO: Implement proper child lookup using graph edges
-        // For now, skip children in recursive export (markdown export partially broken)
-        // The container-level export still works for top-level nodes
-        let mut children: Vec<&Node> = Vec::new();
+        // For now, skip children in recursive export (needs NodeOperations access for graph queries)
+        // The container-level export still works for top-level nodes (gets children via NodeOperations.get_children)
+        let children: Vec<&Node> = Vec::new();
 
         // Sort children by sibling order (reconstruct before_sibling_id chain)
-        sort_by_sibling_chain(&mut children);
+        // let mut sorted_children = children;
+        // sort_by_sibling_chain(&mut sorted_children);
 
-        for child in children {
-            export_node_hierarchy(
-                child,
-                _nodes_map,
-                output,
-                current_depth + 1,
-                max_depth,
-                include_children,
-            )?;
+        for _child in children {
+            // Skipping recursive export due to lack of graph edge access
+            // in this context. Would need to refactor to pass NodeOperations.
         }
     }
 
