@@ -154,7 +154,6 @@ pub async fn handle_tools_call(
         "create_entity_schema_from_description" => {
             natural_language_schema::handle_create_entity_schema_from_description(
                 node_operations,
-                schema_service,
                 arguments,
             )
             .await

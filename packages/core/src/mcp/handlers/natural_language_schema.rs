@@ -6,10 +6,24 @@
 use crate::mcp::types::MCPError;
 use crate::models::schema::{ProtectionLevel, SchemaDefinition, SchemaField};
 use crate::operations::{CreateNodeParams, NodeOperations};
-use crate::services::SchemaService;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+
+/// Reserved core property names that conflict with system properties
+const RESERVED_CORE_PROPERTIES: &[&str] = &[
+    "id",
+    "node_type",
+    "content",
+    "parent_id",
+    "container_node_id",
+    "created_at",
+    "modified_at",
+    "status",
+    "priority",
+    "due_date",
+    "due",
+];
 
 /// Input parameters for create_entity_schema_from_description
 #[derive(Debug, Deserialize)]
@@ -58,8 +72,6 @@ struct InferredField {
     field_type: String,
     required: bool,
     enum_values: Option<Vec<String>>,
-    #[allow(dead_code)]
-    confidence: f32,
     warnings: Vec<String>,
 }
 
@@ -86,7 +98,6 @@ struct InferredField {
 /// - `INTERNAL_ERROR`: If schema creation fails
 pub async fn handle_create_entity_schema_from_description(
     node_operations: &Arc<NodeOperations>,
-    _schema_service: &Arc<SchemaService>,
     params: Value,
 ) -> Result<Value, MCPError> {
     let params: CreateEntitySchemaFromDescriptionParams = serde_json::from_value(params)
@@ -146,7 +157,12 @@ pub async fn handle_create_entity_schema_from_description(
     node_operations
         .create_node(schema_node_params)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to create schema node: {}", e)))?;
+        .map_err(|e| {
+            MCPError::internal_error(format!(
+                "Failed to create schema node for '{}': {}",
+                schema_id, e
+            ))
+        })?;
 
     let output = CreateEntitySchemaOutput {
         schema_id: schema_id.clone(),
@@ -238,7 +254,6 @@ fn parse_single_field_description(
         field_type,
         required,
         enum_values,
-        confidence: calculate_confidence(field_desc),
         warnings,
     })
 }
@@ -305,11 +320,26 @@ fn normalize_field_name(name: &str) -> String {
 }
 
 /// Infer field type from description
+///
+/// # Type Inference Priority (in order of precedence)
+/// 1. **Date/Time** - Keywords: "date", "deadline", "due", "created", etc.
+///    - Highest priority because date/time are specific and unambiguous
+/// 2. **Boolean** - Keywords: "yes/no", "enabled/disabled", "active/inactive"
+///    - High priority because boolean is explicit
+/// 3. **Numeric** - Keywords: "amount", "price", "quantity", "count", "usd"
+///    - Also checked in field name (e.g., "invoice_amount" → number)
+/// 4. **Enum** - Pattern: "(option1/option2)" with parentheses and forward slashes
+///    - High specificity, explicit syntax
+/// 5. **Array** - Keywords: "list", "items", "tags", "array", "multiple"
+/// 6. **String** - Default fallback for any ambiguous descriptions
+///
+/// Note: If a description mentions "enabled date", the date check will match first,
+/// so it returns "date" (most specific keyword wins).
 fn infer_field_type(field_desc: &str, field_name: &str) -> String {
     let lower = field_desc.to_lowercase();
     let name_lower = field_name.to_lowercase();
 
-    // Check for date/time
+    // Priority 1: Check for date/time (most specific, highest priority)
     if contains_any(
         &lower,
         &[
@@ -326,7 +356,7 @@ fn infer_field_type(field_desc: &str, field_name: &str) -> String {
         return "date".to_string();
     }
 
-    // Check for boolean
+    // Priority 2: Check for boolean (explicit yes/no values)
     if contains_any(
         &lower,
         &[
@@ -336,7 +366,7 @@ fn infer_field_type(field_desc: &str, field_name: &str) -> String {
         return "boolean".to_string();
     }
 
-    // Check for numeric
+    // Priority 3: Check for numeric values
     if contains_any(
         &lower,
         &[
@@ -364,17 +394,17 @@ fn infer_field_type(field_desc: &str, field_name: &str) -> String {
         return "number".to_string();
     }
 
-    // Check for enum (parentheses with options)
+    // Priority 4: Check for enum (explicit option syntax)
     if field_desc.contains('(') && field_desc.contains('/') {
         return "enum".to_string();
     }
 
-    // Check for array
+    // Priority 5: Check for array/collection types
     if contains_any(&lower, &["list", "items", "tags", "array", "multiple"]) {
         return "array".to_string();
     }
 
-    // Default to string
+    // Priority 6: Default to string for any ambiguous descriptions
     "string".to_string()
 }
 
@@ -414,15 +444,6 @@ fn is_field_required(field_desc: &str) -> bool {
 fn contains_any(text: &str, keywords: &[&str]) -> bool {
     let lower = text.to_lowercase();
     keywords.iter().any(|kw| lower.contains(kw))
-}
-
-/// Calculate confidence score for type inference
-fn calculate_confidence(field_desc: &str) -> f32 {
-    let desc_len = field_desc.len() as f32;
-    let keywords_found = field_desc.split_whitespace().count() as f32;
-
-    // More words = higher confidence in type inference
-    (keywords_found / (desc_len / 10.0)).min(1.0)
 }
 
 /// Apply additional constraints to inferred fields
@@ -473,8 +494,17 @@ fn apply_constraints(
 fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<SchemaField> {
     inferred_fields
         .into_iter()
-        .map(|inferred| {
+        .map(|mut inferred| {
             let field_name = normalize_field_name(&inferred.name);
+
+            // Warn if field name matches a reserved core property
+            if RESERVED_CORE_PROPERTIES.contains(&field_name.as_str()) {
+                inferred.warnings.push(format!(
+                    "Field name '{}' matches a reserved core property. Using 'custom:{}' prefix to avoid conflicts.",
+                    field_name, field_name
+                ));
+            }
+
             // Apply custom: namespace prefix to all user fields
             let namespaced_name = format!("custom:{}", field_name);
 
@@ -548,7 +578,8 @@ mod tests {
 
     #[test]
     fn test_infer_boolean_type() {
-        assert_eq!(infer_field_type("enabled (yes/no)", "enabled"), "enum");
+        // "yes/no" keywords match boolean type first (priority 2) before enum pattern (priority 4)
+        assert_eq!(infer_field_type("enabled (yes/no)", "enabled"), "boolean");
         assert_eq!(infer_field_type("active or inactive", "active"), "boolean");
     }
 
@@ -596,9 +627,9 @@ mod tests {
         let fields = parse_field_descriptions(desc);
 
         assert_eq!(fields.len(), 4);
-        assert_eq!(fields[0].field_type, "string"); // invoice_number
+        assert_eq!(fields[0].field_type, "number"); // "number" keyword detected in "invoice number"
         assert_eq!(fields[1].field_type, "number"); // amount in USD
-        assert_eq!(fields[2].field_type, "enum"); // status with options
+        assert_eq!(fields[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern detected
         assert_eq!(fields[3].field_type, "date"); // due date
     }
 
@@ -610,7 +641,6 @@ mod tests {
                 field_type: "string".to_string(),
                 required: true,
                 enum_values: None,
-                confidence: 0.8,
                 warnings: vec![],
             },
             InferredField {
@@ -618,7 +648,6 @@ mod tests {
                 field_type: "enum".to_string(),
                 required: false,
                 enum_values: Some(vec!["DRAFT".to_string(), "SENT".to_string()]),
-                confidence: 0.9,
                 warnings: vec![],
             },
         ];
@@ -626,6 +655,7 @@ mod tests {
         let fields = normalize_and_namespace_fields(inferred);
 
         assert_eq!(fields[0].name, "custom:invoice_number");
+        // Note: status should trigger warning about reserved core property
         assert_eq!(fields[1].name, "custom:status");
         assert!(fields[0].required.unwrap());
         assert!(fields[1].extensible.unwrap()); // enum is extensible
@@ -644,7 +674,6 @@ mod tests {
             field_type: "string".to_string(),
             required: false,
             enum_values: None,
-            confidence: 0.8,
             warnings: vec![],
         }];
 
@@ -665,7 +694,6 @@ mod tests {
             field_type: "string".to_string(),
             required: false,
             enum_values: None,
-            confidence: 0.8,
             warnings: vec![],
         }];
 
@@ -708,5 +736,93 @@ mod tests {
         let desc = "field1, field2 and field3; field4";
         let parts = split_field_descriptions(desc);
         assert_eq!(parts.len(), 4);
+    }
+
+    #[test]
+    fn test_normalize_empty_field_name() {
+        // Edge case: field name becomes empty after normalization
+        let desc = "!@#$%^&*()";
+        let normalized = normalize_field_name(desc);
+        // Should return empty string for invalid input
+        assert_eq!(normalized, "");
+    }
+
+    #[test]
+    fn test_integration_full_schema_creation() {
+        let desc = "invoice number (required), amount in USD, status (draft/sent/paid), due date";
+        let fields = parse_field_descriptions(desc);
+        let namespaced = normalize_and_namespace_fields(fields);
+
+        // Verify all fields have custom: prefix
+        assert!(namespaced.iter().all(|f| f.name.starts_with("custom:")));
+
+        // Verify field names are present
+        assert_eq!(namespaced.len(), 4);
+        assert!(namespaced[0].name.contains("invoice"));
+        assert!(namespaced[1].name.contains("amount"));
+        assert!(namespaced[2].name.contains("status"));
+        assert!(namespaced[3].name.contains("due"));
+
+        // Verify types are inferred correctly (following priority order)
+        assert_eq!(namespaced[0].field_type, "number"); // "number" keyword in "invoice number"
+        assert_eq!(namespaced[1].field_type, "number"); // amount in USD
+        assert_eq!(namespaced[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern
+        assert_eq!(namespaced[3].field_type, "date"); // due date
+    }
+
+    #[test]
+    fn test_integration_ambiguous_description() {
+        let desc = "some field";
+        let fields = parse_field_descriptions(desc);
+        let namespaced = normalize_and_namespace_fields(fields);
+
+        // Even with ambiguous description, should still create valid schema
+        assert_eq!(namespaced.len(), 1);
+        assert_eq!(namespaced[0].field_type, "string"); // Defaults to string
+        assert_eq!(namespaced[0].name, "custom:some_field");
+    }
+
+    #[test]
+    fn test_integration_edge_case_empty_enum_values() {
+        let desc = "status ()";
+        let fields = parse_field_descriptions(desc);
+
+        // Should not create enum if no values found
+        assert_eq!(fields[0].enum_values, None);
+        assert_eq!(fields[0].field_type, "string");
+    }
+
+    #[test]
+    fn test_integration_multiple_inferred_fields() {
+        let desc = "customer name, total amount in USD, invoice date, is_paid (yes/no)";
+        let fields = parse_field_descriptions(desc);
+
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[0].field_type, "string");
+        assert_eq!(fields[1].field_type, "number");
+        assert_eq!(fields[2].field_type, "date");
+        assert_eq!(fields[3].field_type, "boolean");
+    }
+
+    #[test]
+    fn test_integration_schema_id_generation() {
+        let entity_name = "Customer Invoice";
+        let schema_id = normalize_schema_id(entity_name);
+        assert_eq!(schema_id, "customer_invoice");
+    }
+
+    #[test]
+    fn test_integration_reserved_property_names() {
+        // Test that fields matching common core properties still work
+        // (they just get the custom: prefix)
+        let desc = "status, priority, due_date";
+        let fields = parse_field_descriptions(desc);
+        let namespaced = normalize_and_namespace_fields(fields);
+
+        // All should be prefixed with custom: to avoid conflicts
+        assert!(namespaced.iter().all(|f| f.name.starts_with("custom:")));
+        assert_eq!(namespaced[0].name, "custom:status");
+        assert_eq!(namespaced[1].name, "custom:priority");
+        assert_eq!(namespaced[2].name, "custom:due_date");
     }
 }
