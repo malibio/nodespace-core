@@ -223,6 +223,9 @@ describe('Sibling Chain Logic (Unit Tests)', () => {
 
     service.initializeNodes([node1, node2, node3]);
 
+    // Populate hierarchy cache (all nodes are root-level siblings)
+    sharedNodeStore.updateChildrenCache(null, ['node-1', 'node-2', 'node-3']);
+
     // Act: Delete middle node
     service.deleteNode('node-2');
 
@@ -279,6 +282,9 @@ describe('Sibling Chain Logic (Unit Tests)', () => {
 
     service.initializeNodes([node1, node2, node3]);
 
+    // Populate hierarchy cache (all nodes are root-level siblings)
+    sharedNodeStore.updateChildrenCache(null, ['node-1', 'node-2', 'node-3']);
+
     // Act: Indent node-2
     service.indentNode('node-2');
 
@@ -334,6 +340,10 @@ describe('Sibling Chain Logic (Unit Tests)', () => {
 
     service.initializeNodes([parent, child1, child2], { expanded: true });
 
+    // Populate hierarchy cache
+    sharedNodeStore.updateChildrenCache(null, ['parent']); // parent is root
+    sharedNodeStore.updateChildrenCache('parent', ['child-1', 'child-2']); // children of parent
+
     // Act: Outdent child-1
     service.outdentNode('child-1');
 
@@ -386,6 +396,9 @@ describe('Sibling Chain Logic (Unit Tests)', () => {
     });
 
     service.initializeNodes([node1, node2, node3]);
+
+    // Populate hierarchy cache (all nodes are root-level siblings)
+    sharedNodeStore.updateChildrenCache(null, ['node-1', 'node-2', 'node-3']);
 
     // Act: Combine node-2 into node-1
     await service.combineNodes('node-2', 'node-1');
