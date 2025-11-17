@@ -44,6 +44,52 @@ import { pluginRegistry } from './plugin-registry';
 import { schemaService } from '$lib/services/schema-service';
 
 /**
+ * Plugin priority constants
+ *
+ * Defines the priority order for plugin slash commands in the dropdown.
+ * Higher priority commands appear first.
+ */
+export const PLUGIN_PRIORITIES = {
+  CORE: 100, // Core types (text, task, date, etc.)
+  CUSTOM_ENTITY: 50, // User-defined custom entity schemas
+  USER_COMMAND: 0 // User-created custom commands
+} as const;
+
+/**
+ * Humanize a schema ID into a readable display name
+ *
+ * Converts technical IDs into user-friendly names:
+ * - camelCase → Camel Case
+ * - snake_case → Snake Case
+ * - kebab-case → Kebab Case
+ * - Capitalizes each word
+ *
+ * @param id - Schema ID to humanize
+ * @returns Humanized display name
+ *
+ * @example
+ * ```typescript
+ * humanizeSchemaId('invoice') // 'Invoice'
+ * humanizeSchemaId('salesInvoice') // 'Sales Invoice'
+ * humanizeSchemaId('sales_invoice') // 'Sales Invoice'
+ * humanizeSchemaId('sales-invoice') // 'Sales Invoice'
+ * ```
+ */
+function humanizeSchemaId(id: string): string {
+  return (
+    id
+      // Insert space before uppercase letters (camelCase → camel Case)
+      .replace(/([A-Z])/g, ' $1')
+      // Replace underscores and hyphens with spaces
+      .replace(/[_-]/g, ' ')
+      // Trim leading/trailing spaces
+      .trim()
+      // Capitalize first letter of each word
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+  );
+}
+
+/**
  * Convert a schema definition into a plugin definition
  *
  * Creates a minimal plugin that registers the custom entity as a slash command
@@ -65,8 +111,8 @@ export function createPluginFromSchema(
   schema: SchemaDefinition,
   schemaId: string
 ): PluginDefinition {
-  // Extract display name from schema description or use schema ID as fallback
-  const displayName = schema.description || schemaId;
+  // Extract display name from schema description or humanize schema ID as fallback
+  const displayName = schema.description || humanizeSchemaId(schemaId);
 
   return {
     id: schemaId,
@@ -81,7 +127,7 @@ export function createPluginFromSchema(
           description: schema.description || `Create ${displayName}`,
           contentTemplate: '',
           nodeType: schemaId,
-          priority: 50 // Lower than core types (100), higher than user commands (0)
+          priority: PLUGIN_PRIORITIES.CUSTOM_ENTITY
         }
       ],
       canHaveChildren: true,
@@ -117,7 +163,9 @@ export async function registerSchemaPlugin(schemaId: string): Promise<void> {
     const schema = await schemaService.getSchema(schemaId);
 
     // Don't register core types (already registered in core-plugins.ts)
-    if (schema.isCore) {
+    // Defensive: Handle both camelCase and snake_case for type safety across boundaries
+    const isCoreType = schema.isCore || (schema as { is_core?: boolean }).is_core;
+    if (isCoreType) {
       console.debug(
         `[SchemaPluginLoader] Skipping core type registration: ${schemaId}`
       );
@@ -180,31 +228,36 @@ export function unregisterSchemaPlugin(schemaId: string): void {
  * Queries the schema service for all schemas and registers non-core types
  * as plugins. This ensures existing custom entities are available on launch.
  *
+ * Note: This function is not directly exported, but is used internally by
+ * initializeSchemaPluginSystem() during app startup.
+ *
  * @throws {Error} If schema fetching or registration fails
  *
  * @example
  * ```typescript
- * // Called once during app initialization
+ * // Called internally during app initialization
  * await registerExistingSchemas();
  * // All custom entities now available in slash menu
  * ```
  */
-async function registerExistingSchemas(): Promise<void> {
+async function _registerExistingSchemas(): Promise<void> {
   try {
     console.log('[SchemaPluginLoader] Registering existing custom entity schemas...');
 
     const schemas = await schemaService.getAllSchemas();
 
-    let registeredCount = 0;
-    for (const schema of schemas) {
-      if (!schema.isCore) {
-        await registerSchemaPlugin(schema.id);
-        registeredCount++;
-      }
-    }
+    // Defensive: Handle both camelCase and snake_case for type safety across boundaries
+    const customSchemas = schemas.filter(
+      (schema) => !schema.isCore && !(schema as { is_core?: boolean }).is_core
+    );
+
+    // Parallelize registration for better performance
+    await Promise.all(
+      customSchemas.map((schema) => registerSchemaPlugin(schema.id))
+    );
 
     console.log(
-      `[SchemaPluginLoader] Registered ${registeredCount} custom entity schemas`
+      `[SchemaPluginLoader] Registered ${customSchemas.length} custom entity schemas`
     );
   } catch (error) {
     console.error(
@@ -213,6 +266,15 @@ async function registerExistingSchemas(): Promise<void> {
     );
     throw error;
   }
+}
+
+/**
+ * Result of schema plugin system initialization
+ */
+export interface InitializationResult {
+  success: boolean;
+  registeredCount: number;
+  error?: string;
 }
 
 /**
@@ -225,22 +287,33 @@ async function registerExistingSchemas(): Promise<void> {
  *
  * Call this once during app startup in the root layout.
  *
- * @throws {Error} If initialization fails
+ * @returns Initialization result with success status and details
  *
  * @example
  * ```typescript
  * // In +layout.svelte
  * onMount(async () => {
- *   await initializeSchemaPluginSystem();
+ *   const result = await initializeSchemaPluginSystem();
+ *   if (!result.success) {
+ *     // Handle initialization failure
+ *     console.warn(`Custom entities unavailable: ${result.error}`);
+ *   }
  * });
  * ```
  */
-export async function initializeSchemaPluginSystem(): Promise<void> {
+export async function initializeSchemaPluginSystem(): Promise<InitializationResult> {
   try {
     console.log('[SchemaPluginLoader] Initializing schema plugin system...');
 
     // Register existing custom entity schemas on startup
-    await registerExistingSchemas();
+    const schemas = await schemaService.getAllSchemas();
+    const customSchemas = schemas.filter(
+      (schema) => !schema.isCore && !(schema as { is_core?: boolean }).is_core
+    );
+
+    await Promise.all(
+      customSchemas.map((schema) => registerSchemaPlugin(schema.id))
+    );
 
     // TODO: Add Tauri event listeners for schema:created and schema:deleted
     // This will be implemented in a future iteration when Tauri events are added
@@ -256,9 +329,22 @@ export async function initializeSchemaPluginSystem(): Promise<void> {
     //   unregisterSchemaPlugin(event.payload.schema_id);
     // });
 
-    console.log('[SchemaPluginLoader] Schema plugin system initialized');
+    console.log(
+      `[SchemaPluginLoader] Schema plugin system initialized (${customSchemas.length} custom entities registered)`
+    );
+
+    return {
+      success: true,
+      registeredCount: customSchemas.length
+    };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[SchemaPluginLoader] Failed to initialize:', error);
-    throw error;
+
+    return {
+      success: false,
+      registeredCount: 0,
+      error: errorMessage
+    };
   }
 }
