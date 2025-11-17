@@ -911,13 +911,12 @@ where
                 .context("Failed to create node in type-specific table")?;
 
             // Set data field to link to type-specific record
-            // Also clear properties in hub node since data is now in spoke (hub-and-spoke pattern)
             self.db
-                .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id), properties = {};")
+                .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);")
                 .bind(("id", node.id.clone()))
                 .bind(("type_table", node.node_type.clone()))
                 .await
-                .context("Failed to set data link and clear hub properties")?;
+                .context("Failed to set data link")?;
         }
 
         // Note: Parent-child relationships are now established separately via move_node()
