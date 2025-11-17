@@ -1,11 +1,11 @@
 /**
  * HttpAdapter SurrealDB Integration Tests
  *
- * Tests the HttpAdapter implementation using SurrealDB HTTP API.
+ * Tests the HttpAdapter implementation using the dev-proxy server.
  * Verifies all CRUD operations, query functionality, version control,
- * and SurrealQL query generation work correctly with a live SurrealDB server.
+ * and API integration work correctly with the NodeService backend.
  *
- * Part of Issue #490: Simplify Browser Dev Mode with SurrealDB
+ * Part of Issue #524: Update Tests for Graph-Native Hierarchy Architecture
  *
  * ## Test Coverage
  *
@@ -19,8 +19,12 @@
  *
  * ## Prerequisites
  *
- * Tests require SurrealDB server running on localhost:8000.
- * Start server with: `bun run dev:db`
+ * Tests require both:
+ * 1. SurrealDB server running on localhost:8000 (start with: `bun run dev:db`)
+ * 2. Dev-proxy server running on localhost:3001 (start with: `cargo run --bin dev-proxy`)
+ *
+ * The dev-proxy provides the HTTP API endpoints (/api/nodes, etc.) that the
+ * HttpAdapter calls. It forwards requests to NodeService which uses SurrealDB.
  *
  * ## Test Execution Requirements
  *
@@ -36,8 +40,7 @@
  * ## Skip Conditions
  *
  * Tests are automatically skipped if:
- * - SurrealDB server is not reachable
- * - TEST_USE_DATABASE environment variable is not set
+ * - Dev-proxy server is not reachable on localhost:3001
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -45,12 +48,12 @@ import { HttpAdapter } from '$lib/services/backend-adapter';
 import { TestNodeBuilder } from '../utils/test-node-builder';
 
 /**
- * Check if SurrealDB server is available
- * @returns True if server is reachable on localhost:8000
+ * Check if dev-proxy server is available
+ * @returns True if server is reachable on localhost:3001
  */
-async function isSurrealDBAvailable(): Promise<boolean> {
+async function isDevProxyAvailable(): Promise<boolean> {
   try {
-    const response = await globalThis.fetch('http://localhost:8000/health', {
+    const response = await globalThis.fetch('http://localhost:3001/health', {
       method: 'GET',
       signal: AbortSignal.timeout(1000) // 1 second timeout
     });
@@ -61,24 +64,16 @@ async function isSurrealDBAvailable(): Promise<boolean> {
 }
 
 /**
- * Initialize namespace and database
- * Must be called before any other operations
+ * Initialize database via dev-proxy
+ * The dev-proxy already initializes the database on startup, so this is a no-op
  */
 async function initializeDatabase(): Promise<void> {
   try {
-    const response = await globalThis.fetch('http://localhost:8000/sql', {
+    const response = await globalThis.fetch('http://localhost:3001/api/database/init', {
       method: 'POST',
       headers: {
-        Accept: 'application/json',
-        Authorization: 'Basic ' + globalThis.btoa('root:root')
-      },
-      body: `
-        DEFINE NAMESPACE nodespace;
-        USE NS nodespace;
-        DEFINE DATABASE nodes;
-        USE DB nodes;
-        DEFINE TABLE nodes SCHEMALESS;
-      `
+        'Content-Type': 'application/json'
+      }
     });
 
     if (!response.ok) {
@@ -92,6 +87,8 @@ async function initializeDatabase(): Promise<void> {
 /**
  * Clean all nodes from the database
  * Used between tests to ensure isolation
+ * Note: We still connect directly to SurrealDB (port 8000) for cleanup
+ * because the dev-proxy doesn't expose a bulk delete endpoint
  */
 async function cleanDatabase(): Promise<void> {
   try {
@@ -101,7 +98,7 @@ async function cleanDatabase(): Promise<void> {
         Accept: 'application/json',
         Authorization: 'Basic ' + globalThis.btoa('root:root')
       },
-      body: 'USE NS nodespace; USE DB nodes; DELETE nodes;'
+      body: 'USE NS nodespace; USE DB nodespace; DELETE nodes;'
     });
 
     if (!response.ok) {
@@ -112,14 +109,14 @@ async function cleanDatabase(): Promise<void> {
   }
 }
 
-describe.skipIf(!(await isSurrealDBAvailable()))('HttpAdapter with SurrealDB', () => {
+describe.skipIf(!(await isDevProxyAvailable()))('HttpAdapter with SurrealDB', () => {
   let adapter: HttpAdapter;
 
   beforeAll(async () => {
-    adapter = new HttpAdapter('http://localhost:8000');
-    console.log('[Test] Using SurrealDB HTTP adapter on port 8000');
+    adapter = new HttpAdapter('http://localhost:3001');
+    console.log('[Test] Using dev-proxy HTTP adapter on port 3001');
 
-    // Initialize namespace, database, and table
+    // Initialize database via dev-proxy
     await initializeDatabase();
     console.log('[Test] Database initialized');
   });
