@@ -696,11 +696,11 @@ async fn create_node(
     node_type: &str,
     content: &str,
     parent_id: Option<String>,
-    container_node_id: Option<String>,
+    _container_node_id: Option<String>, // Kept for backward compat but ignored (auto-derived from parent)
     before_sibling_id: Option<String>,
 ) -> Result<String, MCPError> {
     // Create node via NodeOperations (enforces all business rules)
-    // Container node ID is provided from the pre-created container
+    // Note: container/root is now auto-derived from parent chain by backend
 
     // Provide required properties based on node type
     let properties = match node_type {
@@ -718,7 +718,6 @@ async fn create_node(
             node_type: node_type.to_string(),
             content: content.to_string(),
             parent_id,
-            container_node_id,
             before_sibling_id,
             properties,
         })

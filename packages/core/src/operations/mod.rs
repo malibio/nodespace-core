@@ -27,18 +27,16 @@
 //!
 //! # Business Rules Enforced
 //!
-//! 1. **Container Type Validation**: Container types (date, topic, project) force
-//!    all hierarchy fields (parent_id, container_node_id, before_sibling_id) to None.
+//! 1. **Root Type Validation**: Container/root types (date, topic, project) must
+//!    have parent_id = None (no hierarchy fields allowed).
 //!
-//! 2. **Container Requirement**: Every non-container node MUST have a container_node_id.
-//!    If not provided, it's inferred from the parent.
+//! 2. **Auto-Derive Root from Parent Chain**: Every non-root node's container/root
+//!    is automatically derived by traversing parent edges to find the top-level node.
 //!
 //! 3. **Sibling Position Calculation**: If before_sibling_id is not provided,
 //!    the node is placed as the last sibling automatically.
 //!
-//! 4. **Parent-Container Consistency**: Parent and child must be in the same container.
-//!
-//! 5. **Update Operations Restrictions**: Content updates cannot change hierarchy.
+//! 4. **Update Operations Restrictions**: Content updates cannot change hierarchy.
 //!    Use move_node() or reorder_node() explicitly for hierarchy changes.
 //!
 //! # Examples
@@ -56,13 +54,12 @@
 //!     let node_service = NodeService::new(db)?;
 //!     let operations = NodeOperations::new(node_service);
 //!
-//!     // Create a node with automatic container inference
+//!     // Create a node with automatic root/container derivation from parent
 //!     let node_id = operations.create_node(CreateNodeParams {
 //!         id: None, // Auto-generate ID
 //!         node_type: "text".to_string(),
 //!         content: "Hello World".to_string(),
 //!         parent_id: Some("parent-id".to_string()),
-//!         container_node_id: None, // Will be inferred from parent
 //!         before_sibling_id: None, // Will be placed as last sibling
 //!         properties: json!({}),
 //!     }).await?;
@@ -128,7 +125,6 @@ use std::sync::Arc;
 ///     node_type: "text".to_string(),
 ///     content: "Hello World".to_string(),
 ///     parent_id: Some("parent-123".to_string()),
-///     container_node_id: None,
 ///     before_sibling_id: None,
 ///     properties: json!({}),
 /// };
@@ -140,7 +136,6 @@ use std::sync::Arc;
 ///     node_type: "text".to_string(),
 ///     content: "Tracked by frontend".to_string(),
 ///     parent_id: None,
-///     container_node_id: None,
 ///     before_sibling_id: None,
 ///     properties: json!({}),
 /// };
@@ -153,10 +148,8 @@ pub struct CreateNodeParams {
     pub node_type: String,
     /// Content of the node
     pub content: String,
-    /// Optional parent node ID
+    /// Optional parent node ID (container/root will be auto-derived from parent chain)
     pub parent_id: Option<String>,
-    /// Optional container node ID (will be inferred from parent if not provided)
-    pub container_node_id: Option<String>,
     /// Optional sibling to insert before (if None, appends to end)
     pub before_sibling_id: Option<String>,
     /// Additional node properties as JSON
@@ -194,7 +187,6 @@ pub struct CreateNodeParams {
 ///     node_type: "text".to_string(),
 ///     content: "Content".to_string(),
 ///     parent_id: Some("parent-id".to_string()),
-///     container_node_id: None, // Container ID inferred
 ///     before_sibling_id: None, // Placed as last sibling
 ///     properties: json!({}),
 /// }).await?;
@@ -357,15 +349,9 @@ where
         &self,
         node_id: &str,
         node_type: &str,
-        container_node_id: Option<String>,
         parent_id: Option<&str>,
     ) -> Result<String, NodeOperationError> {
-        // If container is explicitly provided, use it
-        if let Some(container_id) = container_node_id {
-            return Ok(container_id);
-        }
-
-        // Otherwise, infer from parent
+        // Container is always inferred from parent chain (Issue #533 - removed explicit container parameter)
         if let Some(parent_id) = parent_id {
             // Verify parent exists
             self.node_service
@@ -436,45 +422,9 @@ where
         Ok(None)
     }
 
-    /// Validate parent-container consistency
-    ///
-    /// Business Rule 4: Parent and child must be in the same container.
-    ///
-    /// # Arguments
-    ///
-    /// * `parent_id` - Parent node ID (may be None)
-    /// * `container_node_id` - Container node ID for the child
-    ///
-    /// # Errors
-    ///
-    /// - `ParentContainerMismatch` if parent and child have different containers
-    /// - `NodeNotFound` if parent doesn't exist
-    #[allow(dead_code)]
-    async fn validate_parent_container_consistency(
-        &self,
-        parent_id: Option<&str>,
-        container_node_id: &str,
-    ) -> Result<(), NodeOperationError> {
-        if let Some(parent_id) = parent_id {
-            // Verify parent exists
-            self.node_service
-                .get_node(parent_id)
-                .await?
-                .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
-
-            // Parent must have same container (get via edge traversal)
-            let parent_container = self.node_service.get_container_id(parent_id).await?;
-
-            if parent_container != container_node_id {
-                return Err(NodeOperationError::parent_container_mismatch(
-                    parent_container,
-                    container_node_id.to_string(),
-                ));
-            }
-        }
-
-        Ok(())
-    }
+    // validate_parent_container_consistency REMOVED (Issue #533)
+    // Container is now auto-derived from parent chain, so this validation is obsolete.
+    // Parent-child consistency is automatically maintained through edge traversal.
 
     // =========================================================================
     // CREATE Operations
@@ -493,8 +443,7 @@ where
     ///
     /// * `node_type` - Type identifier (e.g., "text", "task", "date")
     /// * `content` - Primary content/text
-    /// * `parent_id` - Optional parent node reference
-    /// * `container_node_id` - Optional container reference (inferred from parent if None)
+    /// * `parent_id` - Optional parent node reference (root auto-derived from parent chain)
     /// * `before_sibling_id` - Optional sibling ordering (calculated as last if None)
     /// * `properties` - JSON object with entity-specific fields
     ///
@@ -505,9 +454,8 @@ where
     /// # Errors
     ///
     /// Returns `NodeOperationError` if:
-    /// - Container nodes have parent/container/sibling set
-    /// - Non-container nodes lack container_node_id and parent doesn't exist
-    /// - Parent-container mismatch
+    /// - Root/container nodes have parent/sibling set
+    /// - Non-root nodes have no parent
     /// - Invalid sibling chain
     /// - Node validation fails
     ///
@@ -524,24 +472,22 @@ where
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
     /// # let node_service = NodeService::new(db)?;
     /// # let operations = NodeOperations::new(node_service);
-    /// // Create a date node (container)
+    /// // Create a date node (root/container)
     /// let date_id = operations.create_node(CreateNodeParams {
     ///     id: None, // Auto-generate ID
     ///     node_type: "date".to_string(),
     ///     content: "2025-01-03".to_string(),
-    ///     parent_id: None, // Containers cannot have parent
-    ///     container_node_id: None, // Containers cannot have container
-    ///     before_sibling_id: None, // Containers cannot have sibling
+    ///     parent_id: None, // Root nodes have no parent
+    ///     before_sibling_id: None, // Root nodes have no siblings
     ///     properties: json!({}),
     /// }).await?;
     ///
-    /// // Create a text node with automatic container inference
+    /// // Create a text node (root auto-derived from parent chain)
     /// let text_id = operations.create_node(CreateNodeParams {
     ///     id: None, // Auto-generate ID
     ///     node_type: "text".to_string(),
     ///     content: "Hello".to_string(),
-    ///     parent_id: Some(date_id.clone()), // Parent
-    ///     container_node_id: None, // Container ID inferred from parent (date_id)
+    ///     parent_id: Some(date_id.clone()), // Root auto-derived from date_id
     ///     before_sibling_id: None, // Placed as last sibling
     ///     properties: json!({}),
     /// }).await?;
@@ -565,7 +511,6 @@ where
     ///     node_type: "date".to_string(),
     ///     content: "2025-10-23".to_string(),  // This becomes the ID
     ///     parent_id: None,
-    ///     container_node_id: None,
     ///     before_sibling_id: None,
     ///     properties: json!({}),
     /// }).await?;
@@ -583,14 +528,11 @@ where
         if let Some(ref parent_id_str) = params.parent_id {
             self.ensure_date_container_exists(parent_id_str).await?;
         }
-        if let Some(ref container_id_str) = params.container_node_id {
-            self.ensure_date_container_exists(container_id_str).await?;
-        }
 
-        // Business Rule 1: Determine if this node IS a container based on hierarchy fields
-        // A node is a container if it has NO parent and NO container
+        // Business Rule 1: Determine if this node IS a container (root) based on hierarchy
+        // A node is a container/root if it has NO parent
         // (not just because its type CAN be a container)
-        let is_container_node = params.parent_id.is_none() && params.container_node_id.is_none();
+        let is_container_node = params.parent_id.is_none();
 
         let (final_parent_id, _final_container_id, final_sibling_id) = if is_container_node {
             // This node IS a container - validate that its type allows being a container
@@ -611,27 +553,17 @@ where
 
             (None, None, None)
         } else {
-            // Non-container nodes: apply business rules 2-4
+            // Non-container nodes: apply business rules
 
-            // Business Rule 2: Resolve container_node_id (with parent inference)
+            // Business Rule 2: Auto-derive container/root from parent chain
+            // The backend traverses parent edges to find the root node
             let resolved_container = self
                 .resolve_container(
                     &params.content, // Passed for error context only (node ID not yet assigned)
                     &params.node_type,
-                    params.container_node_id,
-                    params.parent_id.as_deref(),
+                    params.parent_id.as_deref(), // Container derived from parent chain
                 )
                 .await?;
-
-            // Business Rule 4: Validate parent-container consistency
-            // TODO(#533): Re-enable after container concept cleanup and hierarchy migration
-            // The validation fails because get_container_id() traverses parent chain (returning root),
-            // while container_node_id is the explicit parameter passed. Issue #533 will remove container concept.
-            // self.validate_parent_container_consistency(
-            //     params.parent_id.as_deref(),
-            //     &resolved_container,
-            // )
-            // .await?;
 
             // Business Rule 3: Calculate sibling position
             let calculated_sibling = self
@@ -1584,7 +1516,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1598,7 +1529,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child content".to_string(),
                 parent_id: Some(date_id.clone()),
-                container_node_id: None, // No container_node_id provided
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1618,26 +1548,24 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create two separate date containers
-        let date1 = operations
+        let _date1 = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
             .await
             .unwrap();
 
-        let date2 = operations
+        let _date2 = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-04".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1651,7 +1579,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent in date1".to_string(),
                 parent_id: None,
-                container_node_id: Some(date1.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1665,7 +1592,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child in date2".to_string(),
                 parent_id: Some(parent.clone()),
-                container_node_id: Some(date2.clone()), // Different container!
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1689,13 +1615,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create date container
-        let date = operations
+        let _date = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1709,7 +1634,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "First".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None, // No before_sibling_id = goes to end
                 properties: json!({}),
             })
@@ -1723,7 +1647,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Second".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None, // No before_sibling_id = goes to end
                 properties: json!({}),
             })
@@ -1737,7 +1660,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Third".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: Some(second.clone()), // Insert before second
                 properties: json!({}),
             })
@@ -1778,13 +1700,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create date container
-        let date = operations
+        let _date = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1798,7 +1719,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "A".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1811,7 +1731,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "B".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1824,7 +1743,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "C".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1859,13 +1777,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create date container
-        let date = operations
+        let _date = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1879,7 +1796,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "First".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1892,7 +1808,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Second".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1917,13 +1832,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create date container
-        let date = operations
+        let _date = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1937,7 +1851,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "First".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1950,7 +1863,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Last".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1975,13 +1887,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create date container
-        let date = operations
+        let _date = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -1995,7 +1906,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2008,7 +1918,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Sibling".to_string(),
                 parent_id: None,
-                container_node_id: Some(date.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2022,7 +1931,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(parent.clone()),
-                container_node_id: None, // Inferred from parent
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2073,7 +1981,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Frontend-tracked node".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2112,7 +2019,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-10-31".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2142,7 +2048,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2174,7 +2079,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2189,7 +2093,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(parent_id.clone()),
-                container_node_id: Some(parent_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2213,7 +2116,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Auto-generated ID".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2246,7 +2148,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original content".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2305,13 +2206,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create container
-        let container_id = operations
+        let _container_id = operations
             .create_node(CreateNodeParams {
                 id: None, // Auto-generate UUID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2325,7 +2225,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent 1".to_string(),
                 parent_id: None,
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2338,7 +2237,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent 2".to_string(),
                 parent_id: None,
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2352,7 +2250,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child node".to_string(),
                 parent_id: Some(parent1_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2389,13 +2286,12 @@ mod tests {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create container
-        let container_id = operations
+        let _container_id = operations
             .create_node(CreateNodeParams {
                 id: None, // Auto-generate UUID
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2409,7 +2305,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2423,7 +2318,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Node A".to_string(),
                 parent_id: Some(parent_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2436,7 +2330,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Node B".to_string(),
                 parent_id: Some(parent_id.clone()),
-                container_node_id: Some(container_id),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2475,7 +2368,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test content".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2523,7 +2415,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test content".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2562,7 +2453,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2627,7 +2517,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2640,7 +2529,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2673,7 +2561,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2687,7 +2574,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2701,7 +2587,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2735,7 +2620,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2748,7 +2632,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2761,7 +2644,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2796,7 +2678,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2809,7 +2690,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2838,7 +2718,6 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                container_node_id: None,
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2851,7 +2730,6 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: Some(container_id.clone()),
-                container_node_id: Some(container_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
