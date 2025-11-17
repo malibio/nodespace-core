@@ -53,7 +53,7 @@ export function createTestNode(
   idOrOptions?: string | Partial<Node>,
   content?: string,
   nodeType?: string,
-  parentId?: string | null, // Parent node ID - sets containerNodeId for hierarchy
+  parentId?: string | null, // Parent node ID - sets parentId for hierarchy
   additionalProps?: Partial<Node>
 ): Node {
   // Handle object-based call (preferred)
@@ -67,7 +67,7 @@ export function createTestNode(
       nodeType: options.nodeType || 'text',
       content: options.content ?? 'Test content',
       beforeSiblingId: options.beforeSiblingId ?? null,
-      containerNodeId: options.containerNodeId ?? null,
+      parentId: options.parentId ?? null,
       createdAt: options.createdAt || now,
       modifiedAt: options.modifiedAt || now,
       version: options.version ?? 1,
