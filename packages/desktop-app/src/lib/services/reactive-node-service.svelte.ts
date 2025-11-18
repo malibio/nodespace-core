@@ -1167,7 +1167,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Step 4: Update in-memory state for immediate UI reactivity
-    // The backend moveNode() call (below) will persist to database
+    // This is the correct pattern: update in-memory first, then backend persists
     console.log('[outdentNode] Updating node:', {
       nodeId,
       newBeforeSiblingId: positionBeforeSibling,
@@ -1175,11 +1175,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       oldParentId
     });
 
-    // Update the node's parentId field in memory for subsequent operations
-    // This is needed for the sibling creation fix to work after outdent
+    // Update the node's properties in memory for immediate UI reactivity
     const nodeToUpdate = sharedNodeStore.getNode(nodeId);
     if (nodeToUpdate) {
       nodeToUpdate.parentId = newParentId;
+      nodeToUpdate.beforeSiblingId = positionBeforeSibling;
     }
 
     _uiState[nodeId] = { ...uiState, depth: newDepth };
