@@ -1172,13 +1172,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.updateNode(
       nodeId,
       {
+        parentId: newParentId,
         beforeSiblingId: positionBeforeSibling
       },
       viewerSource,
       {
         persistenceDependencies: mainNodeDeps,
         // Skip conflict detection for sequential viewer operations
-        skipConflictDetection: true
+        skipConflictDetection: true,
+        isComputedField: true // parentId is derived from has_child relations
       }
     );
 
