@@ -1048,13 +1048,18 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.removeChildFromCache(currentParentId, nodeId);
     sharedNodeStore.addChildToCache(targetParentId, nodeId);
 
-    // CRITICAL FIX: Update the node object's parentId field to reflect the new parent
-    // This ensures that subsequent operations (like creating a sibling) use the correct parent ID
-    const nodeToUpdate = sharedNodeStore.getNode(nodeId);
-    if (nodeToUpdate) {
-      nodeToUpdate.parentId = targetParentId;
-      nodeToUpdate.beforeSiblingId = beforeSiblingId;
-    }
+    // CRITICAL FIX: Update the node's parentId and beforeSiblingId using the store update method
+    // This ensures reactive state is updated so subsequent operations use the correct parent ID
+    // Use skipPersistence to avoid writing to database (relationships are stored in has_child edges)
+    sharedNodeStore.updateNode(
+      nodeId,
+      {
+        parentId: targetParentId,
+        beforeSiblingId: beforeSiblingId
+      },
+      { type: 'database', reason: 'indent-node' },
+      { isComputedField: true } // Skip persistence - these are derived from has_child relations
+    );
 
     // Ensure the target parent is expanded to show the newly indented child
     // This prevents the parent from appearing collapsed after indent
