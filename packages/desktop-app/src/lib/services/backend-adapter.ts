@@ -1265,7 +1265,9 @@ export class HttpAdapter implements BackendAdapter {
   ): Promise<void> {
     try {
       // First, set the parent using the /api/nodes/:id/parent endpoint
-      await this.setParent(nodeId, newParentId);
+      // Use retry logic with exponential backoff to handle race condition where node
+      // hasn't been fully committed to database yet (common after node creation)
+      await this.setParentWithRetry(nodeId, newParentId);
 
       // Then, if there's a sibling position change, update beforeSiblingId
       // The beforeSiblingId is used to maintain sibling order within a parent
@@ -1281,6 +1283,56 @@ export class HttpAdapter implements BackendAdapter {
       const err = toError(error);
       throw new NodeOperationError(err.message, nodeId, 'moveNode');
     }
+  }
+
+  private async setParentWithRetry(
+    nodeId: string,
+    parentId: string | null,
+    maxRetries: number = 3,
+    delayMs: number = 50
+  ): Promise<void> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await globalThis.fetch(
+          `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/parent`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ parentId })
+          }
+        );
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        // Success - return early
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        // If it's the last attempt, don't retry
+        if (attempt === maxRetries - 1) {
+          break;
+        }
+
+        // Only retry on 404 "Not Found" errors (race condition indicator)
+        // Other errors should fail immediately
+        if (!lastError.message.includes('404')) {
+          throw lastError;
+        }
+
+        // Wait with exponential backoff before retrying
+        const delay = delayMs * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    // If we got here, all retries failed
+    const err = toError(lastError);
+    throw new NodeOperationError(err.message, nodeId, 'setParent');
   }
 
   async queryNodes(params: QueryNodesParams): Promise<Node[]> {
