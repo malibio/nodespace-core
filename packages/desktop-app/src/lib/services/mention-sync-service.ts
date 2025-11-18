@@ -164,17 +164,23 @@ export class MentionSyncService {
         this.metrics.totalSyncs;
 
       return results;
-    } catch {
-      // Suppress expected implementation errors silently - these are not critical issues:
-      // - queryNodes with mentionedBy filter requires getIncomingMentions endpoint
-      // - getIncomingMentions is not yet implemented in HTTP dev-proxy (Phase 2 feature)
-      // - Only available in Tauri IPC mode
-      // Link text sync is a nice-to-have feature that auto-updates mention link text.
-      // Failures should not disrupt the UI or pollute the console in dev mode.
-      //
-      // Note: This is a temporary workaround until Phase 2 HTTP endpoints are implemented.
-      // In Tauri mode, this works perfectly; in HTTP dev mode, mentions work but link text
-      // won't auto-sync - this is acceptable for development purposes.
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Only suppress KNOWN expected errors for Phase 2 features
+      const isExpectedPhase2Error =
+        errorMessage.includes('getIncomingMentions') ||
+        errorMessage.includes('mentionedBy filter not implemented') ||
+        errorMessage.includes('incoming-mentions');
+
+      if (isExpectedPhase2Error) {
+        // Phase 2 feature not available in HTTP dev-proxy mode - expected
+        console.debug('[MentionSyncService] Skipping link sync - Phase 2 feature not available:', errorMessage);
+        return [];
+      }
+
+      // Log unexpected errors as warnings for debugging
+      console.warn('[MentionSyncService] Unexpected error during link text sync:', error);
       return [];
     }
   }
