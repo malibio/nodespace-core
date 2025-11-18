@@ -371,11 +371,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const afterUIState = _uiState[afterNodeId] || createDefaultUIState(afterNodeId);
     const newDepth = afterUIState.depth;
 
-    // Determine parent from parameter or use backend query
+    // Determine parent from parameter or use afterNode's parentId directly
+    // CRITICAL FIX: Don't rely on broken parentsCache - use the node's own parentId field
     let newParentId: string | null;
     if (parentId !== undefined) {
       newParentId = parentId;
+    } else if (afterNode.parentId !== undefined) {
+      // Use afterNode's parentId directly - this is the authoritative source
+      newParentId = afterNode.parentId ?? null;
     } else {
+      // Fallback: try cache (for compatibility, though it may be null)
       const parents = sharedNodeStore.getParentsForNode(afterNodeId);
       newParentId = parents.length > 0 ? parents[0].id : null;
     }
@@ -1042,6 +1047,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // These local state updates happen after the atomic database operation
     sharedNodeStore.removeChildFromCache(currentParentId, nodeId);
     sharedNodeStore.addChildToCache(targetParentId, nodeId);
+
+    // CRITICAL FIX: Update the node object's parentId field to reflect the new parent
+    // This ensures that subsequent operations (like creating a sibling) use the correct parent ID
+    const nodeToUpdate = sharedNodeStore.getNode(nodeId);
+    if (nodeToUpdate) {
+      nodeToUpdate.parentId = targetParentId;
+      nodeToUpdate.beforeSiblingId = beforeSiblingId;
+    }
 
     // Ensure the target parent is expanded to show the newly indented child
     // This prevents the parent from appearing collapsed after indent
