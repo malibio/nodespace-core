@@ -1110,9 +1110,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const updatedSiblingFromRemoval = removeFromSiblingChain(nodeId);
 
     // Step 2: Calculate new position in parent hierarchy
-    // NOTE: Now using backend query instead of parent.parentId
-    const parentParents = sharedNodeStore.getParentsForNode(parent.id);
-    const newParentId = parentParents.length > 0 ? parentParents[0].id : null;
+    // Try to get parent's parent from the node's parentId field first (more reliable)
+    // Fall back to backend query if not available
+    const newParentId = parent.parentId ?? (
+      sharedNodeStore.getParentsForNode(parent.id).length > 0
+        ? sharedNodeStore.getParentsForNode(parent.id)[0].id
+        : null
+    );
     const uiState = _uiState[nodeId];
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
 
@@ -1172,17 +1176,22 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.updateNode(
       nodeId,
       {
-        parentId: newParentId,
         beforeSiblingId: positionBeforeSibling
       },
       viewerSource,
       {
         persistenceDependencies: mainNodeDeps,
         // Skip conflict detection for sequential viewer operations
-        skipConflictDetection: true,
-        isComputedField: true // parentId is derived from has_child relations
+        skipConflictDetection: true
       }
     );
+
+    // Update the node's parentId field in memory for subsequent operations
+    // This is needed for the sibling creation fix to work after outdent
+    const nodeToUpdate = sharedNodeStore.getNode(nodeId);
+    if (nodeToUpdate) {
+      nodeToUpdate.parentId = newParentId;
+    }
 
     _uiState[nodeId] = { ...uiState, depth: newDepth };
 
