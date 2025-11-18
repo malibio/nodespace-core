@@ -560,6 +560,8 @@ export class TauriAdapter implements BackendAdapter {
     newBeforeSiblingId: string | null
   ): Promise<void> {
     try {
+      // Call the Tauri move_node command which handles the atomic operation
+      // (parent change + sibling position update in a single database transaction)
       await invoke('move_node', {
         nodeId,
         newParentId,
@@ -1262,18 +1264,18 @@ export class HttpAdapter implements BackendAdapter {
     newBeforeSiblingId: string | null
   ): Promise<void> {
     try {
-      const response = await globalThis.fetch(
-        `${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/move`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ newParentId, newBeforeSiblingId })
+      // First, set the parent using the /api/nodes/:id/parent endpoint
+      await this.setParent(nodeId, newParentId);
+
+      // Then, if there's a sibling position change, update beforeSiblingId
+      // The beforeSiblingId is used to maintain sibling order within a parent
+      if (newBeforeSiblingId !== undefined && newBeforeSiblingId !== null) {
+        // Use updateNode to set the beforeSiblingId
+        // Note: We need to fetch the node first to get the current version for optimistic concurrency control
+        const node = await this.getNode(nodeId);
+        if (node) {
+          await this.updateNode(nodeId, node.version, { beforeSiblingId: newBeforeSiblingId });
         }
-      );
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
     } catch (error) {
       const err = toError(error);

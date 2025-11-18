@@ -1,79 +1,101 @@
-# SurrealDB Schema Design - Hybrid Architecture
+# SurrealDB Schema Design - Graph Relations Architecture
 
 ## Overview
 
-NodeSpace will use a **hybrid dual-table architecture** in SurrealDB that combines:
-1. **Universal `nodes` table** - Common metadata, embeddings, hierarchy
-2. **Type-specific tables** - Type-safe schemas per entity (`task`, `text`, `project`, etc.)
+NodeSpace uses a **graph relations architecture** in SurrealDB that combines:
+1. **Universal `node` table** - All nodes (text, task, date, etc.) with common metadata
+2. **Graph relation tables** - `has_child` edges for parent-child hierarchy (not `parent_id` fields)
+3. **Mention relations** - `mentions` edges for cross-node references
 
-This design leverages SurrealDB's native Record IDs (`table:⟨uuid⟩`) while maintaining fast cross-type operations.
+This design leverages SurrealDB's native Record IDs and graph capabilities for clean hierarchy management.
 
 ## Architecture Decisions
 
-### Why Hybrid (Not Single Table or Pure Type Tables)?
+## Quick Reference: Key Design Shift
 
-**Single `nodes` table only (Turso approach):**
-- ✅ Easy cross-type queries
-- ❌ No type in ID (requires lookup: `SELECT type FROM node:⟨uuid⟩`)
-- ❌ No type safety per entity
-- ❌ Properties JSON blob (not SurrealDB-native)
+**IMPORTANT**: This document was updated to reflect the current graph relations architecture.
 
-**Pure type tables (no universal table):**
-- ✅ Type in ID (`task:⟨uuid⟩`)
-- ✅ Type safety per entity
-- ❌ Slow vector search (must scan all tables)
-- ❌ Complex hierarchy queries (JOINs across tables)
-- ❌ Difficult to add common fields (must ALTER all tables)
+**Old approach (documented but not implemented):**
+- Used `parent_id` fields on nodes table
+- Hierarchy stored as denormalized data
 
-**Hybrid (Universal + Type Tables):**
-- ✅ Type in ID (`task:⟨uuid⟩`)
-- ✅ Fast vector search (single `nodes` table scan)
-- ✅ Type safety per entity (SurrealDB enforces schemas)
-- ✅ Fast hierarchy queries (no JOINs needed)
-- ✅ Dynamic entity creation at runtime
-- ⚠️ Dual storage (acceptable overhead: ~1.7KB per node)
+**Current approach (implemented):**
+- Uses `has_child` graph edges for hierarchy
+- Clean separation between nodes and relationships
+- See [Database Debugging Guide](../development/database-debugging-guide.md) for querying
+
+---
+
+## Architecture Decisions
+
+### Why Graph Relations Instead of `parent_id` Fields?
+
+Graph relations provide:
+- **Cleaner semantics** - Relationships are first-class entities
+- **Better performance** - Optimized by SurrealDB for graph traversal
+- **Extensibility** - Add new relation types without schema changes
+- **Bidirectional** - Parent→children and child→parent equally efficient
 
 ## Schema Definition
 
-### Universal Nodes Table
+### Universal Node Table
 
-Stores common metadata, embeddings, and hierarchy information for ALL node types.
+Stores common metadata for ALL node types. No hierarchy fields - relationships are stored in `has_child` edges.
 
 ```sql
--- Universal metadata + embeddings table
-DEFINE TABLE nodes SCHEMAFULL;
+-- Universal metadata table (SCHEMALESS for flexibility)
+DEFINE TABLE IF NOT EXISTS node SCHEMALESS;
 
--- Primary identifier (can be task:⟨uuid⟩, text:⟨uuid⟩, project:⟨uuid⟩, etc.)
-DEFINE FIELD id ON nodes TYPE record;
+-- Typical fields found on nodes:
+-- id: Primary identifier (node:⟨uuid⟩, node:2025-11-17, schema:task, etc.)
+-- content: Node text/title
+-- type: Node type ('text', 'task', 'date', 'schema', etc.)
+-- created_at: Timestamp when created
+-- modified_at: Timestamp of last modification
+-- version: Optimistic concurrency control version
+-- properties: JSON object for schema-driven fields
+-- embedding_stale: Whether vector embedding needs refresh
+-- mentions: Array of mentioned node IDs
+-- mentioned_by: Array of node IDs that mention this node
+-- variants: Metadata variants (type-specific)
 
--- Node type (redundant with table prefix but useful for queries)
-DEFINE FIELD node_type ON nodes TYPE string;
-
--- Primary content/text
-DEFINE FIELD content ON nodes TYPE string;
-
--- Hierarchy fields
-DEFINE FIELD parent_id ON nodes TYPE option<record(nodes)>;
-DEFINE FIELD container_node_id ON nodes TYPE option<record(nodes)>;
-DEFINE FIELD before_sibling_id ON nodes TYPE option<record(nodes)>;
-
--- Vector embeddings (384-dimensional for BAAI/bge-small-en-v1.5)
-DEFINE FIELD embedding_vector ON nodes TYPE option<array<float>>;
-DEFINE FIELD embedding_stale ON nodes TYPE bool DEFAULT true;
-
--- Optimistic concurrency control
-DEFINE FIELD version ON nodes TYPE int DEFAULT 1;
-
--- Timestamps
-DEFINE FIELD created_at ON nodes TYPE datetime;
-DEFINE FIELD modified_at ON nodes TYPE datetime;
-
--- Indexes for common queries
-DEFINE INDEX idx_nodes_parent ON nodes FIELDS parent_id;
-DEFINE INDEX idx_nodes_container ON nodes FIELDS container_node_id;
-DEFINE INDEX idx_nodes_type ON nodes FIELDS node_type;
-DEFINE INDEX idx_nodes_stale ON nodes FIELDS embedding_stale;
+-- NO parent_id, container_node_id, or before_sibling_id fields!
+-- Hierarchy is stored in the has_child relation table instead.
 ```
+
+### Graph Relations Tables
+
+Hierarchy is managed via SurrealDB graph relations, not foreign keys on nodes.
+
+```sql
+-- Parent-child relationships (graph edges)
+DEFINE TABLE IF NOT EXISTS has_child SCHEMALESS TYPE RELATION;
+
+-- Structure of has_child edges:
+-- id: Relation record ID (has_child:⟨uuid⟩)
+-- in: Parent node ID (e.g., node:⟨uuid⟩)
+-- out: Child node ID (e.g., node:⟨uuid⟩)
+-- Semantics: in->has_child->out means "in node HAS out node as a child"
+
+-- Indexes for efficient graph traversal
+DEFINE INDEX IF NOT EXISTS idx_has_child_in ON has_child FIELDS in;
+DEFINE INDEX IF NOT EXISTS idx_has_child_out ON has_child FIELDS out;
+
+-- Mention relationships (cross-node references)
+DEFINE TABLE IF NOT EXISTS mentions SCHEMALESS TYPE RELATION;
+
+-- Structure similar to has_child:
+-- in: Mentioning node
+-- out: Mentioned node
+```
+
+**Why Graph Relations Instead of `parent_id` Fields?**
+
+- ✅ **Cleaner semantics** - Relationship is explicit and first-class
+- ✅ **Better performance** - Graph edges optimized in SurrealDB
+- ✅ **Bidirectional traversal** - Easy parent→children and child→parent queries
+- ✅ **Extensible** - Can add `has_sibling`, `references`, etc. without schema changes
+- ✅ **No denormalization** - Single source of truth for relationships
 
 ### Type-Specific Tables
 
