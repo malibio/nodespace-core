@@ -1112,9 +1112,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Step 2: Calculate new position in parent hierarchy
     // Try to get parent's parent from the node's parentId field first (more reliable)
     // Fall back to backend query if not available
+    const parentParentsQuery = sharedNodeStore.getParentsForNode(parent.id);
     const newParentId = parent.parentId ?? (
-      sharedNodeStore.getParentsForNode(parent.id).length > 0
-        ? sharedNodeStore.getParentsForNode(parent.id)[0].id
+      parentParentsQuery.length > 0
+        ? parentParentsQuery[0].id
         : null
     );
     const uiState = _uiState[nodeId];
