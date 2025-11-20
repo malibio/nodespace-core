@@ -14,9 +14,10 @@
 cargo test
 
 # Frontend tests (Happy-DOM - fast, recommended for 99% of tests)
-bun run test              # Run all unit tests once
+bun run test              # Run all unit tests once (fast mode)
 bun run test:unit         # Same as above (explicit)
 bun run test:watch        # Watch mode for TDD
+bun run test:perf         # Full performance validation (large datasets)
 
 # Browser tests (Vitest Browser Mode - real Chromium for critical tests)
 bun run test:browser      # Run browser integration tests
@@ -691,22 +692,97 @@ errorCases.forEach(({ content, nodeType, expectedError }) => {
 ```
 
 ### 7. Performance Testing
-Test performance with realistic data sizes:
+
+NodeSpace uses **adaptive performance testing** with two modes for optimal developer workflow:
+
+**Performance Test Modes:**
+
+| Mode | Dataset Size | Use Case | Command | Speed |
+|------|--------------|----------|---------|-------|
+| **Fast** (default) | 100-500 nodes | Daily TDD, quick feedback | `bun run test` | ~20-100ms per test |
+| **Full** | 1000-2000 nodes | Pre-merge validation, comprehensive testing | `bun run test:perf` | ~100-700ms per test |
+
+**How It Works:**
+
+Performance tests automatically scale based on the `TEST_FULL_PERFORMANCE` environment variable:
 
 ```typescript
-// Test with large datasets
-it('should handle 1000 nodes efficiently', () => {
+// Adaptive dataset scaling
+const FULL_PERFORMANCE = process.env.TEST_FULL_PERFORMANCE === '1';
+const PERF_SCALE = {
+  init: FULL_PERFORMANCE ? 1000 : 100,
+  lookup: FULL_PERFORMANCE ? 1500 : 150,
+  combine: FULL_PERFORMANCE ? 2000 : 200,
+  hierarchy: FULL_PERFORMANCE ? 1000 : 100,
+  deepNesting: FULL_PERFORMANCE ? 1000 : 100
+};
+
+// Adaptive performance thresholds
+const PERF_THRESHOLDS = {
+  init: FULL_PERFORMANCE ? 100 : 20,
+  combine: FULL_PERFORMANCE ? 100 : 20,
+  hierarchy: FULL_PERFORMANCE ? 500 : 100,
+  deepNesting: FULL_PERFORMANCE ? 700 : 100
+};
+
+// Dynamic test with adaptive thresholds
+test(`initializes ${PERF_SCALE.init} nodes efficiently (< ${PERF_THRESHOLDS.init}ms)`, () => {
   const start = performance.now();
 
-  for (let i = 0; i < 1000; i++) {
+  for (let i = 0; i < PERF_SCALE.init; i++) {
     nodeManager.createNode('text', `Node ${i} content`);
   }
 
   const duration = performance.now() - start;
-  expect(duration).toBeLessThan(1000); // Should complete in <1s
-  expect(nodeManager.getAllNodes()).toHaveLength(1000);
+  expect(duration).toBeLessThan(PERF_THRESHOLDS.init);
+  expect(nodeManager.getAllNodes()).toHaveLength(PERF_SCALE.init);
 });
 ```
+
+**Best Practices:**
+
+- ✅ **Fast mode (default)**: Run during development for quick feedback (5-10x faster)
+- ✅ **Full mode**: Run before merging performance-critical changes
+- ✅ **Centralized thresholds**: Define `PERF_THRESHOLDS` constant to make tuning easier
+- ✅ **Dynamic test names**: Use template literals to show current scale in test descriptions
+- ✅ **Realistic scenarios**: Test actual user workflows (node creation, hierarchy operations, etc.)
+- ✅ **Performance regression detection**: Alert if approaching threshold limits
+
+**Example Test Structure:**
+
+```typescript
+// src/tests/performance/node-manager-performance.test.ts
+const FULL_PERFORMANCE = process.env.TEST_FULL_PERFORMANCE === '1';
+const PERF_SCALE = { /* ... adaptive sizes ... */ };
+const PERF_THRESHOLDS = { /* ... adaptive thresholds ... */ };
+
+describe('NodeManager Performance Tests', () => {
+  test(`node lookup performance with ${PERF_SCALE.lookup} nodes (< 1ms avg)`, () => {
+    const largeDataset = generateLargeNodeDataset(PERF_SCALE.lookup);
+    nodeManager.initializeNodes(largeDataset);
+
+    const start = performance.now();
+    for (let i = 0; i < 100; i++) {
+      const randomId = `node-${Math.floor(Math.random() * PERF_SCALE.lookup)}`;
+      nodeManager.findNode(randomId);
+    }
+    const duration = performance.now() - start;
+    const avgDuration = duration / 100;
+
+    console.log(`Average lookup time (${PERF_SCALE.lookup} nodes): ${avgDuration.toFixed(4)}ms`);
+    expect(avgDuration).toBeLessThan(1);
+  });
+});
+```
+
+**Performance Test Location:**
+- `src/tests/performance/**/*.test.ts` - All performance tests use adaptive scaling
+
+**Why Adaptive Testing?**
+- **Developer velocity**: Fast mode provides quick feedback during TDD (sub-100ms)
+- **Comprehensive validation**: Full mode catches performance regressions before merge
+- **CI/CD optimization**: Run fast mode for PRs, full mode for releases
+- **Maintainability**: Centralized thresholds make performance tuning easier
 
 ### 8. Concurrency & Race Conditions
 Test thread safety and concurrent operations:
