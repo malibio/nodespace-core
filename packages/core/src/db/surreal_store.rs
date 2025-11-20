@@ -5,18 +5,20 @@
 //!
 //! # Architecture
 //!
-//! SurrealStore uses a **graph-native architecture** (Issue #511):
-//! 1. **Universal `node` table** - All node data with record IDs, graph edges for hierarchy
-//! 2. **Type-specific tables** - Optional tables for types with properties (currently: `task`)
-//! 3. **Graph edges** - `has_child` edges for parent-child relationships
+//! SurrealStore uses a **hub-and-spoke architecture** (Issue #560):
+//! 1. **Hub `node` table** - Universal metadata for ALL node types with SCHEMAFULL validation
+//! 2. **Spoke tables** - Type-specific data (task, date, schema) with bidirectional Record Links
+//! 3. **Graph edges** - `has_child` edges for hierarchy, `mentions` for references
+//! 4. **Record Links** - `node.data` → spoke, `spoke.node` → hub (composition, not RELATE)
 //!
 //! # Design Principles
 //!
 //! 1. **Embedded RocksDB**: Desktop-only backend using `kv-rocksdb` engine
-//! 2. **SCHEMALESS Mode**: Core tables use SCHEMALESS for dynamic properties
+//! 2. **SCHEMAFULL + FLEXIBLE**: Core fields strictly typed, user extensions allowed (Issue #560)
 //! 3. **Record IDs**: Native SurrealDB format `node:uuid` (type embedded in ID)
-//! 4. **Graph Edges**: Hierarchy via `has_child` edges (no parent_id/container_node_id fields)
-//! 5. **Direct Access**: No abstraction layers, SurrealStore used directly by services
+//! 4. **Hub-and-Spoke**: Universal `node` table + spoke tables (task, date, schema) with bidirectional Record Links
+//! 5. **Graph Edges**: Hierarchy via `has_child` edges (no parent_id/container_node_id fields)
+//! 6. **Direct Access**: No abstraction layers, SurrealStore used directly by services
 //!
 //! # Performance Targets (from PoC)
 //!
@@ -482,68 +484,24 @@ where
         &self.db
     }
 
-    /// Initialize database schema (universal node table + core type tables)
+    /// Initialize database schema from schema.surql file (Issue #560)
     ///
-    /// Creates SCHEMALESS tables for flexible property handling while maintaining
-    /// core field structure.
+    /// Creates SCHEMAFULL tables with FLEXIBLE fields for user extensions.
+    /// Uses hub-and-spoke architecture with bidirectional Record Links.
     ///
-    /// # Graph-Native Architecture (Issue #511)
-    /// - Table name: `node` (singular, consistent naming)
-    /// - New fields: data, variants, _schema_version (initialized on creation)
+    /// # Hub-and-Spoke Architecture
+    /// - Hub: Universal `node` table with metadata for ALL nodes
+    /// - Spokes: Type-specific tables (task, date, schema) with `node` reverse link
+    /// - Graph edges: `has_child` and `mentions` relations for relationships
+    /// - Record Links: Bidirectional pointers for composition (NOT RELATE)
     async fn initialize_schema(db: &Arc<Surreal<Db>>) -> Result<()> {
-        // Universal node table (singular) - SCHEMALESS for maximum flexibility
-        db.query(
-            "
-            DEFINE TABLE IF NOT EXISTS node SCHEMALESS;
-            ",
-        )
-        .await
-        .context("Failed to create universal node table")?;
+        // Load schema from schema.surql file (Issue #560)
+        // Hub-and-spoke architecture with SCHEMAFULL tables and Record Links
+        let schema_sql = include_str!("schema.surql");
 
-        // Phase 6 (Issue #511): Only create type tables for types with properties
-        // Types without properties (text, date, header, code_block, quote_block, ordered_list)
-        // don't need separate tables - all data is in the node table
-        let core_types_with_properties = ["task", "schema"];
-
-        for node_type in core_types_with_properties {
-            db.query(format!(
-                "DEFINE TABLE IF NOT EXISTS {} SCHEMALESS;",
-                node_type
-            ))
+        db.query(schema_sql)
             .await
-            .with_context(|| format!("Failed to create {} table", node_type))?;
-        }
-
-        // Mentions table for reference graph
-        db.query(
-            "
-            DEFINE TABLE IF NOT EXISTS mentions SCHEMALESS TYPE RELATION;
-            ",
-        )
-        .await
-        .context("Failed to create mentions table")?;
-
-        // has_child graph edges for hierarchy
-        // RELATE table for parent->child relationships
-        // Replaces parent_id field-based queries with graph traversal
-        db.query(
-            "
-            DEFINE TABLE IF NOT EXISTS has_child SCHEMALESS TYPE RELATION;
-            ",
-        )
-        .await
-        .context("Failed to create has_child relation table")?;
-
-        // Critical indexes for graph traversal performance
-        // Without these, traversal is O(n²) - WITH them it's O(1) for parent/child lookups
-        db.query(
-            "
-            DEFINE INDEX IF NOT EXISTS idx_has_child_in ON has_child FIELDS in;
-            DEFINE INDEX IF NOT EXISTS idx_has_child_out ON has_child FIELDS out;
-            ",
-        )
-        .await
-        .context("Failed to create has_child indexes")?;
+            .context("Failed to execute schema.surql")?;
 
         Ok(())
     }
@@ -996,67 +954,67 @@ where
         let props_with_schema = properties.as_object().cloned().unwrap_or_default();
         let has_type_table = TYPES_WITH_PROPERTIES.contains(&node_type.as_str());
 
-        // Build atomic transaction query using quoted Record IDs with parameter binding
+        // Build atomic transaction query with bidirectional Record Links (Issue #560)
         // This ensures ALL operations succeed or ALL fail
-        // Record IDs with hyphens must be quoted in backticks: `node:uuid-with-hyphens`
+        // Hub-and-spoke: Create spoke with reverse link, then hub with forward link
         let transaction_query = if has_type_table && !props_with_schema.is_empty() {
-            // For types with dedicated tables (task, schema)
+            // For types with dedicated tables (task, schema) - bidirectional links
             r#"
                 BEGIN TRANSACTION;
 
-                -- Create node in universal table
-                CREATE $node_id CONTENT {
-                    type: $node_type,
-                    content: $content,
-                    before_sibling_id: $before_sibling_id,
-                    version: 1,
-                    created_at: $created_at,
-                    modified_at: $modified_at,
-                    embedding_vector: NONE,
-                    embedding_stale: false,
-                    mentions: [],
-                    mentioned_by: [],
-                    data: NONE,
-                    variants: {},
-                    properties: $properties
+                -- Step 1: Create spoke (type-specific data) with reverse link to hub
+                CREATE $type_id CONTENT {
+                    id: $type_id,
+                    node: $node_id,
+                    status: $status,
+                    priority: $priority,
+                    due_date: $due_date,
+                    assignee: $assignee
                 };
 
-                -- Create type-specific record
-                CREATE $type_id CONTENT $properties;
+                -- Step 2: Create hub (universal metadata) with forward link to spoke
+                CREATE $node_id CONTENT {
+                    id: $node_id,
+                    nodeType: $node_type,
+                    content: $content,
+                    data: $type_id,
+                    version: 1,
+                    createdAt: $created_at,
+                    modifiedAt: $modified_at
+                };
 
-                -- Link node to type-specific record
-                UPDATE $node_id SET data = $type_id;
-
-                -- Create parent-child edge (parent->has_child->child)
-                RELATE $parent_id->has_child->$node_id;
+                -- Step 3: Create parent-child edge (parent->has_child->child)
+                RELATE $parent_id->has_child->$node_id CONTENT {
+                    order: $order,
+                    createdAt: $created_at,
+                    version: 1
+                };
 
                 COMMIT TRANSACTION;
             "#
             .to_string()
         } else {
-            // For types without dedicated tables (text, date, etc.)
+            // For types without dedicated tables (text, date, etc.) - no spoke needed
             r#"
                 BEGIN TRANSACTION;
 
-                -- Create node in universal table
+                -- Create hub only (no spoke needed for simple types)
                 CREATE $node_id CONTENT {
-                    type: $node_type,
+                    id: $node_id,
+                    nodeType: $node_type,
                     content: $content,
-                    before_sibling_id: $before_sibling_id,
-                    version: 1,
-                    created_at: $created_at,
-                    modified_at: $modified_at,
-                    embedding_vector: NONE,
-                    embedding_stale: false,
-                    mentions: [],
-                    mentioned_by: [],
                     data: NONE,
-                    variants: {},
-                    properties: $properties
+                    version: 1,
+                    createdAt: $created_at,
+                    modifiedAt: $modified_at
                 };
 
                 -- Create parent-child edge (parent->has_child->child)
-                RELATE $parent_id->has_child->$node_id;
+                RELATE $parent_id->has_child->$node_id CONTENT {
+                    order: $order,
+                    createdAt: $created_at,
+                    version: 1
+                };
 
                 COMMIT TRANSACTION;
             "#
