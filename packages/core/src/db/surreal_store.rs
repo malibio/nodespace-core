@@ -2395,10 +2395,17 @@ where
 
                 // Check if rebalancing is needed
                 if let Some(next) = next_order {
-                    if (next - prev_order) < 0.001 {
+                    if (next - prev_order) < 0.0001 {
                         // Gap too small, need to rebalance before inserting
                         self.rebalance_children_for_parent(parent_id).await?;
+
                         // Re-query edges after rebalancing
+                        // NOTE: There is a small race condition window here - between rebalancing
+                        // completion and this re-query, another client could move/delete the sibling.
+                        // If this occurs, we'll get "Sibling not found after rebalancing" error and
+                        // the operation fails. This is an accepted limitation - clients can retry.
+                        // A fully atomic solution would require SurrealDB to support multi-step
+                        // transactions with deferred constraint checking, which isn't available.
                         let mut edges_response = self
                             .db
                             .query("SELECT out, order FROM has_child WHERE in = $parent_thing ORDER BY order ASC;")
@@ -2495,14 +2502,21 @@ where
     }
 
     pub fn reorder_node(&self, _id: &str, _new_before_sibling_id: Option<&str>) -> Result<()> {
-        // With fractional ordering (Issue #550), nodes are reordered by updating the order field
-        // on has_child edges, not by updating a node field.
-        // This method is kept for backward compatibility but is a no-op.
-        // Node reordering happens through move_node with the same parent.
+        // DEPRECATED: This method is a no-op stub kept for API compatibility.
         //
-        // TODO: Remove this method once all callers are migrated to use move_node
+        // With fractional ordering (Issue #550), nodes are reordered by updating the order field
+        // on has_child edges, not by updating a node field. The old before_sibling_id approach
+        // is no longer used in the Rust backend.
+        //
+        // Node reordering is now handled by:
+        // 1. NodeOperations::reorder_node() - High-level wrapper with sibling chain integrity
+        // 2. move_node() - Low-level atomic operation for hierarchy changes
+        //
+        // This method exists solely to prevent breaking the public API, but it has no
+        // implementation and should not be called directly. All callers go through the
+        // NodeOperations wrapper which handles the legacy before_sibling_id semantics.
         tracing::warn!(
-            "reorder_node called - use move_node with same parent for fractional ordering"
+            "SurrealStore::reorder_node is deprecated and is a no-op. Use NodeOperations::reorder_node() instead."
         );
         Ok(())
     }

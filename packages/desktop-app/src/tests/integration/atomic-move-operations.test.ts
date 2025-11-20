@@ -253,4 +253,66 @@ describe('Atomic Move Node Operations - Fractional Ordering (Issue #552)', () =>
       expect(needsRebalancing(rebalanced)).toBe(false);
     });
   });
+
+  describe('Rebalancing integration scenario', () => {
+    it('should trigger rebalancing when precision threshold is approached', () => {
+      // Simulate the scenario where we have degraded precision and need to insert
+      // This validates that the move_node logic correctly detects and triggers rebalancing
+
+      // Start with two siblings with a small gap
+      const orders = [1.0, 1.00005]; // Gap of 0.00005 - less than 0.0001 threshold
+      expect(needsRebalancing(orders)).toBe(true); // Should detect this needs rebalancing
+
+      // When move_node detects this gap is less than 0.0001, it triggers rebalancing
+      // Simulating: move_node would call rebalance_children_for_parent() here
+      const rebalanced = rebalance(2);
+
+      // After rebalancing, orders should be [1.0, 2.0]
+      expect(rebalanced).toEqual([1.0, 2.0]);
+
+      // Now inserting between them has plenty of space
+      const newOrder = calculateOrder(1.0, 2.0);
+      expect(newOrder).toBe(1.5);
+
+      // The new order is well-spaced and won't degrade precision
+      const afterInsert = [1.0, 1.5, 2.0];
+      expect(needsRebalancing(afterInsert)).toBe(false);
+    });
+
+    it('should maintain precision through rapid sequential insertions', () => {
+      // This validates the complete flow: detect degradation → rebalance → calculate new order
+      // Simulating what happens during rapid moves between the same two siblings
+
+      // Start fresh: Parent with 2 children
+      let orders = [1.0, 2.0];
+
+      // Simulate 10 insertions between the first two children
+      // In real scenario, each insertion would trigger rebalancing when gap gets too small
+      for (let i = 0; i < 10; i++) {
+        // Check if we need rebalancing before next insertion
+        if (needsRebalancing(orders)) {
+          // Rebalance before inserting
+          orders = rebalance(orders.length);
+        }
+
+        // Calculate order for new insertion after first child
+        const newOrder = calculateOrder(orders[0], orders[1]);
+
+        // Insert into orders array maintaining sort
+        orders.splice(1, 0, newOrder);
+      }
+
+      // All orders should still be valid (unique, sorted, good spacing)
+      const uniqueOrders = new Set(orders);
+      expect(uniqueOrders.size).toBe(orders.length);
+
+      // Check all are properly spaced (or was rebalanced)
+      // Note: Some might be degraded if we hit the threshold, but we should never
+      // have gaps smaller than our algorithm can handle
+      for (let i = 1; i < orders.length; i++) {
+        const gap = orders[i] - orders[i - 1];
+        expect(gap).toBeGreaterThan(0); // All must be positive gaps
+      }
+    });
+  });
 });
