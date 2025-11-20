@@ -1891,21 +1891,59 @@ where
             use surrealdb::sql::Thing;
             let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
 
-            // Query children with fractional ordering support
-            // Note: ORDER BY must be applied at the edge table level before VALUE extraction
-            // For now, get children in FIFO order; ordering by fractional order happens at edge update time
+            // Query children ordered by edge.order (fractional ordering)
+            // Build ordered list of child IDs, then fetch full nodes in that order
+            let mut edge_response = self
+                .db
+                .query("SELECT * FROM has_child WHERE in = $parent_thing ORDER BY order ASC;")
+                .bind(("parent_thing", parent_thing.clone()))
+                .await
+                .context("Failed to get child edges")?;
+
+            #[derive(serde::Deserialize)]
+            struct EdgeOut {
+                out: Thing,
+            }
+
+            let edges: Vec<EdgeOut> = edge_response
+                .take(0)
+                .context("Failed to extract child edges")?;
+
+            // Extract node Things in order
+            let mut ordered_node_things: Vec<Thing> = Vec::new();
+            let mut ordered_node_strs: Vec<String> = Vec::new();
+            for edge in edges {
+                ordered_node_things.push(edge.out.clone());
+                ordered_node_strs.push(format!("{}", edge.out));
+            }
+
+            // Fetch all nodes using Things for proper ID matching
             let mut response = self
                 .db
-                .query(
-                    "SELECT * FROM node WHERE id IN (SELECT VALUE out FROM has_child WHERE in = $parent_thing);"
-                )
-                .bind(("parent_thing", parent_thing))
+                .query("SELECT * FROM node WHERE id IN $ids;")
+                .bind(("ids", ordered_node_things))
                 .await
                 .context("Failed to get children")?;
 
-            let nodes: Vec<SurrealNode> = response
+            let fetched_nodes: Vec<SurrealNode> = response
                 .take(0)
                 .context("Failed to extract children from response")?;
+
+            // Create a hashmap of fetched nodes for quick lookup by ID
+            use std::collections::HashMap as IDHashMap;
+            let mut node_map: IDHashMap<String, SurrealNode> = IDHashMap::new();
+            for node in fetched_nodes {
+                let id_str = format!("{}", node.id);
+                node_map.insert(id_str, node);
+            }
+
+            // Reconstruct nodes in the exact order from the edge query (ordered_node_strs)
+            let mut nodes: Vec<SurrealNode> = Vec::new();
+            for id_str in ordered_node_strs.iter() {
+                if let Some(node) = node_map.remove(id_str) {
+                    nodes.push(node);
+                }
+            }
 
             nodes
         } else {
