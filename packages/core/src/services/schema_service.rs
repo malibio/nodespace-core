@@ -637,53 +637,56 @@ where
             mentioned_by: Vec::new(),
         };
 
-        // Execute DDL statements and node creation with proper error handling
-        // NOTE: SurrealDB DDL (DEFINE TABLE) cannot be wrapped in transactions.
-        // We ensure atomicity through:
-        // 1. All validation happens BEFORE any DDL execution
-        // 2. DDL executes first (table creation)
-        // 3. Node creation happens second
-        // 4. If node creation fails, we attempt cleanup of created tables
+        // Execute DDL and node creation in a single atomic transaction
+        // SurrealDB supports DEFINE TABLE within transactions for true atomicity
         let db = self.node_service.store.db();
 
-        // Execute all DDL statements
+        // Build transaction query that includes all DDL + node creation
+        let mut transaction_query = String::from("BEGIN TRANSACTION;\n\n");
+
+        // Add all DDL statements (table definitions and indexes)
         for ddl in &ddl_statements {
-            db.query(ddl).await.map_err(|e| {
-                NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
-                    "Failed to execute DDL '{}': {}",
-                    ddl, e
-                )))
-            })?;
+            transaction_query.push_str(ddl);
+            transaction_query.push_str(";\n");
         }
 
-        // Create schema node using NodeService
-        // If this fails, attempt to clean up created tables
-        match self.node_service.create_node(schema_node).await {
-            Ok(_) => {
-                // Success - everything is consistent
-            }
-            Err(e) => {
-                // Node creation failed - attempt cleanup of created tables
-                tracing::warn!(
-                    "Schema node creation failed for '{}', attempting table cleanup: {}",
-                    type_name,
-                    e
-                );
+        transaction_query.push('\n');
 
-                // Best-effort cleanup (ignore errors as we're already in error state)
-                for ddl in &ddl_statements {
-                    if ddl.contains("DEFINE TABLE") {
-                        // Extract table name and attempt to remove it
-                        if let Some(table_name) = ddl.split_whitespace().nth(2) {
-                            let cleanup = format!("REMOVE TABLE {}", table_name);
-                            let _ = db.query(&cleanup).await;
-                        }
-                    }
-                }
+        // Add hub-spoke node creation (following the NodeService pattern)
+        // Schema type has a dedicated table, so create both spoke and hub
 
-                return Err(e);
-            }
-        }
+        // Step 1: Create spoke (schema-specific table entry) with properties
+        let spoke_properties = serde_json::to_value(&schema_node)
+            .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?;
+
+        transaction_query.push_str(&format!(
+            "-- Step 1: Create spoke (schema-specific data)\nCREATE schema:{} CONTENT {};\n\n",
+            schema_node_id,
+            serde_json::to_string(&spoke_properties)
+                .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?
+        ));
+
+        // Step 2: Create hub (universal node table entry) with link to spoke
+        transaction_query.push_str(&format!(
+            "-- Step 2: Create hub (universal metadata) with link to spoke\nCREATE node:{} CONTENT {{\n    id: '{}',\n    nodeType: 'schema',\n    content: {},\n    data: schema:{},\n    version: 1,\n    createdAt: {},\n    modifiedAt: {}\n}};\n\n",
+            schema_node_id,
+            schema_node_id,
+            serde_json::to_string(display_name).unwrap(),
+            schema_node_id,
+            serde_json::to_string(&schema_node.created_at).unwrap(),
+            serde_json::to_string(&schema_node.modified_at).unwrap()
+        ));
+
+        transaction_query.push_str("COMMIT TRANSACTION;");
+
+        // Execute the entire transaction atomically
+        // If any statement fails (DDL or node creation), the entire transaction rolls back
+        db.query(&transaction_query).await.map_err(|e| {
+            NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
+                "Failed to execute schema creation transaction: {}",
+                e
+            )))
+        })?;
 
         tracing::info!(
             "Created user schema '{}' with {} fields",
