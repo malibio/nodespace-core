@@ -303,40 +303,97 @@ export interface NodeReferencePropagationEvent extends BaseEvent {
 // ============================================================================
 
 // ============================================================================
-// Real-time Synchronization Events (LIVE SELECT)
+// Real-time Synchronization Events (Polling/LIVE SELECT)
 // ============================================================================
 
 /**
- * Emitted when a node is changed in the database via another client
- * (MCP server or other Tauri instance) using SurrealDB LIVE SELECT
+ * Node data from database real-time sync
  */
-export interface RealtimeSyncNodeChangedEvent extends BaseEvent {
-  type: 'sync:node-changed';
+export interface NodeEventData {
+  id: string;
+  content: string;
+  nodeType: string;
+  version: number;
+  modifiedAt: string;
+}
+
+/**
+ * Edge data from database real-time sync
+ */
+export interface EdgeEventData {
+  id: string;
+  in: string; // parent_id
+  out: string; // child_id
+  order: number;
+}
+
+/**
+ * Emitted when a node is created in the database via another client
+ * (MCP server or other Tauri instance)
+ */
+export interface RealtimeNodeCreatedEvent extends BaseEvent {
+  type: 'node:created';
   namespace: 'sync';
   nodeId: string;
-  changeType: 'create' | 'update' | 'delete';
-  nodeData?: Record<string, unknown>; // Full node data for create/update
-  previousData?: Record<string, unknown>; // Previous state for update
+  nodeData: NodeEventData;
   metadata?: Record<string, unknown>;
 }
 
 /**
- * Emitted when an edge (relationship) is changed in the database via another client
+ * Emitted when a node is updated in the database via another client
  */
-export interface RealtimeSyncEdgeChangedEvent extends BaseEvent {
-  type: 'sync:edge-changed';
+export interface RealtimeNodeUpdatedEvent extends BaseEvent {
+  type: 'node:updated';
+  namespace: 'sync';
+  nodeId: string;
+  nodeData: NodeEventData;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when a node is deleted in the database via another client
+ */
+export interface RealtimeNodeDeletedEvent extends BaseEvent {
+  type: 'node:deleted';
+  namespace: 'sync';
+  nodeId: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when an edge is created in the database via another client
+ */
+export interface RealtimeEdgeCreatedEvent extends BaseEvent {
+  type: 'edge:created';
   namespace: 'sync';
   edgeId: string;
-  sourceNodeId: string;
-  targetNodeId: string;
-  changeType: 'create' | 'update' | 'delete';
-  edgeData?: Record<string, unknown>; // Full edge data for create/update
-  previousData?: Record<string, unknown>; // Previous state for update
+  edgeData: EdgeEventData;
   metadata?: Record<string, unknown>;
 }
 
 /**
- * Emitted when the LIVE SELECT synchronization service encounters an error
+ * Emitted when an edge is updated in the database via another client
+ */
+export interface RealtimeEdgeUpdatedEvent extends BaseEvent {
+  type: 'edge:updated';
+  namespace: 'sync';
+  edgeId: string;
+  edgeData: EdgeEventData;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when an edge is deleted in the database via another client
+ */
+export interface RealtimeEdgeDeletedEvent extends BaseEvent {
+  type: 'edge:deleted';
+  namespace: 'sync';
+  edgeId: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when the synchronization service encounters an error
  */
 export interface RealtimeSyncErrorEvent extends BaseEvent {
   type: 'error:sync-failed';
@@ -348,7 +405,7 @@ export interface RealtimeSyncErrorEvent extends BaseEvent {
 }
 
 /**
- * Emitted when the LIVE SELECT synchronization service connects/disconnects
+ * Emitted when the synchronization service connects/disconnects
  */
 export interface RealtimeSyncStatusEvent extends BaseEvent {
   type: 'sync:status-changed';
@@ -399,8 +456,12 @@ export type NodeSpaceEvent =
   | NodeEmbeddingEvent
   | NodeReferencePropagationEvent
   // Real-time Synchronization Events
-  | RealtimeSyncNodeChangedEvent
-  | RealtimeSyncEdgeChangedEvent
+  | RealtimeNodeCreatedEvent
+  | RealtimeNodeUpdatedEvent
+  | RealtimeNodeDeletedEvent
+  | RealtimeEdgeCreatedEvent
+  | RealtimeEdgeUpdatedEvent
+  | RealtimeEdgeDeletedEvent
   | RealtimeSyncErrorEvent
   | RealtimeSyncStatusEvent
   // Phase 2+ Events
@@ -513,9 +574,13 @@ export const EventTypes = {
   FOCUS_REQUESTED: 'focus:requested',
   NAVIGATION_CHANGED: 'navigation:changed',
 
-  // Real-time Synchronization (LIVE SELECT)
-  SYNC_NODE_CHANGED: 'sync:node-changed',
-  SYNC_EDGE_CHANGED: 'sync:edge-changed',
+  // Real-time Synchronization (Polling/LIVE SELECT)
+  REALTIME_NODE_CREATED: 'node:created',
+  REALTIME_NODE_UPDATED: 'node:updated',
+  REALTIME_NODE_DELETED: 'node:deleted',
+  REALTIME_EDGE_CREATED: 'edge:created',
+  REALTIME_EDGE_UPDATED: 'edge:updated',
+  REALTIME_EDGE_DELETED: 'edge:deleted',
   SYNC_STATUS_CHANGED: 'sync:status-changed',
 
   // Performance and Debug

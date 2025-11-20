@@ -12,25 +12,23 @@
 import { listen } from '@tauri-apps/api/event';
 import { eventBus } from './event-bus';
 import type {
-  RealtimeSyncNodeChangedEvent,
-  RealtimeSyncEdgeChangedEvent,
+  RealtimeNodeCreatedEvent,
+  RealtimeNodeUpdatedEvent,
+  RealtimeNodeDeletedEvent,
+  RealtimeEdgeCreatedEvent,
+  RealtimeEdgeUpdatedEvent,
+  RealtimeEdgeDeletedEvent,
   RealtimeSyncErrorEvent,
-  RealtimeSyncStatusEvent
+  RealtimeSyncStatusEvent,
+  NodeEventData,
+  EdgeEventData
 } from './event-types';
 
 /**
- * Payload structure for Tauri sync events emitted by LiveQueryService
- */
-interface TauriSyncEventPayload extends Record<string, unknown> {
-  event_type: 'node-changed' | 'edge-changed' | 'error' | 'status';
-  payload: Record<string, unknown>;
-}
-
-/**
- * Initialize Tauri LIVE SELECT event listeners
+ * Initialize Tauri real-time synchronization event listeners
  *
- * Sets up listeners for all real-time synchronization events and bridges them
- * to the frontend EventBus. Should be called once during app initialization.
+ * Sets up listeners for all real-time synchronization events (polling-based MVP)
+ * and bridges them to the frontend EventBus. Should be called once during app initialization.
  *
  * @returns Promise resolving when all listeners are registered
  */
@@ -40,93 +38,185 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     return;
   }
 
-  console.info('Initializing Tauri LIVE SELECT sync listeners');
+  console.info('Initializing Tauri real-time sync listeners');
 
   try {
-    // Listen for node changes
-    await listen<TauriSyncEventPayload>('sync:node-changed', (event) => {
-      handleNodeChangedEvent(event.payload);
+    // Listen for node events
+    await listen<NodeEventData>('node:created', (event) => {
+      handleNodeCreatedEvent(event.payload);
     });
 
-    // Listen for edge changes
-    await listen<TauriSyncEventPayload>('sync:edge-changed', (event) => {
-      handleEdgeChangedEvent(event.payload);
+    await listen<NodeEventData>('node:updated', (event) => {
+      handleNodeUpdatedEvent(event.payload);
+    });
+
+    await listen<{ id: string }>('node:deleted', (event) => {
+      handleNodeDeletedEvent(event.payload);
+    });
+
+    // Listen for edge events
+    await listen<EdgeEventData>('edge:created', (event) => {
+      handleEdgeCreatedEvent(event.payload);
+    });
+
+    await listen<EdgeEventData>('edge:updated', (event) => {
+      handleEdgeUpdatedEvent(event.payload);
+    });
+
+    await listen<{ id: string }>('edge:deleted', (event) => {
+      handleEdgeDeletedEvent(event.payload);
     });
 
     // Listen for synchronization errors
-    await listen<TauriSyncEventPayload>('sync:error', (event) => {
+    await listen<Record<string, unknown>>('sync:error', (event) => {
       handleSyncErrorEvent(event.payload);
     });
 
     // Listen for synchronization status changes
-    await listen<TauriSyncEventPayload>('sync:status', (event) => {
+    await listen<Record<string, unknown>>('sync:status', (event) => {
       handleSyncStatusEvent(event.payload);
     });
 
-    console.info('✅ Tauri LIVE SELECT sync listeners initialized successfully');
+    console.info('✅ Tauri real-time sync listeners initialized successfully');
   } catch (error) {
     console.error('❌ Failed to initialize Tauri sync listeners', error);
-    throw new Error(`Failed to initialize LIVE SELECT listeners: ${error}`);
+    throw new Error(`Failed to initialize sync listeners: ${error}`);
   }
 }
 
 /**
- * Handle node change events from Tauri backend
+ * Handle node created events from Tauri backend
  */
-function handleNodeChangedEvent(payload: Record<string, unknown>): void {
+function handleNodeCreatedEvent(payload: NodeEventData): void {
   try {
-    const nodeId = String(payload.nodeId);
-    const changeType = String(payload.changeType) as 'create' | 'update' | 'delete';
-
-    const event: Omit<RealtimeSyncNodeChangedEvent, 'timestamp'> = {
-      type: 'sync:node-changed',
+    const event: Omit<RealtimeNodeCreatedEvent, 'timestamp'> = {
+      type: 'node:created',
       namespace: 'sync',
-      source: 'tauri-live-query',
-      nodeId,
-      changeType,
-      nodeData: payload.nodeData ? (payload.nodeData as Record<string, unknown>) : undefined,
-      previousData: payload.previousData ? (payload.previousData as Record<string, unknown>) : undefined,
+      source: 'tauri-polling-service',
+      nodeId: payload.id,
+      nodeData: payload,
       metadata: {
         receivedAt: new Date().toISOString()
       }
     };
 
     eventBus.emit(event);
-    console.debug(`🔄 Node ${changeType}: ${nodeId}`);
+    console.debug(`📗 Node created: ${payload.id}`);
   } catch (error) {
-    console.error('Error processing node-changed event', error);
+    console.error('Error processing node:created event', error);
   }
 }
 
 /**
- * Handle edge change events from Tauri backend
+ * Handle node updated events from Tauri backend
  */
-function handleEdgeChangedEvent(payload: Record<string, unknown>): void {
+function handleNodeUpdatedEvent(payload: NodeEventData): void {
   try {
-    const edgeId = String(payload.edgeId);
-    const sourceNodeId = String(payload.sourceNodeId);
-    const targetNodeId = String(payload.targetNodeId);
-    const changeType = String(payload.changeType) as 'create' | 'update' | 'delete';
-
-    const event: Omit<RealtimeSyncEdgeChangedEvent, 'timestamp'> = {
-      type: 'sync:edge-changed',
+    const event: Omit<RealtimeNodeUpdatedEvent, 'timestamp'> = {
+      type: 'node:updated',
       namespace: 'sync',
-      source: 'tauri-live-query',
-      edgeId,
-      sourceNodeId,
-      targetNodeId,
-      changeType,
-      edgeData: payload.edgeData ? (payload.edgeData as Record<string, unknown>) : undefined,
-      previousData: payload.previousData ? (payload.previousData as Record<string, unknown>) : undefined,
+      source: 'tauri-polling-service',
+      nodeId: payload.id,
+      nodeData: payload,
       metadata: {
         receivedAt: new Date().toISOString()
       }
     };
 
     eventBus.emit(event);
-    console.debug(`🔗 Edge ${changeType}: ${sourceNodeId} → ${targetNodeId}`);
+    console.debug(`📘 Node updated: ${payload.id} (v${payload.version})`);
   } catch (error) {
-    console.error('Error processing edge-changed event', error);
+    console.error('Error processing node:updated event', error);
+  }
+}
+
+/**
+ * Handle node deleted events from Tauri backend
+ */
+function handleNodeDeletedEvent(payload: { id: string }): void {
+  try {
+    const event: Omit<RealtimeNodeDeletedEvent, 'timestamp'> = {
+      type: 'node:deleted',
+      namespace: 'sync',
+      source: 'tauri-polling-service',
+      nodeId: payload.id,
+      metadata: {
+        receivedAt: new Date().toISOString()
+      }
+    };
+
+    eventBus.emit(event);
+    console.debug(`📕 Node deleted: ${payload.id}`);
+  } catch (error) {
+    console.error('Error processing node:deleted event', error);
+  }
+}
+
+/**
+ * Handle edge created events from Tauri backend
+ */
+function handleEdgeCreatedEvent(payload: EdgeEventData): void {
+  try {
+    const event: Omit<RealtimeEdgeCreatedEvent, 'timestamp'> = {
+      type: 'edge:created',
+      namespace: 'sync',
+      source: 'tauri-polling-service',
+      edgeId: payload.id,
+      edgeData: payload,
+      metadata: {
+        receivedAt: new Date().toISOString()
+      }
+    };
+
+    eventBus.emit(event);
+    console.debug(`🔗 Edge created: ${payload.in} → ${payload.out}`);
+  } catch (error) {
+    console.error('Error processing edge:created event', error);
+  }
+}
+
+/**
+ * Handle edge updated events from Tauri backend
+ */
+function handleEdgeUpdatedEvent(payload: EdgeEventData): void {
+  try {
+    const event: Omit<RealtimeEdgeUpdatedEvent, 'timestamp'> = {
+      type: 'edge:updated',
+      namespace: 'sync',
+      source: 'tauri-polling-service',
+      edgeId: payload.id,
+      edgeData: payload,
+      metadata: {
+        receivedAt: new Date().toISOString()
+      }
+    };
+
+    eventBus.emit(event);
+    console.debug(`🔄 Edge updated: ${payload.in} → ${payload.out}`);
+  } catch (error) {
+    console.error('Error processing edge:updated event', error);
+  }
+}
+
+/**
+ * Handle edge deleted events from Tauri backend
+ */
+function handleEdgeDeletedEvent(payload: { id: string }): void {
+  try {
+    const event: Omit<RealtimeEdgeDeletedEvent, 'timestamp'> = {
+      type: 'edge:deleted',
+      namespace: 'sync',
+      source: 'tauri-polling-service',
+      edgeId: payload.id,
+      metadata: {
+        receivedAt: new Date().toISOString()
+      }
+    };
+
+    eventBus.emit(event);
+    console.debug(`❌ Edge deleted: ${payload.id}`);
+  } catch (error) {
+    console.error('Error processing edge:deleted event', error);
   }
 }
 

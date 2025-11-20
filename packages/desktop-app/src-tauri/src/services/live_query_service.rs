@@ -1,87 +1,366 @@
 use anyhow::Result;
-use serde::Serialize;
-use tauri::AppHandle;
-use tracing::info;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
 use nodespace_core::SurrealStore;
 
-/// Events emitted to the frontend for real-time updates
-#[derive(Debug, Clone, Serialize)]
-pub struct SyncEvent {
-    pub event_type: String, // "node-changed", "edge-changed"
-    pub payload: serde_json::Value,
+/// Node data structure from database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeData {
+    pub id: String,
+    pub content: String,
+    #[serde(rename = "nodeType")]
+    pub node_type: String,
+    pub version: i32,
+    #[serde(rename = "modifiedAt")]
+    pub modified_at: String,
+}
+
+/// Edge data structure from database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeData {
+    pub id: String,
+    #[serde(rename = "in")]
+    pub parent_id: String,
+    #[serde(rename = "out")]
+    pub child_id: String,
+    pub order: f64,
 }
 
 /// Service for managing real-time database synchronization
 ///
-/// Currently provides a foundation for implementing LIVE SELECT subscriptions.
-/// When LIVE SELECT is properly supported by the SurrealDB Rust driver,
-/// this service will subscribe to database changes and emit Tauri events
-/// to trigger real-time UI updates.
-#[allow(dead_code)]
+/// Uses polling-based change detection as an MVP implementation.
+/// Will migrate to LIVE SELECT when the SurrealDB Rust driver
+/// provides proper streaming support.
 pub struct LiveQueryService {
-    store: std::sync::Arc<SurrealStore>,
+    store: Arc<SurrealStore>,
     app: AppHandle,
+    node_versions: Arc<RwLock<HashMap<String, i32>>>,
+    edge_hashes: Arc<RwLock<HashMap<String, u64>>>,
+    poll_interval_ms: u64,
+    reconnect_attempts: Arc<RwLock<u32>>,
+    max_reconnect_attempts: u32,
 }
 
 impl LiveQueryService {
-    pub fn new(store: std::sync::Arc<SurrealStore>, app: AppHandle) -> Self {
-        Self { store, app }
-    }
-
-    /// Start the real-time synchronization service
-    ///
-    /// Currently initializes the service in preparation for LIVE SELECT support.
-    /// When fully implemented, this will:
-    /// 1. Subscribe to node table changes via LIVE SELECT
-    /// 2. Subscribe to edge table changes via LIVE SELECT
-    /// 3. Emit Tauri events when database records change
-    /// 4. Update the frontend in real-time without polling
-    pub async fn run(self) -> Result<()> {
-        info!("🔧 Initializing real-time synchronization service...");
-
-        // Foundation is in place for LIVE SELECT implementation
-        // The service is now running and ready to handle subscriptions
-        // when the SurrealDB driver provides proper streaming support
-
-        info!("✅ Real-time synchronization service initialized");
-        info!("📋 Note: LIVE SELECT subscriptions coming soon with SurrealDB driver updates");
-
-        // Keep the service alive
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+    pub fn new(store: Arc<SurrealStore>, app: AppHandle) -> Self {
+        Self {
+            store,
+            app,
+            node_versions: Arc::new(RwLock::new(HashMap::new())),
+            edge_hashes: Arc::new(RwLock::new(HashMap::new())),
+            poll_interval_ms: 1000, // 1 second polling interval for MVP
+            reconnect_attempts: Arc::new(RwLock::new(0)),
+            max_reconnect_attempts: 10,
         }
     }
 
-    /// Placeholder for LIVE SELECT node subscription
+    /// Start the real-time synchronization service with polling-based change detection
     ///
-    /// This method will subscribe to `LIVE SELECT * FROM node` when the
-    /// SurrealDB driver supports proper streaming for LIVE SELECT queries.
-    #[allow(dead_code)]
-    fn subscribe_to_nodes(_store: std::sync::Arc<SurrealStore>, _app: AppHandle) -> Result<()> {
-        // TODO: Implement when SurrealDB driver supports LIVE SELECT streaming
-        // Steps:
-        // 1. Get database connection via store.db()
-        // 2. Execute: db.query("LIVE SELECT * FROM node").await
-        // 3. Stream notifications and emit Tauri events
-        // 4. Handle reconnection on stream disconnect
-        info!("LIVE SELECT node subscription - coming soon");
+    /// This implementation polls the database for changes at regular intervals.
+    /// Detects changes by tracking:
+    /// - Node versions (incremented on each update)
+    /// - Edge hashes (computed from edge data)
+    ///
+    /// Emits Tauri events when changes are detected:
+    /// - node:created, node:updated, node:deleted
+    /// - edge:created, edge:updated, edge:deleted
+    pub async fn run(self) -> Result<()> {
+        info!("🔧 Starting polling-based real-time synchronization service");
+        info!("📊 Poll interval: {}ms", self.poll_interval_ms);
+
+        // Emit initial status
+        self.emit_status("connected", None);
+
+        // Initialize baseline state
+        if let Err(e) = self.initialize_baseline().await {
+            error!("Failed to initialize baseline state: {}", e);
+            self.emit_status("disconnected", Some("initialization-failed"));
+            return Err(e);
+        }
+
+        info!("✅ Baseline state initialized successfully");
+
+        // Start polling loop with exponential backoff on errors
+        loop {
+            match self.poll_for_changes().await {
+                Ok(_) => {
+                    // Reset reconnect attempts on success
+                    *self.reconnect_attempts.write().await = 0;
+
+                    // Wait for next poll interval
+                    tokio::time::sleep(tokio::time::Duration::from_millis(self.poll_interval_ms))
+                        .await;
+                }
+                Err(e) => {
+                    let attempts = {
+                        let mut attempts = self.reconnect_attempts.write().await;
+                        *attempts += 1;
+                        *attempts
+                    };
+
+                    if attempts >= self.max_reconnect_attempts {
+                        error!(
+                            "Max reconnection attempts ({}) reached, giving up",
+                            self.max_reconnect_attempts
+                        );
+                        self.emit_status("disconnected", Some("max-retries-exceeded"));
+                        return Err(anyhow::anyhow!("Max reconnection attempts exceeded"));
+                    }
+
+                    // Exponential backoff: 2^attempts seconds (capped at 60s)
+                    let backoff_secs = std::cmp::min(2u64.pow(attempts), 60);
+                    warn!(
+                        "Polling error (attempt {}/{}): {}. Retrying in {}s",
+                        attempts, self.max_reconnect_attempts, e, backoff_secs
+                    );
+
+                    self.emit_status("reconnecting", Some(&format!("retry-{}", attempts)));
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+                }
+            }
+        }
+    }
+
+    /// Initialize baseline state by loading all current nodes and edges
+    async fn initialize_baseline(&self) -> Result<()> {
+        info!("Initializing baseline state...");
+
+        // Load all nodes
+        let nodes: Vec<NodeData> = self
+            .store
+            .db()
+            .query("SELECT id, content, nodeType, version, modifiedAt FROM node")
+            .await?
+            .take(0)?;
+
+        let mut node_versions = self.node_versions.write().await;
+        for node in nodes {
+            node_versions.insert(node.id.clone(), node.version);
+        }
+        info!("Loaded {} nodes into baseline", node_versions.len());
+
+        // Load all edges
+        let edges: Vec<EdgeData> = self
+            .store
+            .db()
+            .query("SELECT id, in, out, order FROM has_child")
+            .await?
+            .take(0)?;
+
+        let mut edge_hashes = self.edge_hashes.write().await;
+        for edge in edges {
+            let hash = Self::compute_edge_hash(&edge);
+            edge_hashes.insert(edge.id.clone(), hash);
+        }
+        info!("Loaded {} edges into baseline", edge_hashes.len());
+
         Ok(())
     }
 
-    /// Placeholder for LIVE SELECT edge subscription
-    ///
-    /// This method will subscribe to `LIVE SELECT * FROM has_child` when the
-    /// SurrealDB driver supports proper streaming for LIVE SELECT queries.
-    #[allow(dead_code)]
-    fn subscribe_to_edges(_store: std::sync::Arc<SurrealStore>, _app: AppHandle) -> Result<()> {
-        // TODO: Implement when SurrealDB driver supports LIVE SELECT streaming
-        // Steps:
-        // 1. Get database connection via store.db()
-        // 2. Execute: db.query("LIVE SELECT * FROM has_child").await
-        // 3. Stream notifications and emit Tauri events
-        // 4. Handle reconnection on stream disconnect
-        info!("LIVE SELECT edge subscription - coming soon");
+    /// Poll database for changes and emit events
+    async fn poll_for_changes(&self) -> Result<()> {
+        debug!("Polling for database changes...");
+
+        // Check for node changes
+        self.check_node_changes().await?;
+
+        // Check for edge changes
+        self.check_edge_changes().await?;
+
         Ok(())
+    }
+
+    /// Check for node changes (created, updated, deleted)
+    async fn check_node_changes(&self) -> Result<()> {
+        let nodes: Vec<NodeData> = self
+            .store
+            .db()
+            .query("SELECT id, content, nodeType, version, modifiedAt FROM node")
+            .await?
+            .take(0)?;
+
+        let mut node_versions = self.node_versions.write().await;
+        let mut current_nodes = HashMap::new();
+
+        for node in nodes {
+            let node_id = node.id.clone();
+            let version = node.version;
+
+            current_nodes.insert(node_id.clone(), version);
+
+            match node_versions.get(&node_id) {
+                None => {
+                    // New node created
+                    debug!("Node created: {}", node_id);
+                    self.emit_node_event("created", &node);
+                    node_versions.insert(node_id, version);
+                }
+                Some(&old_version) if old_version < version => {
+                    // Node updated
+                    debug!(
+                        "Node updated: {} (v{} -> v{})",
+                        node_id, old_version, version
+                    );
+                    self.emit_node_event("updated", &node);
+                    node_versions.insert(node_id, version);
+                }
+                _ => {
+                    // No change
+                }
+            }
+        }
+
+        // Check for deleted nodes
+        let deleted_nodes: Vec<String> = node_versions
+            .keys()
+            .filter(|id| !current_nodes.contains_key(*id))
+            .cloned()
+            .collect();
+
+        for node_id in deleted_nodes {
+            debug!("Node deleted: {}", node_id);
+            self.emit_node_deleted(&node_id);
+            node_versions.remove(&node_id);
+        }
+
+        Ok(())
+    }
+
+    /// Check for edge changes (created, updated, deleted)
+    async fn check_edge_changes(&self) -> Result<()> {
+        let edges: Vec<EdgeData> = self
+            .store
+            .db()
+            .query("SELECT id, in, out, order FROM has_child")
+            .await?
+            .take(0)?;
+
+        let mut edge_hashes = self.edge_hashes.write().await;
+        let mut current_edges = HashMap::new();
+
+        for edge in edges {
+            let edge_id = edge.id.clone();
+            let hash = Self::compute_edge_hash(&edge);
+
+            current_edges.insert(edge_id.clone(), hash);
+
+            match edge_hashes.get(&edge_id) {
+                None => {
+                    // New edge created
+                    debug!("Edge created: {}", edge_id);
+                    self.emit_edge_event("created", &edge);
+                    edge_hashes.insert(edge_id, hash);
+                }
+                Some(&old_hash) if old_hash != hash => {
+                    // Edge updated
+                    debug!("Edge updated: {}", edge_id);
+                    self.emit_edge_event("updated", &edge);
+                    edge_hashes.insert(edge_id, hash);
+                }
+                _ => {
+                    // No change
+                }
+            }
+        }
+
+        // Check for deleted edges
+        let deleted_edges: Vec<String> = edge_hashes
+            .keys()
+            .filter(|id| !current_edges.contains_key(*id))
+            .cloned()
+            .collect();
+
+        for edge_id in deleted_edges {
+            debug!("Edge deleted: {}", edge_id);
+            self.emit_edge_deleted(&edge_id);
+            edge_hashes.remove(&edge_id);
+        }
+
+        Ok(())
+    }
+
+    /// Emit node event to Tauri frontend
+    fn emit_node_event(&self, change_type: &str, node: &NodeData) {
+        let event_name = format!("node:{}", change_type);
+
+        if let Err(e) = self.app.emit(&event_name, node) {
+            error!("Failed to emit {}: {}", event_name, e);
+        }
+    }
+
+    /// Emit node deleted event
+    fn emit_node_deleted(&self, node_id: &str) {
+        #[derive(Serialize)]
+        struct DeletedPayload {
+            id: String,
+        }
+
+        let payload = DeletedPayload {
+            id: node_id.to_string(),
+        };
+
+        if let Err(e) = self.app.emit("node:deleted", &payload) {
+            error!("Failed to emit node:deleted: {}", e);
+        }
+    }
+
+    /// Emit edge event to Tauri frontend
+    fn emit_edge_event(&self, change_type: &str, edge: &EdgeData) {
+        let event_name = format!("edge:{}", change_type);
+
+        if let Err(e) = self.app.emit(&event_name, edge) {
+            error!("Failed to emit {}: {}", event_name, e);
+        }
+    }
+
+    /// Emit edge deleted event
+    fn emit_edge_deleted(&self, edge_id: &str) {
+        #[derive(Serialize)]
+        struct DeletedPayload {
+            id: String,
+        }
+
+        let payload = DeletedPayload {
+            id: edge_id.to_string(),
+        };
+
+        if let Err(e) = self.app.emit("edge:deleted", &payload) {
+            error!("Failed to emit edge:deleted: {}", e);
+        }
+    }
+
+    /// Emit synchronization status event
+    fn emit_status(&self, status: &str, reason: Option<&str>) {
+        #[derive(Serialize)]
+        struct StatusPayload {
+            status: String,
+            reason: Option<String>,
+        }
+
+        let payload = StatusPayload {
+            status: status.to_string(),
+            reason: reason.map(|s| s.to_string()),
+        };
+
+        if let Err(e) = self.app.emit("sync:status", &payload) {
+            error!("Failed to emit sync:status: {}", e);
+        }
+    }
+
+    /// Compute hash of edge data for change detection
+    fn compute_edge_hash(edge: &EdgeData) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        edge.parent_id.hash(&mut hasher);
+        edge.child_id.hash(&mut hasher);
+        edge.order.to_bits().hash(&mut hasher);
+        hasher.finish()
     }
 }
