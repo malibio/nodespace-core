@@ -843,7 +843,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Remove node from sibling chain BEFORE deletion to prevent orphans
-    removeFromSiblingChain(currentNodeId);
+    const currentBeforeSiblingId = currentNode.beforeSiblingId;
+    removeFromSiblingChain(currentNodeId, currentBeforeSiblingId, currentParentId);
 
     // Delete with dependencies - PersistenceCoordinator ensures correct order
     sharedNodeStore.deleteNode(currentNodeId, viewerSource, false, deletionDependencies);
@@ -911,12 +912,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * This prevents orphaned nodes when a node is moved (indent/outdent) or deleted.
    *
    * @param nodeId - The node being removed from its current parent
+   * @param oldBeforeSiblingId - The node's old beforeSiblingId value (before it was moved)
    * @param parentId - The parent ID (optional, will query if not provided)
    */
-  function removeFromSiblingChain(nodeId: string, parentId?: string | null): string | null {
-    const node = sharedNodeStore.getNode(nodeId);
-    if (!node) return null;
-
+  function removeFromSiblingChain(
+    nodeId: string,
+    oldBeforeSiblingId: string | null,
+    parentId?: string | null
+  ): string | null {
     // Use provided parentId or query from graph
     let actualParentId = parentId;
     if (actualParentId === undefined) {
@@ -931,7 +934,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Update next sibling to point to our predecessor, "splicing us out" of the chain
       sharedNodeStore.updateNode(
         nextSibling.id,
-        { beforeSiblingId: node.beforeSiblingId },
+        { beforeSiblingId: oldBeforeSiblingId },
         viewerSource,
         { skipConflictDetection: true } // Sequential structural updates
       );
@@ -1021,16 +1024,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Remove from old sibling chain FIRST (while parentId is still old)
-    removeFromSiblingChain(nodeId, currentParentId);
+    // Save old beforeSiblingId before updating
+    const oldBeforeSiblingId = node.beforeSiblingId;
 
-    // THEN update node's parentId
+    // Update node's parentId FIRST to move it to the new parent
     sharedNodeStore.updateNode(
       nodeId,
       { parentId: targetParentId, beforeSiblingId },
       { type: 'database', reason: 'indent-node' },
       { isComputedField: true }
     );
+
+    // THEN remove from old sibling chain using the OLD beforeSiblingId
+    removeFromSiblingChain(nodeId, oldBeforeSiblingId, currentParentId);
 
     events.hierarchyChanged();
     _updateTrigger++;
@@ -1115,16 +1121,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Remove from old sibling chain FIRST (while parentId is still old)
-    removeFromSiblingChain(nodeId, oldParentId);
+    // Save old beforeSiblingId before updating
+    const oldBeforeSiblingId = node.beforeSiblingId;
 
-    // THEN update node's parentId
+    // Update node's parentId FIRST to move it to the new parent
     sharedNodeStore.updateNode(
       nodeId,
       { parentId: newParentId, beforeSiblingId: positionBeforeSibling },
       { type: 'database', reason: 'outdent-node' },
       { isComputedField: true }
     );
+
+    // THEN remove from old sibling chain using the OLD beforeSiblingId
+    removeFromSiblingChain(nodeId, oldBeforeSiblingId, oldParentId);
 
     // Transfer siblings below as children
     if (siblingsBelow.length > 0) {
@@ -1184,16 +1193,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             // Ignorable error: continue with UI updates (for unit tests without server)
           }
 
-          // Remove from old sibling chain FIRST (while parentId is still old)
-          removeFromSiblingChain(siblingId, oldParentId);
+          // Save old beforeSiblingId before updating
+          const oldSiblingBeforeSiblingId = sibling.beforeSiblingId;
 
-          // THEN update parentId
+          // Update parentId FIRST to move sibling to new parent
           sharedNodeStore.updateNode(
             siblingId,
             { parentId: nodeId, beforeSiblingId: siblingBeforeSiblingId },
             { type: 'database', reason: 'outdent-transfer' },
             { isComputedField: true }
           );
+
+          // THEN remove from old sibling chain using the OLD beforeSiblingId
+          removeFromSiblingChain(siblingId, oldSiblingBeforeSiblingId, oldParentId);
         }
       }
 
@@ -1343,7 +1355,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     cleanupDebouncedOperations(nodeId);
 
     // Remove node from sibling chain BEFORE deletion to prevent orphans
-    removeFromSiblingChain(nodeId);
+    const nodeBeforeSiblingId = node.beforeSiblingId;
+    removeFromSiblingChain(nodeId, nodeBeforeSiblingId, parentId);
 
     // CRITICAL: Update children cache to remove this node from its parent
     sharedNodeStore.removeChildFromCache(parentId, nodeId);
