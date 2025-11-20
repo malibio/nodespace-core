@@ -2368,11 +2368,7 @@ where
         Ok(())
     }
 
-    pub fn reorder_node(
-        &self,
-        _id: &str,
-        _new_before_sibling_id: Option<&str>,
-    ) -> Result<()> {
+    pub fn reorder_node(&self, _id: &str, _new_before_sibling_id: Option<&str>) -> Result<()> {
         // With fractional ordering (Issue #550), nodes are reordered by updating the order field
         // on has_child edges, not by updating a node field.
         // This method is kept for backward compatibility but is a no-op.
