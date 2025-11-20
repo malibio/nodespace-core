@@ -30,6 +30,11 @@ class ReactiveStructureTree {
   /**
    * Initialize the tree with LIVE SELECT event subscriptions
    * This should be called once during app startup
+   *
+   * TODO (#XXXX): Add bulk initialization from backend on startup
+   * Currently the tree starts empty and gets populated via LIVE SELECT events.
+   * This works functionally but means existing hierarchy isn't visible until
+   * external operations trigger events. Need backend command to fetch all edges.
    */
   async initialize() {
     if (this.initialized) return;
@@ -37,6 +42,10 @@ class ReactiveStructureTree {
     console.log('[ReactiveStructureTree] Initializing...');
 
     try {
+      // TODO: Add initial bulk load before subscribing to events
+      // const initialEdges = await tauriNodeService.getAllEdges();
+      // this.buildTree(initialEdges);
+
       // Subscribe to LIVE SELECT structure events
       await this.subscribeToEvents();
 
@@ -49,29 +58,71 @@ class ReactiveStructureTree {
   }
 
   /**
+   * Build initial tree from bulk edge data
+   * Used for initialization when getAllEdges() backend method is available
+   * @private
+   */
+  private buildTree(edges: EdgeEventData[]) {
+    const tree = new Map<string, ChildInfo[]>();
+
+    for (const edge of edges) {
+      if (!tree.has(edge.in)) {
+        tree.set(edge.in, []);
+      }
+      tree.get(edge.in)!.push({
+        nodeId: edge.out,
+        order: edge.order
+      });
+    }
+
+    // Sort all children arrays by order
+    for (const [_parentId, children] of tree) {
+      children.sort((a, b) => a.order - b.order);
+    }
+
+    this.children = tree;
+  }
+
+  /**
    * Subscribe to edge CRUD events from LIVE SELECT
+   * @throws Error if critical event subscriptions fail
    */
   private async subscribeToEvents() {
-    // Edge created event
-    const unlistenCreated = await listen<EdgeEventData>('edge:created', (event) => {
-      console.log('[ReactiveStructureTree] Edge created:', event.payload);
-      this.addChild(event.payload);
-    });
-    this.unlisteners.push(unlistenCreated);
+    try {
+      // Edge created event
+      const unlistenCreated = await listen<EdgeEventData>('edge:created', (event) => {
+        console.log('[ReactiveStructureTree] Edge created:', event.payload);
+        this.addChild(event.payload);
+      });
+      this.unlisteners.push(unlistenCreated);
+    } catch (error) {
+      console.error('[ReactiveStructureTree] Failed to subscribe to edge:created', error);
+      throw new Error('Failed to subscribe to critical structure events: edge:created');
+    }
 
-    // Edge deleted event
-    const unlistenDeleted = await listen<EdgeEventData>('edge:deleted', (event) => {
-      console.log('[ReactiveStructureTree] Edge deleted:', event.payload);
-      this.removeChild(event.payload);
-    });
-    this.unlisteners.push(unlistenDeleted);
+    try {
+      // Edge deleted event
+      const unlistenDeleted = await listen<EdgeEventData>('edge:deleted', (event) => {
+        console.log('[ReactiveStructureTree] Edge deleted:', event.payload);
+        this.removeChild(event.payload);
+      });
+      this.unlisteners.push(unlistenDeleted);
+    } catch (error) {
+      console.error('[ReactiveStructureTree] Failed to subscribe to edge:deleted', error);
+      throw new Error('Failed to subscribe to critical structure events: edge:deleted');
+    }
 
-    // Edge updated event (for order changes during rebalancing)
-    const unlistenUpdated = await listen<EdgeEventData>('edge:updated', (event) => {
-      console.log('[ReactiveStructureTree] Edge updated:', event.payload);
-      this.updateChildOrder(event.payload);
-    });
-    this.unlisteners.push(unlistenUpdated);
+    try {
+      // Edge updated event (for order changes during rebalancing)
+      const unlistenUpdated = await listen<EdgeEventData>('edge:updated', (event) => {
+        console.log('[ReactiveStructureTree] Edge updated:', event.payload);
+        this.updateChildOrder(event.payload);
+      });
+      this.unlisteners.push(unlistenUpdated);
+    } catch (error) {
+      console.error('[ReactiveStructureTree] Failed to subscribe to edge:updated', error);
+      throw new Error('Failed to subscribe to critical structure events: edge:updated');
+    }
   }
 
   /**
@@ -126,15 +177,34 @@ class ReactiveStructureTree {
       this.children.set(parentId, children);
     }
 
-    // Check if child already exists (shouldn't happen, but handle gracefully)
+    // Check if child already exists in current parent
     const existingIndex = children.findIndex((c) => c.nodeId === childId);
     if (existingIndex >= 0) {
+      console.warn(
+        `[ReactiveStructureTree] Duplicate edge detected: ${childId} already child of ${parentId}`,
+        edge
+      );
       // Update order if different
       if (children[existingIndex].order !== order) {
         children[existingIndex].order = order;
         // Re-sort array
         children.sort((a, b) => a.order - b.order);
+        // Notify Svelte of the change
+        this.children.set(parentId, children);
       }
+      return;
+    }
+
+    // Check if child already has a DIFFERENT parent (tree invariant violation)
+    const currentParent = this.getParent(childId);
+    if (currentParent && currentParent !== parentId) {
+      console.error(
+        `[ReactiveStructureTree] Tree invariant violation: ${childId} already has parent ${currentParent}, cannot add to ${parentId}`,
+        edge
+      );
+      // In a tree structure, a node can only have one parent
+      // This indicates either a database inconsistency or a bug in event emission
+      // For now, we'll ignore the duplicate edge to preserve tree structure
       return;
     }
 
@@ -228,6 +298,14 @@ class ReactiveStructureTree {
     }
     this.unlisteners = [];
     this.initialized = false;
+  }
+
+  /**
+   * TEST ONLY: Direct access to addChild for testing binary search algorithm
+   * @internal
+   */
+  __testOnly_addChild(edge: EdgeEventData) {
+    this.addChild(edge);
   }
 }
 

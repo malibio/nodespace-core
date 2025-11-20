@@ -188,16 +188,28 @@ describe('ReactiveStructureTree', () => {
 
   describe('binary search insertion', () => {
     it('should maintain sorted order with single insertion', () => {
-      structureTree.children.set('parent1', [
-        { nodeId: 'child1', order: 1.0 },
-        { nodeId: 'child3', order: 3.0 }
-      ]);
+      // Start with two children
+      structureTree.__testOnly_addChild({
+        id: 'edge1',
+        in: 'parent1',
+        out: 'child1',
+        order: 1.0
+      });
 
-      // Insert child2 with order 2.0 between existing children
-      const children = structureTree.children.get('parent1') || [];
-      const insertIndex = children.findIndex((c) => c.order >= 2.0);
-      children.splice(insertIndex, 0, { nodeId: 'child2', order: 2.0 });
-      structureTree.children.set('parent1', children);
+      structureTree.__testOnly_addChild({
+        id: 'edge3',
+        in: 'parent1',
+        out: 'child3',
+        order: 3.0
+      });
+
+      // Insert child2 with order 2.0 between existing children using binary search
+      structureTree.__testOnly_addChild({
+        id: 'edge2',
+        in: 'parent1',
+        out: 'child2',
+        order: 2.0
+      });
 
       const result = structureTree.getChildren('parent1');
       expect(result).toEqual(['child1', 'child2', 'child3']);
@@ -207,22 +219,17 @@ describe('ReactiveStructureTree', () => {
       const parentId = 'parent1';
       const orders = [5.0, 1.0, 3.0, 7.0, 2.0, 6.0, 4.0];
 
+      // Use actual binary search insertion via addChild
       for (let i = 0; i < orders.length; i++) {
-        const children = structureTree.children.get(parentId) || [];
-
-        // Find insertion position
-        let insertIndex = 0;
-        for (let j = 0; j < children.length; j++) {
-          if (children[j].order < orders[i]) {
-            insertIndex = j + 1;
-          }
-        }
-
-        children.splice(insertIndex, 0, { nodeId: `child${i}`, order: orders[i] });
-        structureTree.children.set(parentId, children);
+        structureTree.__testOnly_addChild({
+          id: `edge${i}`,
+          in: parentId,
+          out: `child${i}`,
+          order: orders[i]
+        });
       }
 
-      // Verify sorted order
+      // Verify sorted order - children should be sorted regardless of insertion order
       const childInfo = structureTree.getChildrenWithOrder(parentId);
       for (let i = 1; i < childInfo.length; i++) {
         expect(childInfo[i].order).toBeGreaterThan(childInfo[i - 1].order);
@@ -230,30 +237,56 @@ describe('ReactiveStructureTree', () => {
     });
 
     it('should handle insertion at beginning', () => {
-      structureTree.children.set('parent1', [
-        { nodeId: 'child2', order: 2.0 },
-        { nodeId: 'child3', order: 3.0 }
-      ]);
+      // Add existing children
+      structureTree.__testOnly_addChild({
+        id: 'edge2',
+        in: 'parent1',
+        out: 'child2',
+        order: 2.0
+      });
 
-      const children = structureTree.children.get('parent1') || [];
-      // Insert at beginning (order 0.5 < 2.0)
-      children.unshift({ nodeId: 'child1', order: 0.5 });
-      structureTree.children.set('parent1', children);
+      structureTree.__testOnly_addChild({
+        id: 'edge3',
+        in: 'parent1',
+        out: 'child3',
+        order: 3.0
+      });
+
+      // Insert at beginning using binary search (order 0.5 < 2.0)
+      structureTree.__testOnly_addChild({
+        id: 'edge1',
+        in: 'parent1',
+        out: 'child1',
+        order: 0.5
+      });
 
       const result = structureTree.getChildren('parent1');
       expect(result).toEqual(['child1', 'child2', 'child3']);
     });
 
     it('should handle insertion at end', () => {
-      structureTree.children.set('parent1', [
-        { nodeId: 'child1', order: 1.0 },
-        { nodeId: 'child2', order: 2.0 }
-      ]);
+      // Add existing children
+      structureTree.__testOnly_addChild({
+        id: 'edge1',
+        in: 'parent1',
+        out: 'child1',
+        order: 1.0
+      });
 
-      const children = structureTree.children.get('parent1') || [];
-      // Insert at end (order 4.0 > 2.0)
-      children.push({ nodeId: 'child3', order: 4.0 });
-      structureTree.children.set('parent1', children);
+      structureTree.__testOnly_addChild({
+        id: 'edge2',
+        in: 'parent1',
+        out: 'child2',
+        order: 2.0
+      });
+
+      // Insert at end using binary search (order 4.0 > 2.0)
+      structureTree.__testOnly_addChild({
+        id: 'edge3',
+        in: 'parent1',
+        out: 'child3',
+        order: 4.0
+      });
 
       const result = structureTree.getChildren('parent1');
       expect(result).toEqual(['child1', 'child2', 'child3']);
