@@ -3,7 +3,9 @@
  * Automatically silences logs during test execution to improve performance
  */
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+// Define log levels as const array for type safety and single source of truth
+const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+type LogLevel = (typeof LOG_LEVELS)[number];
 
 interface LoggerConfig {
   enabled: boolean;
@@ -16,8 +18,13 @@ class Logger {
 
   constructor(config?: Partial<LoggerConfig>) {
     // Disable logging in test environment by default
-    const isTest = typeof import.meta !== 'undefined' && import.meta.env?.VITEST === 'true';
-    const isDebug = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
+    // Support multiple runtime environments (Vite, Node, Bun, etc.)
+    const isTest =
+      (typeof import.meta !== 'undefined' && import.meta.env?.VITEST === 'true') ||
+      (typeof process !== 'undefined' && process.env.VITEST === 'true');
+    const isDebug =
+      (typeof import.meta !== 'undefined' && import.meta.env?.DEV === true) ||
+      (typeof process !== 'undefined' && process.env.NODE_ENV === 'development');
 
     this.config = {
       enabled: !isTest || isDebug,
@@ -30,9 +37,8 @@ class Logger {
   private shouldLog(level: LogLevel): boolean {
     if (!this.config.enabled) return false;
 
-    const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-    const currentLevelIndex = levels.indexOf(this.config.level);
-    const requestedLevelIndex = levels.indexOf(level);
+    const currentLevelIndex = LOG_LEVELS.indexOf(this.config.level);
+    const requestedLevelIndex = LOG_LEVELS.indexOf(level);
 
     return requestedLevelIndex >= currentLevelIndex;
   }

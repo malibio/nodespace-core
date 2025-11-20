@@ -327,6 +327,7 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    bun run test                    # Run all unit tests once (FAST MODE - optimized)
    bun run test:unit               # Same as above (explicit)
    bun run test:watch              # Watch mode (recommended for TDD)
+   bun run test:perf               # Full performance validation (large datasets)
 
    # Test specific files
    bun run test src/tests/integration/my-test.test.ts
@@ -335,9 +336,6 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    # Browser tests with real DOM (Chromium via Playwright)
    bun run test:browser            # Run browser tests (for focus, events, etc.)
    bun run test:browser:watch      # Watch mode for browser tests
-
-   # Performance tests (optimized for developer workflow)
-   bun run test:perf               # Full performance validation (large datasets)
 
    # Run all tests (unit + browser + rust)
    bun run test:all                # Runs both unit and browser tests + Rust tests
