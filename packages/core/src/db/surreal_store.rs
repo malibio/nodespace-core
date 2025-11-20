@@ -156,8 +156,11 @@ struct SurrealNode {
     #[serde(rename = "modifiedAt")]
     modified_at: String,
     embedding_vector: Option<Vec<f32>>,
+    #[serde(default)]
     embedding_stale: bool,
+    #[serde(default)]
     mentions: Vec<String>,
+    #[serde(default)]
     mentioned_by: Vec<String>,
     // Graph-native architecture fields (Issue #511)
     /// FETCH data Limitation (Issue #511):
@@ -792,9 +795,8 @@ where
     C: surrealdb::Connection,
 {
     pub async fn create_node(&self, node: Node) -> Result<Node> {
-        // Convert embedding blob to f32 array if present
-        // embedding_vector is already Vec<f32>, no conversion needed
-        let embedding_f32 = node.embedding_vector.clone();
+        // Note: embedding_vector is not stored in hub-and-spoke architecture
+        // Embeddings are managed separately for optimization
 
         // Insert into universal node table (graph-native architecture)
         // Record ID format: node:uuid (constructed by type::thing)
@@ -807,55 +809,61 @@ where
         // Don't add _schema_version here - it causes properties pollution.
         let props_with_schema = node.properties.as_object().cloned().unwrap_or_default();
 
+        // Instead of binding properties directly, we'll insert them using UPDATE after CREATE
+        // This avoids serialization issues with complex nested objects
         let query = "
             CREATE type::thing($table, $id) CONTENT {
-                type: $node_type,
+                nodeType: $node_type,
                 content: $content,
-                before_sibling_id: $before_sibling_id,
                 version: $version,
-                created_at: $created_at,
-                modified_at: $modified_at,
-                embedding_vector: $embedding_vector,
-                embedding_stale: $embedding_stale,
-                mentions: $mentions,
-                mentioned_by: $mentioned_by,
-                data: $data,
-                variants: $variants,
-                properties: $properties
+                before_sibling_id: $before_sibling_id,
+                createdAt: time::now(),
+                modifiedAt: time::now(),
+                embedding_vector: [],
+                embedding_stale: false,
+                mentions: [],
+                mentioned_by: [],
+                data: $data
             };
         ";
 
-        // Initialize graph-native fields
-        let variants_value = serde_json::json!({});
-
-        self.db
+        let mut response = self.db
             .query(query)
             .bind(("table", "node"))
             .bind(("id", node.id.clone())) // Just the UUID, type::thing will construct node:uuid
             .bind(("node_type", node.node_type.clone()))
             .bind(("content", node.content.clone()))
-            .bind(("before_sibling_id", node.before_sibling_id.clone()))
             .bind(("version", node.version))
-            .bind(("created_at", node.created_at.to_rfc3339()))
-            .bind(("modified_at", node.modified_at.to_rfc3339()))
-            .bind(("embedding_vector", embedding_f32))
-            .bind(("embedding_stale", false))
-            .bind(("mentions", Vec::<String>::new()))
-            .bind(("mentioned_by", Vec::<String>::new()))
+            .bind(("before_sibling_id", node.before_sibling_id.clone()))
             .bind(("data", None::<String>)) // Will be set below if type has properties
-            .bind(("variants", variants_value))
-            .bind(("properties", serde_json::Value::Object(props_with_schema)))
             .await
             .context("Failed to create node in universal table")?;
 
+        // Consume the CREATE response to ensure the query completes properly
+        // Note: Don't try to deserialize to SurrealNode to avoid enum/field mismatch issues
+        // The CREATE response may not include all fields in the same format as SELECT
+        let _: Option<Vec<serde_json::Value>> = response.take(0).ok();
+
+        // Set properties after creation to avoid serialization issues with complex objects
+        if !props_with_schema.is_empty() {
+            self.db
+                .query("UPDATE type::thing($table, $id) SET properties = $properties;")
+                .bind(("table", "node"))
+                .bind(("id", node.id.clone()))
+                .bind(("properties", serde_json::Value::Object(props_with_schema.clone())))
+                .await
+                .context("Failed to set node properties")?;
+        }
+
         // Insert into type-specific table for types with properties (task, schema)
-        if TYPES_WITH_PROPERTIES.contains(&node.node_type.as_str())
-            && !node
-                .properties
-                .as_object()
-                .unwrap_or(&serde_json::Map::new())
-                .is_empty()
-        {
+        let has_properties = !node
+            .properties
+            .as_object()
+            .unwrap_or(&serde_json::Map::new())
+            .is_empty();
+        let should_create_spoke = TYPES_WITH_PROPERTIES.contains(&node.node_type.as_str());
+
+        if should_create_spoke && has_properties {
             // Store properties directly in type-specific table (flattened)
             self.db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
