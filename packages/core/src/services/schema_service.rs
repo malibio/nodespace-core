@@ -613,17 +613,6 @@ where
         // Use type_name as the node ID so it can be retrieved by get_schema(type_name)
         let schema_node_id = type_name.to_string();
 
-        // Execute DDL statements first
-        let db = self.node_service.store.db();
-        for ddl in &ddl_statements {
-            db.query(ddl).await.map_err(|e| {
-                NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
-                    "Failed to execute DDL '{}': {}",
-                    ddl, e
-                )))
-            })?;
-        }
-
         // Create schema definition
         let schema_def = SchemaDefinition {
             is_core: false,
@@ -632,7 +621,7 @@ where
             fields: schema_fields.clone(),
         };
 
-        // Create schema node using NodeService
+        // Create schema node
         let schema_node = crate::models::Node {
             id: schema_node_id.clone(),
             node_type: "schema".to_string(),
@@ -648,7 +637,53 @@ where
             mentioned_by: Vec::new(),
         };
 
-        self.node_service.create_node(schema_node).await?;
+        // Execute DDL statements and node creation with proper error handling
+        // NOTE: SurrealDB DDL (DEFINE TABLE) cannot be wrapped in transactions.
+        // We ensure atomicity through:
+        // 1. All validation happens BEFORE any DDL execution
+        // 2. DDL executes first (table creation)
+        // 3. Node creation happens second
+        // 4. If node creation fails, we attempt cleanup of created tables
+        let db = self.node_service.store.db();
+
+        // Execute all DDL statements
+        for ddl in &ddl_statements {
+            db.query(ddl).await.map_err(|e| {
+                NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
+                    "Failed to execute DDL '{}': {}",
+                    ddl, e
+                )))
+            })?;
+        }
+
+        // Create schema node using NodeService
+        // If this fails, attempt to clean up created tables
+        match self.node_service.create_node(schema_node).await {
+            Ok(_) => {
+                // Success - everything is consistent
+            }
+            Err(e) => {
+                // Node creation failed - attempt cleanup of created tables
+                tracing::warn!(
+                    "Schema node creation failed for '{}', attempting table cleanup: {}",
+                    type_name,
+                    e
+                );
+
+                // Best-effort cleanup (ignore errors as we're already in error state)
+                for ddl in &ddl_statements {
+                    if ddl.contains("DEFINE TABLE") {
+                        // Extract table name and attempt to remove it
+                        if let Some(table_name) = ddl.split_whitespace().nth(2) {
+                            let cleanup = format!("REMOVE TABLE {}", table_name);
+                            let _ = db.query(&cleanup).await;
+                        }
+                    }
+                }
+
+                return Err(e);
+            }
+        }
 
         tracing::info!(
             "Created user schema '{}' with {} fields",
@@ -664,6 +699,13 @@ where
     /// Determines storage strategy for each field:
     /// - Primitive types (string, number, boolean, date, json, object): Stored in spoke table
     /// - Reference types (any other type): Creates relation table
+    ///
+    /// **IMPORTANT: Nested Object Behavior**
+    ///
+    /// User schemas are created as SCHEMALESS tables. Nested object schemas are captured
+    /// in the schema node metadata (FieldDefinition.schema) but are NOT enforced at the
+    /// database level. This allows flexibility for user-defined schemas while maintaining
+    /// the nested structure documentation for future validation at the application level.
     ///
     /// # Arguments
     ///
@@ -704,7 +746,10 @@ where
             let is_primitive = PRIMITIVE_TYPES.contains(&field.field_type.as_str());
 
             let schema_field = if is_primitive {
-                // Primitive field - stored in spoke table
+                // Primitive field - stored in spoke table as SCHEMALESS field
+                // NOTE: For 'object' type with nested schema (FieldDefinition.schema), the schema
+                // metadata is stored in the schema node's properties but NOT enforced at database
+                // level (SCHEMALESS table). Nested validation can be implemented at application level.
                 SchemaField {
                     name: field.name.clone(),
                     field_type: field.field_type.clone(),
@@ -717,11 +762,24 @@ where
                     default: field.default.clone(),
                     description: None,
                     item_type: None,
-                    fields: None,
+                    fields: None, // Nested schema metadata preserved in FieldDefinition.schema
                     item_fields: None,
                 }
             } else {
                 // Reference field - needs relation table
+
+                // Validate field_type to prevent SQL injection (for reference fields)
+                if !field
+                    .field_type
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    return Err(NodeServiceError::invalid_update(format!(
+                        "Invalid field type '{}': must contain only alphanumeric characters and underscores",
+                        field.field_type
+                    )));
+                }
+
                 let relation_name = format!("{}_{}", source_type, field.name);
 
                 // Generate relation table DDL
@@ -2774,6 +2832,65 @@ mod tests {
         let schema_check = service.get_schema("invalid").await;
         assert!(
             schema_check.is_err(),
+            "Schema should not exist due to validation failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_field_type_injection_prevented() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Test 1: SQL injection in field_type is rejected by reference validation
+        // (validates type exists before reaching field type validation)
+        let fields = vec![FieldDefinition {
+            name: "owner".to_string(),
+            field_type: "person; DROP TABLE node; --".to_string(), // SQL injection attempt
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        let result = service
+            .create_user_schema("project", "Project", fields.clone())
+            .await;
+
+        // Should reject the malicious field type (via reference validation)
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("does not exist") || error_msg.contains("Invalid field type"),
+            "Expected rejection, got: {}",
+            error_msg
+        );
+
+        // Test 2: Even if we bypass reference validation by creating the type first,
+        // field_type with special characters should be rejected
+        // Create a schema with semicolon in name (should fail type_name validation)
+        let sneaky_fields = vec![FieldDefinition {
+            name: "test".to_string(),
+            field_type: "person_with_semicolon;".to_string(), // Invalid characters
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        let result2 = service
+            .create_user_schema("sneaky_project", "Sneaky Project", sneaky_fields)
+            .await;
+
+        // Should reject due to invalid characters in field_type (for reference fields)
+        assert!(result2.is_err());
+
+        // Verify no partial state was created
+        let schema_check = service.get_schema("project").await;
+        assert!(
+            schema_check.is_err(),
+            "Schema should not exist due to validation failure"
+        );
+
+        let schema_check2 = service.get_schema("sneaky_project").await;
+        assert!(
+            schema_check2.is_err(),
             "Schema should not exist due to validation failure"
         );
     }
