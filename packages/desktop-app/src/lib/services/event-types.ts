@@ -302,6 +302,62 @@ export interface NodeReferencePropagationEvent extends BaseEvent {
 // Event Union Type
 // ============================================================================
 
+// ============================================================================
+// Real-time Synchronization Events (LIVE SELECT)
+// ============================================================================
+
+/**
+ * Emitted when a node is changed in the database via another client
+ * (MCP server or other Tauri instance) using SurrealDB LIVE SELECT
+ */
+export interface RealtimeSyncNodeChangedEvent extends BaseEvent {
+  type: 'sync:node-changed';
+  namespace: 'sync';
+  nodeId: string;
+  changeType: 'create' | 'update' | 'delete';
+  nodeData?: Record<string, unknown>; // Full node data for create/update
+  previousData?: Record<string, unknown>; // Previous state for update
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when an edge (relationship) is changed in the database via another client
+ */
+export interface RealtimeSyncEdgeChangedEvent extends BaseEvent {
+  type: 'sync:edge-changed';
+  namespace: 'sync';
+  edgeId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  changeType: 'create' | 'update' | 'delete';
+  edgeData?: Record<string, unknown>; // Full edge data for create/update
+  previousData?: Record<string, unknown>; // Previous state for update
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when the LIVE SELECT synchronization service encounters an error
+ */
+export interface RealtimeSyncErrorEvent extends BaseEvent {
+  type: 'error:sync-failed';
+  namespace: 'error';
+  message: string;
+  errorType: 'subscription-failed' | 'stream-interrupted' | 'parse-error' | 'unknown';
+  retryable: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Emitted when the LIVE SELECT synchronization service connects/disconnects
+ */
+export interface RealtimeSyncStatusEvent extends BaseEvent {
+  type: 'sync:status-changed';
+  namespace: 'sync';
+  status: 'connected' | 'disconnected' | 'reconnecting';
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // Error Events
 export interface PersistenceFailedEvent extends BaseEvent {
   type: 'error:persistence-failed';
@@ -342,6 +398,11 @@ export type NodeSpaceEvent =
   | NodePersistenceEvent
   | NodeEmbeddingEvent
   | NodeReferencePropagationEvent
+  // Real-time Synchronization Events
+  | RealtimeSyncNodeChangedEvent
+  | RealtimeSyncEdgeChangedEvent
+  | RealtimeSyncErrorEvent
+  | RealtimeSyncStatusEvent
   // Phase 2+ Events
   | BacklinkDetectedEvent
   | AISuggestionEvent
@@ -451,6 +512,11 @@ export const EventTypes = {
   // Focus and Navigation
   FOCUS_REQUESTED: 'focus:requested',
   NAVIGATION_CHANGED: 'navigation:changed',
+
+  // Real-time Synchronization (LIVE SELECT)
+  SYNC_NODE_CHANGED: 'sync:node-changed',
+  SYNC_EDGE_CHANGED: 'sync:edge-changed',
+  SYNC_STATUS_CHANGED: 'sync:status-changed',
 
   // Performance and Debug
   PERFORMANCE_METRIC: 'performance:metric',
