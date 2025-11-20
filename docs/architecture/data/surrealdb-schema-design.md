@@ -1,13 +1,15 @@
-# SurrealDB Schema Design - Graph Relations Architecture
+# SurrealDB Schema Design - Hub-and-Spoke with Record Links
 
 ## Overview
 
-NodeSpace uses a **graph relations architecture** in SurrealDB that combines:
-1. **Universal `node` table** - All nodes (text, task, date, etc.) with common metadata
-2. **Graph relation tables** - `has_child` edges for parent-child hierarchy (not `parent_id` fields)
-3. **Mention relations** - `mentions` edges for cross-node references
+NodeSpace uses a **hub-and-spoke architecture** in SurrealDB that combines:
+1. **Hub `node` table** - Universal metadata for all nodes
+2. **Spoke tables** (`task`, `date`, `schema`) - Type-specific queryable data with bidirectional Record Links
+3. **Graph relation tables** - `has_child` edges for hierarchy, `mentions` for references
 
-This design leverages SurrealDB's native Record IDs and graph capabilities for clean hierarchy management.
+**Key Pattern**: Record Links (not RELATE) for hub-spoke composition, RELATE edges for node-to-node relationships.
+
+This design leverages SurrealDB's Record Links for composition and graph capabilities for relationships.
 
 ## Architecture Decisions
 
@@ -38,64 +40,136 @@ Graph relations provide:
 
 ## Schema Definition
 
-### Universal Node Table
+### Hub Table (Universal Metadata)
 
-Stores common metadata for ALL node types. No hierarchy fields - relationships are stored in `has_child` edges.
-
-```sql
--- Universal metadata table (SCHEMALESS for flexibility)
-DEFINE TABLE IF NOT EXISTS node SCHEMALESS;
-
--- Typical fields found on nodes:
--- id: Primary identifier (node:⟨uuid⟩, node:2025-11-17, schema:task, etc.)
--- content: Node text/title
--- type: Node type ('text', 'task', 'date', 'schema', etc.)
--- created_at: Timestamp when created
--- modified_at: Timestamp of last modification
--- version: Optimistic concurrency control version
--- properties: JSON object for schema-driven fields
--- embedding_stale: Whether vector embedding needs refresh
--- mentions: Array of mentioned node IDs
--- mentioned_by: Array of node IDs that mention this node
--- variants: Metadata variants (type-specific)
-
--- NO parent_id, container_node_id, or before_sibling_id fields!
--- Hierarchy is stored in the has_child relation table instead.
-```
-
-### Graph Relations Tables
-
-Hierarchy is managed via SurrealDB graph relations, not foreign keys on nodes.
+The `node` table serves as the universal hub storing metadata for ALL node types. Type-specific data lives in spoke tables, linked via Record Links.
 
 ```sql
--- Parent-child relationships (graph edges)
-DEFINE TABLE IF NOT EXISTS has_child SCHEMALESS TYPE RELATION;
+-- Hub table: Universal metadata for all nodes
+DEFINE TABLE node SCHEMAFULL;
 
--- Structure of has_child edges:
--- id: Relation record ID (has_child:⟨uuid⟩)
--- in: Parent node ID (e.g., node:⟨uuid⟩)
--- out: Child node ID (e.g., node:⟨uuid⟩)
--- Semantics: in->has_child->out means "in node HAS out node as a child"
+-- Required universal fields
+DEFINE FIELD id ON TABLE node TYPE string ASSERT $value != NONE;
+DEFINE FIELD content ON TABLE node TYPE string DEFAULT "";
+DEFINE FIELD nodeType ON TABLE node TYPE string ASSERT $value != NONE;
+DEFINE FIELD data ON TABLE node TYPE option<record>;  -- Record Link to spoke (task, date, schema, or NULL)
+DEFINE FIELD version ON TABLE node TYPE int DEFAULT 1 ASSERT $value >= 1;
+DEFINE FIELD createdAt ON TABLE node TYPE datetime DEFAULT time::now();
+DEFINE FIELD modifiedAt ON TABLE node TYPE datetime DEFAULT time::now();
 
--- Indexes for efficient graph traversal
-DEFINE INDEX IF NOT EXISTS idx_has_child_in ON has_child FIELDS in;
-DEFINE INDEX IF NOT EXISTS idx_has_child_out ON has_child FIELDS out;
+-- Indexes for performance
+DEFINE INDEX idx_node_type ON TABLE node COLUMNS nodeType;
+DEFINE INDEX idx_node_modified ON TABLE node COLUMNS modifiedAt;
 
--- Mention relationships (cross-node references)
-DEFINE TABLE IF NOT EXISTS mentions SCHEMALESS TYPE RELATION;
-
--- Structure similar to has_child:
--- in: Mentioning node
--- out: Mentioned node
+-- NO beforeSiblingId - structure lives in has_child edges!
+-- NO parentId - hierarchy lives in has_child edges!
+-- NO properties object - type-specific data lives in spoke tables!
 ```
 
-**Why Graph Relations Instead of `parent_id` Fields?**
+**Why Record Link (`data` field)?**
+- ✅ Faster than RELATE edges for 1-to-1 composition
+- ✅ Direct field access: `node.data.status`
+- ✅ NULL for simple nodes (text, header) - no spoke needed
+- ✅ Cleaner than graph traversal for composition
 
-- ✅ **Cleaner semantics** - Relationship is explicit and first-class
-- ✅ **Better performance** - Graph edges optimized in SurrealDB
+### Spoke Tables (Type-Specific Data)
+
+Type-specific queryable data stored in separate spoke tables with bidirectional links to hub.
+
+```sql
+-- Task spoke: Indexed fields for efficient queries
+DEFINE TABLE task SCHEMAFULL;
+DEFINE FIELD id ON TABLE task TYPE record ASSERT $value != NONE;
+DEFINE FIELD node ON TABLE task TYPE record(node) ASSERT $value != NONE;  -- Reverse link to hub
+
+-- Core task fields
+DEFINE FIELD status ON TABLE task TYPE string DEFAULT 'todo';
+DEFINE FIELD priority ON TABLE task TYPE option<string>;
+DEFINE FIELD due_date ON TABLE task TYPE option<datetime>;
+DEFINE FIELD assignee ON TABLE task TYPE option<record>;
+
+-- Indexes for efficient spoke queries
+DEFINE INDEX idx_task_status ON TABLE task COLUMNS status;
+DEFINE INDEX idx_task_priority ON TABLE task COLUMNS priority;
+DEFINE INDEX idx_task_due_date ON TABLE task COLUMNS due_date;
+
+-- User extensions allowed
+DEFINE FIELD * ON TABLE task FLEXIBLE;
+
+-- ============================================================================
+
+-- Date spoke: Timezone, holiday tracking
+DEFINE TABLE date SCHEMAFULL;
+DEFINE FIELD id ON TABLE date TYPE record ASSERT $value != NONE;
+DEFINE FIELD node ON TABLE date TYPE record(node) ASSERT $value != NONE;
+DEFINE FIELD timezone ON TABLE date TYPE string DEFAULT 'UTC';
+DEFINE FIELD is_holiday ON TABLE date TYPE bool DEFAULT false;
+DEFINE FIELD * ON TABLE date FLEXIBLE;
+
+-- ============================================================================
+
+-- Schema spoke: Type definitions
+DEFINE TABLE schema SCHEMAFULL;
+DEFINE FIELD id ON TABLE schema TYPE record ASSERT $value != NONE;
+DEFINE FIELD node ON TABLE schema TYPE record(node) ASSERT $value != NONE;
+DEFINE FIELD is_core ON TABLE schema TYPE bool DEFAULT false;
+DEFINE FIELD version ON TABLE schema TYPE int DEFAULT 1;
+DEFINE FIELD fields ON TABLE schema TYPE array DEFAULT [];
+DEFINE FIELD * ON TABLE schema FLEXIBLE;
+```
+
+**Why Bidirectional Record Links?**
+- ✅ **Hub → Spoke**: Fast access to type-specific data (`node.data.status`)
+- ✅ **Spoke → Hub**: Efficient queries with context (`task.node.content`)
+- ✅ **Indexed queries**: Query spokes directly with WHERE clauses
+- ✅ **No subqueries**: Join hub context via reverse link
+
+**Which Node Types Need Spokes?**
+- ✅ `task`, `date`, `schema` - Have queryable structured data
+- ❌ `text`, `header`, `code-block` - Just content (`data = null`)
+
+### Graph Relations (Node-to-Node Relationships)
+
+Relationships between nodes are managed via SurrealDB RELATE edges, not Record Links.
+
+```sql
+-- Has_child relation: Hierarchical relationships with fractional ordering
+DEFINE TABLE has_child SCHEMAFULL TYPE RELATION IN node OUT node;
+
+DEFINE FIELD order ON TABLE has_child TYPE float ASSERT $value != NONE;
+DEFINE FIELD createdAt ON TABLE has_child TYPE datetime DEFAULT time::now();
+DEFINE FIELD version ON TABLE has_child TYPE int DEFAULT 1;  -- OCC for concurrent edits
+
+-- Indexes for efficient ordering queries
+DEFINE INDEX idx_child_order ON TABLE has_child COLUMNS in, order;
+DEFINE INDEX idx_unique_child ON TABLE has_child COLUMNS in, out UNIQUE;
+
+-- ============================================================================
+
+-- Mentions relation: Bidirectional references between nodes
+DEFINE TABLE mentions SCHEMAFULL TYPE RELATION IN node OUT node;
+
+DEFINE FIELD createdAt ON TABLE mentions TYPE datetime DEFAULT time::now();
+DEFINE FIELD context ON TABLE mentions TYPE string DEFAULT "";
+DEFINE FIELD offset ON TABLE mentions TYPE int DEFAULT 0;
+
+-- Indexes for efficient bidirectional queries
+DEFINE INDEX idx_mentions_in ON TABLE mentions COLUMNS in;
+DEFINE INDEX idx_mentions_out ON TABLE mentions COLUMNS out;
+DEFINE INDEX idx_unique_mention ON TABLE mentions COLUMNS in, out UNIQUE;
+```
+
+**Why Graph Relations for Hierarchy/References?**
+
+- ✅ **Cleaner semantics** - Relationships are explicit and first-class
+- ✅ **Fractional ordering** - O(1) inserts between siblings
 - ✅ **Bidirectional traversal** - Easy parent→children and child→parent queries
-- ✅ **Extensible** - Can add `has_sibling`, `references`, etc. without schema changes
+- ✅ **Extensible** - Add new relation types without schema changes
 - ✅ **No denormalization** - Single source of truth for relationships
+
+**Record Links vs RELATE - Decision Matrix:**
+- **Use Record Link**: Composition (node "contains" task data, 1-to-1)
+- **Use RELATE Edge**: Association (node references node, many-to-many)
 
 ### Type-Specific Tables
 
