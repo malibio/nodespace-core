@@ -10,7 +10,20 @@
 mod hub_spoke_tests {
     use anyhow::Result;
     use nodespace_core::db::SurrealStore;
+    use serde::{Deserialize, Serialize};
+    use surrealdb::sql::Thing;
     use tempfile::TempDir;
+
+    /// Test helper struct for hub nodes with proper Thing type for Record Links
+    #[derive(Debug, Deserialize, Serialize)]
+    struct NodeWithData {
+        id: Thing,
+        #[serde(rename = "nodeType")]
+        node_type: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<Thing>,
+    }
 
     /// Helper to create test database
     async fn create_test_db() -> Result<(SurrealStore, TempDir)> {
@@ -75,23 +88,22 @@ mod hub_spoke_tests {
         // Create task with bidirectional links atomically
         let uuid = "550e8400-e29b-41d4-a716-446655440000";
 
-        store
+        // Create task with bidirectional links atomically
+        let _create_result = store
             .db()
             .query(format!(
                 r#"
                 BEGIN TRANSACTION;
 
                 -- Step 1: Create spoke with reverse link to hub
-                CREATE task:{uuid} CONTENT {{
-                    id: type::thing('task', '{uuid}'),
+                CREATE task:`{uuid}` CONTENT {{
                     node: type::thing('node', '{uuid}'),
                     status: 'in_progress',
                     priority: 'high'
                 }};
 
                 -- Step 2: Create hub with forward link to spoke
-                CREATE node:{uuid} CONTENT {{
-                    id: type::thing('node', '{uuid}'),
+                CREATE node:`{uuid}` CONTENT {{
                     nodeType: 'task',
                     content: 'Test task',
                     data: type::thing('task', '{uuid}'),
@@ -103,30 +115,39 @@ mod hub_spoke_tests {
                 COMMIT TRANSACTION;
             "#
             ))
-            .await?;
+            .await?
+            .check()?; // Just check for errors, don't deserialize CREATE results
 
-        // Query hub → spoke (via data Record Link)
-        let mut result = store
+        // Query hub node (Record Link as Thing)
+        let result = store
             .db()
-            .query(format!(
-                r#"
-                SELECT
-                    id,
-                    content,
-                    data.status,
-                    data.priority
-                FROM node:{uuid}
-            "#
-            ))
+            .query(format!("SELECT * FROM node:`{uuid}`"))
             .await?;
 
-        let response: Option<serde_json::Value> = result.take(0)?;
-        assert!(response.is_some(), "Should find node via hub→spoke query");
+        let mut result = result.check()?; // Check for query errors before deserializing
+        let response: Vec<NodeWithData> = result.take(0)?;
+        assert_eq!(response.len(), 1, "Should find exactly one node");
 
-        let node = response.unwrap();
-        assert_eq!(node["content"], "Test task");
-        assert_eq!(node["data"]["status"], "in_progress");
-        assert_eq!(node["data"]["priority"], "high");
+        let node = &response[0];
+        assert_eq!(node.content, "Test task");
+        assert_eq!(node.node_type, "task");
+        assert!(node.data.is_some(), "Should have data Record Link");
+
+        // Verify data Record Link points to task table
+        let data_link = node.data.as_ref().unwrap();
+        assert_eq!(data_link.tb, "task");
+
+        // Query spoke directly to verify bidirectional link
+        let result = store
+            .db()
+            .query(format!("SELECT status, priority FROM task:`{uuid}`"))
+            .await?;
+
+        let mut result = result.check()?;
+        let response: Vec<serde_json::Value> = result.take(0)?;
+        assert_eq!(response.len(), 1, "Should find task spoke");
+        assert_eq!(response[0]["status"], "in_progress");
+        assert_eq!(response[0]["priority"], "high");
 
         Ok(())
     }
@@ -144,14 +165,12 @@ mod hub_spoke_tests {
                 r#"
                 BEGIN TRANSACTION;
 
-                CREATE task:{uuid} CONTENT {{
-                    id: type::thing('task', '{uuid}'),
+                CREATE task:`{uuid}` CONTENT {{
                     node: type::thing('node', '{uuid}'),
                     status: 'todo'
                 }};
 
-                CREATE node:{uuid} CONTENT {{
-                    id: type::thing('node', '{uuid}'),
+                CREATE node:`{uuid}` CONTENT {{
                     nodeType: 'task',
                     content: 'Task via spoke',
                     data: type::thing('task', '{uuid}'),
@@ -166,19 +185,14 @@ mod hub_spoke_tests {
             .await?;
 
         // Query spoke → hub (via node reverse link)
-        let mut result = store
+        let result = store
             .db()
             .query(format!(
-                r#"
-                SELECT
-                    *,
-                    node.content AS title,
-                    node.createdAt
-                FROM task:{uuid}
-            "#
+                "SELECT *, node.content AS title, node.createdAt FROM task:`{uuid}`"
             ))
             .await?;
 
+        let mut result = result.check()?; // Check for query errors before deserializing
         let response: Option<serde_json::Value> = result.take(0)?;
         assert!(response.is_some(), "Should find task via spoke→hub query");
 
@@ -204,15 +218,13 @@ mod hub_spoke_tests {
                 BEGIN TRANSACTION;
 
                 -- Valid spoke creation
-                CREATE task:{uuid} CONTENT {{
-                    id: type::thing('task', '{uuid}'),
+                CREATE task:`{uuid}` CONTENT {{
                     node: type::thing('node', '{uuid}'),
                     status: 'todo'
                 }};
 
                 -- Invalid hub creation (missing required nodeType)
-                CREATE node:{uuid} CONTENT {{
-                    id: type::thing('node', '{uuid}'),
+                CREATE node:`{uuid}` CONTENT {{
                     content: 'Missing nodeType'
                 }};
 
@@ -224,13 +236,14 @@ mod hub_spoke_tests {
         assert!(result.is_err(), "Transaction should fail and rollback");
 
         // Verify spoke was NOT created (transaction rolled back)
-        let mut check_result = store
+        let check_result = store
             .db()
-            .query(format!("SELECT * FROM task:{uuid}"))
+            .query(format!("SELECT * FROM task:`{uuid}`"))
             .await?;
 
-        let response: Option<serde_json::Value> = check_result.take(0)?;
-        assert!(response.is_none(), "Spoke should not exist after rollback");
+        let mut check_result = check_result.check()?; // Check for query errors before deserializing
+        let response: Vec<serde_json::Value> = check_result.take(0)?;
+        assert!(response.is_empty(), "Spoke should not exist after rollback");
 
         Ok(())
     }
@@ -282,7 +295,7 @@ mod hub_spoke_tests {
             .await?;
 
         // Verify edge was created with fractional order
-        let mut result = store
+        let result = store
             .db()
             .query(
                 r#"
@@ -291,6 +304,7 @@ mod hub_spoke_tests {
             )
             .await?;
 
+        let mut result = result.check()?; // Check for query errors before deserializing
         let response: Option<serde_json::Value> = result.take(0)?;
         assert!(response.is_some(), "Should find has_child edge");
 
@@ -347,20 +361,22 @@ mod hub_spoke_tests {
             .await?;
 
         // Query outgoing mentions
-        let mut result = store
+        let result = store
             .db()
             .query("SELECT ->mentions->node.* FROM node:source")
             .await?;
 
+        let mut result = result.check()?; // Check for query errors before deserializing
         let response: Vec<serde_json::Value> = result.take(0)?;
         assert!(!response.is_empty(), "Should find outgoing mention");
 
         // Query incoming mentions (backlinks)
-        let mut result = store
+        let result = store
             .db()
             .query("SELECT <-mentions<-node.* FROM node:target")
             .await?;
 
+        let mut result = result.check()?; // Check for query errors before deserializing
         let response: Vec<serde_json::Value> = result.take(0)?;
         assert!(!response.is_empty(), "Should find incoming mention");
 
@@ -378,8 +394,7 @@ mod hub_spoke_tests {
             .db()
             .query(format!(
                 r#"
-                CREATE node:{uuid} CONTENT {{
-                    id: type::thing('node', '{uuid}'),
+                CREATE node:`{uuid}` CONTENT {{
                     nodeType: 'text',
                     content: 'Simple text node',
                     data: NONE,
@@ -392,11 +407,12 @@ mod hub_spoke_tests {
             .await?;
 
         // Verify node was created without spoke
-        let mut result = store
+        let result = store
             .db()
-            .query(format!("SELECT * FROM node:{uuid}"))
+            .query(format!("SELECT * FROM node:`{uuid}`"))
             .await?;
 
+        let mut result = result.check()?; // Check for query errors before deserializing
         let response: Option<serde_json::Value> = result.take(0)?;
         assert!(response.is_some(), "Should find text node");
 
