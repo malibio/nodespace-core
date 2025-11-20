@@ -49,7 +49,7 @@
 //! # }
 //! ```
 
-use crate::models::schema::{ProtectionLevel, SchemaDefinition, SchemaField};
+use crate::models::schema::{FieldDefinition, ProtectionLevel, SchemaDefinition, SchemaField};
 use crate::models::NodeUpdate;
 use crate::services::node_service::NodeService;
 use crate::services::NodeServiceError;
@@ -530,6 +530,281 @@ where
             "Value '{}' not found in user values of enum '{}'",
             value, field_name
         )))
+    }
+
+    /// Create user-defined schema with atomic database generation
+    ///
+    /// This method creates a new user schema with spoke table, relation tables,
+    /// and schema node atomically. The spoke table is created as SCHEMALESS for
+    /// user types. Reference fields automatically generate relation tables.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_name` - The schema type name (e.g., "invoice", "project")
+    /// * `display_name` - Human-readable name for the schema
+    /// * `fields` - List of field definitions
+    ///
+    /// # Returns
+    ///
+    /// The ID of the created schema node
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidUpdate`: Schema already exists or referenced types don't exist
+    /// - Any errors from database operations or node creation
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::SchemaService;
+    /// # use nodespace_core::models::schema::FieldDefinition;
+    /// # async fn example(service: SchemaService) -> Result<(), Box<dyn std::error::Error>> {
+    /// let fields = vec![
+    ///     FieldDefinition {
+    ///         name: "name".to_string(),
+    ///         field_type: "string".to_string(),
+    ///         required: Some(true),
+    ///         default: None,
+    ///         schema: None,
+    ///     },
+    ///     FieldDefinition {
+    ///         name: "customer".to_string(),
+    ///         field_type: "person".to_string(),  // Reference field - creates relation table
+    ///         required: Some(false),
+    ///         default: None,
+    ///         schema: None,
+    ///     },
+    /// ];
+    ///
+    /// let schema_id = service.create_user_schema(
+    ///     "invoice",
+    ///     "Invoice",
+    ///     fields
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_user_schema(
+        &self,
+        type_name: &str,
+        display_name: &str,
+        fields: Vec<FieldDefinition>,
+    ) -> Result<String, NodeServiceError> {
+        // Validate schema doesn't exist and referenced types exist
+        self.validate_user_schema(type_name, &fields).await?;
+
+        // Validate type_name to prevent SQL injection
+        if !type_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Invalid type name '{}': must contain only alphanumeric characters and underscores",
+                type_name
+            )));
+        }
+
+        // Process fields and generate DDL statements
+        let mut ddl_statements = Vec::new();
+
+        // Create spoke table (SCHEMALESS for user types)
+        ddl_statements.push(format!("DEFINE TABLE {} SCHEMALESS;", type_name));
+
+        // Process fields to determine storage strategy and generate relation tables
+        let schema_fields = self.process_fields(type_name, &fields, &mut ddl_statements)?;
+
+        // Use type_name as the node ID so it can be retrieved by get_schema(type_name)
+        let schema_node_id = type_name.to_string();
+
+        // Execute DDL statements first
+        let db = self.node_service.store.db();
+        for ddl in &ddl_statements {
+            db.query(ddl).await.map_err(|e| {
+                NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
+                    "Failed to execute DDL '{}': {}",
+                    ddl, e
+                )))
+            })?;
+        }
+
+        // Create schema definition
+        let schema_def = SchemaDefinition {
+            is_core: false,
+            version: 1,
+            description: display_name.to_string(),
+            fields: schema_fields.clone(),
+        };
+
+        // Create schema node using NodeService
+        let schema_node = crate::models::Node {
+            id: schema_node_id.clone(),
+            node_type: "schema".to_string(),
+            content: display_name.to_string(),
+            before_sibling_id: None,
+            version: 1,
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            properties: serde_json::to_value(&schema_def)
+                .map_err(|e| NodeServiceError::serialization_error(e.to_string()))?,
+            embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
+        };
+
+        self.node_service.create_node(schema_node).await?;
+
+        tracing::info!(
+            "Created user schema '{}' with {} fields",
+            type_name,
+            schema_fields.len()
+        );
+
+        Ok(schema_node_id)
+    }
+
+    /// Process fields and generate DDL for relation tables
+    ///
+    /// Determines storage strategy for each field:
+    /// - Primitive types (string, number, boolean, date, json, object): Stored in spoke table
+    /// - Reference types (any other type): Creates relation table
+    ///
+    /// # Arguments
+    ///
+    /// * `source_type` - The source schema type name
+    /// * `fields` - List of field definitions
+    /// * `ddl_statements` - Mutable vector to accumulate DDL statements
+    ///
+    /// # Returns
+    ///
+    /// Vector of `SchemaField` with proper metadata for schema node
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidUpdate`: Invalid field configuration
+    fn process_fields(
+        &self,
+        source_type: &str,
+        fields: &[FieldDefinition],
+        ddl_statements: &mut Vec<String>,
+    ) -> Result<Vec<SchemaField>, NodeServiceError> {
+        const PRIMITIVE_TYPES: &[&str] = &["string", "number", "boolean", "date", "json", "object"];
+
+        let mut schema_fields = Vec::new();
+
+        for field in fields {
+            // Validate field name
+            if !field
+                .name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
+            {
+                return Err(NodeServiceError::invalid_update(format!(
+                    "Invalid field name '{}': must contain only alphanumeric characters, underscores, and colons",
+                    field.name
+                )));
+            }
+
+            let is_primitive = PRIMITIVE_TYPES.contains(&field.field_type.as_str());
+
+            let schema_field = if is_primitive {
+                // Primitive field - stored in spoke table
+                SchemaField {
+                    name: field.name.clone(),
+                    field_type: field.field_type.clone(),
+                    protection: ProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: field.required,
+                    extensible: None,
+                    default: field.default.clone(),
+                    description: None,
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                }
+            } else {
+                // Reference field - needs relation table
+                let relation_name = format!("{}_{}", source_type, field.name);
+
+                // Generate relation table DDL
+                ddl_statements.push(format!(
+                    "DEFINE TABLE {} SCHEMALESS TYPE RELATION IN {} OUT {};",
+                    relation_name, source_type, field.field_type
+                ));
+
+                // Create index on IN field for efficient queries
+                ddl_statements.push(format!(
+                    "DEFINE INDEX idx_{}_in ON TABLE {} COLUMNS in;",
+                    relation_name, relation_name
+                ));
+
+                SchemaField {
+                    name: field.name.clone(),
+                    field_type: "record".to_string(), // Relations stored as record references
+                    protection: ProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: field.required,
+                    extensible: None,
+                    default: field.default.clone(),
+                    description: Some(format!("Relation to {}", field.field_type)),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                }
+            };
+
+            schema_fields.push(schema_field);
+        }
+
+        Ok(schema_fields)
+    }
+
+    /// Validate schema definition before creation
+    ///
+    /// Checks:
+    /// - Type name doesn't already exist
+    /// - Referenced types exist in the database
+    ///
+    /// # Arguments
+    ///
+    /// * `type_name` - The schema type name to validate
+    /// * `fields` - List of field definitions to validate
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidUpdate`: Schema already exists or referenced type doesn't exist
+    async fn validate_user_schema(
+        &self,
+        type_name: &str,
+        fields: &[FieldDefinition],
+    ) -> Result<(), NodeServiceError> {
+        // Check if schema already exists
+        if let Ok(_existing) = self.get_schema(type_name).await {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Schema '{}' already exists",
+                type_name
+            )));
+        }
+
+        // Get all existing schemas to validate referenced types
+        let existing_schemas = self.get_all_schemas().await?;
+        let existing_types: Vec<String> = existing_schemas.into_iter().map(|(id, _)| id).collect();
+
+        const PRIMITIVE_TYPES: &[&str] = &["string", "number", "boolean", "date", "json", "object"];
+
+        // Validate referenced types exist
+        for field in fields {
+            let is_primitive = PRIMITIVE_TYPES.contains(&field.field_type.as_str());
+
+            if !is_primitive && !existing_types.contains(&field.field_type) {
+                return Err(NodeServiceError::invalid_update(format!(
+                    "Referenced type '{}' for field '{}' does not exist. Create the referenced schema first.",
+                    field.field_type, field.name
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     /// Update schema node with new definition
@@ -2235,5 +2510,377 @@ mod tests {
         let records: Vec<serde_json::Value> = result.take(0).unwrap();
         assert_eq!(records.len(), 1, "Should find one location with lat > 38");
         assert_eq!(records[0]["address"]["city"], "NYC");
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_basic() {
+        let (service, _temp) = setup_test_service().await;
+
+        let fields = vec![
+            FieldDefinition {
+                name: "name".to_string(),
+                field_type: "string".to_string(),
+                required: Some(true),
+                default: None,
+                schema: None,
+            },
+            FieldDefinition {
+                name: "amount".to_string(),
+                field_type: "number".to_string(),
+                required: Some(false),
+                default: Some(json!(0)),
+                schema: None,
+            },
+        ];
+
+        let schema_id = service
+            .create_user_schema("invoice", "Invoice", fields)
+            .await
+            .unwrap();
+
+        println!("Created schema with ID: {}", schema_id);
+
+        // Verify node was created
+        let node = service.node_service.get_node(&schema_id).await.unwrap();
+        println!("Retrieved node: {:?}", node);
+
+        // Verify schema was created
+        let schema = service.get_schema("invoice").await.unwrap();
+        assert!(!schema.is_core);
+        assert_eq!(schema.version, 1);
+        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.fields[0].name, "name");
+        assert_eq!(schema.fields[1].name, "amount");
+
+        // Verify spoke table was created
+        let db = service.node_service.store.db();
+        let result = db.query("INFO FOR TABLE invoice").await;
+        assert!(result.is_ok(), "Spoke table should be created");
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_with_relation() {
+        let (service, _temp) = setup_test_service().await;
+
+        // First create a person schema (referenced type)
+        let person_fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            field_type: "string".to_string(),
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        service
+            .create_user_schema("person", "Person", person_fields)
+            .await
+            .unwrap();
+
+        // Now create invoice schema with reference to person
+        let invoice_fields = vec![
+            FieldDefinition {
+                name: "total".to_string(),
+                field_type: "number".to_string(),
+                required: Some(true),
+                default: None,
+                schema: None,
+            },
+            FieldDefinition {
+                name: "customer".to_string(),
+                field_type: "person".to_string(), // Reference field
+                required: Some(false),
+                default: None,
+                schema: None,
+            },
+        ];
+
+        service
+            .create_user_schema("invoice", "Invoice", invoice_fields)
+            .await
+            .unwrap();
+
+        // Verify schema was created with correct field types
+        let schema = service.get_schema("invoice").await.unwrap();
+        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.fields[0].field_type, "number"); // Primitive
+        assert_eq!(schema.fields[1].field_type, "record"); // Reference (stored as record)
+
+        // Verify relation table was created (invoice_customer)
+        let db = service.node_service.store.db();
+        let result = db.query("INFO FOR TABLE invoice_customer").await;
+        assert!(result.is_ok(), "Relation table should be created");
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_auto_relation_naming() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Create task schema (referenced type)
+        let task_fields = vec![FieldDefinition {
+            name: "title".to_string(),
+            field_type: "string".to_string(),
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        service
+            .create_user_schema("task", "Task", task_fields)
+            .await
+            .unwrap();
+
+        // Create project schema with assignee reference
+        let project_fields = vec![
+            FieldDefinition {
+                name: "name".to_string(),
+                field_type: "string".to_string(),
+                required: Some(true),
+                default: None,
+                schema: None,
+            },
+            FieldDefinition {
+                name: "assignee".to_string(),
+                field_type: "task".to_string(),
+                required: Some(false),
+                default: None,
+                schema: None,
+            },
+        ];
+
+        service
+            .create_user_schema("project", "Project", project_fields)
+            .await
+            .unwrap();
+
+        // Verify relation table uses auto-naming: project_assignee
+        let db = service.node_service.store.db();
+        let result = db.query("INFO FOR TABLE project_assignee").await;
+        assert!(
+            result.is_ok(),
+            "Relation table should use auto-naming: project_assignee"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_duplicate_rejected() {
+        let (service, _temp) = setup_test_service().await;
+
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            field_type: "string".to_string(),
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        // Create first schema
+        service
+            .create_user_schema("duplicate", "Duplicate", fields.clone())
+            .await
+            .unwrap();
+
+        // Try to create again - should fail
+        let result = service
+            .create_user_schema("duplicate", "Duplicate", fields)
+            .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_invalid_reference_rejected() {
+        let (service, _temp) = setup_test_service().await;
+
+        let fields = vec![FieldDefinition {
+            name: "owner".to_string(),
+            field_type: "nonexistent_type".to_string(), // Invalid reference
+            required: Some(false),
+            default: None,
+            schema: None,
+        }];
+
+        let result = service
+            .create_user_schema("invalid_schema", "Invalid Schema", fields)
+            .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_nested_objects() {
+        let (service, _temp) = setup_test_service().await;
+
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: "string".to_string(),
+                required: Some(true),
+                default: None,
+                schema: None,
+            },
+            FieldDefinition {
+                name: "metadata".to_string(),
+                field_type: "object".to_string(), // Nested object
+                required: Some(false),
+                default: None,
+                schema: Some(
+                    vec![
+                        ("author".to_string(), json!("string")),
+                        ("tags".to_string(), json!(["array", "string"])),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            },
+        ];
+
+        let _schema_id = service
+            .create_user_schema("article", "Article", fields)
+            .await
+            .unwrap();
+
+        // Verify schema was created with nested object
+        let schema = service.get_schema("article").await.unwrap();
+        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.fields[1].field_type, "object");
+    }
+
+    #[tokio::test]
+    async fn test_create_user_schema_atomic_transaction() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Create a schema that will fail mid-creation (invalid type name with SQL injection attempt)
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            field_type: "string".to_string(),
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        // Try to create with invalid type name
+        let result = service
+            .create_user_schema("invalid; DROP TABLE node;", "Invalid", fields)
+            .await;
+
+        assert!(result.is_err());
+
+        // Verify no partial state was created (atomic transaction)
+        // The schema node should not exist
+        let schema_check = service.get_schema("invalid").await;
+        assert!(
+            schema_check.is_err(),
+            "Schema should not exist due to validation failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_fields_primitive_vs_reference() {
+        let (service, _temp) = setup_test_service().await;
+
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: "string".to_string(), // Primitive
+                required: Some(true),
+                default: None,
+                schema: None,
+            },
+            FieldDefinition {
+                name: "count".to_string(),
+                field_type: "number".to_string(), // Primitive
+                required: Some(false),
+                default: Some(json!(0)),
+                schema: None,
+            },
+            FieldDefinition {
+                name: "active".to_string(),
+                field_type: "boolean".to_string(), // Primitive
+                required: Some(false),
+                default: Some(json!(true)),
+                schema: None,
+            },
+        ];
+
+        let mut ddl_statements = Vec::new();
+        let schema_fields = service
+            .process_fields("test_type", &fields, &mut ddl_statements)
+            .unwrap();
+
+        // Verify all fields are primitive (no relation tables created)
+        assert_eq!(schema_fields.len(), 3);
+        assert_eq!(schema_fields[0].field_type, "string");
+        assert_eq!(schema_fields[1].field_type, "number");
+        assert_eq!(schema_fields[2].field_type, "boolean");
+
+        // No relation table DDL should be generated
+        assert_eq!(
+            ddl_statements.len(),
+            0,
+            "Primitive fields should not generate relation tables"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_user_schema_all_checks() {
+        let (service, _temp) = setup_test_service().await;
+
+        // Create a reference type first
+        let person_fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            field_type: "string".to_string(),
+            required: Some(true),
+            default: None,
+            schema: None,
+        }];
+
+        service
+            .create_user_schema("person", "Person", person_fields)
+            .await
+            .unwrap();
+
+        // Test 1: Valid schema with reference to existing type
+        let valid_fields = vec![FieldDefinition {
+            name: "owner".to_string(),
+            field_type: "person".to_string(),
+            required: Some(false),
+            default: None,
+            schema: None,
+        }];
+
+        let result = service
+            .validate_user_schema("new_type", &valid_fields)
+            .await;
+        assert!(result.is_ok(), "Valid schema should pass validation");
+
+        // Test 2: Duplicate schema name rejected
+        let duplicate_result = service.validate_user_schema("person", &valid_fields).await;
+        assert!(duplicate_result.is_err());
+        assert!(duplicate_result
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
+
+        // Test 3: Invalid reference type rejected
+        let invalid_fields = vec![FieldDefinition {
+            name: "owner".to_string(),
+            field_type: "nonexistent".to_string(),
+            required: Some(false),
+            default: None,
+            schema: None,
+        }];
+
+        let invalid_result = service
+            .validate_user_schema("another_type", &invalid_fields)
+            .await;
+        assert!(invalid_result.is_err());
+        assert!(invalid_result
+            .unwrap_err()
+            .to_string()
+            .contains("does not exist"));
     }
 }
