@@ -145,12 +145,14 @@ fn validate_node_type(node_type: &str) -> Result<()> {
 struct SurrealNode {
     // Record ID is stored in the 'id' field returned by SurrealDB (e.g., node:⟨uuid⟩)
     id: Thing, // SurrealDB record ID (table:id format)
-    #[serde(rename = "type")]
+    #[serde(rename = "nodeType")]
     node_type: String,
     content: String,
     before_sibling_id: Option<String>,
     version: i64,
+    #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(rename = "modifiedAt")]
     modified_at: String,
     embedding_vector: Option<Vec<f32>>,
     embedding_stale: bool,
@@ -954,23 +956,33 @@ where
         let props_with_schema = properties.as_object().cloned().unwrap_or_default();
         let has_type_table = TYPES_WITH_PROPERTIES.contains(&node_type.as_str());
 
+        // Prepare spoke properties with mandatory reverse link (spoke -> hub)
+        let spoke_properties = if has_type_table && !props_with_schema.is_empty() {
+            let mut spoke_props = props_with_schema.clone();
+            // Add mandatory reverse link field: node (Record Link to hub)
+            spoke_props.insert(
+                "node".to_string(),
+                serde_json::json!({"tb": "node", "id": node_id}),
+            );
+            Some(Value::Object(spoke_props))
+        } else {
+            None
+        };
+
+        // Calculate fractional order (simple default for now, Issue #550 will implement full logic)
+        let order = 1.0_f64;
+
         // Build atomic transaction query with bidirectional Record Links (Issue #560)
         // This ensures ALL operations succeed or ALL fail
         // Hub-and-spoke: Create spoke with reverse link, then hub with forward link
         let transaction_query = if has_type_table && !props_with_schema.is_empty() {
             // For types with dedicated tables (task, schema) - bidirectional links
+            // Use dynamic properties binding to support all spoke types (not just task)
             r#"
                 BEGIN TRANSACTION;
 
-                -- Step 1: Create spoke (type-specific data) with reverse link to hub
-                CREATE $type_id CONTENT {
-                    id: $type_id,
-                    node: $node_id,
-                    status: $status,
-                    priority: $priority,
-                    due_date: $due_date,
-                    assignee: $assignee
-                };
+                -- Step 1: Create spoke (type-specific data) with dynamic properties + reverse link
+                CREATE $type_id CONTENT $spoke_properties;
 
                 -- Step 2: Create hub (universal metadata) with forward link to spoke
                 CREATE $node_id CONTENT {
@@ -1028,7 +1040,8 @@ where
         let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id.clone()));
 
         // Execute transaction (we don't care about the return value, just the side effects)
-        self.db
+        let mut query = self
+            .db
             .query(transaction_query)
             .bind(("node_id", node_thing))
             .bind(("parent_id", parent_thing))
@@ -1038,13 +1051,17 @@ where
             .bind(("before_sibling_id", before_sibling_id.clone()))
             .bind(("created_at", created_at.clone()))
             .bind(("modified_at", modified_at.clone()))
-            .bind(("properties", Value::Object(props_with_schema.clone())))
-            .await
-            .map(|_| ())
-            .context(format!(
-                "Failed to create child node '{}' under parent '{}'",
-                node_id, parent_id
-            ))?;
+            .bind(("order", order));
+
+        // Conditionally bind spoke_properties for types with dedicated tables
+        if let Some(spoke_props) = spoke_properties {
+            query = query.bind(("spoke_properties", spoke_props));
+        }
+
+        query.await.map(|_| ()).context(format!(
+            "Failed to create child node '{}' under parent '{}'",
+            node_id, parent_id
+        ))?;
 
         // Construct and return the created node
         Ok(Node {
