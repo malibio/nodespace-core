@@ -21,6 +21,8 @@
   import { PersistenceCoordinator } from '$lib/services/persistence-coordinator.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
+  import { nodeData as reactiveNodeData } from '$lib/stores/reactive-node-data.svelte';
+  import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
   import type { Node } from '$lib/types';
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
@@ -108,6 +110,84 @@
   let scrollContainer: HTMLElement | null = null;
   // Generate unique viewer ID for this viewer instance
   const viewerId = getViewerId(tabId, paneId);
+
+  // Track expanded state for nodes (viewer-local UI state)
+  // Use $state for reactive Map mutations
+  let expandedState = $state(new Map<string, boolean>());
+
+  // Track auto-focus nodes (viewer-local UI state)
+  // Use $state for reactive Set mutations
+  let autoFocusNodes = $state(new Set<string>());
+
+  /**
+   * Reactive derived state: visible nodes from dual stores
+   * Combines ReactiveStructureTree (hierarchy) + ReactiveNodeData (content)
+   * Replaces nodeManager.visibleNodes() with pure reactive Svelte 5 approach
+   *
+   * This is the core refactor from Issue #555:
+   * - No more _updateTrigger hack needed
+   * - Pure $derived reactivity from $state stores
+   * - Automatic re-render when either store changes
+   *
+   * HYBRID APPROACH: Falls back to sharedNodeStore for nodes not yet in reactive stores
+   * This handles the transition period where reactive stores are being populated
+   */
+  const visibleNodesFromStores = $derived.by(() => {
+    if (!nodeId) return [];
+
+    // Helper function to recursively flatten visible nodes with depth
+    function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {
+      // Try reactive structure tree first, fall back to sharedNodeStore
+      let childIds = reactiveStructureTree.getChildren(parentId);
+      if (childIds.length === 0) {
+        const cachedNodes = sharedNodeStore.getNodesForParent(parentId);
+        if (cachedNodes && cachedNodes.length > 0) {
+          childIds = cachedNodes.map(n => n.id);
+        }
+      }
+
+      for (const id of childIds) {
+        // Try reactive store first, fall back to sharedNodeStore
+        let node = reactiveNodeData.getNode(id);
+        if (!node) {
+          node = sharedNodeStore.getNode(id);
+        }
+        if (!node) continue;
+
+        // Get children IDs for this node
+        let children = reactiveStructureTree.getChildren(node.id);
+        if (children.length === 0) {
+          const cachedChildren = sharedNodeStore.getNodesForParent(node.id);
+          if (cachedChildren) {
+            children = cachedChildren.map(c => c.id);
+          }
+        }
+
+        // Build node with UI state
+        const nodeWithUI = {
+          ...node,
+          depth,
+          children,
+          expanded: expandedState.get(node.id) ?? false,
+          autoFocus: autoFocusNodes.has(node.id),
+          inheritHeaderLevel: 0,
+          isPlaceholder: false
+        };
+
+        result.push(nodeWithUI);
+
+        // Recursively add children if this node is expanded
+        if (nodeWithUI.expanded && children.length > 0) {
+          flattenNodes(node.id, depth + 1, result);
+        }
+      }
+
+      return result;
+    }
+
+    // Start flattening from the root nodeId at depth 0
+    return flattenNodes(nodeId, 0);
+  });
 
   // Set view context, load children, and initialize header content when nodeId changes
   $effect(() => {
@@ -397,7 +477,7 @@
       resolvePhase = resolve;
     });
 
-    const nodes = nodeManager.visibleNodes(nodeId);
+    const nodes = visibleNodesFromStores;
 
     for (const node of nodes) {
       // Skip placeholder nodes
@@ -471,7 +551,7 @@
   $effect(() => {
     if (!nodeId) return;
 
-    const currentNodeIds = new Set(nodeManager.visibleNodes(nodeId).map((n) => n.id));
+    const currentNodeIds = new Set(visibleNodesFromStores.map((n) => n.id));
 
     // Skip the first run (when previousNodeIds is empty)
     if (previousNodeIds.size > 0) {
@@ -629,7 +709,7 @@
   $effect.pre(() => {
     if (!nodeId) return;
 
-    const visibleNodes = nodeManager.visibleNodes(nodeId);
+    const visibleNodes = visibleNodesFromStores;
 
     // Collect all structural changes first
     const updates: Array<{
@@ -1265,7 +1345,7 @@
   }
 
   // Handle chevron click to toggle expand/collapse
-  function handleToggleExpanded(nodeId: string) {
+  function handleToggleExpanded(toggleNodeId: string) {
     // Get the currently focused element before DOM changes
     const activeElement = document.activeElement as HTMLElement;
     const isTextEditor = activeElement && activeElement.id?.startsWith('contenteditable-');
@@ -1278,8 +1358,12 @@
       cursorPosition = saveCursorPosition(focusedNodeId);
     }
 
-    // Perform the toggle operation
-    nodeManager.toggleExpanded(nodeId);
+    // Toggle expanded state (viewer-local)
+    const currentState = expandedState.get(toggleNodeId) ?? false;
+    expandedState.set(toggleNodeId, !currentState);
+
+    // Also update nodeManager for backward compatibility during transition
+    nodeManager.toggleExpanded(toggleNodeId);
 
     // Restore focus and cursor position after DOM update
     if (focusedNodeId && isTextEditor) {
@@ -1330,8 +1414,8 @@
   ) {
     const { nodeId: eventNodeId, direction, pixelOffset } = event.detail;
 
-    // Get visible nodes from NodeManager
-    const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+    // Get visible nodes from reactive stores
+    const currentVisibleNodes = visibleNodesFromStores;
     const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
     if (currentIndex === -1) return;
@@ -1371,7 +1455,7 @@
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentVisibleNodes = visibleNodesFromStores;
       const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) {
@@ -1422,7 +1506,7 @@
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentVisibleNodes = visibleNodesFromStores;
       const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) return; // No previous node to focus
@@ -1472,7 +1556,7 @@
 
   // Derive the list of nodes to render - either viewer placeholder or real children
   const nodesToRender = $derived(() => {
-    const realChildren = nodeManager.visibleNodes(nodeId);
+    const realChildren = visibleNodesFromStores;
 
     // If we have real children, render those
     if (realChildren.length > 0) {
@@ -1501,7 +1585,7 @@
 
   // Reactive effect: Create placeholder when children drop to zero
   $effect(() => {
-    const realChildren = nodeManager.visibleNodes(nodeId);
+    const realChildren = visibleNodesFromStores;
 
     // If we have no real children and no placeholder, create one
     if (realChildren.length === 0 && !viewerPlaceholder && nodeId) {
