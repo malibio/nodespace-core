@@ -996,8 +996,8 @@ where
             None
         };
 
-        // Calculate fractional order (simple default for now, Issue #550 will implement full logic)
-        let order = 1.0_f64;
+        // Calculate fractional order using FractionalOrderCalculator (Issue #550)
+        let order = new_order;
 
         // Build atomic transaction query with bidirectional Record Links (Issue #560)
         // This ensures ALL operations succeed or ALL fail
@@ -1016,32 +1016,18 @@ where
                     id: $node_id,
                     nodeType: $node_type,
                     content: $content,
-<<<<<<< HEAD
                     data: $type_id,
-=======
->>>>>>> d51af89 (Fix fractional ordering implementation - Phase 6 continued)
                     version: 1,
                     createdAt: $created_at,
                     modifiedAt: $modified_at
                 };
 
-<<<<<<< HEAD
                 -- Step 3: Create parent-child edge (parent->has_child->child)
                 RELATE $parent_id->has_child->$node_id CONTENT {
                     order: $order,
                     createdAt: $created_at,
                     version: 1
                 };
-=======
-                -- Create type-specific record
-                CREATE $type_id CONTENT $properties;
-
-                -- Link node to type-specific record
-                UPDATE $node_id SET data = $type_id;
-
-                -- Create parent-child edge
-                RELATE $parent_id->has_child->$node_id;
->>>>>>> d51af89 (Fix fractional ordering implementation - Phase 6 continued)
 
                 COMMIT TRANSACTION;
             "#
@@ -1056,33 +1042,18 @@ where
                     id: $node_id,
                     nodeType: $node_type,
                     content: $content,
-<<<<<<< HEAD
-=======
-                    version: 1,
-                    created_at: $created_at,
-                    modified_at: $modified_at,
-                    embedding_vector: NONE,
-                    embedding_stale: false,
-                    mentions: [],
-                    mentioned_by: [],
->>>>>>> d51af89 (Fix fractional ordering implementation - Phase 6 continued)
                     data: NONE,
                     version: 1,
                     createdAt: $created_at,
                     modifiedAt: $modified_at
                 };
 
-<<<<<<< HEAD
                 -- Create parent-child edge (parent->has_child->child)
                 RELATE $parent_id->has_child->$node_id CONTENT {
                     order: $order,
                     createdAt: $created_at,
                     version: 1
                 };
-=======
-                -- Create parent-child edge
-                RELATE $parent_id->has_child->$node_id;
->>>>>>> d51af89 (Fix fractional ordering implementation - Phase 6 continued)
 
                 COMMIT TRANSACTION;
             "#
@@ -1105,7 +1076,6 @@ where
             .bind(("content", content.clone()))
             .bind(("created_at", created_at.clone()))
             .bind(("modified_at", modified_at.clone()))
-<<<<<<< HEAD
             .bind(("order", order));
 
         // Conditionally bind spoke_properties for types with dedicated tables
@@ -1117,16 +1087,6 @@ where
             "Failed to create child node '{}' under parent '{}'",
             node_id, parent_id
         ))?;
-=======
-            .bind(("properties", Value::Object(props_with_schema.clone())))
-            .bind(("order", new_order))
-            .await
-            .map(|_| ())
-            .context(format!(
-                "Failed to create child node '{}' under parent '{}'",
-                node_id, parent_id
-            ))?;
->>>>>>> d51af89 (Fix fractional ordering implementation - Phase 6 continued)
 
         // Construct and return the created node
         Ok(Node {
