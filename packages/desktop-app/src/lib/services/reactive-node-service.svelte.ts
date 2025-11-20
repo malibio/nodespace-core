@@ -911,16 +911,20 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * This prevents orphaned nodes when a node is moved (indent/outdent) or deleted.
    *
    * @param nodeId - The node being removed from its current parent
+   * @param parentId - The parent ID (optional, will query if not provided)
    */
-  function removeFromSiblingChain(nodeId: string): string | null {
+  function removeFromSiblingChain(nodeId: string, parentId?: string | null): string | null {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return null;
 
-    // Find the next sibling (the node that points to this one via beforeSiblingId)
-    // NOTE: Now using backend query instead of node.parentId
-    const parents = sharedNodeStore.getParentsForNode(nodeId);
-    const parentId = parents.length > 0 ? parents[0].id : null;
-    const siblings = sharedNodeStore.getNodesForParent(parentId);
+    // Use provided parentId or query from graph
+    let actualParentId = parentId;
+    if (actualParentId === undefined) {
+      const parents = sharedNodeStore.getParentsForNode(nodeId);
+      actualParentId = parents.length > 0 ? parents[0].id : null;
+    }
+
+    const siblings = sharedNodeStore.getNodesForParent(actualParentId);
     const nextSibling = siblings.find((n) => n.beforeSiblingId === nodeId);
 
     if (nextSibling) {
@@ -964,8 +968,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const targetParentId = prevSiblingId;
     const targetParentUIState = _uiState[targetParentId];
 
-    // Remove node from current sibling chain to maintain chain integrity
-    removeFromSiblingChain(nodeId);
+    // Save current state for rollback
+    const originalUIState = { ..._uiState[nodeId] };
+    const originalRootNodeIds = [..._rootNodeIds];
 
     // Calculate where to insert in target parent's children
     const existingChildren = sharedNodeStore.getNodesForParent(targetParentId).map((n) => n.id);
@@ -993,7 +998,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     try {
       await backendAdapter.moveNode(nodeId, targetParentId, beforeSiblingId);
     } catch (error) {
-      // Silently ignore backend errors in unit tests (no server) and unpersisted nodes (404)
+      // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
         error instanceof Error &&
         (error.message.includes('404') ||
@@ -1003,11 +1008,23 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           error.message.includes('Failed to execute "fetch()"'));
 
       if (!isIgnorableError) {
+        // Non-ignorable error: rollback and fail
+        _uiState[nodeId] = originalUIState;
+        _rootNodeIds = originalRootNodeIds;
+        sharedNodeStore.removeChildFromCache(targetParentId, nodeId);
+        sharedNodeStore.addChildToCache(currentParentId, nodeId);
+        updateDescendantDepths(nodeId);
+
         console.error('[indentNode] Failed to move node:', error);
+        return false;
       }
+      // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Update node's computed fields
+    // Remove from old sibling chain FIRST (while parentId is still old)
+    removeFromSiblingChain(nodeId, currentParentId);
+
+    // THEN update node's parentId
     sharedNodeStore.updateNode(
       nodeId,
       { parentId: targetParentId, beforeSiblingId },
@@ -1047,8 +1064,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const nodeIndex = sortedSiblings.indexOf(nodeId);
     const siblingsBelow = nodeIndex >= 0 ? sortedSiblings.slice(nodeIndex + 1) : [];
 
-    // Remove node from current sibling chain to maintain chain integrity
-    removeFromSiblingChain(nodeId);
+    // Save current state for rollback
+    const originalUIState = { ..._uiState[nodeId] };
+    const originalRootNodeIds = [..._rootNodeIds];
 
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
     const positionBeforeSibling = oldParentId;
@@ -1074,7 +1092,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     try {
       await backendAdapter.moveNode(nodeId, newParentId, positionBeforeSibling);
     } catch (error) {
-      // Silently ignore backend errors in unit tests (no server) and unpersisted nodes (404)
+      // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
         error instanceof Error &&
         (error.message.includes('404') ||
@@ -1084,11 +1102,23 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           error.message.includes('Failed to execute "fetch()"'));
 
       if (!isIgnorableError) {
+        // Non-ignorable error: rollback and fail
+        _uiState[nodeId] = originalUIState;
+        _rootNodeIds = originalRootNodeIds;
+        sharedNodeStore.removeChildFromCache(newParentId, nodeId);
+        sharedNodeStore.addChildToCache(oldParentId, nodeId);
+        updateDescendantDepths(nodeId);
+
         console.error('[outdentNode] Failed to move node:', error);
+        return false;
       }
+      // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Update node's computed fields
+    // Remove from old sibling chain FIRST (while parentId is still old)
+    removeFromSiblingChain(nodeId, oldParentId);
+
+    // THEN update node's parentId
     sharedNodeStore.updateNode(
       nodeId,
       { parentId: newParentId, beforeSiblingId: positionBeforeSibling },
@@ -1114,8 +1144,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const siblingId = siblingsBelow[i];
         const sibling = sharedNodeStore.getNode(siblingId);
         if (sibling) {
-          // Remove from current sibling chain BEFORE changing parent
-          removeFromSiblingChain(siblingId);
+          // Save state for rollback
+          const siblingOriginalUIState = { ..._uiState[siblingId] };
 
           const siblingBeforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];
 
@@ -1132,6 +1162,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           try {
             await backendAdapter.moveNode(siblingId, nodeId, siblingBeforeSiblingId);
           } catch (error) {
+            // Check if error is ignorable
             const isIgnorableError =
               error instanceof Error &&
               (error.message.includes('404') ||
@@ -1141,10 +1172,22 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
                 error.message.includes('Failed to execute "fetch()"'));
 
             if (!isIgnorableError) {
+              // Non-ignorable error: rollback and skip this sibling
+              _uiState[siblingId] = siblingOriginalUIState;
+              sharedNodeStore.removeChildFromCache(nodeId, siblingId);
+              sharedNodeStore.addChildToCache(oldParentId, siblingId);
+              updateDescendantDepths(siblingId);
+
               console.error(`[outdentNode] Failed to move sibling ${siblingId}:`, error);
+              continue;
             }
+            // Ignorable error: continue with UI updates (for unit tests without server)
           }
 
+          // Remove from old sibling chain FIRST (while parentId is still old)
+          removeFromSiblingChain(siblingId, oldParentId);
+
+          // THEN update parentId
           sharedNodeStore.updateNode(
             siblingId,
             { parentId: nodeId, beforeSiblingId: siblingBeforeSiblingId },
