@@ -47,10 +47,15 @@ export function registerChildWithParent(parentId: string, childId: string): void
     return;
   }
 
-  // CRITICAL FIX: Manually add in-memory edge to ReactiveStructureTree
+  // CRITICAL FIX: Manually add in-memory relationship to ReactiveStructureTree
   // For placeholder promotion, the node hasn't been persisted yet so LIVE SELECT won't fire
-  // We need to manually register the edge so visibleNodesFromStores includes the promoted node
+  // We need to manually register the relationship so visibleNodesFromStores includes the promoted node
   // This prevents a new placeholder from being created immediately after promotion
+  //
+  // TODO: This is a workaround. The proper fix (per hierarchy-reactivity-architecture-review.md)
+  // is for the backend to return complete relationship data from node creation, allowing the
+  // frontend to apply a proper optimistic update instead of manufacturing relationship records.
+  // See Issue #528 for the placeholder promotion bug context.
   const order = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
-  reactiveStructureTree.addInMemoryEdge(parentId, childId, order);
+  reactiveStructureTree.addInMemoryRelationship(parentId, childId, order);
 }

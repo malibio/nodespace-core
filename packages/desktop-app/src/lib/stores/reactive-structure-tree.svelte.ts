@@ -15,7 +15,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { UnlistenFn } from '@tauri-apps/api/event';
-import type { EdgeEventData } from '$lib/types/event-types';
+import type { HierarchyRelationship } from '$lib/types/event-types';
 
 interface ChildInfo {
   nodeId: string;
@@ -42,7 +42,7 @@ class ReactiveStructureTree {
     try {
       // Bulk load existing edges from backend before subscribing to events
       // This ensures the tree is populated with existing hierarchy on startup
-      const initialEdges = await invoke<EdgeEventData[]>('get_all_edges');
+      const initialEdges = await invoke<HierarchyRelationship[]>('get_all_edges');
       this.buildTree(initialEdges);
       console.log('[ReactiveStructureTree] Bulk loaded', initialEdges.length, 'edges');
 
@@ -62,7 +62,7 @@ class ReactiveStructureTree {
    * Called during initialization to populate the tree with existing edges
    * @private
    */
-  private buildTree(edges: EdgeEventData[]) {
+  private buildTree(edges: HierarchyRelationship[]) {
     const tree = new Map<string, ChildInfo[]>();
 
     for (const edge of edges) {
@@ -90,8 +90,8 @@ class ReactiveStructureTree {
   private async subscribeToEvents() {
     try {
       // Edge created event
-      const unlistenCreated = await listen<EdgeEventData>('edge:created', (event) => {
-        console.log('[ReactiveStructureTree] Edge created:', event.payload);
+      const unlistenCreated = await listen<HierarchyRelationship>('edge:created', (event) => {
+        console.log('[ReactiveStructureTree] Hierarchy relationship created:', event.payload);
         this.addChild(event.payload);
       });
       this.unlisteners.push(unlistenCreated);
@@ -102,8 +102,8 @@ class ReactiveStructureTree {
 
     try {
       // Edge deleted event
-      const unlistenDeleted = await listen<EdgeEventData>('edge:deleted', (event) => {
-        console.log('[ReactiveStructureTree] Edge deleted:', event.payload);
+      const unlistenDeleted = await listen<HierarchyRelationship>('edge:deleted', (event) => {
+        console.log('[ReactiveStructureTree] Hierarchy relationship deleted:', event.payload);
         this.removeChild(event.payload);
       });
       this.unlisteners.push(unlistenDeleted);
@@ -114,8 +114,8 @@ class ReactiveStructureTree {
 
     try {
       // Edge updated event (for order changes during rebalancing)
-      const unlistenUpdated = await listen<EdgeEventData>('edge:updated', (event) => {
-        console.log('[ReactiveStructureTree] Edge updated:', event.payload);
+      const unlistenUpdated = await listen<HierarchyRelationship>('edge:updated', (event) => {
+        console.log('[ReactiveStructureTree] Hierarchy relationship updated:', event.payload);
         this.updateChildOrder(event.payload);
       });
       this.unlisteners.push(unlistenUpdated);
@@ -166,7 +166,7 @@ class ReactiveStructureTree {
   /**
    * Add a child with binary search insertion to maintain sort by order
    */
-  private addChild(edge: EdgeEventData) {
+  private addChild(edge: HierarchyRelationship) {
     const parentId = edge.in;
     const childId = edge.out;
     const order = edge.order;
@@ -227,7 +227,7 @@ class ReactiveStructureTree {
   /**
    * Remove a child from parent's children
    */
-  private removeChild(edge: EdgeEventData) {
+  private removeChild(edge: HierarchyRelationship) {
     const parentId = edge.in;
     const childId = edge.out;
 
@@ -244,7 +244,7 @@ class ReactiveStructureTree {
   /**
    * Update child order (rare - only during rebalancing)
    */
-  private updateChildOrder(edge: EdgeEventData) {
+  private updateChildOrder(edge: HierarchyRelationship) {
     // Remove and re-add to update order
     this.removeChild(edge);
     this.addChild(edge);
@@ -303,7 +303,7 @@ class ReactiveStructureTree {
   }
 
   /**
-   * Manually register an in-memory edge (for placeholder promotion)
+   * Manually register an in-memory parent-child relationship (for placeholder promotion)
    *
    * Use this when creating parent-child relationships for nodes that haven't
    * been persisted yet and won't trigger LIVE SELECT events.
@@ -311,13 +311,15 @@ class ReactiveStructureTree {
    * @param parentId - Parent node ID
    * @param childId - Child node ID
    * @param order - Sort order (use 1.0 for first child, or get max order + 1)
+   *
+   * @deprecated This creates a temporary in-memory relationship. Prefer backend API
+   * calls that return complete relationship data with proper optimistic updates.
    */
-  addInMemoryEdge(parentId: string, childId: string, order: number = 1.0) {
+  addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0) {
     this.addChild({
       id: `${parentId}-${childId}`,
       in: parentId,
       out: childId,
-      edgeType: 'has_child',
       order
     });
   }
@@ -326,7 +328,7 @@ class ReactiveStructureTree {
    * TEST ONLY: Direct access to addChild for testing binary search algorithm
    * @internal
    */
-  __testOnly_addChild(edge: EdgeEventData) {
+  __testOnly_addChild(edge: HierarchyRelationship) {
     this.addChild(edge);
   }
 }

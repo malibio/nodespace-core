@@ -43,7 +43,6 @@ export interface CreateNodeInput {
   properties?: Record<string, unknown>;
   mentions?: string[];
   parentId?: string | null;
-  containerNodeId?: string | null;
 }
 
 export interface UpdateNodeInput {
@@ -85,7 +84,6 @@ export interface SaveNodeWithParentInput {
   content: string;
   nodeType: string;
   parentId: string;
-  containerNodeId: string;
   beforeSiblingId?: string | null;
 }
 
@@ -102,7 +100,7 @@ export interface BackendAdapter {
 
   // Hierarchy
   getChildren(parentId: string): Promise<Node[]>;
-  getNodesByContainerId(containerNodeId: string): Promise<Node[]>;
+  getDescendants(rootNodeId: string): Promise<Node[]>;
   moveNode(nodeId: string, newParentId: string | null, beforeSiblingId?: string | null): Promise<void>;
   reorderNode(nodeId: string, beforeSiblingId: string | null): Promise<void>;
   getAllEdges(): Promise<EdgeRecord[]>;
@@ -154,8 +152,7 @@ class TauriAdapter implements BackendAdapter {
       content: input.content,
       properties: input.properties ?? {},
       mentions: input.mentions ?? [],
-      parent_id: (input as CreateNodeInput).parentId ?? null,
-      container_node_id: (input as CreateNodeInput).containerNodeId ?? null
+      parent_id: (input as CreateNodeInput).parentId ?? null
     };
     return invoke<string>('create_node', { node: nodeInput });
   }
@@ -180,9 +177,10 @@ class TauriAdapter implements BackendAdapter {
     return invoke<Node[]>('get_children', { parent_id: parentId });
   }
 
-  async getNodesByContainerId(containerNodeId: string): Promise<Node[]> {
+  async getDescendants(rootNodeId: string): Promise<Node[]> {
     const invoke = await this.getInvoke();
-    return invoke<Node[]>('get_nodes_by_container_id', { container_node_id: containerNodeId });
+    // Note: Backend command still uses legacy name - can be renamed in backend separately
+    return invoke<Node[]>('get_nodes_by_container_id', { container_node_id: rootNodeId });
   }
 
   async moveNode(nodeId: string, newParentId: string | null, beforeSiblingId?: string | null): Promise<void> {
@@ -268,7 +266,6 @@ class TauriAdapter implements BackendAdapter {
         content: input.content,
         node_type: input.nodeType,
         parent_id: input.parentId,
-        container_node_id: input.containerNodeId,
         before_sibling_id: input.beforeSiblingId
       }
     });
@@ -345,7 +342,6 @@ class HttpAdapter implements BackendAdapter {
       properties: input.properties ?? {},
       mentions: input.mentions ?? [],
       parentId: (input as CreateNodeInput).parentId ?? null,
-      containerNodeId: (input as CreateNodeInput).containerNodeId ?? null,
       createdAt: now,
       modifiedAt: now,
       version: 1
@@ -389,10 +385,10 @@ class HttpAdapter implements BackendAdapter {
     return await this.handleResponse<Node[]>(response);
   }
 
-  async getNodesByContainerId(containerNodeId: string): Promise<Node[]> {
-    // Containers have been removed - this is now just getChildren
+  async getDescendants(rootNodeId: string): Promise<Node[]> {
+    // Returns all descendants of a node (entire subtree)
     // Using the /api/nodes/:id/children endpoint which calls get_children
-    return this.getChildren(containerNodeId);
+    return this.getChildren(rootNodeId);
   }
 
   async moveNode(nodeId: string, newParentId: string | null, _beforeSiblingId?: string | null): Promise<void> {
@@ -467,15 +463,14 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async createContainerNode(input: CreateContainerInput): Promise<string> {
-    // Use createNode with no parent for container creation
+    // Use createNode with no parent for root node creation
     return this.createNode({
       id: crypto.randomUUID(),
       nodeType: input.nodeType,
       content: input.content,
       properties: input.properties,
       mentions: [],
-      parentId: null,
-      containerNodeId: null
+      parentId: null
     });
   }
 
@@ -487,8 +482,7 @@ class HttpAdapter implements BackendAdapter {
       content: input.content,
       properties: {},
       mentions: [],
-      parentId: input.parentId,
-      containerNodeId: input.containerNodeId
+      parentId: input.parentId
     });
   }
 
@@ -567,7 +561,7 @@ class MockAdapter implements BackendAdapter {
   async getChildren(_parentId: string): Promise<Node[]> {
     return [];
   }
-  async getNodesByContainerId(_containerNodeId: string): Promise<Node[]> {
+  async getDescendants(_rootNodeId: string): Promise<Node[]> {
     return [];
   }
   async moveNode(_nodeId: string, _newParentId: string | null): Promise<void> {}

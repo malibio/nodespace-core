@@ -86,10 +86,10 @@ export async function getChildren(parentId: string): Promise<Node[]> {
 }
 
 /**
- * Get nodes by container ID (for page loading)
+ * Get all descendants of a node (entire subtree)
  */
-export async function getNodesByContainerId(containerNodeId: string): Promise<Node[]> {
-  return backendAdapter.getNodesByContainerId(containerNodeId);
+export async function getDescendants(rootNodeId: string): Promise<Node[]> {
+  return backendAdapter.getDescendants(rootNodeId);
 }
 
 /**
