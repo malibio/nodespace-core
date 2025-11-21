@@ -605,7 +605,6 @@ export class SharedNodeStore {
       // Notify subscribers
       this.notifySubscribers(nodeId, updatedNode, source);
 
-      // Log update event (eventBus removed - LIVE SELECT handles real-time sync)
       console.debug(`[SharedNodeStore] Node updated: ${nodeId}, type: ${this.determineUpdateType(changes)}`);
 
       // Update metrics
@@ -804,7 +803,6 @@ export class SharedNodeStore {
     this.notifySubscribers(node.id, node, source);
 
     if (isHierarchyChange) {
-      // Log hierarchy change (eventBus removed - LIVE SELECT handles real-time sync)
       console.debug(`[SharedNodeStore] Hierarchy change for node: ${node.id}`);
     }
 
@@ -952,7 +950,6 @@ export class SharedNodeStore {
       this.persistedNodeIds.delete(nodeId); // Remove from tracking set
       this.notifySubscribers(nodeId, node, source);
 
-      // Log delete event (eventBus removed - LIVE SELECT handles real-time sync)
       console.debug(`[SharedNodeStore] Node deleted: ${nodeId}`);
 
       // Phase 2.4: Persist deletion to database
@@ -1262,7 +1259,6 @@ export class SharedNodeStore {
     this.nodes.set(conflict.nodeId, resolution.resolvedNode);
     this.versions.set(conflict.nodeId, this.getNextVersion(conflict.nodeId));
 
-    // Log conflict resolution (eventBus removed)
     console.debug(`[SharedNodeStore] Conflict resolved for node: ${conflict.nodeId}, strategy: ${resolution.strategy}`);
 
     // Notify subscribers
@@ -1322,7 +1318,6 @@ export class SharedNodeStore {
       this.notifySubscribers(nodeId, currentNode, updateToRollback.source);
     }
 
-    // Log rollback event (eventBus removed)
     console.debug(`[SharedNodeStore] Update rolled back for node: ${nodeId}`);
   }
 
