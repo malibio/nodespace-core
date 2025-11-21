@@ -6,25 +6,25 @@
 
 ## Context
 
-NodeSpace's @mention autocomplete feature needed to restrict results to only nodes that make sense to reference (containers and tasks), excluding child text nodes and other content fragments that shouldn't be directly mentioned.
+NodeSpace's @mention autocomplete feature needed to restrict results to only nodes that make sense to reference (roots and tasks), excluding child text nodes and other content fragments that shouldn't be directly mentioned.
 
 The key question was how to implement filtering:
 
-1. **Boolean flag approach** - Add `include_containers_and_tasks` parameter to NodeQuery
+1. **Boolean flag approach** - Add `include_roots_and_tasks` parameter to NodeQuery
 2. **Flexible filter builder** - Implement a composable filter system for future extensibility
 3. **Frontend post-processing** - Filter results in the frontend after database query
 4. **Separate query method** - Create dedicated `query_referenceable_nodes()` method
 
 ## Decision
 
-We will implement filtering as a **boolean flag (`include_containers_and_tasks`) in the NodeQuery struct**, applied at the SQL level via a helper function that generates filter clauses.
+We will implement filtering as a **boolean flag (`include_roots_and_tasks`) in the NodeQuery struct**, applied at the SQL level via a helper function that generates filter clauses.
 
 ## Rationale
 
 ### Primary Use Case Alignment
 
 The filter's primary use case is:
-> "@mention autocomplete should only show task nodes and container/root nodes, not individual text paragraphs or other child content"
+> "@mention autocomplete should only show task nodes and root nodes, not individual text paragraphs or other child content"
 
 This requirement is specific and well-defined - there's no current need for arbitrary filter combinations or complex filtering logic.
 
@@ -36,8 +36,8 @@ This requirement is specific and well-defined - there's no current need for arbi
 2. **SQL-Level Efficiency**: Filter applied at database level (not post-processing in frontend)
 3. **Consistent Application**: Automatically works across all query paths (mentioned_by, content_contains, node_type)
 4. **Backward Compatible**: Optional parameter defaults to `false` (no breaking changes)
-5. **Clear Intent**: Name `include_containers_and_tasks` explicitly states what's included
-6. **Maintainable**: Centralized filter logic in `build_container_task_filter()` helper
+5. **Clear Intent**: Name `include_roots_and_tasks` explicitly states what's included
+6. **Maintainable**: Centralized filter logic in `build_root_task_filter()` helper
 7. **YAGNI Principle**: Doesn't over-engineer for hypothetical future requirements
 
 **Disadvantages of Alternative Approaches:**
@@ -51,13 +51,13 @@ This requirement is specific and well-defined - there's no current need for arbi
 **SQL Filter Generation:**
 
 ```rust
-fn build_container_task_filter(enabled: bool, table_alias: Option<&str>) -> String {
+fn build_root_task_filter(enabled: bool, table_alias: Option<&str>) -> String {
     if !enabled {
         return String::new();
     }
     let prefix = table_alias.map(|a| format!("{}.", a)).unwrap_or_default();
     format!(
-        " AND ({}node_type = 'task' OR {}container_node_id IS NULL)",
+        " AND ({}node_type = 'task' OR {}root_id IS NULL)",
         prefix, prefix
     )
 }
@@ -69,7 +69,7 @@ fn build_container_task_filter(enabled: bool, table_alias: Option<&str>) -> Stri
 - No SQL injection risk
 
 **Filter Logic:**
-- **Includes**: Task nodes (`node_type = 'task'`) OR container nodes (`container_node_id IS NULL`)
+- **Includes**: Task nodes (`node_type = 'task'`) OR root nodes (`root_id IS NULL`)
 - **Excludes**: Text children and other non-referenceable content fragments
 
 ### Query Priority Order
@@ -80,7 +80,7 @@ The filter integrates seamlessly into the existing query priority system:
 2. `mentioned_by` - Nodes referencing target (filter applied)
 3. `content_contains` + optional `node_type` - Full-text search (filter applied)
 4. `node_type` - Type-based query (filter applied)
-5. **`include_containers_and_tasks`** - Filter-only query (new capability)
+5. **`include_roots_and_tasks`** - Filter-only query (new capability)
 6. Empty query - Returns empty vec
 
 ### Code Review Validation

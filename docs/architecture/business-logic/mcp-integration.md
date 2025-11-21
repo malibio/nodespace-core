@@ -461,7 +461,7 @@ struct CreateNodeParams {
     node_type: String,
     content: String,
     parent_id: Option<String>,
-    container_node_id: Option<String>,
+    root_id: Option<String>,
     properties: Value,
 }
 
@@ -481,7 +481,7 @@ async fn handle_create_node(
         node_type: params.node_type.clone(),
         content: params.content,
         parent_id: params.parent_id,
-        container_node_id: params.container_node_id,
+        root_id: params.root_id,
         before_sibling_id: None,
         created_at: chrono::Utc::now(),
         modified_at: chrono::Utc::now(),
@@ -623,7 +623,7 @@ const request = {
   params: {
     node_type: "text",
     content: "Meeting notes from AI agent",
-    container_node_id: "daily-2025-01-19",
+    root_id: "daily-2025-01-19",
     properties: {}
   }
 };
@@ -868,14 +868,14 @@ See `/packages/core/src/mcp/handlers/markdown.rs` for implementation details.
 
 ## Migration Guide: Container Model Change (v0.2.0)
 
-### Breaking Change: First Element as Container
+### Breaking Change: First Element as Root
 
 **What Changed:**
 
-In the markdown import implementation, we changed how container nodes are created:
+In the markdown import implementation, we changed how root nodes are created:
 
-- **Old behavior**: `create_nodes_from_markdown` created a wrapper container node with `container_title` as content, then all parsed markdown elements became children of that wrapper
-- **New behavior**: The first markdown element becomes the container node itself (no wrapper created)
+- **Old behavior**: `create_nodes_from_markdown` created a wrapper root node with `container_title` as content, then all parsed markdown elements became children of that wrapper
+- **New behavior**: The first markdown element becomes the root node itself (no wrapper created)
 
 **Visual Example:**
 
@@ -887,22 +887,22 @@ Some text
 
 **Old Model (pre-v0.2.0):**
 ```
-Container (node_type="text", content="Test Title")  ← wrapper node
+Root (node_type="text", content="Test Title")  ← wrapper node
   └─ Header (node_type="header", content="# My Document")
      └─ Text (node_type="text", content="Some text")
 ```
 
 **New Model (v0.2.0+):**
 ```
-Header (node_type="header", content="# My Document")  ← IS the container
+Header (node_type="header", content="# My Document")  ← IS the root
   └─ Text (node_type="text", content="Some text")
 ```
 
 **Key Differences:**
 
-1. **No wrapper node**: The first parsed element becomes the container
+1. **No wrapper node**: The first parsed element becomes the root
 2. **container_title parameter deprecated**: Still accepted for backward compatibility but effectively ignored
-3. **Container node structure**: Container has `container_node_id = None`, children have `container_node_id = <container_id>`
+3. **Root node structure**: Root has `root_id = None`, children have `root_id = <root_id>`
 4. **Export format**: When exporting, you get the actual first element content, not a wrapper title
 
 **Why This Change:**
@@ -914,12 +914,12 @@ Header (node_type="header", content="# My Document")  ← IS the container
 
 **Migration Steps:**
 
-If you have existing code that depends on the old container model:
+If you have existing code that depends on the old root model:
 
-1. **Update container queries**: Code expecting `container_node_id` to point to a wrapper node should expect it to point to the first markdown element instead
-2. **Re-import existing content**: To migrate existing markdown containers to the new structure, export and re-import them
-3. **Update tests**: Any tests asserting on container content should expect the first markdown element, not the `container_title` value
-4. **Export workflows**: If you're exporting markdown, the container node will now be the first element, not a wrapper with arbitrary title
+1. **Update root queries**: Code expecting `root_id` to point to a wrapper node should expect it to point to the first markdown element instead
+2. **Re-import existing content**: To migrate existing markdown roots to the new structure, export and re-import them
+3. **Update tests**: Any tests asserting on root content should expect the first markdown element, not the `container_title` value
+4. **Export workflows**: If you're exporting markdown, the root node will now be the first element, not a wrapper with arbitrary title
 
 **Example Code Migration:**
 
