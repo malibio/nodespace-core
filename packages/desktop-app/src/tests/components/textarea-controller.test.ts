@@ -723,7 +723,7 @@ describe('TextareaController', () => {
       element.dispatchEvent(new Event('input', { bubbles: true }));
 
       // Insert node reference - stores UUID only, display text fetched at render time
-      controller.insertNodeReference('node-123', 'My Node');
+      controller.insertNodeReference('node-123');
 
       // New format: [](nodespace://uuid) - no display text stored
       expect(element.value).toContain('[](nodespace://node-123)');

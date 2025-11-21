@@ -896,7 +896,7 @@ export class TextareaController {
    * Insert node reference at current @mention position
    * Stores only UUID - display text is fetched at render time
    */
-  public insertNodeReference(nodeId: string, _nodeTitle: string): void {
+  public insertNodeReference(nodeId: string): void {
     if (!this.mentionSession) return;
 
     const content = this.element.value;
