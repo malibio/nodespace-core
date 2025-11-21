@@ -62,15 +62,18 @@ pub struct CreateNodesFromMarkdownParams {
     /// ```
     pub markdown_content: String,
 
-    /// Title for the container node (REQUIRED).
+    /// Title for the root node (REQUIRED).
     ///
-    /// This creates a separate container node that all markdown_content nodes
+    /// This creates a separate root node that all markdown_content nodes
     /// will be children of. Can be:
-    /// - A date string (YYYY-MM-DD) to use/create a date container
-    /// - Markdown text (e.g., "# My Document" or "Project Notes") to create a text/header container
+    /// - A date string (YYYY-MM-DD) to use/create a date root
+    /// - Markdown text (e.g., "# My Document" or "Project Notes") to create a text/header root
     ///
-    /// The parsed container type must be text, header, or date.
-    /// Multi-line types (code-block, quote-block, ordered-list) cannot be containers.
+    /// The parsed root type must be text, header, or date.
+    /// Multi-line types (code-block, quote-block, ordered-list) cannot be roots.
+    ///
+    /// NOTE: Field name kept as `container_title` for MCP API backward compatibility.
+    /// Internally, this represents the "root" node in the graph-native architecture.
     pub container_title: String,
 }
 

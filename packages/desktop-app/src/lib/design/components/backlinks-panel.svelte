@@ -1,5 +1,5 @@
 <!--
-  BacklinksPanel - Collapsible panel showing root-level backlinks
+  BacklinksPanel - Collapsible panel showing container-level backlinks
 
   Design matches Schema-Driven Property Forms:
   - Simple collapsible trigger with count and chevron
@@ -9,7 +9,7 @@
 
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
-  import { backendAdapter } from '$lib/services/backend-adapter';
+  import * as tauriCommands from '$lib/services/tauri-commands';
   import Icon, { type IconName } from '$lib/design/icons/icon.svelte';
   import { onMount } from 'svelte';
   import type { Node } from '$lib/types/node';
@@ -23,12 +23,12 @@
 
   onMount(async () => {
     try {
-      // Get root IDs that mention this node
-      const rootIds = await backendAdapter.getMentioningRoots(nodeId);
+      // Get container IDs that mention this node
+      const containerIds = await tauriCommands.getMentioningContainers(nodeId);
 
-      // Fetch full node data for each root explicitly
+      // Fetch full node data for each container explicitly
       // (don't rely on cache - ensure we always have the latest data)
-      const nodes = await Promise.all(rootIds.map((id) => backendAdapter.getNode(id)));
+      const nodes = await Promise.all(containerIds.map((id) => tauriCommands.getNode(id)));
 
       // Filter out null values (nodes that no longer exist)
       backlinks = nodes.filter((node): node is Node => node !== null);
