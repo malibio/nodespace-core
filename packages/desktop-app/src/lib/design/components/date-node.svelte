@@ -34,7 +34,7 @@
   // Derive props from stores with fallback to passed props for backward compatibility
   let content = $derived(node?.content ?? propsContent);
   let nodeType = $derived(node?.nodeType ?? propsNodeType);
-  let children = $derived(childIds?.length > 0 ? childIds : propsChildren);
+  let children = $derived(childIds ?? propsChildren);
 
   // Parse date from content - expects YYYY-MM-DD format or similar
   function parseDate(content: string): Date | null {

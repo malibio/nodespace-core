@@ -35,7 +35,7 @@
   // Derive props from stores with fallback to passed props for backward compatibility
   let content = $derived(node?.content ?? propsContent);
   let nodeType = $derived(node?.nodeType ?? propsNodeType);
-  let children = $derived(childIds?.length > 0 ? childIds : propsChildren);
+  let children = $derived(childIds ?? propsChildren);
 
   // Text nodes always allow multiline editing
   const editableConfig = {
