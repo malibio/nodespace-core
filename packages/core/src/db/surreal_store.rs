@@ -869,9 +869,10 @@ where
             .await
             .context("Failed to verify hub node creation")?;
 
-        let _: Vec<SurrealNode> = verify_response
-            .take(0)
-            .context("Hub node was not created - verification query returned no results")?;
+        let _: Vec<SurrealNode> = verify_response.take(0).context(format!(
+            "Hub node '{}' was not created - verification query returned no results",
+            node.id
+        ))?;
 
         // Create spoke record if needed
         if should_create_spoke && has_properties {
@@ -904,9 +905,10 @@ where
                 .await
                 .context("Failed to verify spoke record creation")?;
 
-            let _: Vec<serde_json::Value> = verify_spoke_response
-                .take(0)
-                .context("Spoke record was not created - verification query returned no results")?;
+            let _: Vec<serde_json::Value> = verify_spoke_response.take(0).context(format!(
+                "Spoke record '{}:{}' was not created - verification query returned no results",
+                node.node_type, node.id
+            ))?;
 
             // Set bidirectional links: hub -> spoke and spoke -> hub
             let link_query = format!(
