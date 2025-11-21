@@ -860,6 +860,19 @@ where
         // Consume the CREATE response - critical for persistence
         let _: Result<Vec<serde_json::Value>, _> = response.take(0usize);
 
+        // Verify the hub node was actually created by querying it back
+        // This ensures the CREATE statement fully persisted before proceeding
+        let verify_query = format!("SELECT * FROM node:`{}` LIMIT 1;", node.id);
+        let mut verify_response = self
+            .db
+            .query(&verify_query)
+            .await
+            .context("Failed to verify hub node creation")?;
+
+        let _: Vec<SurrealNode> = verify_response
+            .take(0)
+            .context("Hub node was not created - verification query returned no results")?;
+
         // Create spoke record if needed
         if should_create_spoke && has_properties {
             // CREATE spoke record with properties using simpler table:id syntax
@@ -881,6 +894,19 @@ where
             // Consume spoke response - we don't need the returned data
             // Ignore deserialization errors from CREATE response (may contain enum types)
             let _: Result<Vec<serde_json::Value>, _> = spoke_response.take(0usize);
+
+            // Verify the spoke record was actually created
+            let verify_spoke_query =
+                format!("SELECT * FROM {}:`{}` LIMIT 1;", node.node_type, node.id);
+            let mut verify_spoke_response = self
+                .db
+                .query(&verify_spoke_query)
+                .await
+                .context("Failed to verify spoke record creation")?;
+
+            let _: Vec<serde_json::Value> = verify_spoke_response
+                .take(0)
+                .context("Spoke record was not created - verification query returned no results")?;
 
             // Set bidirectional links: hub -> spoke and spoke -> hub
             let link_query = format!(
