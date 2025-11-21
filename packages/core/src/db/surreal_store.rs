@@ -845,19 +845,8 @@ where
         // The CREATE response may not include all fields in the same format as SELECT
         let _: Option<Vec<serde_json::Value>> = response.take(0).ok();
 
-        // Set properties after creation to avoid serialization issues with complex objects
-        if !props_with_schema.is_empty() {
-            self.db
-                .query("UPDATE type::thing($table, $id) SET properties = $properties;")
-                .bind(("table", "node"))
-                .bind(("id", node.id.clone()))
-                .bind((
-                    "properties",
-                    serde_json::Value::Object(props_with_schema.clone()),
-                ))
-                .await
-                .context("Failed to set node properties")?;
-        }
+        // Note: Properties are stored ONLY in spoke tables, not in hub node
+        // For nodes without a spoke table (text, header, etc.), properties live in CONTENT during CREATE
 
         // Insert into type-specific table for types with properties (task, schema)
         let has_properties = !node
@@ -868,28 +857,40 @@ where
         let should_create_spoke = TYPES_WITH_PROPERTIES.contains(&node.node_type.as_str());
 
         if should_create_spoke && has_properties {
+            // Prepare spoke properties with mandatory reverse link (spoke -> hub)
+            let mut spoke_props = props_with_schema.clone();
+            // Add mandatory reverse link field: node (Record Link to hub)
+            spoke_props.insert(
+                "node".to_string(),
+                serde_json::json!({"tb": "node", "id": node.id.clone()}),
+            );
+
             // Store properties directly in type-specific table (flattened)
             let mut spoke_response = self
                 .db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
                 .bind(("table", node.node_type.clone()))
                 .bind(("id", node.id.clone()))
-                .bind(("properties", node.properties.clone()))
+                .bind(("properties", Value::Object(spoke_props)))
                 .await
                 .context("Failed to create node in type-specific table")?;
 
             // Consume the spoke CREATE response to ensure the query completes properly
             let _: Option<Vec<serde_json::Value>> = spoke_response.take(0).ok();
 
-            // Set data field to link to type-specific record and clear hub properties
-            // Hub-and-spoke pattern: properties live ONLY in spoke table, not duplicated in hub
-            // The get_node() method fetches spoke data using OMIT id pattern (line 1136)
-            self.db
-                .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id), properties = {};")
+            // Set data field to link to type-specific record
+            // Hub-and-spoke pattern: properties live ONLY in spoke table, not in hub
+            // The get_node() method fetches spoke data using the data record link
+            let mut link_response = self
+                .db
+                .query("UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);")
                 .bind(("id", node.id.clone()))
                 .bind(("type_table", node.node_type.clone()))
                 .await
-                .context("Failed to set data link and clear hub properties")?;
+                .context("Failed to set data link")?;
+
+            // Consume the UPDATE response to ensure the query completes properly
+            let _: Option<Vec<serde_json::Value>> = link_response.take(0).ok();
         }
 
         // Note: Parent-child relationships are now established separately via move_node()
