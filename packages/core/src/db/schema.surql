@@ -40,8 +40,8 @@ DEFINE INDEX IF NOT EXISTS idx_node_modified ON TABLE node COLUMNS modifiedAt;
 
 -- Task spoke: Status, priority, due dates with efficient indexing
 DEFINE TABLE IF NOT EXISTS task SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS id ON TABLE task TYPE record ASSERT $value != NONE;
-DEFINE FIELD IF NOT EXISTS node ON TABLE task TYPE record ASSERT $value != NONE;  -- Reverse link to hub
+DEFINE FIELD IF NOT EXISTS id ON TABLE task TYPE option<record>;
+DEFINE FIELD IF NOT EXISTS node ON TABLE task TYPE option<record>;  -- Reverse link to hub
 
 -- Core task fields (indexed for queries)
 DEFINE FIELD IF NOT EXISTS status ON TABLE task TYPE string DEFAULT 'todo';
@@ -61,8 +61,8 @@ DEFINE INDEX IF NOT EXISTS idx_task_due_date ON TABLE task COLUMNS due_date;
 
 -- Date spoke: Timezone, holiday tracking
 DEFINE TABLE IF NOT EXISTS date SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS id ON TABLE date TYPE record ASSERT $value != NONE;
-DEFINE FIELD IF NOT EXISTS node ON TABLE date TYPE record ASSERT $value != NONE;  -- Reverse link to hub
+DEFINE FIELD IF NOT EXISTS id ON TABLE date TYPE option<record>;
+DEFINE FIELD IF NOT EXISTS node ON TABLE date TYPE option<record>;  -- Reverse link to hub
 
 -- Core date fields
 DEFINE FIELD IF NOT EXISTS timezone ON TABLE date TYPE string DEFAULT 'UTC';
@@ -74,8 +74,8 @@ DEFINE FIELD IF NOT EXISTS is_holiday ON TABLE date TYPE bool DEFAULT false;
 
 -- Schema spoke: Type definitions
 DEFINE TABLE IF NOT EXISTS schema SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS id ON TABLE schema TYPE record ASSERT $value != NONE;
-DEFINE FIELD IF NOT EXISTS node ON TABLE schema TYPE record ASSERT $value != NONE;  -- Reverse link to hub
+DEFINE FIELD IF NOT EXISTS id ON TABLE schema TYPE option<record>;
+DEFINE FIELD IF NOT EXISTS node ON TABLE schema TYPE option<record>;  -- Reverse link to hub
 
 -- Core schema fields
 DEFINE FIELD IF NOT EXISTS is_core ON TABLE schema TYPE bool DEFAULT false;

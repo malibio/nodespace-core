@@ -869,13 +869,16 @@ where
 
         if should_create_spoke && has_properties {
             // Store properties directly in type-specific table (flattened)
-            self.db
+            let mut spoke_response = self.db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
                 .bind(("table", node.node_type.clone()))
                 .bind(("id", node.id.clone()))
                 .bind(("properties", node.properties.clone()))
                 .await
                 .context("Failed to create node in type-specific table")?;
+
+            // Consume the spoke CREATE response to ensure the query completes properly
+            let _: Option<Vec<serde_json::Value>> = spoke_response.take(0).ok();
 
             // Set data field to link to type-specific record and clear hub properties
             // Hub-and-spoke pattern: properties live ONLY in spoke table, not duplicated in hub
