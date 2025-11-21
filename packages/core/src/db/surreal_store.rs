@@ -17,7 +17,7 @@
 //! 2. **SCHEMAFULL + FLEXIBLE**: Core fields strictly typed, user extensions allowed (Issue #560)
 //! 3. **Record IDs**: Native SurrealDB format `node:uuid` (type embedded in ID)
 //! 4. **Hub-and-Spoke**: Universal `node` table + spoke tables (task, date, schema) with bidirectional Record Links
-//! 5. **Graph Edges**: Hierarchy via `has_child` edges (no parent_id/container_node_id fields)
+//! 5. **Graph Edges**: Hierarchy via `has_child` edges (no parent_id/root_id fields)
 //! 6. **Direct Access**: No abstraction layers, SurrealStore used directly by services
 //!
 //! # Performance Targets (from PoC)
@@ -137,7 +137,7 @@ fn validate_node_type(node_type: &str) -> Result<()> {
 ///   - Automatically set when content changes, cleared when embedding regenerated
 ///
 /// - **v1.2** (Issue #511): Graph-native architecture
-///   - Removed `uuid`, `parent_id`, `container_node_id`, `properties` fields
+///   - Removed `uuid`, `parent_id`, `root_id`, `properties` fields
 ///   - Added `data` field: Optional record link to type-specific table
 ///   - Added `variants` field: Type history for lossless type switching
 ///   - Added `_schema_version` field: Universal versioning
@@ -3006,7 +3006,7 @@ where
         // SurrealDB query using vector::similarity::cosine
         // We need to explicitly select fields to avoid deserialization issues with the computed similarity field
         // Use SurrealQL's OR operator to provide defaults for NONE values (SurrealDB's COALESCE equivalent)
-        // Note: parent_id/container_node_id removed - use graph edges instead
+        // Note: parent_id/root_id removed - use graph edges instead
         let query = r#"
             SELECT
                 id,

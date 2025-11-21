@@ -291,19 +291,19 @@ where
         NaiveDate::parse_from_str(id, "%Y-%m-%d").is_ok()
     }
 
-    /// Resolve container_node_id for non-container nodes
+    /// Resolve root_id for non-root nodes
     ///
-    /// Business Rule 2: Every non-container node MUST have a container_node_id.
+    /// Business Rule 2: Every non-root node MUST have a root_id.
     /// If not provided explicitly, infer it from the parent.
     ///
     /// # Arguments
     ///
-    /// * `container_node_id` - Explicitly provided container (may be None)
+    /// * `root_id` - Explicitly provided root (may be None)
     /// * `parent_id` - Parent node ID (may be None)
     ///
     /// # Returns
     ///
-    /// The resolved container_node_id or an error if it cannot be determined
+    /// The resolved root_id or an error if it cannot be determined
     ///
     /// # Errors
     ///
@@ -900,7 +900,7 @@ where
             .await?
             .ok_or_else(|| NodeOperationError::node_not_found(node_id.to_string()))?;
 
-        // NOTE: Hierarchy changes (parent_id, container_node_id) are no longer supported in update_node.
+        // NOTE: Hierarchy changes (parent_id, root_id) are no longer supported in update_node.
         // Use the move_node() API instead for changing node hierarchy.
 
         let sibling_changed = update
@@ -1005,8 +1005,8 @@ where
     /// Move a node to a new parent
     ///
     /// This method enforces Rules 2, 4, and 5:
-    /// - Validates parent-container consistency
-    /// - Updates container_node_id if needed
+    /// - Validates parent-root consistency
+    /// - Updates root_id if needed
     /// - Separate from content updates
     ///
     /// # Arguments
@@ -1456,7 +1456,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Create a child WITHOUT container_node_id - should infer from parent
+        // Create a child WITHOUT root_id - should infer from parent
         let child_id = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
@@ -1469,16 +1469,16 @@ mod tests {
             .await
             .unwrap();
 
-        // Graph Architecture Note: Parent-child and container relationships are now managed
-        // via graph edges in the SurrealDB schema, not via parent_id/container_node_id fields.
+        // Graph Architecture Note: Parent-child and root relationships are now managed
+        // via graph edges in the SurrealDB schema, not via parent_id/root_id fields.
         // The relationship assertions would be verified via edge queries.
         let _child = operations.get_node(&child_id).await.unwrap().unwrap();
         // TODO: Verify parent-child relationship via graph edge query when edge API is available
     }
 
     #[tokio::test]
-    #[ignore = "TODO(#533): Re-enable after container concept cleanup"]
-    async fn test_parent_container_mismatch_error() {
+    #[ignore = "TODO(#533): Re-enable after root concept cleanup"]
+    async fn test_parent_root_mismatch_error() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
         // Create two separate date containers
@@ -2033,8 +2033,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Graph Architecture Note: Parent-child and container relationships are now managed
-        // via graph edges in the SurrealDB schema, not via parent_id/container_node_id fields.
+        // Graph Architecture Note: Parent-child and root relationships are now managed
+        // via graph edges in the SurrealDB schema, not via parent_id/root_id fields.
         let _child = operations.get_node(&child_id).await.unwrap().unwrap();
         // TODO: Verify parent-child relationship via graph edge query when edge API is available
     }

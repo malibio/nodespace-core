@@ -16,7 +16,7 @@ pub struct CreateNodeInput {
     pub node_type: String,
     pub content: String,
     pub parent_id: Option<String>,
-    // container_node_id removed - backend auto-derives root from parent chain (Issue #533)
+    // root_id removed - backend auto-derives root from parent chain (Issue #533)
     pub before_sibling_id: Option<String>,
     pub properties: serde_json::Value,
     #[serde(default)]
@@ -140,7 +140,7 @@ pub async fn create_node(
             node_type: node.node_type,
             content: node.content,
             parent_id: node.parent_id,
-            // container_node_id removed - backend auto-derives root from parent chain (Issue #533)
+            // root_id removed - backend auto-derives root from parent chain (Issue #533)
             before_sibling_id: node.before_sibling_id,
             properties: node.properties,
         })
@@ -512,7 +512,7 @@ pub async fn get_children(
 /// - Single database query fetches all nodes with the same root
 /// - In-memory hierarchy reconstruction using parent_id and before_sibling_id
 ///
-/// Phase 5 (Issue #511): Uses graph edges instead of container_node_id field
+/// Phase 5 (Issue #511): Uses graph edges instead of root_id field
 ///
 /// # Arguments
 /// * `service` - Node service instance from Tauri state

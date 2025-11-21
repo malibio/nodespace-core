@@ -253,9 +253,9 @@ fn get_tool_schemas() -> Value {
                         "type": "string",
                         "description": "Optional parent node ID for hierarchy"
                     },
-                    "container_node_id": {
+                    "root_id": {
                         "type": "string",
-                        "description": "Optional container/document ID"
+                        "description": "Optional root/document ID"
                     },
                     "properties": {
                         "type": "object",

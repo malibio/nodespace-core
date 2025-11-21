@@ -110,16 +110,16 @@ struct ParserContext {
     node_ids: Vec<String>,
     /// All created nodes with metadata (id + type)
     nodes: Vec<NodeMetadata>,
-    /// Container node ID (determined by strategy)
-    container_node_id: Option<String>,
+    /// Root node ID (determined by strategy)
+    root_id: Option<String>,
     /// Whether the first node has been created (for tracking purposes)
     first_node_created: bool,
 }
 
 impl ParserContext {
     fn new_with_strategy(strategy: ContainerStrategy) -> Self {
-        // For DateContainer strategy, set container_node_id immediately
-        let container_node_id = match &strategy {
+        // For DateContainer strategy, set root_id immediately
+        let root_id = match &strategy {
             ContainerStrategy::DateContainer(date) => Some(date.clone()),
             ContainerStrategy::TitleAsContainer(_) => None, // Will be set after parsing title
         };
@@ -130,7 +130,7 @@ impl ParserContext {
             last_sibling: None,
             node_ids: Vec::new(),
             nodes: Vec::new(),
-            container_node_id,
+            root_id,
             first_node_created: false,
         }
     }
@@ -160,8 +160,8 @@ impl ParserContext {
         let mut context =
             Self::new_with_strategy(ContainerStrategy::TitleAsContainer(container_content));
 
-        // Set container_node_id to the existing container
-        context.container_node_id = Some(container_id.clone());
+        // Set root_id to the existing container
+        context.root_id = Some(container_id.clone());
 
         // Set up initial heading stack with container as root (level 0)
         // This makes all parsed nodes children of the container
@@ -247,9 +247,9 @@ pub async fn handle_create_nodes_from_markdown(
 
     // For TitleAsContainer, parse the title first to create the container node
     if let ContainerStrategy::TitleAsContainer(ref title) = container_strategy {
-        // Temporarily clear container_node_id so the container node itself is created as a container
-        // (with container_node_id = None, which is required for container nodes)
-        context.container_node_id = None;
+        // Temporarily clear root_id so the container node itself is created as a root
+        // (with root_id = None, which is required for root nodes)
+        context.root_id = None;
 
         parse_markdown(title, operations, &mut context).await?;
 
@@ -269,8 +269,8 @@ pub async fn handle_create_nodes_from_markdown(
             )));
         }
 
-        // Set this node as the container for subsequent nodes
-        context.container_node_id = Some(container_node.id.clone());
+        // Set this node as the root for subsequent nodes
+        context.root_id = Some(container_node.id.clone());
 
         // CRITICAL: Set the container as the initial parent for top-level nodes in markdown_content
         // This makes the first heading in markdown_content a CHILD of the container, not a sibling
@@ -291,13 +291,13 @@ pub async fn handle_create_nodes_from_markdown(
         )));
     }
 
-    let container_node_id = context
-        .container_node_id
-        .ok_or_else(|| MCPError::internal_error("No container node created".to_string()))?;
+    let root_id = context
+        .root_id
+        .ok_or_else(|| MCPError::internal_error("No root node created".to_string()))?;
 
     Ok(json!({
         "success": true,
-        "container_node_id": container_node_id,
+        "root_id": root_id,
         "nodes_created": context.nodes.len(),
         "node_ids": context.node_ids,
         "nodes": context.nodes
@@ -645,7 +645,7 @@ async fn parse_markdown(
             node_type,
             &content,
             parent_id.clone(),
-            context.container_node_id.clone(),
+            context.root_id.clone(),
             None, // Fractional ordering handles positioning on edges
         )
         .await?;

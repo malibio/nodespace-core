@@ -54,8 +54,8 @@ Some content under subtitle."#;
         assert_eq!(node_ids.len(), 4);
 
         // Verify first node is the container ("Test Document")
-        let container_id = result["container_node_id"].as_str().unwrap();
-        assert_eq!(container_id, node_ids[0]);
+        let root_id = result["root_id"].as_str().unwrap();
+        assert_eq!(root_id, node_ids[0]);
     }
 
     #[tokio::test]
@@ -82,8 +82,8 @@ Text under second H2"#;
         assert_eq!(result["nodes_created"], 6);
 
         // Get the container node (created from container_title)
-        let container_id = result["container_node_id"].as_str().unwrap();
-        let container = operations.get_node(container_id).await.unwrap().unwrap();
+        let root_id = result["root_id"].as_str().unwrap();
+        let container = operations.get_node(root_id).await.unwrap().unwrap();
 
         assert_eq!(container.content, "Hierarchy Test"); // Container from container_title
         assert_eq!(container.node_type, "text");
@@ -558,8 +558,8 @@ Regular paragraph text."#;
             .await
             .unwrap();
 
-        let container_id = result["container_node_id"].as_str().unwrap();
-        let container = operations.get_node(container_id).await.unwrap().unwrap();
+        let root_id = result["root_id"].as_str().unwrap();
+        let container = operations.get_node(root_id).await.unwrap().unwrap();
 
         // Container should be a root node created from container_title
         assert_eq!(container.node_type, "text"); // "Container Test" is plain text
@@ -584,7 +584,7 @@ Text content
             .await
             .unwrap();
 
-        let _container_id = result["container_node_id"].as_str().unwrap();
+        let _root_id = result["root_id"].as_str().unwrap();
         let node_ids = result["node_ids"].as_array().unwrap();
 
         // Verify all non-container nodes are descendants of the container (via graph edges)
@@ -894,7 +894,7 @@ Text paragraph
         let import_result = handle_create_nodes_from_markdown(&operations, params)
             .await
             .unwrap();
-        let root_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Export markdown
         let export_params = json!({
@@ -935,7 +935,7 @@ Text paragraph
         let import_result = handle_create_nodes_from_markdown(&operations, params)
             .await
             .unwrap();
-        let root_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Export with max_depth=3 to include container + 2 levels of children
         // Depth counting: container=0, # Root=1, ## Child 1=2
@@ -978,7 +978,7 @@ Text paragraph
         let import_result = handle_create_nodes_from_markdown(&operations, params)
             .await
             .unwrap();
-        let root_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Export WITHOUT children
         let export_params = json!({
@@ -1018,7 +1018,7 @@ Text paragraph
         let import_result = handle_create_nodes_from_markdown(&operations, import_params)
             .await
             .unwrap();
-        let container_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Note: Actual node count may include additional nodes for blank lines or parsing artifacts
         // Let's verify the count matches what we actually get
@@ -1031,7 +1031,7 @@ Text paragraph
 
         // Export
         let export_params = json!({
-            "node_id": container_id,
+            "node_id": root_id,
             "include_children": true
         });
         let export_result = handle_get_markdown_from_node_id(&operations, export_params)
@@ -1108,7 +1108,7 @@ Text under section 1
         let import_result = handle_create_nodes_from_markdown(&operations, import_params)
             .await
             .unwrap();
-        let root_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Verify node count: container + 3 headers + 1 text + 2 list items
         let actual_count = import_result["nodes_created"].as_u64().unwrap();
@@ -1243,11 +1243,11 @@ Text under section 1
             .await
             .unwrap();
 
-        let container_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Export
         let export_params = json!({
-            "node_id": container_id,
+            "node_id": root_id,
             "include_children": true
         });
 
@@ -1291,7 +1291,7 @@ Regular text after code."#;
         let import_result = handle_create_nodes_from_markdown(&operations, import_params)
             .await
             .unwrap();
-        let root_id = import_result["container_node_id"].as_str().unwrap();
+        let root_id = import_result["root_id"].as_str().unwrap();
 
         // Verify node count: container + header + code block + text
         let actual_count = import_result["nodes_created"].as_u64().unwrap();
@@ -1343,7 +1343,7 @@ Regular text after code."#;
         let create_result = handle_create_nodes_from_markdown(&operations, create_params)
             .await
             .unwrap();
-        let root_id = create_result["container_node_id"].as_str().unwrap();
+        let root_id = create_result["root_id"].as_str().unwrap();
 
         // Update root with new markdown using new root_id parameter
         let update_params = json!({
@@ -1394,7 +1394,7 @@ Regular text after code."#;
         let create_result = handle_create_nodes_from_markdown(&operations, create_params)
             .await
             .unwrap();
-        let root_id = create_result["container_node_id"].as_str().unwrap();
+        let root_id = create_result["root_id"].as_str().unwrap();
 
         // Update using deprecated container_id parameter (backward compatibility)
         let update_params = json!({
@@ -1424,7 +1424,7 @@ Regular text after code."#;
         let create_result = handle_create_nodes_from_markdown(&operations, create_params)
             .await
             .unwrap();
-        let root_id = create_result["container_node_id"].as_str().unwrap();
+        let root_id = create_result["root_id"].as_str().unwrap();
 
         // Update with complex hierarchy
         let update_params = json!({
@@ -1494,7 +1494,7 @@ Regular text after code."#;
         let create_result = handle_create_nodes_from_markdown(&operations, create_params)
             .await
             .unwrap();
-        let root_id = create_result["container_node_id"].as_str().unwrap();
+        let root_id = create_result["root_id"].as_str().unwrap();
 
         // Update with empty markdown (should delete all children)
         let update_params = json!({
@@ -1528,7 +1528,7 @@ Regular text after code."#;
         let create_result = handle_create_nodes_from_markdown(&operations, create_params)
             .await
             .unwrap();
-        let root_id = create_result["container_node_id"].as_str().unwrap();
+        let root_id = create_result["root_id"].as_str().unwrap();
 
         // Try to update with markdown exceeding 1MB limit
         let large_markdown = "x".repeat(1_000_001);

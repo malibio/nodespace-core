@@ -12,17 +12,17 @@
 //! Initial implementation supports Text, Task, and Date nodes for E2E testing.
 //! Person and Project node support will be added in separate issues.
 //!
-//! # Container Node Detection
+//! # Root Node Detection
 //!
-//! Container nodes (topics, date nodes, etc.) are the primary targets for semantic search.
-//! They are identified by `container_node_id IS NULL` in the database.
+//! Root nodes (topics, date nodes, etc.) are the primary targets for semantic search.
+//! They are identified by `root_id IS NULL` in the database.
 //!
-//! **CRITICAL:** Never use `node_type == 'topic'` for container detection.
-//! The node_type field indicates the node's behavior, not its container status.
+//! **CRITICAL:** Never use `node_type == 'topic'` for root detection.
+//! The node_type field indicates the node's behavior, not its root status.
 //!
 //! Examples:
-//! - Container node: `container_node_id = NULL` (e.g., @mention pages, date nodes)
-//! - Child node: `container_node_id = Some("parent-id")` (e.g., notes within a topic)
+//! - Root node: `root_id = NULL` (e.g., @mention pages, date nodes)
+//! - Child node: `root_id = Some("parent-id")` (e.g., notes within a topic)
 
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::SurrealStore;
@@ -70,28 +70,28 @@ fn is_date_node_id(id: &str) -> bool {
     chrono::NaiveDate::parse_from_str(id, "%Y-%m-%d").is_ok()
 }
 
-/// Check if a node is a container node based on its container_node_id
+/// Check if a node is a root node based on its root_id
 ///
-/// Container nodes are identified by having a NULL container_node_id in the database.
-/// This is the ONLY correct way to detect container nodes.
+/// Root nodes are identified by having a NULL root_id in the database.
+/// This is the ONLY correct way to detect root nodes.
 ///
 /// # Arguments
 ///
-/// * `container_node_id` - The container_node_id field from a Node
+/// * `root_id` - The root_id field from a Node
 ///
 /// # Returns
 ///
-/// `true` if the node is a container (container_node_id is None), `false` otherwise
+/// `true` if the node is a root (root_id is None), `false` otherwise
 ///
 /// # Examples
 ///
 /// ```
-/// # use nodespace_core::services::node_service::is_container_node;
-/// assert!(is_container_node(&None)); // Container node
-/// assert!(!is_container_node(&Some("parent-id".to_string()))); // Child node
+/// # use nodespace_core::services::node_service::is_root_node;
+/// assert!(is_root_node(&None)); // Root node
+/// assert!(!is_root_node(&Some("parent-id".to_string()))); // Child node
 /// ```
-pub fn is_container_node(container_node_id: &Option<String>) -> bool {
-    container_node_id.is_none()
+pub fn is_root_node(root_id: &Option<String>) -> bool {
+    root_id.is_none()
 }
 
 // Regex pattern for UUID validation (lowercase hex with standard UUID format)
@@ -348,7 +348,7 @@ where
     /// Returns error if:
     /// - Node validation fails
     /// - Parent node doesn't exist (if parent_id is set)
-    /// - Root node doesn't exist (if container_node_id is set)
+    /// - Root node doesn't exist (if root_id is set)
     /// - Database insertion fails
     ///
     /// # Examples
@@ -720,7 +720,7 @@ where
         // Update node with properties (only versioned if schema has fields)
         node.properties = properties;
 
-        // NOTE: container_node_id filtering removed - hierarchy now managed via edges
+        // NOTE: root_id filtering removed - hierarchy now managed via edges
 
         // Create node via store
         self.store
@@ -1427,7 +1427,7 @@ where
     /// Check if a node is a root node (has no parent)
     ///
     /// A root node is one that has no incoming `has_child` edges.
-    /// This replaces the old `is_root()` method which checked `container_node_id IS NULL`.
+    /// This replaces the old `is_root()` method which checked `root_id IS NULL`.
     ///
     /// # Arguments
     ///
@@ -1500,14 +1500,14 @@ where
     /// Bulk fetch all nodes belonging to an origin node (viewer/page)
     ///
     /// This is the efficient way to load a complete document tree:
-    /// 1. Single database query fetches all nodes with the same container_node_id
+    /// 1. Single database query fetches all nodes with the same root_id
     /// 2. In-memory hierarchy reconstruction using parent_id and before_sibling_id
     ///
     /// This avoids making multiple queries for each level of the tree.
     ///
     /// # Arguments
     ///
-    /// * `container_node_id` - The ID of the origin node (e.g., date page ID)
+    /// * `root_node_id` - The ID of the origin node (e.g., date page ID)
     ///
     /// # Returns
     ///
@@ -1539,7 +1539,7 @@ where
 
     /// Move a node to a new parent
     ///
-    /// Updates the parent_id and container_node_id of a node, maintaining hierarchy consistency.
+    /// Updates the parent_id and root_id of a node, maintaining hierarchy consistency.
     ///
     /// # Arguments
     ///
@@ -1814,7 +1814,7 @@ where
     ///
     /// Returns a SQL WHERE clause fragment that filters to only include:
     /// - Task nodes (node_type = 'task')
-    /// - Container nodes (container_node_id IS NULL)
+    /// - Root nodes (root_id IS NULL)
     ///
     /// # Arguments
     /// * `enabled` - Whether to apply the filter
@@ -1832,7 +1832,7 @@ where
 
         let prefix = table_alias.map(|a| format!("{}.", a)).unwrap_or_default();
         format!(
-            " AND ({}node_type = 'task' OR ({}container_node_id IS NULL AND {}node_type NOT IN ('date', 'schema')))",
+            " AND ({}node_type = 'task' OR ({}root_id IS NULL AND {}node_type NOT IN ('date', 'schema')))",
             prefix, prefix, prefix
         )
     }
@@ -2144,7 +2144,7 @@ where
         content: &str,
         node_type: &str,
         parent_id: &str,
-        _container_node_id: &str, // Deprecated: hierarchy now managed via edges
+        _root_id: &str, // Deprecated: hierarchy now managed via edges
         before_sibling_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         // Ensure parent exists (create if missing)
@@ -3271,9 +3271,9 @@ mod tests {
             );
             service.create_node(child_task).await.unwrap();
 
-            // Query for task nodes WITH container/task filter
+            // Query for task nodes WITH root/task filter
             // This should still return task nodes even if they're children,
-            // because the filter is (node_type = 'task' OR container_node_id IS NULL)
+            // because the filter is (node_type = 'task' OR root_id IS NULL)
             let query = crate::models::NodeQuery {
                 node_type: Some("task".to_string()),
                 ..Default::default()
