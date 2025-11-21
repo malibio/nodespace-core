@@ -169,7 +169,7 @@ const max_retries: u32 = 3;   // lowercase - should be SCREAMING
 - created_at
 - updated_at
 - parent_id
-- container_node_id
+- root_id
 - field_type
 - core_values
 
@@ -300,7 +300,7 @@ const { type } = node;  // Destructuring 'type' from node is ambiguous
 const nodeId = 'abc-123';
 const parentId = node.parentId;
 const schemaId = 'task';
-const containerId = container.id;
+const rootId = root.id;
 
 // ❌ Incorrect
 const node_id = 'abc-123';  // Should be camelCase in TypeScript
@@ -439,7 +439,7 @@ const schema = await invoke<{
 | **Schema field category** | `type` | `field_type` (renamed to "type" in JSON) | `type` | Context makes it clear |
 | **Node identifier** | `nodeId` or `id` | `node_id` or `id` | `id` | Use `id` when context is clear |
 | **Parent reference** | `parentId` | `parent_id` | `parent_id` | ALWAYS suffixed with Id |
-| **Container reference** | `containerId` or `containerNodeId` | `container_id` or `container_node_id` | `container_node_id` | Full name in DB for clarity |
+| **Root reference** | `rootId` or `rootNodeId` | `root_id` or `root_node_id` | `root_id` | Full name in DB for clarity |
 | **Schema identifier** | `schemaId` | `schema_id` | `id` (in schema nodes) | Use `id` when context is schema |
 | **Timestamps** | `createdAt`, `updatedAt` | `created_at`, `updated_at` | `created_at`, `updated_at` | Standard timestamp naming |
 
@@ -493,13 +493,13 @@ if (field.type === 'enum') {
 ```typescript
 // ✅ Correct - Clear these are IDs
 parentId: string;
-containerId: string;
+rootId: string;
 beforeSiblingId: string;
 mentionedById: string[];
 
 // ❌ Incorrect - Ambiguous
 parent: string;     // Is this an ID or a Node object?
-container: string;  // Unclear
+root: string;       // Unclear
 sibling: string;    // Unclear
 ```
 
@@ -590,7 +590,7 @@ await createNode({
 // ✅ Rust - All snake_case
 let node_id = Uuid::new_v4().to_string();
 let node_type = "task".to_string();
-let parent_id = Some(current_container.id.clone());
+let parent_id = Some(current_root.id.clone());
 let created_at = Utc::now().to_rfc3339();
 
 node_service.create_node(Node {

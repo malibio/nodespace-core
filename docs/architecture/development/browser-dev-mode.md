@@ -163,7 +163,7 @@ async surrealQuery<T>(query: string): Promise<T[]> {
 **Query Operations:**
 - `queryNodes(query)` → `SELECT * FROM node WHERE ...`
 - `getChildren(uuid)` → `SELECT * FROM node WHERE parent_uuid = $uuid`
-- `getNodesByContainerId(id)` → `SELECT * FROM node WHERE container_id = $id`
+- `getNodesByRootId(id)` → `SELECT * FROM node WHERE root_id = $id`
 
 **Schema Operations:**
 - `getSchema(name)` → `SELECT * FROM node WHERE node_type = "schema" AND uuid = $name`
