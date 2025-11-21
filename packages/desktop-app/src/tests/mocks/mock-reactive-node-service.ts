@@ -17,7 +17,6 @@ export interface Node {
   inheritHeaderLevel: number;
   metadata: Record<string, unknown>;
   mentions?: string[];
-  beforeSiblingId?: string;
   isPlaceholder?: boolean;
 }
 
@@ -227,13 +226,12 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
           content: unifiedNode.content,
           nodeType: unifiedNode.nodeType,
           depth: 0, // Will be calculated based on hierarchy
-          children: [], // Will be computed from beforeSiblingId relationships
+          children: [], // Backend handles ordering via fractional IDs
           expanded: defaultOptions.expanded,
           autoFocus: defaultOptions.autoFocus,
           inheritHeaderLevel: defaultOptions.inheritHeaderLevel,
           metadata: unifiedNode.properties,
-          mentions: unifiedNode.mentions,
-          beforeSiblingId: unifiedNode.beforeSiblingId || undefined
+          mentions: unifiedNode.mentions
         };
         _nodes[unifiedNode.id] = node;
       }
