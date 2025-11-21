@@ -1134,7 +1134,8 @@ where
             if types_with_properties.contains(&node.node_type.as_str()) {
                 // Fetch properties from spoke table using direct record ID lookup
                 // Omit 'id' and 'node' fields - both are Thing types that can't deserialize to JSON
-                let props_query = format!("SELECT * OMIT id, node FROM {}:`{}`;", node.node_type, id);
+                let props_query =
+                    format!("SELECT * OMIT id, node FROM {}:`{}`;", node.node_type, id);
                 let mut props_response = self.db.query(&props_query).await;
 
                 let result: Option<serde_json::Value> = match props_response {
