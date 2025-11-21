@@ -218,7 +218,7 @@ impl NodeOperations {
         node_type: String,
         content: String,
         parent_id: Option<String>,
-        container_node_id: Option<String>,
+        root_id: Option<String>,
         before_sibling_id: Option<String>,
         properties: Value,
     ) -> Result<String, NodeOperationError>;
@@ -238,10 +238,10 @@ impl NodeOperations {
 ```
 
 **Enforced Business Rules:**
-1. **Container Node Validation**: Container types (date, topic, project) force all hierarchy fields to None
-2. **Container Requirement**: Every non-container node MUST have container_node_id (inferred from parent if missing)
+1. **Root Node Validation**: Root types (date, topic, project) force all hierarchy fields to None
+2. **Root Requirement**: Every non-root node MUST have root_id (inferred from parent if missing)
 3. **Sibling Position Calculation**: If before_sibling_id not provided, automatically calculate last sibling
-4. **Parent-Container Consistency**: Parent and child must be in same container
+4. **Parent-Root Consistency**: Parent and child must be in same root
 5. **Update Restrictions**: Content updates cannot change hierarchy; use move_node() or reorder_node() explicitly
 
 **Integration Points:**
@@ -286,9 +286,9 @@ impl NodeService {
                ▼
 ┌─────────────────────────────────────────┐
 │  NodeOperations (Business Logic) ✅     │
-│  - Container validation                 │
+│  - Root validation                      │
 │  - Sibling position calculation         │
-│  - Parent-container consistency         │
+│  - Parent-root consistency              │
 │  - Type-specific rules                  │
 └──────────────┬──────────────────────────┘
                │
@@ -334,12 +334,12 @@ pub async fn create_node(
     node_type: String,
     content: String,
     parent_id: Option<String>,
-    container_node_id: Option<String>,
+    root_id: Option<String>,
     before_sibling_id: Option<String>,
     properties: serde_json::Value,
 ) -> Result<String, String> {
     operations
-        .create_node(node_type, content, parent_id, container_node_id, before_sibling_id, properties)
+        .create_node(node_type, content, parent_id, root_id, before_sibling_id, properties)
         .await
         .map_err(|e| e.to_string())
 }
@@ -373,7 +373,7 @@ async fn handle_create_node(operations: Arc<NodeOperations>, params: CreateNodeP
         params.node_type,
         params.content,
         params.parent_id,
-        params.container_node_id,
+        params.root_id,
         params.before_sibling_id,
         params.properties,
     ).await

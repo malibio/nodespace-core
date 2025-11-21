@@ -788,7 +788,7 @@ where
             return Err(NodeServiceError::node_not_found(mentioned_node_id));
         }
 
-        // Prevent container-level self-references (child mentioning its own container)
+        // Prevent root-level self-references (child mentioning its own root)
         let mentioning_node = self
             .get_node(mentioning_node_id)
             .await?
@@ -801,12 +801,12 @@ where
         if root_id == mentioned_node_id {
             return Err(NodeServiceError::ValidationFailed(
                 crate::models::ValidationError::InvalidParent(
-                    "Cannot mention own container (container-level self-reference)".to_string(),
+                    "Cannot mention own root (root-level self-reference)".to_string(),
                 ),
             ));
         }
 
-        // Get container ID with special handling for tasks
+        // Get root ID with special handling for tasks
         // Tasks are always treated as their own roots (exception rule)
         let final_root_id = if mentioning_node.node_type == "task" {
             mentioning_node_id
@@ -1223,7 +1223,7 @@ where
     /// Compares old vs new mentions and updates database:
     /// - Adds new mention relationships
     /// - Removes deleted mention relationships
-    /// - Prevents self-references and container-level self-references
+    /// - Prevents self-references and root-level self-references
     /// - Errors are logged but don't block the update
     ///
     /// This is called automatically when node content is updated.
@@ -1246,7 +1246,7 @@ where
         let to_add: Vec<&String> = new_mentions.difference(&old_mentions).collect();
         let to_remove: Vec<&String> = old_mentions.difference(&new_mentions).collect();
 
-        // Add new mentions (filter out self-references and container-level self-references)
+        // Add new mentions (filter out self-references and root-level self-references)
         for mentioned_id in to_add {
             // Skip direct self-references
             if mentioned_id.as_str() == node_id {
@@ -1254,11 +1254,11 @@ where
                 continue;
             }
 
-            // Skip container-level self-references (child mentioning its own parent)
+            // Skip root-level self-references (child mentioning its own parent)
             if let Ok(Some(parent)) = self.get_parent(node_id).await {
                 if mentioned_id.as_str() == parent.id.as_str() {
                     tracing::debug!(
-                        "Skipping container-level self-reference: {} -> {} (parent: {})",
+                        "Skipping root-level self-reference: {} -> {} (parent: {})",
                         node_id,
                         mentioned_id,
                         parent.id
@@ -2300,12 +2300,12 @@ where
             return Err(NodeServiceError::node_not_found(target_id));
         }
 
-        // Prevent container-level self-references (child mentioning its own parent)
+        // Prevent root-level self-references (child mentioning its own parent)
         if let Ok(Some(parent)) = self.get_parent(source_id).await {
             if parent.id == target_id {
                 return Err(NodeServiceError::ValidationFailed(
                     crate::models::ValidationError::InvalidParent(
-                        "Cannot mention own parent (container-level self-reference)".to_string(),
+                        "Cannot mention own parent (root-level self-reference)".to_string(),
                     ),
                 ));
             }
@@ -2421,13 +2421,13 @@ where
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
-    /// Get container nodes of nodes that mention the target node (backlinks at container level).
+    /// Get root nodes of nodes that mention the target node (backlinks at root level).
     ///
-    /// This resolves incoming mentions to their container nodes and deduplicates.
+    /// This resolves incoming mentions to their root nodes and deduplicates.
     ///
-    /// # Container Resolution Logic
-    /// - For task and ai-chat nodes: Uses the node's own ID (they are their own containers)
-    /// - For other nodes: Uses their container_node_id (or the node ID itself if it's a root)
+    /// # Root Resolution Logic
+    /// - For task and ai-chat nodes: Uses the node's own ID (they are their own roots)
+    /// - For other nodes: Uses their root_id (or the node ID itself if it's a root)
     ///
     /// # Example
     /// ```no_run
@@ -3067,15 +3067,15 @@ mod tests {
         async fn basic_filter() {
             let (service, _temp) = create_test_service().await;
 
-            // Create a container node (no parent = root/container)
-            let container = Node::new(
+            // Create a root node (no parent = root)
+            let root = Node::new(
                 "text".to_string(),
-                "UniqueBasicFilter Container".to_string(),
+                "UniqueBasicFilter Root".to_string(),
                 json!({}),
             );
-            let container_id = service.create_node(container).await.unwrap();
+            let root_id = service.create_node(root).await.unwrap();
 
-            // Create a task node (child of container - graph edges will establish relationship)
+            // Create a task node (child of root - graph edges will establish relationship)
             let task = Node::new_with_id(
                 "task-1".to_string(),
                 "task".to_string(),
@@ -3100,17 +3100,17 @@ mod tests {
             };
             let filtered_results = service.query_nodes_simple(query_with_filter).await.unwrap();
 
-            // Verify we only get container and task nodes
+            // Verify we only get root and task nodes
             assert_eq!(
                 filtered_results.len(),
                 2,
-                "Should return exactly 2 nodes (container + task)"
+                "Should return exactly 2 nodes (root + task)"
             );
 
             let result_ids: Vec<&str> = filtered_results.iter().map(|n| n.id.as_str()).collect();
             assert!(
-                result_ids.contains(&container_id.as_str()),
-                "Should include container node"
+                result_ids.contains(&root_id.as_str()),
+                "Should include root node"
             );
             assert!(
                 result_ids.contains(&task_id.as_str()),
@@ -3139,15 +3139,15 @@ mod tests {
         async fn content_contains_with_filter() {
             let (service, _temp) = create_test_service().await;
 
-            // Create container with "meeting" in content
-            let container = Node::new(
+            // Create root with "meeting" in content
+            let root = Node::new(
                 "text".to_string(),
                 "Team meeting notes".to_string(),
                 json!({}),
             );
-            let container_id = service.create_node(container).await.unwrap();
+            let root_id = service.create_node(root).await.unwrap();
 
-            // Create task with "meeting" in content (child of container)
+            // Create task with "meeting" in content (child of root)
             let task = Node::new_with_id(
                 "task-meeting".to_string(),
                 "task".to_string(),
@@ -3165,22 +3165,22 @@ mod tests {
             );
             service.create_node(text_child).await.unwrap();
 
-            // Query for "meeting" WITH container/task filter
+            // Query for "meeting" WITH root/task filter
             let query = crate::models::NodeQuery {
                 content_contains: Some("meeting".to_string()),
                 ..Default::default()
             };
             let results = service.query_nodes_simple(query).await.unwrap();
 
-            // Should only return container and task, not the text child
+            // Should only return root and task, not the text child
             assert_eq!(
                 results.len(),
                 2,
-                "Should return only container and task nodes with 'meeting'"
+                "Should return only root and task nodes with 'meeting'"
             );
 
             let result_ids: Vec<&str> = results.iter().map(|n| n.id.as_str()).collect();
-            assert!(result_ids.contains(&container_id.as_str()));
+            assert!(result_ids.contains(&root_id.as_str()));
             assert!(result_ids.contains(&task_id.as_str()));
         }
 
@@ -3197,20 +3197,17 @@ mod tests {
             );
             let target_id = service.create_node(target).await.unwrap();
 
-            // Create container that mentions target
-            let container = Node::new_with_id(
-                "container-1".to_string(),
+            // Create root that mentions target
+            let root = Node::new_with_id(
+                "root-1".to_string(),
                 "text".to_string(),
-                "Container mentioning @target-node".to_string(),
+                "Root mentioning @target-node".to_string(),
                 json!({}),
             );
-            let container_id = service.create_node(container).await.unwrap();
-            service
-                .create_mention(&container_id, &target_id)
-                .await
-                .unwrap();
+            let root_id = service.create_node(root).await.unwrap();
+            service.create_mention(&root_id, &target_id).await.unwrap();
 
-            // Create task that mentions target (child of container)
+            // Create task that mentions target (child of root)
             let task = Node::new_with_id(
                 "task-mentions".to_string(),
                 "task".to_string(),
@@ -3233,22 +3230,22 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Query nodes that mention target WITH container/task filter
+            // Query nodes that mention target WITH root/task filter
             let query = crate::models::NodeQuery {
                 mentioned_by: Some(target_id.clone()),
                 ..Default::default()
             };
             let results = service.query_nodes_simple(query).await.unwrap();
 
-            // Should only return container and task
+            // Should only return root and task
             assert_eq!(
                 results.len(),
                 2,
-                "Should return only container and task that mention target"
+                "Should return only root and task that mention target"
             );
 
             let result_ids: Vec<&str> = results.iter().map(|n| n.id.as_str()).collect();
-            assert!(result_ids.contains(&container_id.as_str()));
+            assert!(result_ids.contains(&root_id.as_str()));
             assert!(result_ids.contains(&task_id.as_str()));
             assert!(!result_ids.contains(&text_child_id.as_str()));
         }
@@ -3257,14 +3254,14 @@ mod tests {
         async fn node_type_with_filter() {
             let (service, _temp) = create_test_service().await;
 
-            // Create multiple task nodes - some containers, some children
-            let container_task = Node::new_with_id(
-                "task-container".to_string(),
+            // Create multiple task nodes - some roots, some children
+            let root_task = Node::new_with_id(
+                "task-root".to_string(),
                 "task".to_string(),
-                "Container task".to_string(),
+                "Root task".to_string(),
                 json!({"task": {"status": "OPEN"}}),
             );
-            let _container_task_id = service.create_node(container_task).await.unwrap();
+            let _root_task_id = service.create_node(root_task).await.unwrap();
 
             let child_task = Node::new_with_id(
                 "task-child".to_string(),
@@ -3348,11 +3345,11 @@ mod tests {
         async fn basic_backlinks() {
             let (service, _temp) = create_test_service().await;
 
-            // Create a container node
-            let container = Node::new("text".to_string(), "Container page".to_string(), json!({}));
-            let container_id = service.create_node(container).await.unwrap();
+            // Create a root node
+            let root = Node::new("text".to_string(), "Root page".to_string(), json!({}));
+            let root_id = service.create_node(root).await.unwrap();
 
-            // Create a child text node in the container
+            // Create a child text node in the root
             let child = Node::new_with_id(
                 "child-text".to_string(),
                 "text".to_string(),
@@ -3373,14 +3370,14 @@ mod tests {
             // Child mentions target
             service.create_mention(&child_id, &target_id).await.unwrap();
 
-            // Get mentioning containers for target
-            let containers = service.get_mentioning_containers(&target_id).await.unwrap();
+            // Get mentioning roots for target
+            let roots = service.get_mentioning_containers(&target_id).await.unwrap();
 
-            // Should return the container (not the child)
-            assert_eq!(containers.len(), 1, "Should return exactly one container");
+            // Should return the root (not the child)
+            assert_eq!(roots.len(), 1, "Should return exactly one root");
             assert_eq!(
-                containers[0], container_id,
-                "Should return the container node, not the child"
+                roots[0], root_id,
+                "Should return the root node, not the child"
             );
         }
 
@@ -3388,11 +3385,11 @@ mod tests {
         async fn deduplication() {
             let (service, _temp) = create_test_service().await;
 
-            // Create a container
-            let container = Node::new("text".to_string(), "Container page".to_string(), json!({}));
-            let container_id = service.create_node(container).await.unwrap();
+            // Create a root
+            let root = Node::new("text".to_string(), "Root page".to_string(), json!({}));
+            let root_id = service.create_node(root).await.unwrap();
 
-            // Create two child nodes in the same container
+            // Create two child nodes in the same root
             let child1 = Node::new_with_id(
                 "child-1".to_string(),
                 "text".to_string(),
@@ -3428,30 +3425,27 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Get mentioning containers
-            let containers = service.get_mentioning_containers(&target_id).await.unwrap();
+            // Get mentioning roots
+            let roots = service.get_mentioning_containers(&target_id).await.unwrap();
 
-            // Should return only ONE container (deduplicated)
+            // Should return only ONE root (deduplicated)
             assert_eq!(
-                containers.len(),
+                roots.len(),
                 1,
-                "Should deduplicate to single container despite two children mentioning target"
+                "Should deduplicate to single root despite two children mentioning target"
             );
-            assert_eq!(
-                containers[0], container_id,
-                "Should return the container node"
-            );
+            assert_eq!(roots[0], root_id, "Should return the root node");
         }
 
         #[tokio::test]
         async fn task_exception() {
             let (service, _temp) = create_test_service().await;
 
-            // Create a container
-            let container = Node::new("text".to_string(), "Container page".to_string(), json!({}));
-            let container_id = service.create_node(container).await.unwrap();
+            // Create a root
+            let root = Node::new("text".to_string(), "Root page".to_string(), json!({}));
+            let root_id = service.create_node(root).await.unwrap();
 
-            // Create a task node (child of container)
+            // Create a task node (child of root)
             let task = Node::new_with_id(
                 "task-1".to_string(),
                 "task".to_string(),
@@ -3472,18 +3466,18 @@ mod tests {
             // Task mentions target
             service.create_mention(&task_id, &target_id).await.unwrap();
 
-            // Get mentioning containers
-            let containers = service.get_mentioning_containers(&target_id).await.unwrap();
+            // Get mentioning roots
+            let roots = service.get_mentioning_containers(&target_id).await.unwrap();
 
-            // Should return the TASK itself (not its container)
-            assert_eq!(containers.len(), 1, "Should return exactly one container");
+            // Should return the TASK itself (not its root)
+            assert_eq!(roots.len(), 1, "Should return exactly one root");
             assert_eq!(
-                containers[0], task_id,
-                "Task nodes should be treated as their own containers (exception rule)"
+                roots[0], task_id,
+                "Task nodes should be treated as their own roots (exception rule)"
             );
             assert_ne!(
-                containers[0], container_id,
-                "Should NOT return the parent container for task nodes"
+                roots[0], root_id,
+                "Should NOT return the parent root for task nodes"
             );
         }
 
@@ -3844,30 +3838,28 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_prevent_container_level_self_reference() {
+        async fn test_prevent_root_level_self_reference() {
             let (service, _temp) = create_test_service().await;
 
-            // Create container node
-            let container = Node::new("text".to_string(), "Container".to_string(), json!({}));
-            let container_id = service.create_node(container).await.unwrap();
+            // Create root node
+            let root = Node::new("text".to_string(), "Root".to_string(), json!({}));
+            let root_id = service.create_node(root).await.unwrap();
 
-            // Create child node as a child of the container (using parent relationship)
+            // Create child node as a child of the root (using parent relationship)
             let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
             let child_id = service.create_node(child).await.unwrap();
 
-            // Try to update child to mention its own container
-            let update = NodeUpdate::new().with_content(format!(
-                "Mention container [@container](nodespace://{})",
-                container_id
-            ));
+            // Try to update child to mention its own root
+            let update = NodeUpdate::new()
+                .with_content(format!("Mention root [@root](nodespace://{})", root_id));
             service.update_node(&child_id, update).await.unwrap();
 
-            // Verify container-level self-reference was NOT created
+            // Verify root-level self-reference was NOT created
             let child_with_mentions = service.get_node(&child_id).await.unwrap().unwrap();
             assert_eq!(
                 child_with_mentions.mentions.len(),
                 0,
-                "Should not create container-level self-reference"
+                "Should not create root-level self-reference"
             );
         }
 

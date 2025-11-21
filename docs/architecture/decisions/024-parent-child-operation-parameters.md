@@ -55,7 +55,7 @@ pub struct CreateNodeParams {
     pub node_type: String,
     pub content: String,
     pub parent_id: Option<String>,      // ✅ Operation parameter
-    pub container_node_id: Option<String>, // ✅ Operation parameter
+    pub root_id: Option<String>, // ✅ Operation parameter
     // ... other fields
 }
 
@@ -84,7 +84,7 @@ struct CreateNodeRequest {
     pub nodeType: String,
     pub content: String,
     pub parentId: Option<String>,        // ✅ HTTP API parameter
-    pub containerNodeId: Option<String>, // ✅ HTTP API parameter
+    pub rootId: Option<String>, // ✅ HTTP API parameter
 }
 
 // Map HTTP request to NodeOperations::CreateNodeParams
@@ -93,7 +93,7 @@ let params = CreateNodeParams {
     node_type: req.nodeType,
     content: req.content,
     parent_id: req.parentId,             // ✅ Pass to operations
-    container_node_id: req.containerNodeId, // ✅ Pass to operations
+    root_id: req.rootId, // ✅ Pass to operations
     // ...
 };
 ```
@@ -115,8 +115,8 @@ async createNode(node: Node): Promise<string> {
     requestBody.parentId = (node as any)._parentId; // ✅ Send as operation parameter
   }
 
-  if ((node as any)._containerId) {
-    requestBody.containerNodeId = (node as any)._containerId; // ✅ Send as operation parameter
+  if ((node as any)._rootId) {
+    requestBody.rootId = (node as any)._rootId; // ✅ Send as operation parameter
   }
 
   return await fetch('/api/nodes', {
@@ -134,7 +134,7 @@ const promotedNode = {
   ...placeholder,
   content: newContent,
   _parentId: parentNodeId,      // ✅ Transient field
-  _containerId: containerNodeId // ✅ Transient field
+  _rootId: rootNodeId // ✅ Transient field
 };
 
 await nodeService.createNode(promotedNode);
@@ -190,7 +190,7 @@ sharedNodeStore.updateChildrenCache(parentNodeId, [...existingChildren, promoted
 
 ### Risks
 
-- **Risk**: Developers might try to persist `_parentId`/`_containerId` fields
+- **Risk**: Developers might try to persist `_parentId`/`_rootId` fields
 - **Mitigation**: Clear naming convention, linter rules, code review
 
 - **Risk**: Confusion between storage model and operation parameters

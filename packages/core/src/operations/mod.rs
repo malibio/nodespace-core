@@ -323,11 +323,11 @@ where
                 .await?
                 .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
 
-            // Get the container by traversing up to the root
-            // If parent is a root (no parent of its own), use the parent as the container
-            // Otherwise, get the parent's container recursively
-            let container_id = self.node_service.get_root_id(parent_id).await?;
-            return Ok(container_id);
+            // Get the root by traversing up the parent chain
+            // If parent is a root (no parent of its own), use the parent as the root
+            // Otherwise, get the parent's root recursively
+            let root_id = self.node_service.get_root_id(parent_id).await?;
+            return Ok(root_id);
         }
 
         // Cannot resolve root
@@ -516,9 +516,8 @@ where
 
         // Business Rule 1: Auto-derive container/root from parent chain
         // If node has a parent, traverse parent edges to find the root node
-        // If node has NO parent, it IS the root (container_id = None)
-        let (final_parent_id, _final_container_id, final_sibling_id) = if params.parent_id.is_some()
-        {
+        // If node has NO parent, it IS the root (root_id = None)
+        let (final_parent_id, _final_root_id, final_sibling_id) = if params.parent_id.is_some() {
             // Node has a parent - derive container from parent chain
             let resolved_container = self
                 .resolve_container(
@@ -613,7 +612,7 @@ where
 
         // Note: Container relationship is NOT stored as an edge.
         // Container is determined by traversing UP the parent chain to find the root node.
-        // The final_container_id is used for validation/queries but doesn't create database edges.
+        // The final_root_id is used for validation/queries but doesn't create database edges.
         // See NodeService::get_root_id() for the graph traversal implementation.
 
         Ok(created_id)
@@ -696,14 +695,11 @@ where
         Ok(self.node_service.get_children(parent_id).await?)
     }
 
-    /// Get all descendants of a container node
+    /// Get all descendants of a root node
     ///
-    /// Returns all nodes within the container's hierarchy (not just direct children).
-    pub async fn get_descendants(
-        &self,
-        container_id: &str,
-    ) -> Result<Vec<Node>, NodeOperationError> {
-        Ok(self.node_service.get_nodes_by_root_id(container_id).await?)
+    /// Returns all nodes within the root's hierarchy (not just direct children).
+    pub async fn get_descendants(&self, root_id: &str) -> Result<Vec<Node>, NodeOperationError> {
+        Ok(self.node_service.get_nodes_by_root_id(root_id).await?)
     }
 
     /// Get the parent ID of a node
@@ -2147,8 +2143,8 @@ mod tests {
     async fn test_concurrent_move_version_conflict() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        // Create container
-        let _container_id = operations
+        // Create root
+        let _root_id = operations
             .create_node(CreateNodeParams {
                 id: None, // Auto-generate UUID
                 node_type: "date".to_string(),
@@ -2160,7 +2156,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Create two parent nodes in the container
+        // Create two parent nodes in the root
         let parent1_id = operations
             .create_node(CreateNodeParams {
                 id: None, // Auto-generate UUID
@@ -2228,8 +2224,8 @@ mod tests {
     async fn test_concurrent_reorder_version_conflict() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        // Create container
-        let _container_id = operations
+        // Create root
+        let _root_id = operations
             .create_node(CreateNodeParams {
                 id: None, // Auto-generate UUID
                 node_type: "date".to_string(),
@@ -2453,8 +2449,8 @@ mod tests {
     async fn test_update_node_with_hierarchy_content_only() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        // Create container and node
-        let container_id = operations
+        // Create root and node
+        let root_id = operations
             .create_node(CreateNodeParams {
                 id: None,
                 node_type: "date".to_string(),
@@ -2471,7 +2467,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2497,8 +2493,8 @@ mod tests {
     async fn test_update_node_with_hierarchy_hierarchy_only() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        // Create container
-        let container_id = operations
+        // Create root
+        let root_id = operations
             .create_node(CreateNodeParams {
                 id: None,
                 node_type: "date".to_string(),
@@ -2516,7 +2512,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2529,7 +2525,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2556,8 +2552,8 @@ mod tests {
     async fn test_update_node_with_hierarchy_combined_update() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        // Create container and parent
-        let container_id = operations
+        // Create root and parent
+        let root_id = operations
             .create_node(CreateNodeParams {
                 id: None,
                 node_type: "date".to_string(),
@@ -2574,7 +2570,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2586,7 +2582,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2615,7 +2611,7 @@ mod tests {
     async fn test_update_node_with_hierarchy_empty_update_fails() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        let container_id = operations
+        let root_id = operations
             .create_node(CreateNodeParams {
                 id: None,
                 node_type: "date".to_string(),
@@ -2632,7 +2628,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Test".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })
@@ -2655,7 +2651,7 @@ mod tests {
     async fn test_update_node_with_hierarchy_version_conflict() {
         let (operations, _temp_dir) = setup_test_operations().await.unwrap();
 
-        let container_id = operations
+        let root_id = operations
             .create_node(CreateNodeParams {
                 id: None,
                 node_type: "date".to_string(),
@@ -2672,7 +2668,7 @@ mod tests {
                 id: None,
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
-                parent_id: Some(container_id.clone()),
+                parent_id: Some(root_id.clone()),
                 before_sibling_id: None,
                 properties: json!({}),
             })

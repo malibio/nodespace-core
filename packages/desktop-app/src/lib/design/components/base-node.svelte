@@ -42,9 +42,8 @@
     type SlashCommand,
     type SlashCommandContext
   } from '$lib/services/slash-command-service';
-  import type { TriggerContext } from '$lib/services/content-processor';
+  import type { TriggerContext } from '$lib/services/node-reference-service';
   import { getIconConfig, resolveNodeState, type NodeType } from '$lib/design/icons/registry';
-  import * as tauriCommands from '$lib/services/tauri-commands';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import type { Node as NodeData } from '$lib/types/node';
@@ -328,11 +327,12 @@
         return;
       }
 
-      // Query backend for mentionable nodes (tasks and containers)
+      // Query backend for mentionable nodes (tasks and roots)
       // Backend applies SQL-level filtering for performance and scalability
-      // Rules (applied in Rust): Exclude dates (by default), include tasks + container nodes
-      const backendResults: NodeData[] = await tauriCommands.queryNodes({
+      // Rules (applied in Rust): Exclude dates (by default), include tasks + root nodes
+      const backendResults: NodeData[] = await services.databaseService.queryNodes({
         contentContains: query,
+        includeRootsAndTasks: true, // Backend SQL filter: tasks OR roots
         limit: 10
       });
 
@@ -422,18 +422,19 @@
       }
 
       const { v4: uuidv4 } = await import('uuid');
-      const tauriCommands = await import('$lib/services/tauri-commands');
+      const { backendAdapter } = await import('$lib/services/backend-adapter');
 
       const newNodeId = uuidv4();
 
-      // Create node using Tauri commands (works in Tauri environment)
+      // Create node using backend adapter (works in both Tauri and browser)
       // Note: Sibling ordering is now handled by the backend via sibling_order column,
       // so we don't need to pass beforeSiblingId here.
-      await tauriCommands.createNode({
+      await backendAdapter.createNode({
         id: newNodeId,
         content: title,
         nodeType: 'text',
-        properties: {}
+        properties: {},
+        embeddingVector: null
       });
 
       // The backend adapter emits events that update nodeManager automatically

@@ -377,13 +377,13 @@ CREATE project:abc-123 CONTENT {
 -- Mention relationships (for [[links]] and @mentions)
 DEFINE TABLE mentions SCHEMAFULL TYPE RELATION
     FROM nodes TO nodes;
-DEFINE FIELD container_id ON mentions TYPE record(nodes);
+DEFINE FIELD root_id ON mentions TYPE record(nodes);
 DEFINE FIELD created_at ON mentions TYPE datetime;
 
 -- Example usage:
 RELATE (task:⟨uuid1⟩)->mentions->(text:⟨uuid2⟩)
     CONTENT {
-        container_id: date:2025-01-03,
+        root_id: date:2025-01-03,
         created_at: time::now()
     };
 ```
@@ -438,7 +438,7 @@ CREATE nodes CONTENT {
     node_type: 'task',
     content: 'Finish migration',
     parent_id: NONE,
-    container_node_id: NONE,
+    root_id: NONE,
     before_sibling_id: NONE,
     embedding_vector: NONE,
     embedding_stale: true,
@@ -558,7 +558,7 @@ FOLLOW before_sibling_id;
 
 **Why Fast:**
 - No JOINs needed (all hierarchy in one table)
-- Indexed on parent_id and container_node_id
+- Indexed on parent_id and root_id
 - Polymorphic references work across types
 
 ### 3. Type-Specific Queries
@@ -573,13 +573,13 @@ INNER JOIN task ON nodes.id = task.id
 WHERE task.status = 'todo'
 ORDER BY task.due_date ASC;
 
--- Get all high-priority tasks in a container
+-- Get all high-priority tasks in a root
 SELECT
     nodes.*,
     task.*
 FROM nodes
 INNER JOIN task ON nodes.id = task.id
-WHERE nodes.container_node_id = $container_id
+WHERE nodes.root_id = $root_id
   AND task.priority = 'high';
 ```
 
@@ -607,8 +607,8 @@ SELECT ->mentions->nodes.* FROM $node_id;
 -- Get all nodes that mention this node (incoming)
 SELECT <-mentions<-nodes.* FROM $node_id;
 
--- Get containers where this node is mentioned (backlinks)
-SELECT DISTINCT container_id FROM mentions
+-- Get root nodes where this node is mentioned (backlinks)
+SELECT DISTINCT root_id FROM mentions
 WHERE out = $node_id;
 ```
 
@@ -720,7 +720,7 @@ async fn migrate_turso_to_surrealdb(
                 node_type: $node_type,
                 content: $content,
                 parent_id: $parent_id,
-                container_node_id: $container_id,
+                root_id: $root_id,
                 embedding_vector: $embedding_vector,
                 embedding_stale: $embedding_stale,
                 created_at: $created_at,

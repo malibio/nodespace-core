@@ -387,9 +387,11 @@ pub async fn handle_query_nodes(
         tracing::warn!("parent_id filter ignored - use graph queries for relationship traversal");
     }
 
+    // DEPRECATED: container_node_id is now root_node_id in the new terminology
+    // Kept for backward compatibility but ignored in graph-native architecture
     if params.container_node_id.is_some() {
         tracing::warn!(
-            "container_node_id filter ignored - use graph queries for relationship traversal"
+            "container_node_id filter is deprecated (use root_node_id). Filter ignored - use graph queries for relationship traversal"
         );
     }
 
