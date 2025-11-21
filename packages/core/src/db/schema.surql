@@ -86,6 +86,8 @@ DEFINE FIELD IF NOT EXISTS description ON TABLE schema TYPE string DEFAULT "";
 -- Fields array: stores SchemaField objects as flexible array
 -- Using FLEXIBLE to allow nested structures without strict constraints
 -- Validation is handled by Rust structs during serialization/deserialization
+-- Note: Changed from option<string> (stringified JSON) to option<array> to enable
+-- queryability and proper enum handling (see issue #587)
 DEFINE FIELD IF NOT EXISTS fields ON TABLE schema FLEXIBLE TYPE option<array> DEFAULT [];
 
 -- ============================================================================
