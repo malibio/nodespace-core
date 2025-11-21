@@ -60,6 +60,21 @@ use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 
+/// Represents a has_child edge from the database
+///
+/// Used for bulk loading the tree structure on startup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeRecord {
+    /// Edge ID in SurrealDB format (e.g., "has_child:123")
+    pub id: String,
+    /// Parent node ID
+    pub in_node: String,
+    /// Child node ID
+    pub out_node: String,
+    /// Order position for this child in parent's children list
+    pub order: f64,
+}
+
 /// Types that require type-specific tables for storing properties
 ///
 /// - `task`: Has properties (priority, status, due_date, assignee, etc.)
@@ -3135,6 +3150,62 @@ where
         }
 
         Ok(created_nodes)
+    }
+
+    /// Retrieves all has_child edges sorted by parent and order
+    ///
+    /// Returns a vector of all edges in the database, useful for bulk-loading
+    /// the tree structure on startup.
+    ///
+    /// # Returns
+    ///
+    /// A vector of edge records with `id`, `in` (parent), `out` (child), and `order` fields.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
+    /// // Load all edges to populate the tree on startup
+    /// let edges = store.get_all_edges().await?;
+    /// for edge in edges {
+    ///     println!("Edge: {} -> {}", edge.in_node, edge.out_node);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_all_edges(&self) -> Result<Vec<EdgeRecord>> {
+        #[derive(Deserialize)]
+        struct EdgeOut {
+            id: String,
+            #[serde(rename = "in")]
+            in_node: String,
+            out: String,
+            order: f64,
+        }
+
+        let mut response = self
+            .db
+            .query("SELECT id, in, out, order FROM has_child ORDER BY `in`, `order` ASC;")
+            .await
+            .context("Failed to query all edges")?;
+
+        let edges: Vec<EdgeOut> = response.take(0).context("Failed to extract edges")?;
+
+        let result = edges
+            .into_iter()
+            .map(|edge| EdgeRecord {
+                id: edge.id,
+                in_node: edge.in_node,
+                out_node: edge.out,
+                order: edge.order,
+            })
+            .collect();
+
+        Ok(result)
     }
 
     pub fn close(&self) -> Result<()> {
