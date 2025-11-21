@@ -874,29 +874,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   /**
-   * PERSISTENCE DEPENDENCY PATTERN: Sibling Chain Updates
+   * ARCHITECTURE: Sibling Ordering Management
    *
-   * CRITICAL ARCHITECTURAL DECISION for indent/outdent operations:
+   * All sibling ordering is now handled atomically by the backend's moveNode operation
+   * using fractional positioning on edges (see Issue #565). The frontend is responsible
+   * only for managing parentId relationships and UI state (depth, expansion).
    *
-   * DO NOT add the updatedSiblingId returned from removeFromSiblingChain() as a
-   * persistence dependency in indent/outdent operations.
-   *
-   * Rationale:
-   * 1. Consecutive indent/outdent operations can update each other as siblings,
-   *    creating circular dependency chains (e.g., node-2 waits for node-3,
-   *    node-3 waits for node-2, resulting in deadlock)
-   * 2. Sibling chain updates from removeFromSiblingChain are independent operations
-   *    that can execute in parallel with the main update without violating database
-   *    constraints
-   * 3. SharedNodeStore's automatic dependency system (lines 297-302) ensures that
-   *    beforeSiblingId references wait for node persistence (handles FOREIGN KEY
-   *    constraints automatically)
-   * 4. Removing this dependency eliminates circular deadlocks without sacrificing
-   *    database integrity guarantees
-   *
-   * @see SharedNodeStore lines 297-302 for automatic dependency injection
-   * @see indentNode() for implementation example
-   * @see outdentNode() for implementation example
+   * This eliminates the complexity of frontend-managed sibling chains and ensures
+   * all ordering operations are atomic and consistent with the backend's single
+   * source of truth.
    */
 
   async function indentNode(nodeId: string): Promise<boolean> {
