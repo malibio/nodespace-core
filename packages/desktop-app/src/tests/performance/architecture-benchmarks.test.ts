@@ -33,6 +33,12 @@ import { createTestNode } from '../helpers';
 // Performance test scaling based on environment variable
 const FULL_PERFORMANCE = process.env.TEST_FULL_PERFORMANCE === '1';
 
+// Log test mode for visibility
+console.log(`\n🔧 Performance Test Mode: ${FULL_PERFORMANCE ? 'FULL' : 'FAST'}`);
+console.log(
+  `   Running ${FULL_PERFORMANCE ? 'comprehensive validation' : 'quick development tests'} with ${FULL_PERFORMANCE ? 'large' : 'reduced'} datasets\n`
+);
+
 // Dataset sizes: Fast mode for development, Full mode for comprehensive validation
 const PERF_SCALE = {
   structural: FULL_PERFORMANCE ? 1000 : 100, // Structural operations test
@@ -135,8 +141,9 @@ describe('Architecture Performance Benchmarks', () => {
 
       const startTime = performance.now();
 
-      // Test multiple structural operations
-      for (let i = 100; i < 200; i++) {
+      // Test multiple structural operations on existing nodes
+      const operationCount = Math.min(100, PERF_SCALE.structural);
+      for (let i = 0; i < operationCount; i++) {
         const nodeId = `node-${i}`;
         nodeManager.indentNode(nodeId);
         if (i % 2 === 0) {
@@ -245,10 +252,12 @@ describe('Architecture Performance Benchmarks', () => {
       // Setup: Track node creation events
       const mockSyncEvents: NodeManagerEvents = {
         focusRequested: () => {},
-        hierarchyChanged: () => {},
-        nodeCreated: () => {
+        hierarchyChanged: () => {
+          // NOTE: hierarchyChanged fires once per batch of operations (reactive coalescing)
+          // rather than once per node. This is expected behavior for Svelte 5 reactivity.
           eventCount++;
         },
+        nodeCreated: () => {},
         nodeDeleted: () => {}
       };
 
@@ -271,15 +280,18 @@ describe('Architecture Performance Benchmarks', () => {
         `Multi-client sync (10 nodes): ${duration.toFixed(2)}ms (target: <${PERF_THRESHOLDS.syncLatency}ms)`
       );
       console.log(`  Nodes created: ${syncNodeManager.nodes.size}`);
-      console.log(`  Events emitted: ${eventCount}`);
+      console.log(`  hierarchyChanged events: ${eventCount} (batched reactivity)`);
 
       // Average latency per sync event
       const avgLatency = duration / 10;
-      console.log(`  Average latency per sync: ${avgLatency.toFixed(3)}ms`);
+      console.log(`  Average latency per operation: ${avgLatency.toFixed(3)}ms`);
 
       // Both total and average should be well under target
       expect(duration).toBeLessThan(PERF_THRESHOLDS.syncLatency);
       expect(avgLatency).toBeLessThan(PERF_THRESHOLDS.syncLatency / 5);
+
+      // Verify at least one hierarchyChanged event fired (reactive batching may coalesce events)
+      expect(eventCount).toBeGreaterThanOrEqual(1);
     });
 
     test(`rapid sequential sync operations maintain <${PERF_THRESHOLDS.syncLatency}ms latency`, () => {
@@ -308,11 +320,15 @@ describe('Architecture Performance Benchmarks', () => {
   });
 
   describe('Memory Usage Efficiency - 45% Reduction Target', () => {
-    test(`memory usage demonstrates efficient data structures vs legacy`, () => {
+    test(`memory usage demonstrates efficient data structures vs legacy (baseline estimation)`, () => {
       const nodes = generateTestNodes(PERF_SCALE.memory);
 
       // Initialize and measure memory usage
       nodeManager.initializeNodes(nodes);
+
+      // BASELINE ESTIMATION: This test uses calculated estimates rather than real memory measurements
+      // TODO: Implement actual memory profiling when performance.memory API is available in test environment
+      // For now, this validates our architectural design assumptions against legacy baseline
 
       // Estimate memory for new architecture
       const newArchMemory = estimateMemoryUsage(nodeManager);
@@ -327,6 +343,7 @@ describe('Architecture Performance Benchmarks', () => {
       console.log(`  New architecture estimate: ${(newArchMemory / 1024).toFixed(2)}KB`);
       console.log(`  Legacy estimate: ${(legacyBaselineMemory / 1024).toFixed(2)}KB`);
       console.log(`  Reduction: ${(reduction * 100).toFixed(1)}%`);
+      console.log(`  NOTE: Using baseline estimation (not real memory measurement)`);
 
       // We target at least 40% reduction (conservative vs 45% target)
       // Real gains depend on structural optimizations, which are validated elsewhere
@@ -423,8 +440,15 @@ describe('Architecture Performance Benchmarks', () => {
 });
 
 /**
- * Utility: Estimate memory usage of node manager
- * Returns approximate bytes used (for benchmarking purposes)
+ * Utility: Estimate memory usage of node manager (BASELINE ESTIMATION ONLY)
+ *
+ * WARNING: This function uses hardcoded estimates, not actual memory measurements.
+ * It's intended to validate architectural design assumptions, not measure real memory usage.
+ *
+ * Returns approximate bytes used (for baseline benchmarking purposes)
+ *
+ * TODO: Replace with actual memory measurement when performance.memory API is available
+ * in the test environment, or use process.memoryUsage() for Node.js environments
  */
 function estimateMemoryUsage(nodeManager: NodeManager): number {
   const nodeCount = nodeManager.nodes.size;
