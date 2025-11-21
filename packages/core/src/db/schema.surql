@@ -77,6 +77,7 @@ DEFINE FIELD IF NOT EXISTS node ON TABLE schema TYPE option<record>;  -- Reverse
 -- Core schema fields
 DEFINE FIELD IF NOT EXISTS is_core ON TABLE schema TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS version ON TABLE schema TYPE int DEFAULT 1;
+DEFINE FIELD IF NOT EXISTS description ON TABLE schema TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS fields ON TABLE schema TYPE array DEFAULT [];
 
 -- Note: SCHEMAFULL allows undefined fields by default (flexible)

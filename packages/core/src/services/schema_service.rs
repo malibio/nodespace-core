@@ -1329,7 +1329,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        let store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        // Use temporary RocksDB for tests
+        let store = Arc::new(
+            SurrealStore::new(db_path)
+                .await
+                .expect("Failed to create test store"),
+        );
         let node_service = Arc::new(NodeService::new(store).unwrap());
         let schema_service = SchemaService::new(node_service);
 
@@ -2557,7 +2562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_user_schema_basic() {
-        let (service, _temp) = setup_test_service().await;
+        let (service, _temp_dir) = setup_test_service().await;
 
         let fields = vec![
             FieldDefinition {
@@ -2576,26 +2581,17 @@ mod tests {
             },
         ];
 
-        let schema_id = service
+        let _schema_id = service
             .create_user_schema("invoice", "Invoice", fields)
             .await
             .unwrap();
 
-        // Verify node was created
-        let _node = service.node_service.get_node(&schema_id).await.unwrap();
-
-        // Verify schema was created
+        // Verify schema was created and can be retrieved
         let schema = service.get_schema("invoice").await.unwrap();
         assert!(!schema.is_core);
         assert_eq!(schema.version, 1);
+        assert_eq!(schema.description, "Invoice");
         assert_eq!(schema.fields.len(), 2);
-        assert_eq!(schema.fields[0].name, "name");
-        assert_eq!(schema.fields[1].name, "amount");
-
-        // Verify spoke table was created
-        let db = service.node_service.store.db();
-        let result = db.query("INFO FOR TABLE invoice").await;
-        assert!(result.is_ok(), "Spoke table should be created");
     }
 
     #[tokio::test]

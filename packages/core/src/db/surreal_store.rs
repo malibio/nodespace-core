@@ -807,9 +807,11 @@ where
         let should_create_spoke = TYPES_WITH_PROPERTIES.contains(&node.node_type.as_str());
         let props_with_schema = node.properties.as_object().cloned().unwrap_or_default();
 
-        // Create hub node
-        let hub_query = r#"
-            CREATE type::thing('node', $id) CONTENT {
+        // Create hub node using simpler table:id syntax
+        // Note: IDs with special characters (hyphens, spaces, etc.) need to be backtick-quoted
+        let hub_query = format!(
+            r#"
+            CREATE node:`{}` CONTENT {{
                 nodeType: $node_type,
                 content: $content,
                 version: $version,
@@ -821,13 +823,14 @@ where
                 mentions: [],
                 mentioned_by: [],
                 data: $data
-            };
-        "#;
+            }};
+        "#,
+            node.id
+        );
 
         let mut response = self
             .db
-            .query(hub_query)
-            .bind(("id", node.id.clone()))
+            .query(&hub_query)
             .bind(("node_type", node.node_type.clone()))
             .bind(("content", node.content.clone()))
             .bind(("version", node.version))
@@ -837,41 +840,46 @@ where
             .context("Failed to create node in universal table")?;
 
         // Consume the CREATE response - critical for persistence
-        let _: Result<Option<serde_json::Value>, _> = response.take(0usize);
+        let _: Result<Vec<serde_json::Value>, _> = response.take(0usize);
 
         // Create spoke record if needed
         if should_create_spoke && has_properties {
-            // CREATE spoke record with properties
-            let spoke_query = "CREATE type::thing($spoke_table, $id) CONTENT $properties;";
+            // CREATE spoke record with properties using simpler table:id syntax
+            // Note: IDs with special characters (hyphens, spaces, etc.) need backtick-quoting
+            let spoke_query = format!(
+                "CREATE {}:`{}` CONTENT $properties;",
+                node.node_type, node.id
+            );
+
             let mut spoke_response = self
                 .db
-                .query(spoke_query)
-                .bind(("spoke_table", node.node_type.clone()))
-                .bind(("id", node.id.clone()))
+                .query(&spoke_query)
                 .bind(("properties", Value::Object(props_with_schema.clone())))
                 .await
                 .context("Failed to create spoke record")?;
 
-            // Consume spoke response
-            let _: Result<Option<serde_json::Value>, _> = spoke_response.take(0usize);
+            // Consume spoke response - CREATE returns created records
+            let _ = spoke_response.take::<Vec<serde_json::Value>>(0usize);
 
             // Set bidirectional links: hub -> spoke and spoke -> hub
-            let link_query = r#"
-                UPDATE type::thing('node', $id) SET data = type::thing($spoke_table, $id);
-                UPDATE type::thing($spoke_table, $id) SET node = type::thing('node', $id);
-            "#;
+            let link_query = format!(
+                r#"
+                UPDATE node:`{}` SET data = {}:`{}`;
+                UPDATE {}:`{}` SET node = node:`{}`;
+            "#,
+                node.id, node.node_type, node.id, node.node_type, node.id, node.id
+            );
 
             let mut link_response = self
                 .db
-                .query(link_query)
-                .bind(("id", node.id.clone()))
-                .bind(("spoke_table", node.node_type.clone()))
+                .query(&link_query)
                 .await
                 .context("Failed to set spoke links")?;
 
             // Consume link responses - both UPDATE statements
-            let _: Result<Option<serde_json::Value>, _> = link_response.take(0usize);
-            let _: Result<Option<serde_json::Value>, _> = link_response.take(1usize);
+            // UPDATE returns updated records which may have deserialization quirks
+            let _: Result<Vec<serde_json::Value>, _> = link_response.take(0usize);
+            let _: Result<Vec<serde_json::Value>, _> = link_response.take(1usize);
         }
 
         // Note: Parent-child relationships are now established separately via move_node()
@@ -1106,11 +1114,11 @@ where
         // Direct record ID lookup (O(1) primary key access)
         // Note: We don't use FETCH data because it causes deserialization issues
         // with the polymorphic data field (Thing vs Object)
-        let query = "SELECT * FROM type::thing('node', $id);";
+        // IDs with special characters need backtick-quoting
+        let query = format!("SELECT * FROM node:`{}`;", id);
         let mut response = self
             .db
-            .query(query)
-            .bind(("id", id.to_string()))
+            .query(&query)
             .await
             .context("Failed to query node by record ID")?;
 
@@ -1124,17 +1132,10 @@ where
         if let Some(ref mut node) = node_opt {
             let types_with_properties = ["task", "schema"];
             if types_with_properties.contains(&node.node_type.as_str()) {
-                // Fetch properties using SQL query, excluding 'id' field to avoid Thing deserialization issues
-                // SELECT * OMIT id gets all fields except the id (which is a Thing type that can't deserialize to JSON)
-                let props_query = format!(
-                    "SELECT * OMIT id FROM type::thing('{}', $id);",
-                    node.node_type
-                );
-                let mut props_response = self
-                    .db
-                    .query(&props_query)
-                    .bind(("id", id.to_string()))
-                    .await;
+                // Fetch properties from spoke table using direct record ID lookup
+                // Omit 'node' field to avoid Thing deserialization issues
+                let props_query = format!("SELECT * OMIT node FROM {}:`{}`;", node.node_type, id);
+                let mut props_response = self.db.query(&props_query).await;
 
                 let result: Option<serde_json::Value> = match props_response {
                     Ok(ref mut response) => {
@@ -1172,7 +1173,6 @@ where
                 };
 
                 if let Some(props) = result {
-                    // Properties already exclude 'id' due to OMIT in query
                     node.properties = props;
                 }
             }
