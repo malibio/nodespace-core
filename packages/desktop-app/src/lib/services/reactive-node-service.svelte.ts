@@ -23,6 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ContentProcessor } from './content-processor';
 import { eventBus } from './event-bus';
 import { SharedNodeStore } from './shared-node-store';
+import { hierarchyStore } from './hierarchy-store.svelte';
 import { getFocusManager } from './focus-manager.svelte';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import type { Node, NodeUIState } from '$lib/types';
@@ -451,9 +452,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.setNode(newNode, viewerSource, skipPersistence);
     _uiState[nodeId] = newUIState;
 
-    // CRITICAL: Update children cache when creating a new node
-    // This keeps the cache synchronized with the actual hierarchy
-    sharedNodeStore.addChildToCache(newParentId, nodeId);
+    // NOTE: Hierarchy is synced automatically by SharedNodeStore.setNode()
+    // which calls hierarchyStore.updateParentChild() for new nodes
 
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
@@ -993,9 +993,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     setExpanded(targetParentId, true);
 
-    // Update children cache to reflect the move
-    sharedNodeStore.removeChildFromCache(currentParentId, nodeId);
-    sharedNodeStore.addChildToCache(targetParentId, nodeId);
+    // NOTE: Hierarchy is synced by HierarchyStore when backend updates node's parentId
 
     // Atomic backend operation
     try {
@@ -1014,8 +1012,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // Non-ignorable error: rollback and fail
         _uiState[nodeId] = originalUIState;
         _rootNodeIds = originalRootNodeIds;
-        sharedNodeStore.removeChildFromCache(targetParentId, nodeId);
-        sharedNodeStore.addChildToCache(currentParentId, nodeId);
+        // NOTE: Hierarchy will be synced when node reverts to original parentId
         updateDescendantDepths(nodeId);
 
         console.error('[indentNode] Failed to move node:', error);
@@ -1090,9 +1087,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ];
     }
 
-    // Update children cache to reflect the move
-    sharedNodeStore.removeChildFromCache(oldParentId, nodeId);
-    sharedNodeStore.addChildToCache(newParentId, nodeId);
+    // NOTE: Hierarchy is synced by HierarchyStore when backend updates node's parentId
 
     // Atomic backend operation for main node
     try {
@@ -1111,8 +1106,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // Non-ignorable error: rollback and fail
         _uiState[nodeId] = originalUIState;
         _rootNodeIds = originalRootNodeIds;
-        sharedNodeStore.removeChildFromCache(newParentId, nodeId);
-        sharedNodeStore.addChildToCache(oldParentId, nodeId);
+        // NOTE: Hierarchy will be synced when node reverts to original parentId
         updateDescendantDepths(nodeId);
 
         console.error('[outdentNode] Failed to move node:', error);
@@ -1163,9 +1157,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           _uiState[siblingId] = { ..._uiState[siblingId], depth: siblingDepth };
           updateDescendantDepths(siblingId);
 
-          // Update children cache for sibling transfer
-          sharedNodeStore.removeChildFromCache(oldParentId, siblingId);
-          sharedNodeStore.addChildToCache(nodeId, siblingId);
+          // NOTE: Hierarchy is synced by HierarchyStore when backend updates sibling's parentId
 
           // Atomic backend operation
           try {
@@ -1183,8 +1175,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             if (!isIgnorableError) {
               // Non-ignorable error: rollback and skip this sibling
               _uiState[siblingId] = siblingOriginalUIState;
-              sharedNodeStore.removeChildFromCache(nodeId, siblingId);
-              sharedNodeStore.addChildToCache(oldParentId, siblingId);
+              // NOTE: Hierarchy will be synced when sibling reverts to original parentId
               updateDescendantDepths(siblingId);
 
               console.error(`[outdentNode] Failed to move sibling ${siblingId}:`, error);
@@ -1299,9 +1290,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // NOTE: parentId and containerNodeId removed - hierarchy managed by backend via parent_of edges
       sharedNodeStore.updateNode(child.id, updates, viewerSource);
 
-      // CRITICAL: Update children cache when promoting children to new parent
-      sharedNodeStore.removeChildFromCache(nodeId, child.id);
-      sharedNodeStore.addChildToCache(newParentForChildren, child.id);
+      // NOTE: Hierarchy is synced automatically by SharedNodeStore.updateNode() when parentId changes
 
       // CRITICAL: If promoting to root level, add to _rootNodeIds
       // Must reassign (not mutate) for Svelte 5 reactivity
@@ -1358,8 +1347,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const nodeBeforeSiblingId = node.beforeSiblingId;
     removeFromSiblingChain(nodeId, nodeBeforeSiblingId, parentId);
 
-    // CRITICAL: Update children cache to remove this node from its parent
-    sharedNodeStore.removeChildFromCache(parentId, nodeId);
+    // NOTE: Hierarchy is synced automatically by SharedNodeStore.deleteNode()
+    // which calls hierarchyStore.removeNode()
 
     sharedNodeStore.deleteNode(nodeId, viewerSource);
     delete _uiState[nodeId];
@@ -1807,20 +1796,18 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // CRITICAL: Build parent-child relationship cache from loaded nodes
       // This populates sharedNodeStore's childrenCache and parentsCache
       //
-      // Always build cache from nodes' containerNodeId field
-      // This works for both test scenarios and production (backend sets containerNodeId)
-      const nodesByParent = new Map<string | null, string[]>();
-      for (const node of nodes) {
-        const parentKey = defaults.parentMapping?.[node.id] ?? node.parentId ?? null;
-        if (!nodesByParent.has(parentKey)) {
-          nodesByParent.set(parentKey, []);
-        }
-        nodesByParent.get(parentKey)!.push(node.id);
-      }
-
-      // Update cache for each parent (including root nodes with null parent)
-      for (const [parentId, childIds] of nodesByParent.entries()) {
-        sharedNodeStore.updateChildrenCache(parentId, childIds);
+      // If parentMapping is provided (for tests), use it to build the hierarchy
+      // Otherwise, use the nodes' parentId field from the backend
+      if (defaults.parentMapping) {
+        // Test scenario: use explicit parentMapping
+        const nodesWithMappedParents = nodes.map(node => ({
+          id: node.id,
+          parentId: defaults.parentMapping![node.id]
+        }));
+        hierarchyStore.syncFromBackend(nodesWithMappedParents);
+      } else {
+        // Production scenario: use nodes' parentId field
+        hierarchyStore.syncFromBackend(nodes);
       }
 
       // Second pass: Compute depths and identify roots

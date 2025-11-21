@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store';
+import { hierarchyStore } from '$lib/services/hierarchy-store.svelte';
 import type { Node } from '$lib/types/node';
 
 describe('Split-Pane Content Isolation', () => {
@@ -64,8 +65,10 @@ describe('Split-Pane Content Isolation', () => {
     sharedNodeStore.setNode(childB1, { type: 'database', reason: 'test-setup' });
 
     // CRITICAL: Populate parent-child cache (simulates what loadChildrenForParent() does)
-    sharedNodeStore.updateChildrenCache('parent-a', ['child-a1']);
-    sharedNodeStore.updateChildrenCache('parent-b', ['child-b1']);
+    hierarchyStore.syncFromBackend([
+      { id: 'child-a1', parentId: 'parent-a' },
+      { id: 'child-b1', parentId: 'parent-b' }
+    ]);
 
     // Create service (simulating nodeManager)
     const mockEvents = { emit: () => {}, on: () => () => {}, hierarchyChanged: () => {} };
@@ -111,7 +114,7 @@ describe('Split-Pane Content Isolation', () => {
     sharedNodeStore.setNode(child1, { type: 'database', reason: 'test-setup' });
 
     // CRITICAL: Populate parent-child cache (simulates what loadChildrenForParent() does)
-    sharedNodeStore.updateChildrenCache('shared-parent', ['child-1']);
+    hierarchyStore.syncFromBackend([{ id: 'child-1', parentId: 'shared-parent' }]);
 
     const mockEvents = { emit: () => {}, on: () => () => {}, hierarchyChanged: () => {} };
     const service = createReactiveNodeService(mockEvents as never);

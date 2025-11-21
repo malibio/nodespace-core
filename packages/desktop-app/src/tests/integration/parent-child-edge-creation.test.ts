@@ -30,6 +30,7 @@ import { TestNodeBuilder } from '../utils/test-node-builder';
 import { getBackendAdapter, HttpAdapter } from '$lib/services/backend-adapter';
 import type { BackendAdapter } from '$lib/services/backend-adapter';
 import { sharedNodeStore } from '$lib/services/shared-node-store';
+import { hierarchyStore } from '$lib/services/hierarchy-store.svelte';
 import { registerChildWithParent } from '$lib/utils/node-hierarchy';
 
 describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
@@ -141,8 +142,7 @@ describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
       });
 
       // Update children cache (what base-node-viewer.svelte does)
-      const existingChildren = sharedNodeStore.getNodesForParent(dateId).map((n) => n.id);
-      sharedNodeStore.updateChildrenCache(dateId, [...existingChildren, placeholderId]);
+      hierarchyStore.updateParentChild(placeholderId, dateId);
 
       // Verify children cache was updated
       const updatedChildren = sharedNodeStore.getNodesForParent(dateId);
@@ -265,8 +265,7 @@ describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
 
     // Update children cache (critical fix from Issue #528)
     // This is what base-node-viewer.svelte does to prevent orphaning
-    const existingChildren = sharedNodeStore.getNodesForParent(dateId).map((n) => n.id);
-    sharedNodeStore.updateChildrenCache(dateId, [...existingChildren, placeholderId]);
+    hierarchyStore.updateParentChild(placeholderId, dateId);
 
     // Verify node is now in parent's children (the key assertion)
     const childrenAfter = sharedNodeStore.getNodesForParent(dateId);

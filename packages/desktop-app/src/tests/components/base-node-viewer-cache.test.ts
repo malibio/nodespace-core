@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store';
 import { PersistenceCoordinator } from '../../lib/services/persistence-coordinator.svelte';
+import { hierarchyStore } from '../../lib/services/hierarchy-store.svelte';
 import type { Node } from '../../lib/types';
 
 describe('BaseNodeViewer cache optimization', () => {
@@ -68,7 +69,7 @@ describe('BaseNodeViewer cache optimization', () => {
     }
 
     // Explicitly populate the parent-child cache (Issue #514: cache-based hierarchy)
-    store.updateChildrenCache('parent-id', children.map(c => c.id));
+    hierarchyStore.syncFromBackend(children.map(c => ({ id: c.id, parentId: 'parent-id' })));
 
     // Spy on loadChildrenForParent (database call)
     const loadSpy = vi.spyOn(store, 'loadChildrenForParent');
@@ -152,7 +153,7 @@ describe('BaseNodeViewer cache optimization', () => {
     // In real scenarios, this would happen when:
     // 1. MCP update notification includes parent info, OR
     // 2. Frontend re-queries backend via loadChildrenForParent()
-    store.addChildToCache('parent-id', 'new-child');
+    hierarchyStore.updateParentChild('new-child', 'parent-id');
 
     // Verify cache was updated and includes the new node
     cached = store.getNodesForParent('parent-id');
@@ -181,7 +182,7 @@ describe('BaseNodeViewer cache optimization', () => {
 
     // CRITICAL: Explicitly populate cache with parent-child relationship
     // This simulates what loadChildrenForParent() would do after querying backend
-    store.updateChildrenCache('parent-id', ['child-1']);
+    hierarchyStore.syncFromBackend([{ id: 'child-1', parentId: 'parent-id' }]);
 
     let cached = store.getNodesForParent('parent-id');
     expect(cached.length).toBe(1);
@@ -191,7 +192,10 @@ describe('BaseNodeViewer cache optimization', () => {
     store.setNode(child2, { type: 'viewer', viewerId: 'test-viewer' });
 
     // Update cache to reflect the new child (simulates cache refresh after update)
-    store.updateChildrenCache('parent-id', ['child-1', 'child-2']);
+    hierarchyStore.syncFromBackend([
+      { id: 'child-1', parentId: 'parent-id' },
+      { id: 'child-2', parentId: 'parent-id' }
+    ]);
 
     // Cache should reflect the update
     cached = store.getNodesForParent('parent-id');
