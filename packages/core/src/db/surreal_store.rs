@@ -966,8 +966,6 @@ where
         let node_type = node_type.to_string();
         let content = content.to_string();
 
-        let now = Utc::now();
-
         // Validate parent exists (prevent orphan nodes)
         let parent_exists = self.get_node(&parent_id).await?;
         if parent_exists.is_none() {
@@ -1118,20 +1116,10 @@ where
             node_id, parent_id
         ))?;
 
-        // Construct and return the created node
-        Ok(Node {
-            id: node_id,
-            node_type,
-            content,
-            before_sibling_id: None,
-            version: 1,
-            created_at: now,
-            modified_at: now,
-            properties,
-            embedding_vector: None,
-            mentions: Vec::new(),
-            mentioned_by: Vec::new(),
-        })
+        // Fetch and return created node (ensures timestamps match database values)
+        self.get_node(&node_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
