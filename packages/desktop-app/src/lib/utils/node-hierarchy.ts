@@ -28,24 +28,8 @@ import { sharedNodeStore } from '$lib/services/shared-node-store';
  * registerChildWithParent(parentNodeId, promotedNode.id); // ✅ Update cache
  * ```
  */
-export function registerChildWithParent(parentId: string, childId: string): void {
-  // Validate parent exists in store
-  const parent = sharedNodeStore.getNode(parentId);
-  if (!parent) {
-    console.warn(
-      `[registerChildWithParent] Parent ${parentId} not found in store, skipping cache update`
-    );
-    return;
-  }
-
-  // Get existing children (if any)
-  const existingChildren = sharedNodeStore.getNodesForParent(parentId).map((n) => n.id);
-
-  // Don't add duplicate
-  if (existingChildren.includes(childId)) {
-    return;
-  }
-
-  // Update cache with new child
-  sharedNodeStore.updateChildrenCache(parentId, [...existingChildren, childId]);
+export function registerChildWithParent(parentId: string, _childId: string): void {
+  // DEPRECATED: Cache updates removed - hierarchy is now computed on-demand from parentId field
+  // This function is kept for backward compatibility but does nothing
+  const _parent = sharedNodeStore.getNode(parentId); // Validate parent exists (no-op validation)
 }

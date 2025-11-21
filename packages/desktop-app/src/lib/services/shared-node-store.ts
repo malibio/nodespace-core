@@ -95,16 +95,6 @@ export class SharedNodeStore {
   // Avoids querying database on every update to check existence
   private persistedNodeIds = new Set<string>();
 
-  // Cache of parent-child relationships (populated from backend queries)
-  // Maps parentId (or '__root__' for root nodes) -> array of child node IDs
-  // CRITICAL: This cache must be updated when nodes are created/moved/deleted
-  private childrenCache = new Map<string, string[]>();
-
-  // Cache of child-parent relationships (inverse of childrenCache)
-  // Maps childId -> array of parent node IDs (typically just one parent)
-  // CRITICAL: Must be kept in sync with childrenCache
-  private parentsCache = new Map<string, string[]>();
-
   // Subscriptions for change notifications
   private subscriptions = new Map<string, Set<Subscription>>();
   private wildcardSubscriptions = new Set<Subscription>();
@@ -237,128 +227,37 @@ export class SharedNodeStore {
   }
 
   /**
-   * Get nodes filtered by parent ID (synchronous, cache-based)
+   * Get nodes filtered by parent ID (in-memory only)
    *
-   * IMPORTANT: This method uses a client-side cache of parent-child relationships.
-   * The cache is populated from backend queries and must be kept in sync.
-   *
-   * Cache updates happen when:
-   * - Nodes are loaded from backend (initializeNodes, loadChildren)
-   * - Nodes are created/moved/deleted (updateChildrenCache called)
-   * - Hierarchy changes occur (indent, outdent, delete)
-   *
-   * For real-time accuracy, use: await backendAdapter.getChildren(parentId)
-   * For cached performance, use this method (most UI operations)
+   * Returns nodes currently loaded in memory that have the specified parent.
+   * Note: This is not a backend query - it only includes nodes in memory.
    *
    * @param parentId - Parent node ID, or null for root-level nodes
-   * @returns Array of child nodes (from cache)
+   * @returns Array of child nodes currently in memory
    */
   getNodesForParent(parentId: string | null): Node[] {
-    const cacheKey = parentId || '__root__';
-    const childIds = this.childrenCache.get(cacheKey) || [];
-    return childIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
+    return Array.from(this.nodes.values()).filter(node => {
+      // Check if node's parentId matches the requested parentId
+      const nodeParentId = node.parentId ?? null;
+      return nodeParentId === parentId;
+    });
   }
 
   /**
-   * Update the children cache for a specific parent
-   * Called by ReactiveNodeService when hierarchy changes occur
+   * Get parent nodes for a given node (in-memory only)
    *
-   * @param parentId - Parent node ID (null for root nodes)
-   * @param childIds - Array of child node IDs in order
-   */
-  updateChildrenCache(parentId: string | null, childIds: string[]): void {
-    const cacheKey = parentId || '__root__';
-    this.childrenCache.set(cacheKey, [...childIds]);
-
-    // Update inverse cache (parentsCache) for each child
-    for (const childId of childIds) {
-      if (parentId !== null) {
-        this.parentsCache.set(childId, [parentId]);
-      } else {
-        // Root nodes have no parent
-        this.parentsCache.delete(childId);
-      }
-    }
-  }
-
-  /**
-   * Add a child to the parent's children cache
-   * Used when creating new nodes
-   *
-   * @param parentId - Parent node ID (null for root)
-   * @param childId - Child node ID to add
-   */
-  addChildToCache(parentId: string | null, childId: string): void {
-    const cacheKey = parentId || '__root__';
-    const existing = this.childrenCache.get(cacheKey) || [];
-    if (!existing.includes(childId)) {
-      this.childrenCache.set(cacheKey, [...existing, childId]);
-    }
-
-    // Update inverse cache (parentsCache)
-    if (parentId !== null) {
-      this.parentsCache.set(childId, [parentId]);
-    } else {
-      // Root node has no parent
-      this.parentsCache.delete(childId);
-    }
-  }
-
-  /**
-   * Remove a child from the parent's children cache
-   * Used when deleting or moving nodes
-   *
-   * @param parentId - Parent node ID (null for root)
-   * @param childId - Child node ID to remove
-   */
-  removeChildFromCache(parentId: string | null, childId: string): void {
-    const cacheKey = parentId || '__root__';
-    const existing = this.childrenCache.get(cacheKey) || [];
-    this.childrenCache.set(cacheKey, existing.filter(id => id !== childId));
-
-    // Update inverse cache (parentsCache) - remove this parent from the child's parent list
-    const childParents = this.parentsCache.get(childId) || [];
-    if (parentId !== null) {
-      const filteredParents = childParents.filter(id => id !== parentId);
-      if (filteredParents.length > 0) {
-        this.parentsCache.set(childId, filteredParents);
-      } else {
-        this.parentsCache.delete(childId);
-      }
-    } else {
-      // Removing from root, so this child must now have a parent
-      // (This should not normally happen, but handle it gracefully)
-      this.parentsCache.delete(childId);
-    }
-  }
-
-  /**
-   * Clear the entire children cache
-   * Used when invalidating all hierarchy data
-   */
-  clearChildrenCache(): void {
-    this.childrenCache.clear();
-    this.parentsCache.clear();
-  }
-
-  /**
-   * Get parent nodes for a given node (synchronous, cache-based)
-   *
-   * IMPORTANT: This method uses a client-side cache of parent-child relationships.
-   * The cache is populated from backend queries and must be kept in sync.
-   *
-   * NOTE: In graph-native architecture, a node can have multiple parents via different edge types.
-   * Currently this method returns the parent from the primary hierarchy only.
-   *
-   * For real-time accuracy, use: await backendAdapter.getParents(nodeId) (when available)
-   * For cached performance, use this method (most UI operations)
+   * Returns parent nodes currently loaded in memory.
+   * Note: This is not a backend query - it only includes nodes in memory.
    *
    * @param nodeId - Node ID to find parents for
-   * @returns Array of parent nodes (from cache)
+   * @returns Array of parent nodes currently in memory (typically 0 or 1)
    */
   getParentsForNode(nodeId: string): Node[] {
-    const parentIds = this.parentsCache.get(nodeId) || [];
-    return parentIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
+    const node = this.nodes.get(nodeId);
+    if (!node || !node.parentId) return [];
+
+    const parent = this.nodes.get(node.parentId);
+    return parent ? [parent] : [];
   }
 
   /**
@@ -989,11 +888,6 @@ export class SharedNodeStore {
       for (const node of nodes) {
         this.setNode(node, databaseSource); // skipPersistence removed - database source handles it
       }
-
-      // CRITICAL: Update children cache now that we've loaded these nodes
-      // This populates the cache used by getNodesForParent() for synchronous access
-      const childIds = nodes.map(n => n.id);
-      this.updateChildrenCache(parentId, childIds);
 
       return nodes;
     } catch (error) {

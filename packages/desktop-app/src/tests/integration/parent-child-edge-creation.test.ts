@@ -140,9 +140,6 @@ describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
         viewerId: 'test-viewer'
       });
 
-      // Update children cache (what base-node-viewer.svelte does)
-      const existingChildren = sharedNodeStore.getNodesForParent(dateId).map((n) => n.id);
-      sharedNodeStore.updateChildrenCache(dateId, [...existingChildren, placeholderId]);
 
       // Verify children cache was updated
       const updatedChildren = sharedNodeStore.getNodesForParent(dateId);
@@ -263,10 +260,6 @@ describe.sequential('Parent-Child Edge Creation (Issue #528)', () => {
       viewerId: 'test-viewer'
     });
 
-    // Update children cache (critical fix from Issue #528)
-    // This is what base-node-viewer.svelte does to prevent orphaning
-    const existingChildren = sharedNodeStore.getNodesForParent(dateId).map((n) => n.id);
-    sharedNodeStore.updateChildrenCache(dateId, [...existingChildren, placeholderId]);
 
     // Verify node is now in parent's children (the key assertion)
     const childrenAfter = sharedNodeStore.getNodesForParent(dateId);
