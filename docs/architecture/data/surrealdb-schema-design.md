@@ -801,6 +801,86 @@ async fn migrate_turso_to_surrealdb(
 - **Writes**: 10K+ nodes/second (bulk insert)
 - **Queries**: <10ms for 99th percentile (indexed queries)
 
+## Common Pitfalls and Solutions
+
+### Issue: "invalid type: enum, expected any valid JSON value"
+
+**Symptom**: Deserialization errors when querying spoke tables or hub nodes, even when no `TYPE enum` fields are defined.
+
+**Root Cause**: The `id` field (Record ID) is a **Thing type** that cannot deserialize to generic JSON. When you SELECT records and try to deserialize to `serde_json::Value` or `HashMap<String, serde_json::Value>`, the `id` field causes this cryptic error.
+
+**Solution**: Always OMIT Thing-typed fields when deserializing to generic JSON:
+
+```rust
+// ❌ WRONG - includes id field (Thing type)
+let query = format!("SELECT * FROM schema:`{}`;", id);
+let records: Vec<HashMap<String, Value>> = response.take(0)?;
+// Error: Db(Serialization("invalid type: enum, expected any valid JSON value"))
+
+// ✅ CORRECT - omit id and other Thing-typed fields
+let query = format!("SELECT * OMIT id, node FROM schema:`{}`;", id);
+let records: Vec<HashMap<String, Value>> = response.take(0)?;
+// Success!
+```
+
+**Thing-typed fields to always OMIT:**
+- `id` - The record identifier (automatically a Thing)
+- `node` - Reverse link to hub (defined as `TYPE option<record>`)
+- Any field defined as `TYPE record` or `TYPE option<record>`
+
+### Issue: Empty Properties When Querying Spoke Tables
+
+**Symptom**: Hub node exists, spoke records exist, but `node.properties` is empty after calling `get_node()`.
+
+**Root Cause**: The spoke table query is failing to deserialize due to Thing-typed fields being included in the SELECT.
+
+**Solution**: Update `get_node()` to use `OMIT id, node` pattern:
+
+```rust
+// Get properties from spoke table
+let props_query = format!("SELECT * OMIT id, node FROM {}:`{}`;", node_type, id);
+```
+
+### Issue: Never Redefine the `id` Field
+
+**Problem**: Defining `id` as a field in your schema conflicts with SurrealDB's automatic Record ID:
+
+```sql
+-- ❌ WRONG - conflicts with native Record ID
+DEFINE FIELD id ON TABLE node TYPE string ASSERT $value != NONE;
+
+-- ✅ CORRECT - let SurrealDB manage id automatically
+-- (No id field definition needed!)
+```
+
+**Why**: The `id` is automatically the primary key (Thing type). Redefining it causes type conflicts and deserialization errors.
+
+**Extracting the ID**: Use `record::id()` function to get the identifier portion as a string:
+
+```sql
+SELECT record::id(id) AS raw_id FROM node:invoice;
+-- Returns: "invoice" (string)
+```
+
+### Query Syntax: table:id vs type::thing()
+
+Both syntaxes work for accessing records by ID:
+
+```rust
+// Option 1: Direct table:id syntax (simpler for literals)
+let query = format!("SELECT * FROM node:`{}`;", id);
+
+// Option 2: type::thing() function (better for parameterized queries)
+let query = "SELECT * FROM type::thing('node', $id);";
+```
+
+**When to use which:**
+- **Use `table:id`**: When the table name and ID are known at query construction time
+- **Use `type::thing()`**: When table/ID come from variables or need runtime construction
+- **Backtick-quote IDs**: IDs with special characters (hyphens, spaces) need backticks: ``node:`code-block` ``
+
+**Note**: Both are functionally equivalent - choose based on readability and context.
+
 ## References
 
 - [SurrealDB Record IDs](https://surrealdb.com/docs/surrealql/datamodel/ids)
@@ -812,5 +892,5 @@ async fn migrate_turso_to_surrealdb(
 ---
 
 **Status**: Architecture design approved for Phase 2 implementation
-**Last Updated**: 2025-01-11
-**Related Issues**: #461 (Epic), #462 (Phase 1), #463 (Phase 2 - TBD)
+**Last Updated**: 2025-11-21 (Added troubleshooting section from Issue #562)
+**Related Issues**: #461 (Epic), #462 (Phase 1), #463 (Phase 2 - TBD), #562 (Schema Creation)
