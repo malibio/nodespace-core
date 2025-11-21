@@ -25,6 +25,8 @@ interface ChildInfo {
 class ReactiveStructureTree {
   // Reactive map using Svelte 5 $state - automatically triggers reactivity
   children = $state(new Map<string, ChildInfo[]>());
+  // Version counter to ensure reactivity triggers on Map mutations
+  version = $state(0);
   private unlisteners: UnlistenFn[] = [];
   private initialized = false;
 
@@ -218,6 +220,8 @@ class ReactiveStructureTree {
     children.splice(insertIndex, 0, newChild);
     // Notify Svelte of the change
     this.children.set(parentId, children);
+    // Increment version to trigger reactivity in derived states
+    this.version++;
   }
 
   /**
@@ -296,6 +300,26 @@ class ReactiveStructureTree {
     }
     this.unlisteners = [];
     this.initialized = false;
+  }
+
+  /**
+   * Manually register an in-memory edge (for placeholder promotion)
+   *
+   * Use this when creating parent-child relationships for nodes that haven't
+   * been persisted yet and won't trigger LIVE SELECT events.
+   *
+   * @param parentId - Parent node ID
+   * @param childId - Child node ID
+   * @param order - Sort order (use 1.0 for first child, or get max order + 1)
+   */
+  addInMemoryEdge(parentId: string, childId: string, order: number = 1.0) {
+    this.addChild({
+      id: `${parentId}-${childId}`,
+      in: parentId,
+      out: childId,
+      edgeType: 'has_child',
+      order
+    });
   }
 
   /**

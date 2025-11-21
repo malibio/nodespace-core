@@ -6,6 +6,7 @@
  */
 
 import { sharedNodeStore } from '$lib/services/shared-node-store';
+import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
 /**
  * Registers a child node with its parent in the SharedNodeStore children cache.
@@ -39,12 +40,17 @@ export function registerChildWithParent(parentId: string, childId: string): void
   }
 
   // Get existing children (if any)
-  const existingChildren = sharedNodeStore.getNodesForParent(parentId).map((n) => n.id);
+  const existingChildren = reactiveStructureTree.getChildren(parentId);
 
   // Don't add duplicate
   if (existingChildren.includes(childId)) {
     return;
   }
 
-  // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via LIVE SELECT events
+  // CRITICAL FIX: Manually add in-memory edge to ReactiveStructureTree
+  // For placeholder promotion, the node hasn't been persisted yet so LIVE SELECT won't fire
+  // We need to manually register the edge so visibleNodesFromStores includes the promoted node
+  // This prevents a new placeholder from being created immediately after promotion
+  const order = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+  reactiveStructureTree.addInMemoryEdge(parentId, childId, order);
 }
