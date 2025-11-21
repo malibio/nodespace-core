@@ -120,24 +120,19 @@
   let autoFocusNodes = $state(new Set<string>());
 
   /**
-   * Reactive derived state: visible nodes from dual stores
-   * Combines ReactiveStructureTree (hierarchy) + ReactiveNodeData (content)
-   * Replaces nodeManager.visibleNodes() with pure reactive Svelte 5 approach
+   * Visible nodes derived from ReactiveStructureTree + ReactiveNodeData (Issue #555)
    *
-   * This is the core refactor from Issue #555:
-   * - No more _updateTrigger hack needed
-   * - Pure $derived reactivity from $state stores
-   * - Automatic re-render when either store changes
-   *
-   * HYBRID APPROACH: Falls back to sharedNodeStore for nodes not yet in reactive stores
-   * This handles the transition period where reactive stores are being populated
+   * Pure reactivity via $derived - NO _updateTrigger hack needed.
+   * Falls back to sharedNodeStore during transition period (Issue #580 tracks removal).
    */
   const visibleNodesFromStores = $derived.by(() => {
     if (!nodeId) return [];
 
     // Helper function to recursively flatten visible nodes with depth
     function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {
-      // Try reactive structure tree first, fall back to sharedNodeStore
+      // TRANSITION PERIOD (Issue #580): Try reactive structure tree first, fall back to sharedNodeStore
+      // This supports gradual migration where reactive stores are being populated asynchronously.
+      // Once all nodes are in reactive stores, remove fallback and use only reactiveStructureTree.
       let childIds = reactiveStructureTree.getChildren(parentId);
       if (childIds.length === 0) {
         const cachedNodes = sharedNodeStore.getNodesForParent(parentId);
@@ -147,7 +142,7 @@
       }
 
       for (const id of childIds) {
-        // Try reactive store first, fall back to sharedNodeStore
+        // TRANSITION PERIOD (Issue #580): Try reactive store first, fall back to sharedNodeStore
         let node = reactiveNodeData.getNode(id);
         if (!node) {
           node = sharedNodeStore.getNode(id);
@@ -155,6 +150,7 @@
         if (!node) continue;
 
         // Get children IDs for this node
+        // TRANSITION PERIOD (Issue #580): Same fallback pattern as above
         let children = reactiveStructureTree.getChildren(node.id);
         if (children.length === 0) {
           const cachedChildren = sharedNodeStore.getNodesForParent(node.id);
@@ -1362,7 +1358,9 @@
     const currentState = expandedState.get(toggleNodeId) ?? false;
     expandedState.set(toggleNodeId, !currentState);
 
-    // Also update nodeManager for backward compatibility during transition
+    // TRANSITION PERIOD (Issue #580): Also update nodeManager for backward compatibility
+    // This dual update ensures expansionState syncs during migration from nodeManager to reactive stores.
+    // Once all state is in reactive stores, remove this call and update-only expandedState.
     nodeManager.toggleExpanded(toggleNodeId);
 
     // Restore focus and cursor position after DOM update
