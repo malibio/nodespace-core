@@ -869,7 +869,8 @@ where
 
         if should_create_spoke && has_properties {
             // Store properties directly in type-specific table (flattened)
-            let mut spoke_response = self.db
+            let mut spoke_response = self
+                .db
                 .query("CREATE type::thing($table, $id) CONTENT $properties;")
                 .bind(("table", node.node_type.clone()))
                 .bind(("id", node.id.clone()))
