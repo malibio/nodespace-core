@@ -388,38 +388,34 @@ describe('ReactiveStructureTree', () => {
 
   describe('buildTree (bulk load)', () => {
     it('should populate tree from bulk edge data', () => {
+      // Test the buildTree logic by manually calling addChild in the expected order
+      // This exercises the actual implementation path
       const edges = [
         { id: 'edge:1', in: 'parent1', out: 'child1', order: 1.0 },
         { id: 'edge:2', in: 'parent1', out: 'child2', order: 2.0 },
         { id: 'edge:3', in: 'parent2', out: 'child3', order: 1.0 }
       ];
 
-      // Call buildTree through the internal method
-      // Since buildTree is private, we'll access the tree after calling it directly
-      const tree = new Map<string, { nodeId: string; order: number }[]>();
+      // Clear previous state
+      structureTree.children.clear();
 
+      // Simulate what buildTree does: add edges via addChild
       for (const edge of edges) {
-        if (!tree.has(edge.in)) {
-          tree.set(edge.in, []);
-        }
-        tree.get(edge.in)!.push({
-          nodeId: edge.out,
-          order: edge.order
-        });
+        structureTree.__testOnly_addChild(edge);
       }
 
       // Verify parent1 has children in correct order
-      const parent1Children = tree.get('parent1');
-      expect(parent1Children).toBeDefined();
-      expect(parent1Children?.length).toBe(2);
-      expect(parent1Children?.[0].nodeId).toBe('child1');
-      expect(parent1Children?.[1].nodeId).toBe('child2');
+      const parent1Children = structureTree.getChildrenWithOrder('parent1');
+      expect(parent1Children).toEqual([
+        { nodeId: 'child1', order: 1.0 },
+        { nodeId: 'child2', order: 2.0 }
+      ]);
 
       // Verify parent2 has its child
-      const parent2Children = tree.get('parent2');
-      expect(parent2Children).toBeDefined();
-      expect(parent2Children?.length).toBe(1);
-      expect(parent2Children?.[0].nodeId).toBe('child3');
+      const parent2Children = structureTree.getChildrenWithOrder('parent2');
+      expect(parent2Children).toEqual([
+        { nodeId: 'child3', order: 1.0 }
+      ]);
     });
 
     it('should handle bulk load with many edges and maintain sort order', () => {
@@ -430,45 +426,23 @@ describe('ReactiveStructureTree', () => {
         { id: 'edge:4', in: 'root', out: 'd', order: 4.0 }
       ];
 
-      // Simulate buildTree logic
-      const tree = new Map<string, { nodeId: string; order: number }[]>();
+      structureTree.children.clear();
 
+      // Add edges in unsorted order to test sort functionality
       for (const edge of edges) {
-        if (!tree.has(edge.in)) {
-          tree.set(edge.in, []);
-        }
-        tree.get(edge.in)!.push({
-          nodeId: edge.out,
-          order: edge.order
-        });
+        structureTree.__testOnly_addChild(edge);
       }
 
-      // Sort all children arrays by order (as buildTree does)
-      for (const [_parentId, children] of tree) {
-        children.sort((a, b) => a.order - b.order);
-      }
-
-      // Verify they're sorted correctly
-      const children = tree.get('root');
-      expect(children?.map(c => c.nodeId)).toEqual(['b', 'c', 'a', 'd']);
+      // Verify edges are sorted correctly
+      const children = structureTree.getChildrenWithOrder('root');
+      expect(children.map(c => c.nodeId)).toEqual(['b', 'c', 'a', 'd']);
     });
 
     it('should handle empty bulk load', () => {
-      const edges: { id: string; in: string; out: string; order: number }[] = [];
+      structureTree.children.clear();
 
-      const tree = new Map<string, { nodeId: string; order: number }[]>();
-
-      for (const edge of edges) {
-        if (!tree.has(edge.in)) {
-          tree.set(edge.in, []);
-        }
-        tree.get(edge.in)!.push({
-          nodeId: edge.out,
-          order: edge.order
-        });
-      }
-
-      expect(tree.size).toBe(0);
+      // No edges to add
+      expect(structureTree.children.size).toBe(0);
     });
   });
 });
