@@ -858,7 +858,8 @@ where
                 if let Some(fields_value) = bound_properties.get("fields") {
                     let fields_str = serde_json::to_string(fields_value)
                         .context("Failed to stringify schema fields")?;
-                    bound_properties.insert("fields".to_string(), serde_json::Value::String(fields_str));
+                    bound_properties
+                        .insert("fields".to_string(), serde_json::Value::String(fields_str));
                 }
             }
 
@@ -1166,7 +1167,10 @@ where
                                     );
                                     tracing::debug!(
                                         "Raw properties full: {}",
-                                        serde_json::to_string_pretty(&serde_json::Value::Object(map.clone().into_iter().collect())).unwrap_or_default()
+                                        serde_json::to_string_pretty(&serde_json::Value::Object(
+                                            map.clone().into_iter().collect()
+                                        ))
+                                        .unwrap_or_default()
                                     );
                                     serde_json::Value::Object(map.into_iter().collect())
                                 });
@@ -1193,7 +1197,9 @@ where
                     // If schema fields were stored as JSON string, parse them back
                     if node.node_type == "schema" {
                         if let Some(serde_json::Value::String(fields_str)) = props.get("fields") {
-                            if let Ok(fields_value) = serde_json::from_str::<serde_json::Value>(fields_str) {
+                            if let Ok(fields_value) =
+                                serde_json::from_str::<serde_json::Value>(fields_str)
+                            {
                                 // Replace the stringified value with the parsed array
                                 if let Some(obj) = props.as_object_mut() {
                                     obj.insert("fields".to_string(), fields_value);
@@ -1426,7 +1432,8 @@ where
             if let Some(fields_value) = props_with_schema.get("fields") {
                 let fields_str = serde_json::to_string(fields_value)
                     .context("Failed to stringify schema fields in switch_node_type")?;
-                props_with_schema.insert("fields".to_string(), serde_json::Value::String(fields_str));
+                props_with_schema
+                    .insert("fields".to_string(), serde_json::Value::String(fields_str));
             }
         }
 

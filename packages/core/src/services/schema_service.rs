@@ -2245,11 +2245,14 @@ mod tests {
         // Create person schema with nested address field using the proper API
         let mut address_schema = std::collections::HashMap::new();
         address_schema.insert("type".to_string(), json!("object"));
-        address_schema.insert("properties".to_string(), json!({
-            "city": {
-                "type": "string"
-            }
-        }));
+        address_schema.insert(
+            "properties".to_string(),
+            json!({
+                "city": {
+                    "type": "string"
+                }
+            }),
+        );
 
         let fields = vec![
             FieldDefinition {
@@ -2541,32 +2544,32 @@ mod tests {
     async fn test_create_user_schema_with_relation() {
         let (service, _temp) = setup_test_service().await;
 
-        // First create a person schema (referenced type)
-        let person_fields = vec![FieldDefinition {
-            name: "name".to_string(),
-            field_type: "string".to_string(),
+        // First create an invoice schema (referenced type)
+        let invoice_fields = vec![FieldDefinition {
+            name: "amount".to_string(),
+            field_type: "number".to_string(),
             required: Some(true),
             default: None,
             schema: None,
         }];
 
         service
-            .create_user_schema("person", "Person", person_fields)
+            .create_user_schema("invoice", "Invoice", invoice_fields)
             .await
             .unwrap();
 
-        // Now create invoice schema with reference to person
-        let invoice_fields = vec![
+        // Now create expense schema with reference to invoice
+        let expense_fields = vec![
             FieldDefinition {
-                name: "total".to_string(),
-                field_type: "number".to_string(),
+                name: "description".to_string(),
+                field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "customer".to_string(),
-                field_type: "person".to_string(), // Reference field
+                name: "invoice_ref".to_string(),
+                field_type: "invoice".to_string(), // Reference field
                 required: Some(false),
                 default: None,
                 schema: None,
@@ -2574,19 +2577,19 @@ mod tests {
         ];
 
         service
-            .create_user_schema("invoice", "Invoice", invoice_fields)
+            .create_user_schema("expense", "Expense", expense_fields)
             .await
             .unwrap();
 
         // Verify schema was created with correct field types
-        let schema = service.get_schema("invoice").await.unwrap();
+        let schema = service.get_schema("expense").await.unwrap();
         assert_eq!(schema.fields.len(), 2);
-        assert_eq!(schema.fields[0].field_type, "number"); // Primitive
+        assert_eq!(schema.fields[0].field_type, "string"); // Primitive
         assert_eq!(schema.fields[1].field_type, "record"); // Reference (stored as record)
 
-        // Verify relation table was created (invoice_customer)
+        // Verify relation table was created (expense_invoice_ref)
         let db = service.node_service.store.db();
-        let result = db.query("INFO FOR TABLE invoice_customer").await;
+        let result = db.query("INFO FOR TABLE expense_invoice_ref").await;
         assert!(result.is_ok(), "Relation table should be created");
     }
 
@@ -2594,21 +2597,21 @@ mod tests {
     async fn test_create_user_schema_auto_relation_naming() {
         let (service, _temp) = setup_test_service().await;
 
-        // Create task schema (referenced type)
-        let task_fields = vec![FieldDefinition {
-            name: "title".to_string(),
-            field_type: "string".to_string(),
+        // Create invoice schema (referenced type)
+        let invoice_fields = vec![FieldDefinition {
+            name: "total".to_string(),
+            field_type: "number".to_string(),
             required: Some(true),
             default: None,
             schema: None,
         }];
 
         service
-            .create_user_schema("task", "Task", task_fields)
+            .create_user_schema("invoice", "Invoice", invoice_fields)
             .await
             .unwrap();
 
-        // Create project schema with assignee reference
+        // Create project schema with budget reference
         let project_fields = vec![
             FieldDefinition {
                 name: "name".to_string(),
@@ -2618,8 +2621,8 @@ mod tests {
                 schema: None,
             },
             FieldDefinition {
-                name: "assignee".to_string(),
-                field_type: "task".to_string(),
+                name: "budget".to_string(),
+                field_type: "invoice".to_string(),
                 required: Some(false),
                 default: None,
                 schema: None,
@@ -2631,12 +2634,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify relation table uses auto-naming: project_assignee
+        // Verify relation table uses auto-naming: project_budget
         let db = service.node_service.store.db();
-        let result = db.query("INFO FOR TABLE project_assignee").await;
+        let result = db.query("INFO FOR TABLE project_budget").await;
         assert!(
             result.is_ok(),
-            "Relation table should use auto-naming: project_assignee"
+            "Relation table should use auto-naming: project_budget"
         );
     }
 

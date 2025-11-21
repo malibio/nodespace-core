@@ -713,49 +713,49 @@ mod tests {
     async fn test_create_user_schema_with_reference() {
         let (schema_service, _node_service, _temp) = setup_test_service().await;
 
-        // First create person schema
-        let person_params = json!({
-            "type_name": "person",
-            "display_name": "Person",
-            "fields": [
-                {
-                    "name": "name",
-                    "type": "string",
-                    "required": true
-                }
-            ]
-        });
-
-        handle_create_user_schema(&schema_service, person_params)
-            .await
-            .unwrap();
-
-        // Then create invoice with reference to person
+        // First create invoice schema
         let invoice_params = json!({
             "type_name": "invoice",
             "display_name": "Invoice",
             "fields": [
                 {
-                    "name": "total",
+                    "name": "amount",
                     "type": "number",
+                    "required": true
+                }
+            ]
+        });
+
+        handle_create_user_schema(&schema_service, invoice_params)
+            .await
+            .unwrap();
+
+        // Then create expense with reference to invoice
+        let expense_params = json!({
+            "type_name": "expense",
+            "display_name": "Expense",
+            "fields": [
+                {
+                    "name": "description",
+                    "type": "string",
                     "required": true
                 },
                 {
-                    "name": "customer",
-                    "type": "person",
+                    "name": "invoice_ref",
+                    "type": "invoice",
                     "required": false
                 }
             ]
         });
 
-        let result = handle_create_user_schema(&schema_service, invoice_params)
+        let result = handle_create_user_schema(&schema_service, expense_params)
             .await
             .unwrap();
 
         assert_eq!(result["success"], true);
 
         // Verify relation field is stored as record
-        let schema = schema_service.get_schema("invoice").await.unwrap();
+        let schema = schema_service.get_schema("expense").await.unwrap();
         assert_eq!(schema.fields[1].field_type, "record");
     }
 
