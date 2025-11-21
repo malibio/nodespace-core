@@ -236,14 +236,14 @@ export function createMockReactiveNodeService(events: NodeManagerEvents) {
         _nodes[unifiedNode.id] = node;
       }
 
-      // Compute children arrays from beforeSiblingId relationships (simplified mock)
+      // Compute children arrays from parent relationships
       // In the real implementation, this would use HierarchyService
       for (const node of Object.values(_nodes)) {
         node.children = [];
       }
 
       // For mock purposes, treat all nodes as root nodes
-      // Real implementation would build hierarchy from beforeSiblingId chains
+      // Real implementation would build hierarchy from parent-child relationships
       _rootNodeIds = nodes.map((n) => n.id);
 
       // Calculate depths based on parent hierarchy
