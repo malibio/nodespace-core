@@ -844,6 +844,19 @@ where
 
         // Create spoke record if needed
         if should_create_spoke && has_properties {
+            // For schema nodes, we need to stringify the fields array because it contains
+            // complex Rust enums that SurrealDB can't deserialize properly
+            let mut properties_to_store = props_with_schema.clone();
+            if node.node_type == "schema" {
+                if let Some(Value::Array(fields)) = properties_to_store.get("fields") {
+                    // Convert the fields array to a JSON string
+                    let fields_json = serde_json::to_string(fields)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    properties_to_store.insert("fields".to_string(), Value::String(fields_json));
+                    tracing::debug!("Stringified fields for schema storage");
+                }
+            }
+
             // CREATE spoke record with properties using simpler table:id syntax
             // Note: IDs with special characters (hyphens, spaces, etc.) need backtick-quoting
             let spoke_query = format!(
@@ -854,7 +867,7 @@ where
             let mut spoke_response = self
                 .db
                 .query(&spoke_query)
-                .bind(("properties", Value::Object(props_with_schema.clone())))
+                .bind(("properties", Value::Object(properties_to_store.clone())))
                 .await
                 .context("Failed to create spoke record")?;
 
@@ -1136,6 +1149,7 @@ where
                 // Omit 'id' and 'node' fields - both are Thing types that can't deserialize to JSON
                 let props_query =
                     format!("SELECT * OMIT id, node FROM {}:`{}`;", node.node_type, id);
+
                 let mut props_response = self.db.query(&props_query).await;
 
                 let result: Option<serde_json::Value> = match props_response {
@@ -1173,7 +1187,21 @@ where
                     }
                 };
 
-                if let Some(props) = result {
+                if let Some(mut props) = result {
+                    // For schema nodes, parse the stringified fields back to an array
+                    if node.node_type == "schema" {
+                        if let Some(Value::String(fields_str)) = props.get("fields") {
+                            let fields_str = fields_str.clone();
+                            // Try to parse the fields string back to an array
+                            if let Ok(fields_array) = serde_json::from_str::<Vec<serde_json::Value>>(&fields_str) {
+                                if let Some(obj) = props.as_object_mut() {
+                                    obj.insert("fields".to_string(), Value::Array(fields_array));
+                                }
+                            } else {
+                                tracing::warn!("Failed to parse fields string for schema {}", id);
+                            }
+                        }
+                    }
                     node.properties = props;
                 }
             }
@@ -1260,8 +1288,19 @@ where
         query_builder.await.context("Failed to update node")?;
 
         // If properties were provided and node type has type-specific table, update it there too
-        if let Some(updated_props) = update.properties {
+        if let Some(mut updated_props) = update.properties {
             if TYPES_WITH_PROPERTIES.contains(&updated_node_type.as_str()) {
+                // For schema nodes, stringify the fields array before storage
+                if updated_node_type == "schema" {
+                    if let Some(Value::Array(fields)) = updated_props.get("fields") {
+                        let fields_json = serde_json::to_string(fields)
+                            .unwrap_or_else(|_| "[]".to_string());
+                        if let Some(obj) = updated_props.as_object_mut() {
+                            obj.insert("fields".to_string(), Value::String(fields_json));
+                        }
+                    }
+                }
+
                 // UPSERT with MERGE to preserve existing spoke data on type reconversions
                 // Scenario: text→task creates task:uuid, task→text preserves it, text→task reconnects
                 // MERGE ensures old task properties (priority, due_date) aren't lost on reconversion
