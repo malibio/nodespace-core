@@ -19,7 +19,8 @@
 DEFINE TABLE IF NOT EXISTS node SCHEMAFULL;
 
 -- Required universal fields
-DEFINE FIELD IF NOT EXISTS id ON TABLE node TYPE string ASSERT $value != NONE;
+-- NOTE: 'id' is the Record ID (primary key) and is automatically managed by SurrealDB
+-- Do NOT redefine it - let SurrealDB handle it natively as a Thing type
 DEFINE FIELD IF NOT EXISTS content ON TABLE node TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS nodeType ON TABLE node TYPE string ASSERT $value != NONE;
 DEFINE FIELD IF NOT EXISTS data ON TABLE node TYPE option<record>;  -- Record Link to spoke (task, date, schema, or NULL)
