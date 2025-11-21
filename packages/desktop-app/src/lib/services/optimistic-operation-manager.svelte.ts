@@ -24,10 +24,27 @@ import { emit } from '@tauri-apps/api/event';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { nodeData } from '$lib/stores/reactive-node-data.svelte';
 import type { PersistenceFailedEvent } from '$lib/services/event-types';
+import type { Node } from '$lib/types';
+
+// Development-only logging helper
+const isDev = import.meta.env.DEV;
+const log = (message: string, data?: unknown) => {
+  if (isDev) {
+    console.log(message, data ?? '');
+  }
+};
+const logError = (message: string, error?: unknown) => {
+  // Always log errors, but with less detail in production
+  if (isDev) {
+    console.error(message, error);
+  } else {
+    console.error(message);
+  }
+};
 
 interface OperationSnapshot {
   structure: Map<string, Array<{ nodeId: string; order: number }>>;
-  data: Map<string, import('$lib/types').Node>;
+  data: Map<string, Node>;
   timestamp: number;
 }
 
@@ -98,7 +115,7 @@ class OptimisticOperationManager {
     // Step 1: Take snapshot for rollback
     const snapshot = this.takeSnapshot(snapshotData);
 
-    console.log(`[OptimisticOperationManager] Starting operation: ${description}`, {
+    log(`[OptimisticOperationManager] Starting operation: ${description}`, {
       affectedNodes,
       snapshotData,
       timestamp: snapshot.timestamp
@@ -108,7 +125,7 @@ class OptimisticOperationManager {
       // Step 2: Apply optimistic change immediately (UI updates)
       optimisticUpdate();
 
-      console.log(`[OptimisticOperationManager] Optimistic update applied: ${description}`);
+      log(`[OptimisticOperationManager] Optimistic update applied: ${description}`);
 
       // Step 3: Fire backend operation (don't await - let LIVE SELECT confirm)
       // We intentionally don't await here so the UI feels instant
@@ -119,7 +136,7 @@ class OptimisticOperationManager {
       });
     } catch (error) {
       // Optimistic update failed (should be rare) - rollback immediately
-      console.error(
+      logError(
         `[OptimisticOperationManager] Optimistic update failed: ${description}`,
         error
       );
@@ -147,7 +164,7 @@ class OptimisticOperationManager {
    * @private
    */
   private restoreSnapshot(snapshot: OperationSnapshot, includeData: boolean): void {
-    console.log('[OptimisticOperationManager] Rolling back to snapshot', {
+    log('[OptimisticOperationManager] Rolling back to snapshot', {
       timestamp: snapshot.timestamp,
       includeData
     });
@@ -160,7 +177,7 @@ class OptimisticOperationManager {
       nodeData.restore(snapshot.data);
     }
 
-    console.log('[OptimisticOperationManager] Rollback complete');
+    log('[OptimisticOperationManager] Rollback complete');
   }
 
   /**
@@ -174,7 +191,7 @@ class OptimisticOperationManager {
     description: string,
     affectedNodes: string[]
   ): void {
-    console.error(
+    logError(
       `[OptimisticOperationManager] Backend operation failed: ${description}`,
       error
     );
@@ -222,9 +239,9 @@ class OptimisticOperationManager {
 
     try {
       await emit('error:persistence-failed', event);
-      console.log('[OptimisticOperationManager] Error event emitted', event);
+      log('[OptimisticOperationManager] Error event emitted', event);
     } catch (emitError) {
-      console.error(
+      logError(
         '[OptimisticOperationManager] Failed to emit error event',
         emitError
       );
@@ -295,7 +312,7 @@ class OptimisticOperationManager {
     );
     const batchDescription = operations.map((op) => op.description).join(', ');
 
-    console.log(
+    log(
       `[OptimisticOperationManager] Starting batch operation: ${batchDescription}`,
       {
         operationCount: operations.length,
@@ -310,29 +327,39 @@ class OptimisticOperationManager {
         operation.optimisticUpdate();
       }
 
-      console.log(
+      log(
         `[OptimisticOperationManager] Batch optimistic updates applied: ${batchDescription}`
       );
 
       // Fire all backend operations (don't await - let LIVE SELECT confirm)
-      // If any fail, rollback entire batch
-      Promise.all(operations.map((op) => op.backendOperation())).catch(
-        (error) => {
-          console.error(
-            `[OptimisticOperationManager] Batch backend operation failed: ${batchDescription}`,
-            error
+      // Use Promise.allSettled to capture all failures for better diagnostics
+      Promise.allSettled(operations.map((op) => op.backendOperation())).then(
+        (results) => {
+          const failures = results.filter(
+            (r): r is PromiseRejectedResult => r.status === 'rejected'
           );
-          this.handleBackendFailure(
-            error,
-            snapshot,
-            batchDescription,
-            allAffectedNodes
-          );
+          if (failures.length > 0) {
+            // Aggregate error messages for diagnostics
+            const aggregatedError = new Error(
+              `${failures.length}/${operations.length} operations failed: ` +
+                failures.map((f) => f.reason?.message || String(f.reason)).join('; ')
+            );
+            logError(
+              `[OptimisticOperationManager] Batch backend operation failed: ${batchDescription}`,
+              { failureCount: failures.length, totalCount: operations.length, failures }
+            );
+            this.handleBackendFailure(
+              aggregatedError,
+              snapshot,
+              batchDescription,
+              allAffectedNodes
+            );
+          }
         }
       );
     } catch (error) {
       // Optimistic update failed - rollback immediately
-      console.error(
+      logError(
         `[OptimisticOperationManager] Batch optimistic update failed: ${batchDescription}`,
         error
       );
