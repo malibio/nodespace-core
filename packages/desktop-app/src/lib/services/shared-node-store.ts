@@ -25,6 +25,7 @@
 import { eventBus } from './event-bus';
 import { tauriNodeService } from './tauri-node-service';
 import { PersistenceCoordinator, OperationCancelledError } from './persistence-coordinator.svelte';
+import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { requiresAtomicBatching } from '$lib/utils/placeholder-detection';
 import { shouldLogDatabaseErrors, isTestEnvironment } from '$lib/utils/test-environment';
 import type { Node } from '$lib/types';
@@ -239,23 +240,23 @@ export class SharedNodeStore {
   /**
    * Get nodes filtered by parent ID (synchronous, cache-based)
    *
-   * IMPORTANT: This method uses a client-side cache of parent-child relationships.
-   * The cache is populated from backend queries and must be kept in sync.
-   *
-   * Cache updates happen when:
-   * - Nodes are loaded from backend (initializeNodes, loadChildren)
-   * - Nodes are created/moved/deleted (updateChildrenCache called)
-   * - Hierarchy changes occur (indent, outdent, delete)
-   *
-   * For real-time accuracy, use: await backendAdapter.getChildren(parentId)
-   * For cached performance, use this method (most UI operations)
+   * IMPORTANT: Delegates to ReactiveStructureTree for hierarchy queries.
+   * ReactiveStructureTree uses has_child edge data with proper ordering.
    *
    * @param parentId - Parent node ID, or null for root-level nodes
-   * @returns Array of child nodes (from cache)
+   * @returns Array of child nodes in correct order
    */
   getNodesForParent(parentId: string | null): Node[] {
-    const cacheKey = parentId || '__root__';
-    const childIds = this.childrenCache.get(cacheKey) || [];
+    // Delegate to ReactiveStructureTree for ordered children IDs
+    // Use legacy cache as fallback during transition period (#580)
+    let childIds = structureTree.getChildren(parentId || '__root__');
+
+    // Fallback to legacy cache if ReactiveStructureTree hasn't been populated yet
+    if (childIds.length === 0) {
+      const cacheKey = parentId || '__root__';
+      childIds = this.childrenCache.get(cacheKey) || [];
+    }
+
     return childIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
   }
 
@@ -344,20 +345,25 @@ export class SharedNodeStore {
   /**
    * Get parent nodes for a given node (synchronous, cache-based)
    *
-   * IMPORTANT: This method uses a client-side cache of parent-child relationships.
-   * The cache is populated from backend queries and must be kept in sync.
+   * IMPORTANT: Delegates to ReactiveStructureTree for hierarchy queries.
+   * ReactiveStructureTree uses has_child edge data from the backend.
    *
    * NOTE: In graph-native architecture, a node can have multiple parents via different edge types.
    * Currently this method returns the parent from the primary hierarchy only.
-   *
-   * For real-time accuracy, use: await backendAdapter.getParents(nodeId) (when available)
-   * For cached performance, use this method (most UI operations)
    *
    * @param nodeId - Node ID to find parents for
    * @returns Array of parent nodes (from cache)
    */
   getParentsForNode(nodeId: string): Node[] {
-    const parentIds = this.parentsCache.get(nodeId) || [];
+    // Delegate to ReactiveStructureTree for parent lookup
+    // Use legacy cache as fallback during transition period (#580)
+    let parentIds = structureTree.getParentsForNode(nodeId);
+
+    // Fallback to legacy cache if ReactiveStructureTree hasn't been populated yet
+    if (parentIds.length === 0) {
+      parentIds = this.parentsCache.get(nodeId) || [];
+    }
+
     return parentIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
   }
 
@@ -990,8 +996,12 @@ export class SharedNodeStore {
         this.setNode(node, databaseSource); // skipPersistence removed - database source handles it
       }
 
-      // CRITICAL: Update children cache now that we've loaded these nodes
-      // This populates the cache used by getNodesForParent() for synchronous access
+      // Sync ReactiveStructureTree with loaded nodes
+      // This populates the structure tree for synchronous getNodesForParent() access
+      structureTree.syncFromNodes(nodes);
+
+      // Keep legacy cache for backward compatibility during transition
+      // TODO (#580): Remove childrenCache/parentsCache when ReactiveStructureTree fully adopted
       const childIds = nodes.map(n => n.id);
       this.updateChildrenCache(parentId, childIds);
 

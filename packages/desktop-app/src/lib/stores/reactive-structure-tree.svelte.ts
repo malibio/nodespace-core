@@ -24,6 +24,11 @@ interface ChildInfo {
 class ReactiveStructureTree {
   // Reactive map using Svelte 5 $state - automatically triggers reactivity
   children = $state(new Map<string, ChildInfo[]>());
+
+  // Reverse parent map for O(1) parent lookups
+  // Maps child ID -> parent ID
+  private parentMap = $state(new Map<string, string>());
+
   private unlisteners: UnlistenFn[] = [];
   private initialized = false;
 
@@ -64,6 +69,7 @@ class ReactiveStructureTree {
    */
   private buildTree(edges: EdgeEventData[]) {
     const tree = new Map<string, ChildInfo[]>();
+    const parents = new Map<string, string>();
 
     for (const edge of edges) {
       if (!tree.has(edge.in)) {
@@ -73,6 +79,9 @@ class ReactiveStructureTree {
         nodeId: edge.out,
         order: edge.order
       });
+
+      // Build reverse parent map
+      parents.set(edge.out, edge.in);
     }
 
     // Sort all children arrays by order
@@ -81,6 +90,46 @@ class ReactiveStructureTree {
     }
 
     this.children = tree;
+    this.parentMap = parents;
+  }
+
+  /**
+   * PUBLIC API: Populate tree from nodes with parentId
+   * Temporary method until backend provides getAllEdges()
+   * Creates synthetic edge data from node.parentId and assigns default ordering
+   *
+   * @param nodes - Array of nodes with parentId field
+   */
+  syncFromNodes(nodes: Array<{ id: string; parentId?: string | null }>): void {
+    // Build synthetic edges from parentId
+    // Use array index as default order (insertion order)
+    const edges: EdgeEventData[] = [];
+    const nodesByParent = new Map<string, Array<{ id: string; index: number }>>();
+
+    nodes.forEach((node, index) => {
+      const parentId = node.parentId ?? null;
+      const parentKey = parentId || '__root__';
+
+      if (!nodesByParent.has(parentKey)) {
+        nodesByParent.set(parentKey, []);
+      }
+      nodesByParent.get(parentKey)!.push({ id: node.id, index });
+    });
+
+    // Convert to edge data with fractional ordering
+    for (const [parentKey, children] of nodesByParent) {
+      const parentId = parentKey === '__root__' ? null : parentKey;
+      children.forEach((child, idx) => {
+        edges.push({
+          id: `${parentId || 'root'}-${child.id}`,
+          in: parentId || '__root__',
+          out: child.id,
+          order: idx // Simple sequential ordering for now
+        });
+      });
+    }
+
+    this.buildTree(edges);
   }
 
   /**
@@ -151,16 +200,18 @@ class ReactiveStructureTree {
   }
 
   /**
-   * Get parent of a node by searching all edges
-   * Note: This is O(n) - consider adding reverse map if performance issue
+   * Get parent of a node (O(1) lookup using reverse map)
    */
   getParent(nodeId: string): string | null {
-    for (const [parentId, childrenList] of this.children) {
-      if (childrenList.some((c) => c.nodeId === nodeId)) {
-        return parentId;
-      }
-    }
-    return null;
+    return this.parentMap.get(nodeId) || null;
+  }
+
+  /**
+   * Get parent IDs for a node (array for API consistency with SharedNodeStore)
+   */
+  getParentsForNode(nodeId: string): string[] {
+    const parentId = this.parentMap.get(nodeId);
+    return parentId ? [parentId] : [];
   }
 
   /**
@@ -220,6 +271,9 @@ class ReactiveStructureTree {
     children.splice(insertIndex, 0, newChild);
     // Notify Svelte of the change
     this.children.set(parentId, children);
+
+    // Update reverse parent map for O(1) parent lookups
+    this.parentMap.set(childId, parentId);
   }
 
   /**
@@ -237,6 +291,9 @@ class ReactiveStructureTree {
     } else {
       this.children.set(parentId, filtered);
     }
+
+    // Remove from parent map
+    this.parentMap.delete(childId);
   }
 
   /**

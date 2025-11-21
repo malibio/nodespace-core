@@ -23,6 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ContentProcessor } from './content-processor';
 import { eventBus } from './event-bus';
 import { SharedNodeStore } from './shared-node-store';
+import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { getFocusManager } from './focus-manager.svelte';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import type { Node, NodeUIState } from '$lib/types';
@@ -1804,11 +1805,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         });
       }
 
-      // CRITICAL: Build parent-child relationship cache from loaded nodes
-      // This populates sharedNodeStore's childrenCache and parentsCache
-      //
-      // Always build cache from nodes' containerNodeId field
-      // This works for both test scenarios and production (backend sets containerNodeId)
+      // CRITICAL: Build parent-child relationship from loaded nodes
+      // Sync ReactiveStructureTree with nodes' parentId or parentMapping
+      const nodesWithParents = nodes.map(node => ({
+        id: node.id,
+        parentId: defaults.parentMapping?.[node.id] ?? node.parentId ?? null
+      }));
+      structureTree.syncFromNodes(nodesWithParents);
+
+      // Keep legacy cache for backward compatibility during transition
+      // TODO (#580): Remove this when ReactiveStructureTree fully adopted
       const nodesByParent = new Map<string | null, string[]>();
       for (const node of nodes) {
         const parentKey = defaults.parentMapping?.[node.id] ?? node.parentId ?? null;
