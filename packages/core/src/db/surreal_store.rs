@@ -844,16 +844,14 @@ where
 
         // Create spoke record if needed
         if should_create_spoke && has_properties {
-            // For schema nodes, we need to stringify the fields array because it contains
-            // complex Rust enums that SurrealDB can't deserialize properly
+            // For schema nodes, stringify the fields array because SurrealDB cannot properly
+            // deserialize records containing Rust enums (ProtectionLevel) via serde_json::Value
             let mut properties_to_store = props_with_schema.clone();
             if node.node_type == "schema" {
                 if let Some(Value::Array(fields)) = properties_to_store.get("fields") {
-                    // Convert the fields array to a JSON string
-                    let fields_json =
-                        serde_json::to_string(fields).unwrap_or_else(|_| "[]".to_string());
+                    let fields_json = serde_json::to_string(fields)
+                        .unwrap_or_else(|_| "[]".to_string());
                     properties_to_store.insert("fields".to_string(), Value::String(fields_json));
-                    tracing::debug!("Stringified fields for schema storage");
                 }
             }
 
@@ -1192,15 +1190,12 @@ where
                     if node.node_type == "schema" {
                         if let Some(Value::String(fields_str)) = props.get("fields") {
                             let fields_str = fields_str.clone();
-                            // Try to parse the fields string back to an array
                             if let Ok(fields_array) =
                                 serde_json::from_str::<Vec<serde_json::Value>>(&fields_str)
                             {
                                 if let Some(obj) = props.as_object_mut() {
                                     obj.insert("fields".to_string(), Value::Array(fields_array));
                                 }
-                            } else {
-                                tracing::warn!("Failed to parse fields string for schema {}", id);
                             }
                         }
                     }
@@ -1292,7 +1287,7 @@ where
         // If properties were provided and node type has type-specific table, update it there too
         if let Some(mut updated_props) = update.properties {
             if TYPES_WITH_PROPERTIES.contains(&updated_node_type.as_str()) {
-                // For schema nodes, stringify the fields array before storage
+                // For schema nodes, stringify the fields array
                 if updated_node_type == "schema" {
                     if let Some(Value::Array(fields)) = updated_props.get("fields") {
                         let fields_json =
