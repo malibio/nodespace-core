@@ -1609,6 +1609,11 @@
                     // Add to shared store (in-memory only, don't persist yet)
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
 
+                    // CRITICAL FIX: Clear viewerPlaceholder SYNCHRONOUSLY to prevent subsequent
+                    // keystrokes from hitting the promotion path again while $effect is pending.
+                    // Without this, rapid typing can cause multiple setNode() calls with stale content.
+                    viewerPlaceholder = null;
+
                     // Clear placeholder ID so fresh one is created if needed later
                     placeholderId = null;
 
