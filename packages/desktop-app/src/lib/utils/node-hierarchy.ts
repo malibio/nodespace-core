@@ -6,7 +6,6 @@
  */
 
 import { sharedNodeStore } from '$lib/services/shared-node-store';
-import { hierarchyStore } from '$lib/services/hierarchy-store.svelte';
 
 /**
  * Registers a child node with its parent in the SharedNodeStore children cache.
@@ -39,14 +38,14 @@ export function registerChildWithParent(parentId: string, childId: string): void
     return;
   }
 
-  // Get existing children (if any) from hierarchy store
-  const existingChildren = hierarchyStore.getNodesForParent(parentId);
+  // Get existing children (if any)
+  const existingChildren = sharedNodeStore.getNodesForParent(parentId).map((n) => n.id);
 
   // Don't add duplicate
   if (existingChildren.includes(childId)) {
     return;
   }
 
-  // Update hierarchy with new parent-child relationship
-  hierarchyStore.updateParentChild(childId, parentId);
+  // Update cache with new child
+  sharedNodeStore.updateChildrenCache(parentId, [...existingChildren, childId]);
 }

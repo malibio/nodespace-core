@@ -15,7 +15,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store';
-import { hierarchyStore } from '../../lib/services/hierarchy-store.svelte';
 import { PersistenceCoordinator } from '../../lib/services/persistence-coordinator.svelte';
 import type { Node } from '../../lib/types';
 import type { UpdateSource, NodeUpdate } from '../../lib/types/update-protocol';
@@ -162,13 +161,9 @@ describe('SharedNodeStore', () => {
       store.setNode(node2, viewerSource);
       store.setNode(node3, viewerSource);
 
-      // Populate hierarchy to simulate backend hierarchy data
+      // Populate cache to simulate backend hierarchy data
       // (Graph-native architecture stores hierarchy as edges, not in Node fields)
-      hierarchyStore.syncFromBackend([
-        { id: 'node-1', parentId: null },
-        { id: 'node-2', parentId: null },
-        { id: 'node-3', parentId: null }
-      ]);
+      store.updateChildrenCache(null, ['node-1', 'node-2', 'node-3']);
 
       const allNodes = store.getNodesForParent(null);
       expect(allNodes).toHaveLength(3);
@@ -186,13 +181,9 @@ describe('SharedNodeStore', () => {
       store.setNode(root2, viewerSource);
       store.setNode(root3, viewerSource);
 
-      // Populate hierarchy to simulate backend hierarchy data
+      // Populate cache to simulate backend hierarchy data
       // (Graph-native architecture: parentId removed, hierarchy stored as SurrealDB edges)
-      hierarchyStore.syncFromBackend([
-        { id: 'root-1', parentId: null },
-        { id: 'root-2', parentId: null },
-        { id: 'root-3', parentId: null }
-      ]);
+      store.updateChildrenCache(null, ['root-1', 'root-2', 'root-3']);
 
       const roots = store.getNodesForParent(null);
       expect(roots).toHaveLength(3);

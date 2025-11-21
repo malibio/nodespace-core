@@ -25,7 +25,6 @@
 import { eventBus } from './event-bus';
 import { tauriNodeService } from './tauri-node-service';
 import { PersistenceCoordinator, OperationCancelledError } from './persistence-coordinator.svelte';
-import { hierarchyStore } from './hierarchy-store.svelte';
 import { requiresAtomicBatching } from '$lib/utils/placeholder-detection';
 import { shouldLogDatabaseErrors, isTestEnvironment } from '$lib/utils/test-environment';
 import type { Node } from '$lib/types';
@@ -96,11 +95,15 @@ export class SharedNodeStore {
   // Avoids querying database on every update to check existence
   private persistedNodeIds = new Set<string>();
 
-  // NOTE: Parent-child relationship caches moved to HierarchyStore (Svelte 5 reactive)
-  // See: src/lib/services/hierarchy-store.svelte.ts
-  // - childrenMap: parentId -> Set<childId> (O(1) lookups)
-  // - parentMap: childId -> parentId (O(1) lookups)
-  // Synced via: hierarchyStore.updateParentChild(), removeNode(), syncFromBackend()
+  // Cache of parent-child relationships (populated from backend queries)
+  // Maps parentId (or '__root__' for root nodes) -> array of child node IDs
+  // CRITICAL: This cache must be updated when nodes are created/moved/deleted
+  private childrenCache = new Map<string, string[]>();
+
+  // Cache of child-parent relationships (inverse of childrenCache)
+  // Maps childId -> array of parent node IDs (typically just one parent)
+  // CRITICAL: Must be kept in sync with childrenCache
+  private parentsCache = new Map<string, string[]>();
 
   // Subscriptions for change notifications
   private subscriptions = new Map<string, Set<Subscription>>();
@@ -236,9 +239,13 @@ export class SharedNodeStore {
   /**
    * Get nodes filtered by parent ID (synchronous, cache-based)
    *
-   * IMPORTANT: This method delegates to HierarchyStore for structure lookups
-   * and maps IDs to Node objects from this store's data.
-   * The hierarchy is populated from backend queries and kept in sync via HierarchyStore.
+   * IMPORTANT: This method uses a client-side cache of parent-child relationships.
+   * The cache is populated from backend queries and must be kept in sync.
+   *
+   * Cache updates happen when:
+   * - Nodes are loaded from backend (initializeNodes, loadChildren)
+   * - Nodes are created/moved/deleted (updateChildrenCache called)
+   * - Hierarchy changes occur (indent, outdent, delete)
    *
    * For real-time accuracy, use: await backendAdapter.getChildren(parentId)
    * For cached performance, use this method (most UI operations)
@@ -247,17 +254,98 @@ export class SharedNodeStore {
    * @returns Array of child nodes (from cache)
    */
   getNodesForParent(parentId: string | null): Node[] {
-    // Delegate to HierarchyStore for structure lookups
-    const childIds = hierarchyStore.getNodesForParent(parentId);
+    const cacheKey = parentId || '__root__';
+    const childIds = this.childrenCache.get(cacheKey) || [];
     return childIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
   }
 
+  /**
+   * Update the children cache for a specific parent
+   * Called by ReactiveNodeService when hierarchy changes occur
+   *
+   * @param parentId - Parent node ID (null for root nodes)
+   * @param childIds - Array of child node IDs in order
+   */
+  updateChildrenCache(parentId: string | null, childIds: string[]): void {
+    const cacheKey = parentId || '__root__';
+    this.childrenCache.set(cacheKey, [...childIds]);
+
+    // Update inverse cache (parentsCache) for each child
+    for (const childId of childIds) {
+      if (parentId !== null) {
+        this.parentsCache.set(childId, [parentId]);
+      } else {
+        // Root nodes have no parent
+        this.parentsCache.delete(childId);
+      }
+    }
+  }
+
+  /**
+   * Add a child to the parent's children cache
+   * Used when creating new nodes
+   *
+   * @param parentId - Parent node ID (null for root)
+   * @param childId - Child node ID to add
+   */
+  addChildToCache(parentId: string | null, childId: string): void {
+    const cacheKey = parentId || '__root__';
+    const existing = this.childrenCache.get(cacheKey) || [];
+    if (!existing.includes(childId)) {
+      this.childrenCache.set(cacheKey, [...existing, childId]);
+    }
+
+    // Update inverse cache (parentsCache)
+    if (parentId !== null) {
+      this.parentsCache.set(childId, [parentId]);
+    } else {
+      // Root node has no parent
+      this.parentsCache.delete(childId);
+    }
+  }
+
+  /**
+   * Remove a child from the parent's children cache
+   * Used when deleting or moving nodes
+   *
+   * @param parentId - Parent node ID (null for root)
+   * @param childId - Child node ID to remove
+   */
+  removeChildFromCache(parentId: string | null, childId: string): void {
+    const cacheKey = parentId || '__root__';
+    const existing = this.childrenCache.get(cacheKey) || [];
+    this.childrenCache.set(cacheKey, existing.filter(id => id !== childId));
+
+    // Update inverse cache (parentsCache) - remove this parent from the child's parent list
+    const childParents = this.parentsCache.get(childId) || [];
+    if (parentId !== null) {
+      const filteredParents = childParents.filter(id => id !== parentId);
+      if (filteredParents.length > 0) {
+        this.parentsCache.set(childId, filteredParents);
+      } else {
+        this.parentsCache.delete(childId);
+      }
+    } else {
+      // Removing from root, so this child must now have a parent
+      // (This should not normally happen, but handle it gracefully)
+      this.parentsCache.delete(childId);
+    }
+  }
+
+  /**
+   * Clear the entire children cache
+   * Used when invalidating all hierarchy data
+   */
+  clearChildrenCache(): void {
+    this.childrenCache.clear();
+    this.parentsCache.clear();
+  }
 
   /**
    * Get parent nodes for a given node (synchronous, cache-based)
    *
-   * IMPORTANT: This method delegates to HierarchyStore for structure lookups
-   * and maps IDs to Node objects from this store's data.
+   * IMPORTANT: This method uses a client-side cache of parent-child relationships.
+   * The cache is populated from backend queries and must be kept in sync.
    *
    * NOTE: In graph-native architecture, a node can have multiple parents via different edge types.
    * Currently this method returns the parent from the primary hierarchy only.
@@ -269,8 +357,7 @@ export class SharedNodeStore {
    * @returns Array of parent nodes (from cache)
    */
   getParentsForNode(nodeId: string): Node[] {
-    // Delegate to HierarchyStore for structure lookups
-    const parentIds = hierarchyStore.getParentsForNode(nodeId);
+    const parentIds = this.parentsCache.get(nodeId) || [];
     return parentIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
   }
 
@@ -407,13 +494,6 @@ export class SharedNodeStore {
         this.pendingUpdates.set(nodeId, []);
       }
       this.pendingUpdates.get(nodeId)!.push(update);
-
-      // Sync hierarchy structure with HierarchyStore if parentId changed
-      if ('parentId' in changes && existingNode.parentId !== changes.parentId) {
-        const oldParentId = existingNode.parentId ?? null;
-        const newParentId = changes.parentId ?? null;
-        hierarchyStore.updateParentChild(nodeId, newParentId, oldParentId);
-      }
 
       // Notify subscribers
       this.notifySubscribers(nodeId, updatedNode, source);
@@ -648,19 +728,6 @@ export class SharedNodeStore {
     this.versions.set(node.id, this.getNextVersion(node.id));
     this.notifySubscribers(node.id, node, source);
 
-    // Sync hierarchy structure with HierarchyStore
-    // Update when node is created or when parent relationship changes
-    if (!existingNode) {
-      // New node - sync to hierarchy
-      const parentId = node.parentId ?? null;
-      hierarchyStore.updateParentChild(node.id, parentId);
-    } else if (existingNode.parentId !== node.parentId) {
-      // Parent changed - update hierarchy
-      const oldParentId = existingNode.parentId ?? null;
-      const newParentId = node.parentId ?? null;
-      hierarchyStore.updateParentChild(node.id, newParentId, oldParentId);
-    }
-
     if (isHierarchyChange) {
       const event: NodeUpdatedEvent = {
         type: 'node:updated',
@@ -828,10 +895,6 @@ export class SharedNodeStore {
       this.persistedNodeIds.delete(nodeId); // Remove from tracking set
       this.notifySubscribers(nodeId, node, source);
 
-      // Sync hierarchy structure with HierarchyStore
-      // Remove node from hierarchy
-      hierarchyStore.removeNode(nodeId);
-
       // Emit event - cast to bypass type checking for now
       // TODO: Update event-types.ts to support source tracking
       eventBus.emit({
@@ -927,9 +990,10 @@ export class SharedNodeStore {
         this.setNode(node, databaseSource); // skipPersistence removed - database source handles it
       }
 
-      // Sync hierarchy structure with HierarchyStore
-      // This populates HierarchyStore for synchronous getNodesForParent() access
-      hierarchyStore.syncFromBackend(nodes);
+      // CRITICAL: Update children cache now that we've loaded these nodes
+      // This populates the cache used by getNodesForParent() for synchronous access
+      const childIds = nodes.map(n => n.id);
+      this.updateChildrenCache(parentId, childIds);
 
       return nodes;
     } catch (error) {

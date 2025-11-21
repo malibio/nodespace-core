@@ -21,7 +21,7 @@ import {
 } from '../../lib/services/reactive-node-service.svelte.js';
 import type { NodeManagerEvents } from '../../lib/services/reactive-node-service.svelte.js';
 import { createTestNode } from '../helpers';
-import { hierarchyStore } from '../../lib/services/hierarchy-store.svelte';
+import { sharedNodeStore } from '../../lib/services/shared-node-store';
 
 // Performance test scaling based on environment variable
 const FULL_PERFORMANCE = process.env.TEST_FULL_PERFORMANCE === '1';
@@ -94,13 +94,9 @@ describe('NodeManager Performance Tests', () => {
 
     // Populate hierarchy cache BEFORE initializeNodes for graph-native architecture
     // This simulates what the backend adapter would do when loading from database
-    const hierarchyNodes: Array<{ id: string; parentId: string | null }> = [];
     for (const [parentId, childIds] of hierarchyMap) {
-      for (const childId of childIds) {
-        hierarchyNodes.push({ id: childId, parentId });
-      }
+      sharedNodeStore.updateChildrenCache(parentId, childIds);
     }
-    hierarchyStore.syncFromBackend(hierarchyNodes);
 
     const startTime = performance.now();
     nodeManager.initializeNodes(largeDataset);
@@ -123,13 +119,9 @@ describe('NodeManager Performance Tests', () => {
 
   test(`node lookup performance with ${PERF_SCALE.lookup}+ nodes (< 1ms)`, () => {
     const { nodes: largeDataset, hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.lookup);
-    const hierarchyNodes: Array<{ id: string; parentId: string | null }> = [];
     for (const [parentId, childIds] of hierarchyMap) {
-      for (const childId of childIds) {
-        hierarchyNodes.push({ id: childId, parentId });
-      }
+      sharedNodeStore.updateChildrenCache(parentId, childIds);
     }
-    hierarchyStore.syncFromBackend(hierarchyNodes);
     nodeManager.initializeNodes(largeDataset);
 
     const startTime = performance.now();
@@ -148,13 +140,9 @@ describe('NodeManager Performance Tests', () => {
 
   test(`combineNodes performance with large document (< ${PERF_THRESHOLDS.combine}ms)`, () => {
     const { nodes: largeDataset, hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.combine);
-    const hierarchyNodes: Array<{ id: string; parentId: string | null }> = [];
     for (const [parentId, childIds] of hierarchyMap) {
-      for (const childId of childIds) {
-        hierarchyNodes.push({ id: childId, parentId });
-      }
+      sharedNodeStore.updateChildrenCache(parentId, childIds);
     }
-    hierarchyStore.syncFromBackend(hierarchyNodes);
     nodeManager.initializeNodes(largeDataset);
 
     const startTime = performance.now();
@@ -190,13 +178,9 @@ describe('NodeManager Performance Tests', () => {
     // Real-world performance: ~440ms measured in tests with proper caching (full mode)
     // This ensures operations complete in sub-second timeframes for user interactions
     const { nodes: largeDataset, hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.hierarchy);
-    const hierarchyNodes: Array<{ id: string; parentId: string | null }> = [];
     for (const [parentId, childIds] of hierarchyMap) {
-      for (const childId of childIds) {
-        hierarchyNodes.push({ id: childId, parentId });
-      }
+      sharedNodeStore.updateChildrenCache(parentId, childIds);
     }
-    hierarchyStore.syncFromBackend(hierarchyNodes);
     nodeManager.initializeNodes(largeDataset);
 
     const startTime = performance.now();
@@ -279,13 +263,9 @@ describe('NodeManager Performance Tests', () => {
     // Perform many operations
     for (let cycle = 0; cycle < 10; cycle++) {
       const { nodes: dataset, hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.multiCycle);
-      const hierarchyNodes: Array<{ id: string; parentId: string | null }> = [];
       for (const [parentId, childIds] of hierarchyMap) {
-        for (const childId of childIds) {
-          hierarchyNodes.push({ id: childId, parentId });
-        }
+        sharedNodeStore.updateChildrenCache(parentId, childIds);
       }
-      hierarchyStore.syncFromBackend(hierarchyNodes);
       nodeManager.initializeNodes(dataset);
 
       // Perform various operations
@@ -305,13 +285,9 @@ describe('NodeManager Performance Tests', () => {
 
   test('concurrent operations performance', () => {
     const { nodes: largeDataset, hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.concurrent);
-    const hierarchyNodes: Array<{ id: string; parentId: string | null }> = [];
     for (const [parentId, childIds] of hierarchyMap) {
-      for (const childId of childIds) {
-        hierarchyNodes.push({ id: childId, parentId });
-      }
+      sharedNodeStore.updateChildrenCache(parentId, childIds);
     }
-    hierarchyStore.syncFromBackend(hierarchyNodes);
     nodeManager.initializeNodes(largeDataset);
 
     const startTime = performance.now();
