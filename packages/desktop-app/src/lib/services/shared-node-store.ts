@@ -792,11 +792,10 @@ export class SharedNodeStore {
   setNode(node: Node, source: UpdateSource, skipPersistence = false): void {
     const isNewNode = !this.persistedNodeIds.has(node.id);
 
-    // Emit event for HierarchyService cache invalidation
-    // ONLY when new nodes are created (hierarchy changes handled via backend moveNode)
-    // Content-only updates should not trigger hierarchy cache invalidation
+    // Track hierarchy changes for logging
+    // New nodes trigger hierarchy change, content-only updates do not
     const existingNode = this.nodes.get(node.id);
-    const isHierarchyChange = !existingNode; // New nodes trigger hierarchy event
+    const isHierarchyChange = !existingNode;
 
     this.nodes.set(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
