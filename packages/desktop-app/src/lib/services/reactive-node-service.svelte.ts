@@ -96,167 +96,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   // Prevent unused variable warning (cleanup would happen here if needed)
   void _unsubscribe;
 
-  // Performance optimization: Cache sorted children to avoid O(n) sorting on every render
-  // Invalidate cache only when hierarchy changes (child added/removed/reordered)
-  const _sortedChildrenCache = new Map<
-    string | null,
-    {
-      childIds: string[]; // Original unsorted child IDs (for comparison)
-      sorted: string[]; // Cached sorted result
-    }
-  >();
-
-  // Helper function to check if two arrays contain the same elements in the same order
-  function arraysEqual(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] !== b[i]) return false;
-    }
-    return true;
-  }
-
-  // Helper function to invalidate sorted children cache for a parent
-  function invalidateSortedChildrenCache(parentId: string | null): void {
-    _sortedChildrenCache.delete(parentId);
-  }
-
-  // Helper function to sort children according to beforeSiblingId linked list
-  // CRITICAL: This ensures nodes appear in correct visual order, not insertion order
-  // Performance: Uses memoization to avoid O(n) sorting on every render
-  function sortChildrenByBeforeSiblingId(childIds: string[], parentId?: string | null): string[] {
-    if (childIds.length === 0) return [];
-
-    // Check cache first - O(1) lookup
-    const cacheKey = parentId ?? null;
-    const cached = _sortedChildrenCache.get(cacheKey);
-    if (cached && arraysEqual(cached.childIds, childIds)) {
-      // Cache hit: return pre-sorted result without recomputing
-      return cached.sorted;
-    }
-
-    // Cache miss: perform sorting (O(n) operation)
-
-    // Build a map of beforeSiblingId -> nodeId for quick lookup
-    const beforeSiblingMap = new Map<string | null, string>();
-    for (const childId of childIds) {
-      const child = sharedNodeStore.getNode(childId);
-      if (child) {
-        beforeSiblingMap.set(child.beforeSiblingId, childId);
-      }
-    }
-
-    // Find ALL candidates for first child to detect data corruption
-    const firstChildCandidates: string[] = [];
-    for (const childId of childIds) {
-      const child = sharedNodeStore.getNode(childId);
-      if (child) {
-        // A node is first if its beforeSiblingId is null or not in the sibling set
-        if (child.beforeSiblingId === null || !childIds.includes(child.beforeSiblingId)) {
-          firstChildCandidates.push(childId);
-        }
-      }
-    }
-
-    // Validate linked list integrity: should have exactly one first child
-    if (firstChildCandidates.length === 0) {
-      console.error(`[ReactiveNodeService] Cannot determine first child - returning unsorted`, {
-        parentId: parentId || 'root',
-        childCount: childIds.length,
-        childPointers: childIds.map((id) => ({
-          id,
-          beforeSiblingId: sharedNodeStore.getNode(id)?.beforeSiblingId
-        }))
-      });
-      return childIds;
-    }
-
-    if (firstChildCandidates.length > 1) {
-      console.error(
-        `[ReactiveNodeService] Multiple first children detected - data corruption in beforeSiblingId chain`,
-        {
-          parentId: parentId || 'root',
-          candidates: firstChildCandidates,
-          childPointers: childIds.map((id) => ({
-            id,
-            beforeSiblingId: sharedNodeStore.getNode(id)?.beforeSiblingId
-          }))
-        }
-      );
-      // Use first candidate but log the issue
-    }
-
-    const firstChildId = firstChildCandidates[0];
-
-    // Build sorted list by following the linked list
-    const sorted: string[] = [];
-    let currentId: string | null = firstChildId;
-    const visited = new Set<string>();
-
-    // Safety: Stop if we've visited all children (prevents infinite loop on corrupted data)
-    while (currentId && visited.size < childIds.length) {
-      if (visited.has(currentId)) {
-        // Circular reference detected - this is a data integrity violation
-        console.error(
-          `[ReactiveNodeService] Circular reference detected in beforeSiblingId chain`,
-          {
-            parentId: parentId || 'root',
-            circularNodeId: currentId,
-            visitedNodes: Array.from(visited),
-            allChildIds: childIds,
-            chainSoFar: sorted
-          }
-        );
-
-        eventBus.emit<import('./event-types').CacheInvalidateEvent>({
-          type: 'cache:invalidate',
-          namespace: 'coordination',
-          source: serviceName,
-          cacheKey: 'all',
-          scope: 'global',
-          reason: 'circular-reference-detected'
-        });
-
-        break;
-      }
-      visited.add(currentId);
-      sorted.push(currentId);
-
-      // Find next sibling (the one whose beforeSiblingId points to currentId)
-      const nextId = beforeSiblingMap.get(currentId);
-      currentId = nextId || null;
-    }
-
-    // Add any remaining children that weren't in the linked list (orphaned nodes)
-    const orphanedNodes: string[] = [];
-    for (const childId of childIds) {
-      if (!visited.has(childId)) {
-        orphanedNodes.push(childId);
-        sorted.push(childId);
-      }
-    }
-
-    if (orphanedNodes.length > 0) {
-      console.warn(
-        `[ReactiveNodeService] Found orphaned nodes not in beforeSiblingId chain - appending to end`,
-        {
-          parentId: parentId || 'root',
-          orphanedNodes,
-          orphanedPointers: orphanedNodes.map((id) => ({
-            id,
-            beforeSiblingId: sharedNodeStore.getNode(id)?.beforeSiblingId
-          }))
-        }
-      );
-    }
-
-    // Cache the sorted result for future renders (performance optimization)
-    _sortedChildrenCache.set(cacheKey, {
-      childIds: [...childIds], // Clone to avoid mutation issues
-      sorted
-    });
-
-    return sorted;
-  }
+  // NOTE: Backend now returns children pre-sorted via fractional ordering (ORDER BY order ASC)
+  // No frontend sorting needed - we trust the backend's ordering
 
   function getVisibleNodesRecursive(nodeIds: string[]): (Node & {
     depth: number;
@@ -279,11 +120,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       const node = sharedNodeStore.getNode(nodeId);
       const uiState = _uiState[nodeId];
       if (node) {
-        // Get children from SharedNodeStore
-        let childIds = sharedNodeStore.getNodesForParent(nodeId).map((n) => n.id);
-
-        // Sort children according to beforeSiblingId linked list
-        const children = sortChildrenByBeforeSiblingId(childIds, nodeId);
+        // Get children from SharedNodeStore (already sorted by backend via fractional ordering)
+        const children = sharedNodeStore.getNodesForParent(nodeId).map((n) => n.id);
 
         // Derive autoFocus from FocusManager (single source of truth)
         const autoFocus = focusManager.editingNodeId === nodeId;
@@ -326,12 +164,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     let viewRoots: string[];
     if (viewParentId !== null) {
-      // Get children from SharedNodeStore
+      // Get children from SharedNodeStore (already sorted by backend via fractional ordering)
       // NOTE: Parent may not exist yet (e.g., virtual date nodes) - this is OK
-      const nodesFromStore = sharedNodeStore.getNodesForParent(viewParentId);
-      const childIds = nodesFromStore.map((n) => n.id);
-      // Sort children according to beforeSiblingId linked list
-      viewRoots = sortChildrenByBeforeSiblingId(childIds, viewParentId);
+      viewRoots = sharedNodeStore.getNodesForParent(viewParentId).map((n) => n.id);
     } else {
       viewRoots = _rootNodeIds;
     }
@@ -405,22 +240,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const shouldFocusNewNode = focusNewNode !== undefined ? focusNewNode : !insertAtBeginning;
     const isPlaceholder = initialContent.trim() === '' || /^#{1,6}\s*$/.test(initialContent.trim());
 
-    // Determine before_sibling_id based on insertion position
-    let beforeSiblingId: string | null = null;
-    if (insertAtBeginning) {
-      // New node takes the place of afterNode, so it gets afterNode's before_sibling_id
-      beforeSiblingId = afterNode.beforeSiblingId;
-    } else {
-      // New node comes after afterNode, so afterNode becomes its before_sibling
-      beforeSiblingId = afterNodeId;
-    }
-
     // Create Node with unified type system
+    // NOTE: beforeSiblingId removed - backend uses fractional ordering on edges
     const newNode: Node = {
       id: nodeId,
       nodeType: nodeType,
       content: initialContent,
-      beforeSiblingId: beforeSiblingId,
       createdAt: new Date().toISOString(),
       parentId: newParentId,
       modifiedAt: new Date().toISOString(),
@@ -437,12 +262,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       inheritHeaderLevel: headerLevel !== undefined ? headerLevel : afterUIState.inheritHeaderLevel,
       isPlaceholder
     });
-
-    // Find next sibling BEFORE adding new node to prevent interference
-    const siblings = sharedNodeStore.getNodesForParent(newParentId);
-    const nextSibling = !insertAtBeginning
-      ? siblings.find((n) => n.beforeSiblingId === afterNodeId)
-      : null;
 
     // Skip persistence ONLY for initial viewer placeholder (when no children exist)
     // All other nodes (including blank nodes created during editing) persist immediately
@@ -461,16 +280,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       focusManager.setEditingNode(nodeId, paneId);
     }
 
-    // Update sibling linked list
-    if (insertAtBeginning) {
-      // New node takes afterNode's place, so afterNode now comes after newNode
-      sharedNodeStore.updateNode(afterNodeId, { beforeSiblingId: nodeId }, viewerSource);
-    } else {
-      // New node inserted after afterNode - update next sibling to point to new node
-      if (nextSibling) {
-        sharedNodeStore.updateNode(nextSibling.id, { beforeSiblingId: nodeId }, viewerSource);
-      }
-    }
+    // NOTE: Sibling linked list updates removed - backend handles ordering via fractional ordering
 
     // Bug 4 fix: Transfer children from expanded nodes
     // If afterNode is expanded and has children, transfer them to the new node
@@ -525,12 +335,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
     }
 
-    // Invalidate sorted children cache for parent (hierarchy changed)
-    invalidateSortedChildrenCache(newParentId);
-    // If children were transferred to new node, invalidate that cache too
-    if (!insertAtBeginning && afterUIState.expanded) {
-      invalidateSortedChildrenCache(nodeId);
-    }
+    // NOTE: Sorted children cache removed - backend provides pre-sorted children
 
     events.nodeCreated(nodeId);
     events.hierarchyChanged();
@@ -830,15 +635,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // This prevents "database is locked" errors and FOREIGN KEY violations
     // PersistenceCoordinator will ensure these operations complete before deletion
     const deletionDependencies = [previousNodeId]; // Content update must persist first
-    const currentNodeParents = sharedNodeStore.getParentsForNode(currentNodeId);
-    const currentParentId = currentNodeParents.length > 0 ? currentNodeParents[0].id : null;
     const children = sharedNodeStore.getNodesForParent(currentNodeId);
     if (children.length > 0) {
       deletionDependencies.push(...children.map((c) => c.id)); // Child promotions must complete
     }
 
+    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
+
     // Delete with dependencies - PersistenceCoordinator ensures correct order
-    // Backend handles sibling chain integrity with atomic moveNode
     sharedNodeStore.deleteNode(currentNodeId, viewerSource, false, deletionDependencies);
     delete _uiState[currentNodeId];
 
@@ -848,9 +652,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds = _rootNodeIds.filter((id) => id !== currentNodeId);
     }
 
-    // Invalidate sorted children cache for both old parent and new parent
-    invalidateSortedChildrenCache(currentParentId);
-    invalidateSortedChildrenCache(currentNodeId);
+    // NOTE: Sorted children cache removed - backend provides pre-sorted children
 
     // Set focus on the previous node using FocusManager
     focusManager.setEditingNode(previousNodeId, paneId, mergePosition);
@@ -873,17 +675,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return cleaned.trim();
   }
 
-  /**
-   * ARCHITECTURE: Sibling Ordering Management
-   *
-   * All sibling ordering is now handled atomically by the backend's moveNode operation
-   * using fractional positioning on edges (see Issue #565). The frontend is responsible
-   * only for managing parentId relationships and UI state (depth, expansion).
-   *
-   * This eliminates the complexity of frontend-managed sibling chains and ensures
-   * all ordering operations are atomic and consistent with the backend's single
-   * source of truth.
-   */
+  // NOTE: removeFromSiblingChain function removed - backend handles sibling ordering via fractional ordering
 
   async function indentNode(nodeId: string): Promise<boolean> {
     const node = sharedNodeStore.getNode(nodeId);
@@ -893,12 +685,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const parents = sharedNodeStore.getParentsForNode(nodeId);
     const currentParentId = parents.length > 0 ? parents[0].id : null;
 
+    // Get siblings (already sorted by backend via fractional ordering)
     let siblings: string[];
     if (currentParentId) {
-      const unsortedSiblings = sharedNodeStore.getNodesForParent(currentParentId).map((n) => n.id);
-      siblings = sortChildrenByBeforeSiblingId(unsortedSiblings, currentParentId);
+      siblings = sharedNodeStore.getNodesForParent(currentParentId).map((n) => n.id);
     } else {
-      siblings = sortChildrenByBeforeSiblingId(_rootNodeIds, null);
+      siblings = _rootNodeIds;
     }
 
     const nodeIndex = siblings.indexOf(nodeId);
@@ -917,6 +709,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const originalUIState = { ..._uiState[nodeId] };
     const originalRootNodeIds = [..._rootNodeIds];
 
+    // Get existing children to determine position (insert at end)
+    // Backend handles fractional ordering - we just need to know the last child for positioning
+    const existingChildren = sharedNodeStore.getNodesForParent(targetParentId).map((n) => n.id);
+    const beforeSiblingId = existingChildren.length > 0 ? existingChildren[existingChildren.length - 1] : null;
+
     // Optimistic UI update: Show the move immediately
     _uiState[nodeId] = { ..._uiState[nodeId], depth: (targetParentUIState?.depth || 0) + 1 };
     updateDescendantDepths(nodeId);
@@ -931,9 +728,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.removeChildFromCache(currentParentId, nodeId);
     sharedNodeStore.addChildToCache(targetParentId, nodeId);
 
-    // Atomic backend operation - moveNode handles all ordering internally
+    // Atomic backend operation - backend handles fractional ordering
     try {
-      await backendAdapter.moveNode(nodeId, targetParentId, null);
+      await backendAdapter.moveNode(nodeId, targetParentId, beforeSiblingId);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -958,13 +755,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Update node's parentId to reflect the backend move
+    // Update node's parentId to move it to the new parent
+    // NOTE: beforeSiblingId removed from node - backend handles ordering via fractional ordering
     sharedNodeStore.updateNode(
       nodeId,
       { parentId: targetParentId },
       { type: 'database', reason: 'indent-node' },
       { isComputedField: true }
     );
+
+    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
 
     events.hierarchyChanged();
     _updateTrigger++;
@@ -993,16 +793,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const newParentId = parent.parentId ?? (parentParentsQuery.length > 0 ? parentParentsQuery[0].id : null);
 
     // Find siblings that come after this node (they will become children)
+    // Backend returns children already sorted via fractional ordering
     const siblings = sharedNodeStore.getNodesForParent(oldParentId).map((n) => n.id);
-    const sortedSiblings = sortChildrenByBeforeSiblingId(siblings, oldParentId);
-    const nodeIndex = sortedSiblings.indexOf(nodeId);
-    const siblingsBelow = nodeIndex >= 0 ? sortedSiblings.slice(nodeIndex + 1) : [];
+    const nodeIndex = siblings.indexOf(nodeId);
+    const siblingsBelow = nodeIndex >= 0 ? siblings.slice(nodeIndex + 1) : [];
 
     // Save current state for rollback
     const originalUIState = { ..._uiState[nodeId] };
     const originalRootNodeIds = [..._rootNodeIds];
 
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
+    const positionBeforeSibling = oldParentId;
 
     // Optimistic UI updates for main node
     _uiState[nodeId] = { ..._uiState[nodeId], depth: newDepth };
@@ -1021,9 +822,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.removeChildFromCache(oldParentId, nodeId);
     sharedNodeStore.addChildToCache(newParentId, nodeId);
 
-    // Atomic backend operation for main node - moveNode handles all ordering internally
+    // Atomic backend operation for main node - backend handles fractional ordering
     try {
-      await backendAdapter.moveNode(nodeId, newParentId, null);
+      await backendAdapter.moveNode(nodeId, newParentId, positionBeforeSibling);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -1048,7 +849,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Update node's parentId to reflect the backend move
+    // Update node's parentId to move it to the new parent
+    // NOTE: beforeSiblingId removed from node - backend handles ordering via fractional ordering
     sharedNodeStore.updateNode(
       nodeId,
       { parentId: newParentId },
@@ -1056,8 +858,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       { isComputedField: true }
     );
 
+    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
+
     // Transfer siblings below as children
     if (siblingsBelow.length > 0) {
+      // Get existing children (already sorted by backend)
+      const existingChildren = sharedNodeStore
+        .getNodesForParent(nodeId)
+        .filter((n) => !siblingsBelow.includes(n.id))
+        .map((n) => n.id);
+
+      // Get last existing child for positioning (if any)
+      const lastSiblingId = existingChildren.length > 0 ? existingChildren[existingChildren.length - 1] : null;
+
       // Transfer each sibling
       for (let i = 0; i < siblingsBelow.length; i++) {
         const siblingId = siblingsBelow[i];
@@ -1065,6 +878,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         if (sibling) {
           // Save state for rollback
           const siblingOriginalUIState = { ..._uiState[siblingId] };
+
+          // Position: after last existing child, or after previous sibling we just moved
+          const siblingBeforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];
 
           // Optimistic UI update
           const siblingDepth = newDepth + 1;
@@ -1075,9 +891,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           sharedNodeStore.removeChildFromCache(oldParentId, siblingId);
           sharedNodeStore.addChildToCache(nodeId, siblingId);
 
-          // Atomic backend operation - moveNode handles all ordering internally
+          // Atomic backend operation - backend handles fractional ordering
           try {
-            await backendAdapter.moveNode(siblingId, nodeId, null);
+            await backendAdapter.moveNode(siblingId, nodeId, siblingBeforeSiblingId);
           } catch (error) {
             // Check if error is ignorable
             const isIgnorableError =
@@ -1101,13 +917,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             // Ignorable error: continue with UI updates (for unit tests without server)
           }
 
-          // Update parentId to reflect the backend move
+          // Update parentId to move sibling to new parent
+          // NOTE: beforeSiblingId removed from node - backend handles ordering via fractional ordering
           sharedNodeStore.updateNode(
             siblingId,
             { parentId: nodeId },
             { type: 'database', reason: 'outdent-transfer' },
             { isComputedField: true }
           );
+
+          // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
         }
       }
 
@@ -1171,16 +990,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Process each child individually
-    // Note: We could optimize this with a batch update API, but typical nodes have <10 children
-    // and PersistenceCoordinator already handles batching at a lower level
+    // NOTE: beforeSiblingId logic removed - backend handles ordering via fractional ordering
+    // Children will be appended in their existing order (already sorted by backend)
     for (const child of children) {
-      // Update parentId to promote child to new parent
-      // Backend handles sibling ordering with atomic moveNode
-      sharedNodeStore.updateNode(
-        child.id,
-        { parentId: newParentForChildren },
-        viewerSource
-      );
+      // NOTE: parentId and containerNodeId removed - hierarchy managed by backend via parent_of edges
+      // NOTE: beforeSiblingId removed - backend handles ordering via fractional ordering
+      sharedNodeStore.updateNode(child.id, {}, viewerSource);
 
       // CRITICAL: Update children cache when promoting children to new parent
       sharedNodeStore.removeChildFromCache(nodeId, child.id);
@@ -1195,7 +1010,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Update depth
       const currentChildDepth = _uiState[child.id]?.depth ?? 0;
       const targetDepth = newParentForChildren
-        ? (_uiState[newParentForChildren]?.depth || 0) + 1
+        ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
         : 0;
       const newDepth = Math.min(currentChildDepth, targetDepth);
 
@@ -1210,7 +1025,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
 
   /**
-   * Deletes a node from storage with sibling chain repair.
+   * Deletes a node from storage.
    *
    * **IMPORTANT**: This function does NOT handle child promotion. Children will remain
    * orphaned with their parentId pointing to the deleted node. Use this only when:
@@ -1221,7 +1036,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * child promotion using depth-aware logic to maintain outline structure.
    *
    * **Use cases for direct deleteNode()**:
-   * - Testing sibling chain repair logic in isolation
    * - Backend operations where child handling is managed separately
    * - Cleanup operations where orphaned children are intentional
    *
@@ -1237,7 +1051,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     cleanupDebouncedOperations(nodeId);
 
-    // Backend handles sibling chain integrity with atomic operations
+    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
 
     // CRITICAL: Update children cache to remove this node from its parent
     sharedNodeStore.removeChildFromCache(parentId, nodeId);
@@ -1251,8 +1065,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _rootNodeIds = _rootNodeIds.filter((id) => id !== nodeId);
     }
 
-    // Invalidate sorted children cache for this node and its children
-    invalidateSortedChildrenCache(nodeId);
+    // NOTE: Sorted children cache removed - backend provides pre-sorted children
 
     events.nodeDeleted(nodeId);
     events.hierarchyChanged();

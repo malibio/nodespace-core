@@ -21,6 +21,8 @@
   import { PersistenceCoordinator } from '$lib/services/persistence-coordinator.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
+  import { nodeData as reactiveNodeData } from '$lib/stores/reactive-node-data.svelte';
+  import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
   import type { Node } from '$lib/types';
   import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
@@ -109,6 +111,80 @@
   // Generate unique viewer ID for this viewer instance
   const viewerId = getViewerId(tabId, paneId);
 
+  // Track expanded state for nodes (viewer-local UI state)
+  // Use $state for reactive Map mutations
+  let expandedState = $state(new Map<string, boolean>());
+
+  // Track auto-focus nodes (viewer-local UI state)
+  // Use $state for reactive Set mutations
+  let autoFocusNodes = $state(new Set<string>());
+
+  /**
+   * Visible nodes derived from ReactiveStructureTree + ReactiveNodeData (Issue #555)
+   *
+   * Pure reactivity via $derived - NO _updateTrigger hack needed.
+   * Falls back to sharedNodeStore during transition period (Issue #580 tracks removal).
+   */
+  const visibleNodesFromStores = $derived.by(() => {
+    if (!nodeId) return [];
+
+    // Helper function to recursively flatten visible nodes with depth
+    function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {
+      // TRANSITION PERIOD (Issue #580): Try reactive structure tree first, fall back to sharedNodeStore
+      // This supports gradual migration where reactive stores are being populated asynchronously.
+      // Once all nodes are in reactive stores, remove fallback and use only reactiveStructureTree.
+      let childIds = reactiveStructureTree.getChildren(parentId);
+      if (childIds.length === 0) {
+        const cachedNodes = sharedNodeStore.getNodesForParent(parentId);
+        if (cachedNodes && cachedNodes.length > 0) {
+          childIds = cachedNodes.map(n => n.id);
+        }
+      }
+
+      for (const id of childIds) {
+        // TRANSITION PERIOD (Issue #580): Try reactive store first, fall back to sharedNodeStore
+        let node = reactiveNodeData.getNode(id);
+        if (!node) {
+          node = sharedNodeStore.getNode(id);
+        }
+        if (!node) continue;
+
+        // Get children IDs for this node
+        // TRANSITION PERIOD (Issue #580): Same fallback pattern as above
+        let children = reactiveStructureTree.getChildren(node.id);
+        if (children.length === 0) {
+          const cachedChildren = sharedNodeStore.getNodesForParent(node.id);
+          if (cachedChildren) {
+            children = cachedChildren.map(c => c.id);
+          }
+        }
+
+        // Build node with UI state
+        const nodeWithUI = {
+          ...node,
+          depth,
+          children,
+          expanded: expandedState.get(node.id) ?? false,
+          autoFocus: autoFocusNodes.has(node.id),
+          inheritHeaderLevel: 0,
+          isPlaceholder: false
+        };
+
+        result.push(nodeWithUI);
+
+        // Recursively add children if this node is expanded
+        if (nodeWithUI.expanded && children.length > 0) {
+          flattenNodes(node.id, depth + 1, result);
+        }
+      }
+
+      return result;
+    }
+
+    // Start flattening from the root nodeId at depth 0
+    return flattenNodes(nodeId, 0);
+  });
+
   // Set view context, load children, and initialize header content when nodeId changes
   $effect(() => {
     // Removed setViewParentId - now pass nodeId directly to visibleNodes()
@@ -191,10 +267,6 @@
 
   // Timeout configuration for promise coordination
   const CONTENT_SAVE_TIMEOUT_MS = 5000; // 5 seconds
-
-  // Explicit coordination: Promise that resolves when content save phase completes
-  // This makes the dependency between watchers explicit rather than relying on declaration order
-  let contentSavePhasePromise: Promise<void> = Promise.resolve();
 
   // Explicit coordination: Promise that resolves when structural updates complete
   // The deletion watcher awaits this to ensure children are reassigned before parent deletion
@@ -310,67 +382,6 @@
     );
   }
 
-  /**
-   * Wait for a pending node save to complete, with timeout and grace period
-   * Delegates to SharedNodeStore which tracks pending saves
-   * @param nodeIds - Array of node IDs to wait for
-   * @returns Set of node IDs that failed to save (should be excluded from updates)
-   */
-  async function waitForNodeSavesIfPending(nodeIds: string[]): Promise<Set<string>> {
-    return await sharedNodeStore.waitForNodeSaves(nodeIds, CONTENT_SAVE_TIMEOUT_MS);
-  }
-
-  /**
-   * Build error event for persistence failures
-   * Extracted for clarity and reusability
-   */
-  function buildPersistenceErrorEvent(
-    failedNodeIds: Set<string>,
-    failedUpdates: Array<{
-      nodeId: string;
-      beforeSiblingId: string | null;
-    }>
-  ) {
-    // Determine failure reason based on what failed
-    let failureReason: 'timeout' | 'foreign-key-constraint' | 'database-locked' | 'unknown' =
-      'unknown';
-    if (failedNodeIds.size > 0) {
-      failureReason = 'timeout'; // Nodes that failed to save due to timeout
-    } else if (failedUpdates.length > 0) {
-      // Check error messages to determine specific reason
-      failureReason = 'foreign-key-constraint'; // Most common for structural updates
-    }
-
-    // Build detailed operation list
-    const affectedOperations = [
-      // Failed saves (new nodes that timed out)
-      ...Array.from(failedNodeIds).map((nodeId) => ({
-        nodeId,
-        operation: 'create' as const,
-        error: 'Save operation timed out'
-      })),
-      // Failed updates (structural changes that failed)
-      ...failedUpdates.map((update) => ({
-        nodeId: update.nodeId,
-        operation: 'update' as const,
-        error: 'Structural update failed (possible FOREIGN KEY constraint)'
-      }))
-    ];
-
-    const totalFailed = failedNodeIds.size + failedUpdates.length;
-
-    return {
-      type: 'error:persistence-failed',
-      namespace: 'error',
-      source: 'base-node-viewer',
-      message: `Failed to persist ${totalFailed} node(s). Changes have been reverted.`,
-      failedNodeIds: Array.from(failedNodeIds),
-      failureReason,
-      canRetry: failureReason === 'timeout', // Timeouts might succeed on retry
-      affectedOperations
-    };
-  }
-
   // ============================================================================
   // CONTENT SAVE WATCHER - Initiates content saves for new nodes
   // ============================================================================
@@ -380,24 +391,21 @@
   // ============================================================================
   $effect.pre(() => {
     if (!nodeId) {
-      contentSavePhasePromise = Promise.resolve();
       return;
     }
 
     // Skip if we're still loading initial nodes from database
     if (isLoadingInitialNodes) {
-      contentSavePhasePromise = Promise.resolve();
       return;
     }
 
     // Create a new promise for this content save phase
     // The structural watcher will await this before processing updates
     let resolvePhase: () => void;
-    contentSavePhasePromise = new Promise((resolve) => {
-      resolvePhase = resolve;
-    });
+    // TODO: Implement content save phase tracking if needed
+    // This was part of the contentSavePhasePromise coordination system
 
-    const nodes = nodeManager.visibleNodes(nodeId);
+    const nodes = visibleNodesFromStores;
 
     for (const node of nodes) {
       // Skip placeholder nodes
@@ -428,7 +436,6 @@
               id: node.id,
               nodeType: node.nodeType,
               content: node.content,
-              beforeSiblingId: node.beforeSiblingId,
               createdAt: node.createdAt || new Date().toISOString(),
               modifiedAt: new Date().toISOString(),
               version: node.version || 1, // Use existing version or default to 1 for new nodes
@@ -471,7 +478,7 @@
   $effect(() => {
     if (!nodeId) return;
 
-    const currentNodeIds = new Set(nodeManager.visibleNodes(nodeId).map((n) => n.id));
+    const currentNodeIds = new Set(visibleNodesFromStores.map((n) => n.id));
 
     // Skip the first run (when previousNodeIds is empty)
     if (previousNodeIds.size > 0) {
@@ -486,23 +493,11 @@
       // Delete nodes through the global write queue
       // The queue ensures deletions happen after any pending structural updates
       if (deletedNodeIds.length > 0) {
-        // Clean up previousStructure: null out any beforeSiblingId references to deleted nodes
-        // This prevents FOREIGN KEY errors when other nodes reference the deleted node
-        // Uses reverse index for O(1) lookup instead of O(n) iteration
+        // Issue #575: Simplified - beforeSiblingId tracking removed
+        // Just clean up previousStructure entries for deleted nodes
         for (const deletedId of deletedNodeIds) {
-          const affectedNodes = siblingToNodesMap.get(deletedId) || new Set();
-          for (const nodeId of affectedNodes) {
-            const structure = previousStructure.get(nodeId);
-            if (structure) {
-              // Use centralized tracking function
-              trackStructureChange(nodeId, {
-                ...structure,
-                beforeSiblingId: null
-              });
-            }
-          }
-          // Clean up the deleted node's entry
-          siblingToNodesMap.delete(deletedId);
+          previousStructure.delete(deletedId);
+          persistedStructure.delete(deletedId);
         }
 
         (async () => {
@@ -555,223 +550,47 @@
   // this mismatch and persist the correction.
   // ============================================================================
   // previousStructure is updated in three places (all necessary):
-  // 1. Deletion watcher (line ~218): Cleans up beforeSiblingId references to deleted nodes
+  // 1. Deletion watcher (line ~218): Cleans up deleted nodes
   // 2. This watcher (line ~388): Tracks nodes on first sight
   // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
-  let previousStructure = new Map<
-    string,
-    { beforeSiblingId: string | null }
-  >();
+  // Issue #575: Simplified - tracks node presence for cleanup (no beforeSiblingId)
+  let previousStructure = new Set<string>();
 
   // Track what structure was actually persisted to database (#479)
-  // This allows detecting when in-memory state differs from persisted state
-  let persistedStructure = new Map<
-    string,
-    { beforeSiblingId: string | null }
-  >();
+  // Issue #575: Simplified - only tracks node presence
+  let persistedStructure = new Set<string>();
 
-  // Reverse index: Map from beforeSiblingId -> Set of node IDs that reference it
-  // This allows O(1) lookup when cleaning up deleted sibling references
-  const siblingToNodesMap = new Map<string, Set<string>>();
+  // Issue #575: Sibling index removed - sibling ordering now handled by backend
 
   /**
-   * Update reverse index when tracking structure changes
+   * Issue #575: Simplified - just tracks node presence for cleanup
+   * Original function tracked beforeSiblingId changes
    */
-  function updateSiblingIndex(
-    nodeId: string,
-    oldBeforeSiblingId: string | null,
-    newBeforeSiblingId: string | null
-  ): void {
-    // Remove from old index entry
-    if (oldBeforeSiblingId) {
-      const nodes = siblingToNodesMap.get(oldBeforeSiblingId);
-      if (nodes) {
-        nodes.delete(nodeId);
-        if (nodes.size === 0) {
-          siblingToNodesMap.delete(oldBeforeSiblingId);
-        }
-      }
-    }
-
-    // Add to new index entry
-    if (newBeforeSiblingId) {
-      if (!siblingToNodesMap.has(newBeforeSiblingId)) {
-        siblingToNodesMap.set(newBeforeSiblingId, new Set());
-      }
-      siblingToNodesMap.get(newBeforeSiblingId)!.add(nodeId);
-    }
+  function trackStructureChange(nodeId: string): void {
+    previousStructure.add(nodeId);
   }
 
-  /**
-   * Update previousStructure tracking and reverse index
-   * Centralizes structure change tracking logic used in three places:
-   * 1. Deletion watcher - cleaning up beforeSiblingId references
-   * 2. Structural watcher - tracking unchanged nodes
-   * 3. Structural watcher - tracking successfully persisted changes
-   */
-  function trackStructureChange(
-    nodeId: string,
-    newStructure: { beforeSiblingId: string | null }
-  ): void {
-    const oldStructure = previousStructure.get(nodeId);
-    previousStructure.set(nodeId, newStructure);
-
-    // Update reverse index if beforeSiblingId changed
-    if (!oldStructure || oldStructure.beforeSiblingId !== newStructure.beforeSiblingId) {
-      updateSiblingIndex(
-        nodeId,
-        oldStructure?.beforeSiblingId || null,
-        newStructure.beforeSiblingId
-      );
-    }
-  }
-
+  // Issue #575: Simplified structural watcher - beforeSiblingId no longer tracked
+  // Sibling ordering is now handled by the backend's sibling_order column
   $effect.pre(() => {
     if (!nodeId) return;
 
-    const visibleNodes = nodeManager.visibleNodes(nodeId);
+    const visibleNodes = visibleNodesFromStores;
 
-    // Collect all structural changes first
-    const updates: Array<{
-      nodeId: string;
-      beforeSiblingId: string | null;
-    }> = [];
-
+    // Track nodes for cleanup purposes only
     for (const node of visibleNodes) {
-      // Issue #479: Do NOT skip placeholder nodes in structural watcher
-      // isPlaceholder is a UI-only property for viewer styling
-      // All structural changes must be persisted regardless of placeholder status
-
-      const currentStructure = {
-        beforeSiblingId: node.beforeSiblingId
-      };
-
-      const prevStructure = previousStructure.get(node.id);
-      const persisted = persistedStructure.get(node.id);
-
-      // Issue #479: Check if current structure differs from what was persisted
-      // This catches cases where Tab indent happened after node was created but before structural watcher ran
-      const needsPersistenceCorrection =
-        persisted &&
-        persisted.beforeSiblingId !== currentStructure.beforeSiblingId;
-
-      if (needsPersistenceCorrection) {
-        // Current in-memory structure differs from persisted - fix database
-        updates.push({
-          nodeId: node.id,
-          beforeSiblingId: node.beforeSiblingId
-        });
-      } else if (
-        prevStructure &&
-        prevStructure.beforeSiblingId !== currentStructure.beforeSiblingId
-      ) {
-        // Normal structural change detected - queue for persistence
-        updates.push({
-          nodeId: node.id,
-          beforeSiblingId: node.beforeSiblingId
-        });
-      } else {
-        // No change detected OR new node - update tracking to current state
-        trackStructureChange(node.id, currentStructure);
-        // Issue #479: For nodes loaded from database (first time seeing), query their persisted structure
-        // Don't assume current = persisted, as Enter+Tab can create mismatch
-        if (!persisted && sharedNodeStore.isNodePersisted(node.id)) {
-          // Node exists in database - current structure IS the persisted one (loaded from DB)
-          persistedStructure.set(node.id, currentStructure);
-        }
-        // If node is NOT persisted yet (new node being created), don't track persisted structure
-        // until it actually gets persisted (handled in success callback above)
+      trackStructureChange(node.id);
+      // Mark as persisted if it exists in database
+      if (!persistedStructure.has(node.id) && sharedNodeStore.isNodePersisted(node.id)) {
+        persistedStructure.add(node.id);
       }
-    }
-
-    // Persist updates sequentially to avoid SQLite "database is locked" errors
-    // All writes go through the global queue to ensure serialization
-    if (updates.length > 0) {
-      // Process updates asynchronously - queue ensures proper serialization
-      // Track this promise so deletion watcher can await completion
-      pendingStructuralUpdatesPromise = (async () => {
-        // CRITICAL: Wait for content save phase to complete first
-        await contentSavePhasePromise;
-
-        // Wait for any pending content saves to complete
-        const nodeIdsToWaitFor: string[] = [];
-        for (const update of updates) {
-          if (update.beforeSiblingId) nodeIdsToWaitFor.push(update.beforeSiblingId);
-        }
-
-        const failedNodeIds = await waitForNodeSavesIfPending(nodeIdsToWaitFor);
-
-        // Filter out updates that reference failed nodes
-        const validUpdates = updates.filter(
-          (update) =>
-            !failedNodeIds.has(update.nodeId) &&
-            (!update.beforeSiblingId || !failedNodeIds.has(update.beforeSiblingId))
-        );
-
-        // Delegate to SharedNodeStore for validation and persistence
-        const result = await sharedNodeStore.updateStructuralChangesValidated(
-          validUpdates,
-          VIEWER_SOURCE,
-          nodeId
-        );
-
-        // Update tracking for succeeded updates
-        for (const update of result.succeeded) {
-          const structure = {
-            beforeSiblingId: update.beforeSiblingId
-          };
-          trackStructureChange(update.nodeId, structure);
-          // Issue #479: Track what was actually persisted to database
-          persistedStructure.set(update.nodeId, structure);
-        }
-
-        // Handle failed updates: rollback in-memory state and emit error event
-        const allFailedNodeIds = new Set([...failedNodeIds, ...result.failed.map((u) => u.nodeId)]);
-
-        if (allFailedNodeIds.size > 0) {
-          console.warn(
-            '[BaseNodeViewer] Failed to persist changes:',
-            failedNodeIds.size,
-            'save failure(s),',
-            result.failed.length,
-            'update failure(s)'
-          );
-
-          // Rollback in-memory state for failed updates to match last known database state
-          for (const update of result.failed) {
-            const lastGoodState = previousStructure.get(update.nodeId);
-            if (lastGoodState) {
-              // Revert node's in-memory structure to last successfully persisted state
-              const node = nodeManager.nodes.get(update.nodeId);
-              if (node) {
-                nodeManager.nodes.set(update.nodeId, {
-                  ...node,
-                  beforeSiblingId: lastGoodState.beforeSiblingId
-                });
-              }
-            }
-          }
-
-          // Emit event for error notification (UI can show toast/banner)
-          import('$lib/services/event-bus').then(({ eventBus }) => {
-            const event = buildPersistenceErrorEvent(failedNodeIds, result.failed);
-            eventBus.emit(event as never);
-          });
-        }
-
-        // Clear promise after all updates complete
-        pendingStructuralUpdatesPromise = null;
-      })();
-    } else {
-      // No updates to process - clear promise immediately
-      pendingStructuralUpdatesPromise = null;
     }
 
     // Clean up tracking for nodes that no longer exist
     const currentNodeIds = new Set(visibleNodes.map((n) => n.id));
-    for (const [nodeId] of previousStructure) {
-      if (!currentNodeIds.has(nodeId)) {
-        previousStructure.delete(nodeId);
+    for (const trackedNodeId of previousStructure) {
+      if (!currentNodeIds.has(trackedNodeId)) {
+        previousStructure.delete(trackedNodeId);
       }
     }
   });
@@ -795,11 +614,11 @@
     // but is needed by the backend HTTP API to create the parent-child edge relationship
     // The backend will extract this field and call operations.create_node() with it
     // Note (Issue #533): _containerId removed - backend auto-derives root from parent chain
+    // Note (Issue #575): beforeSiblingId removed - backend now handles sibling ordering
     return {
       id: placeholder.id,
       nodeType: overrides.nodeType ?? placeholder.nodeType,
       content: overrides.content ?? placeholder.content,
-      beforeSiblingId: placeholder.beforeSiblingId,
       version: placeholder.version,
       createdAt: placeholder.createdAt,
       modifiedAt: new Date().toISOString(),
@@ -867,7 +686,6 @@
             id: placeholderId,
             nodeType: 'text',
             content: '',
-            beforeSiblingId: null,
             createdAt: new Date().toISOString(),
             modifiedAt: new Date().toISOString(),
             version: 1,
@@ -1265,7 +1083,7 @@
   }
 
   // Handle chevron click to toggle expand/collapse
-  function handleToggleExpanded(nodeId: string) {
+  function handleToggleExpanded(toggleNodeId: string) {
     // Get the currently focused element before DOM changes
     const activeElement = document.activeElement as HTMLElement;
     const isTextEditor = activeElement && activeElement.id?.startsWith('contenteditable-');
@@ -1278,8 +1096,14 @@
       cursorPosition = saveCursorPosition(focusedNodeId);
     }
 
-    // Perform the toggle operation
-    nodeManager.toggleExpanded(nodeId);
+    // Toggle expanded state (viewer-local)
+    const currentState = expandedState.get(toggleNodeId) ?? false;
+    expandedState.set(toggleNodeId, !currentState);
+
+    // TRANSITION PERIOD (Issue #580): Also update nodeManager for backward compatibility
+    // This dual update ensures expansionState syncs during migration from nodeManager to reactive stores.
+    // Once all state is in reactive stores, remove this call and update-only expandedState.
+    nodeManager.toggleExpanded(toggleNodeId);
 
     // Restore focus and cursor position after DOM update
     if (focusedNodeId && isTextEditor) {
@@ -1330,8 +1154,8 @@
   ) {
     const { nodeId: eventNodeId, direction, pixelOffset } = event.detail;
 
-    // Get visible nodes from NodeManager
-    const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+    // Get visible nodes from reactive stores
+    const currentVisibleNodes = visibleNodesFromStores;
     const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
     if (currentIndex === -1) return;
@@ -1371,7 +1195,7 @@
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentVisibleNodes = visibleNodesFromStores;
       const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) {
@@ -1422,7 +1246,7 @@
         return;
       }
 
-      const currentVisibleNodes = nodeManager.visibleNodes(nodeId);
+      const currentVisibleNodes = visibleNodesFromStores;
       const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
       if (currentIndex <= 0) return; // No previous node to focus
@@ -1472,7 +1296,7 @@
 
   // Derive the list of nodes to render - either viewer placeholder or real children
   const nodesToRender = $derived(() => {
-    const realChildren = nodeManager.visibleNodes(nodeId);
+    const realChildren = visibleNodesFromStores;
 
     // If we have real children, render those
     if (realChildren.length > 0) {
@@ -1501,7 +1325,7 @@
 
   // Reactive effect: Create placeholder when children drop to zero
   $effect(() => {
-    const realChildren = nodeManager.visibleNodes(nodeId);
+    const realChildren = visibleNodesFromStores;
 
     // If we have no real children and no placeholder, create one
     if (realChildren.length === 0 && !viewerPlaceholder && nodeId) {
@@ -1510,7 +1334,6 @@
         id: placeholderId,
         nodeType: 'text',
         content: '',
-        beforeSiblingId: null,
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
         version: 1,
