@@ -223,7 +223,8 @@ COMMIT TRANSACTION;
 
 DEFINE TABLE node SCHEMAFULL;
 
-DEFINE FIELD id ON TABLE node TYPE string;
+-- NOTE: 'id' field is automatically managed by SurrealDB as Record ID (Thing type)
+-- Do NOT redefine it - causes type conflicts and deserialization errors
 DEFINE FIELD content ON TABLE node TYPE string;
 DEFINE FIELD nodeType ON TABLE node TYPE string;
 DEFINE FIELD data ON TABLE node TYPE option<record>;  -- Record Link to spoke (composition)
@@ -240,31 +241,34 @@ DEFINE FIELD modifiedAt ON TABLE node TYPE datetime;
 
 -- Task spoke: Indexed fields for efficient queries
 DEFINE TABLE task SCHEMAFULL;
-DEFINE FIELD id ON TABLE task TYPE record;
-DEFINE FIELD node ON TABLE task TYPE record(node);  -- Reverse link to hub
-DEFINE FIELD status ON TABLE task TYPE string;
+-- NOTE: 'id' is automatically the Record ID - do NOT redefine it
+DEFINE FIELD node ON TABLE task TYPE option<record>;  -- Reverse link to hub
+DEFINE FIELD status ON TABLE task TYPE string DEFAULT 'todo';
 DEFINE FIELD priority ON TABLE task TYPE option<string>;
 DEFINE FIELD due_date ON TABLE task TYPE option<datetime>;
+DEFINE FIELD assignee ON TABLE task TYPE option<record>;
 DEFINE FIELD * ON TABLE task FLEXIBLE;  -- User extensions
 
 -- Indexes for efficient spoke queries
 DEFINE INDEX idx_task_status ON TABLE task COLUMNS status;
 DEFINE INDEX idx_task_priority ON TABLE task COLUMNS priority;
+DEFINE INDEX idx_task_due_date ON TABLE task COLUMNS due_date;
 
 -- Date spoke: Timezone, holiday tracking
 DEFINE TABLE date SCHEMAFULL;
-DEFINE FIELD id ON TABLE date TYPE record;
-DEFINE FIELD node ON TABLE date TYPE record(node);
+-- NOTE: 'id' is automatically the Record ID - do NOT redefine it
+DEFINE FIELD node ON TABLE date TYPE option<record>;
 DEFINE FIELD timezone ON TABLE date TYPE string DEFAULT 'UTC';
 DEFINE FIELD is_holiday ON TABLE date TYPE bool DEFAULT false;
 DEFINE FIELD * ON TABLE date FLEXIBLE;
 
 -- Schema spoke: Type definitions
 DEFINE TABLE schema SCHEMAFULL;
-DEFINE FIELD id ON TABLE schema TYPE record;
-DEFINE FIELD node ON TABLE schema TYPE record(node);
+-- NOTE: 'id' is automatically the Record ID - do NOT redefine it
+DEFINE FIELD node ON TABLE schema TYPE option<record>;
 DEFINE FIELD is_core ON TABLE schema TYPE bool DEFAULT false;
 DEFINE FIELD version ON TABLE schema TYPE int DEFAULT 1;
+DEFINE FIELD description ON TABLE schema TYPE string DEFAULT "";
 DEFINE FIELD fields ON TABLE schema TYPE array DEFAULT [];
 DEFINE FIELD * ON TABLE schema FLEXIBLE;
 
