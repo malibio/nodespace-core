@@ -16,19 +16,39 @@
 -->
 
 <script context="module" lang="ts">
-  import type { NodeReferenceService } from '$lib/services/node-reference-service';
-
   export interface AutocompleteModalProps {
     visible: boolean;
     position: { x: number; y: number };
     query: string;
-    nodeReferenceService: NodeReferenceService;
+    nodeReferenceService: NodeReferenceService | null;
   }
 
   export interface NewNodeRequest {
     type: 'create';
     content: string;
     nodeType: string;
+  }
+
+  // Types moved inline (previously from node-reference-service)
+  export interface AutocompleteResult {
+    suggestions: NodeSuggestion[];
+    hasMore: boolean;
+    totalCount?: number;
+    query: string;
+  }
+
+  export interface NodeSuggestion {
+    nodeId: string;
+    displayName: string;
+    title?: string;
+    nodeType: string;
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }
+
+  // Stub interface - NodeReferenceService was deleted as obsolete
+  export interface NodeReferenceService {
+    resolveNodeReference(_nodeId: string): Promise<any | null>;
   }
 </script>
 
@@ -39,7 +59,6 @@
   import Badge from '$lib/components/ui/badge/badge.svelte';
   import Separator from '$lib/components/ui/separator/separator.svelte';
   import Icon, { type IconName } from '$lib/design/icons';
-  import type { AutocompleteResult, NodeSuggestion } from '$lib/services/node-reference-service';
   import type { Node } from '$lib/types';
 
   // ============================================================================
