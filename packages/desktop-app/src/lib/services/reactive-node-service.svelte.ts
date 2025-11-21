@@ -707,11 +707,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const originalUIState = { ..._uiState[nodeId] };
     const originalRootNodeIds = [..._rootNodeIds];
 
-    // Get existing children to determine position (insert at end)
-    // Backend handles fractional ordering - we just need to know the last child for positioning
-    const existingChildren = sharedNodeStore.getNodesForParent(targetParentId).map((n) => n.id);
-    const beforeSiblingId = existingChildren.length > 0 ? existingChildren[existingChildren.length - 1] : null;
-
     // Optimistic UI update: Show the move immediately
     _uiState[nodeId] = { ..._uiState[nodeId], depth: (targetParentUIState?.depth || 0) + 1 };
     updateDescendantDepths(nodeId);
@@ -723,10 +718,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     setExpanded(targetParentId, true);
 
     // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via LIVE SELECT events
+    // Sibling positioning removed (Issue #557) - Backend handles ordering via fractional IDs
 
     // Atomic backend operation - backend handles fractional ordering
     try {
-      await backendAdapter.moveNode(nodeId, targetParentId, beforeSiblingId);
+      await backendAdapter.moveNode(nodeId, targetParentId);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -798,7 +794,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const originalRootNodeIds = [..._rootNodeIds];
 
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
-    const positionBeforeSibling = oldParentId;
 
     // Optimistic UI updates for main node
     _uiState[nodeId] = { ..._uiState[nodeId], depth: newDepth };
@@ -817,7 +812,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Atomic backend operation for main node - backend handles fractional ordering
     try {
-      await backendAdapter.moveNode(nodeId, newParentId, positionBeforeSibling);
+      await backendAdapter.moveNode(nodeId, newParentId);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -854,14 +849,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Transfer siblings below as children
     if (siblingsBelow.length > 0) {
-      // Get existing children (already sorted by backend)
-      const existingChildren = sharedNodeStore
-        .getNodesForParent(nodeId)
-        .filter((n) => !siblingsBelow.includes(n.id))
-        .map((n) => n.id);
-
-      // Get last existing child for positioning (if any)
-      const lastSiblingId = existingChildren.length > 0 ? existingChildren[existingChildren.length - 1] : null;
+      // NOTE: Sibling positioning removed (Issue #557) - Backend handles ordering via fractional IDs
 
       // Transfer each sibling
       for (let i = 0; i < siblingsBelow.length; i++) {
@@ -870,9 +858,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         if (sibling) {
           // Save state for rollback
           const siblingOriginalUIState = { ..._uiState[siblingId] };
-
-          // Position: after last existing child, or after previous sibling we just moved
-          const siblingBeforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];
 
           // Optimistic UI update
           const siblingDepth = newDepth + 1;
@@ -883,7 +868,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
           // Atomic backend operation - backend handles fractional ordering
           try {
-            await backendAdapter.moveNode(siblingId, nodeId, siblingBeforeSiblingId);
+            await backendAdapter.moveNode(siblingId, nodeId);
           } catch (error) {
             // Check if error is ignorable
             const isIgnorableError =
