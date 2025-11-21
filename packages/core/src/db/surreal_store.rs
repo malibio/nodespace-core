@@ -827,7 +827,8 @@ where
             };
         ";
 
-        let mut response = self.db
+        let mut response = self
+            .db
             .query(query)
             .bind(("table", "node"))
             .bind(("id", node.id.clone())) // Just the UUID, type::thing will construct node:uuid
@@ -850,7 +851,10 @@ where
                 .query("UPDATE type::thing($table, $id) SET properties = $properties;")
                 .bind(("table", "node"))
                 .bind(("id", node.id.clone()))
-                .bind(("properties", serde_json::Value::Object(props_with_schema.clone())))
+                .bind((
+                    "properties",
+                    serde_json::Value::Object(props_with_schema.clone()),
+                ))
                 .await
                 .context("Failed to set node properties")?;
         }
