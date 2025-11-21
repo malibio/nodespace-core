@@ -62,6 +62,17 @@ class ReactiveNodeData {
   }
 
   /**
+   * Bulk initialize nodes from a list
+   * Used when loading the initial tree view from the backend
+   */
+  initializeFromNodes(nodes: Node[]) {
+    for (const node of nodes) {
+      this.nodes.set(node.id, node);
+    }
+    console.log(`[ReactiveNodeData] Bulk initialized ${nodes.length} nodes`);
+  }
+
+  /**
    * Subscribe to node CRUD events from LIVE SELECT
    * @throws Error if critical event subscriptions fail
    */

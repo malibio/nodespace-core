@@ -325,12 +325,75 @@ class ReactiveStructureTree {
   }
 
   /**
+   * Initialize the tree from a nested NodeWithChildren structure
+   * This is used when loading the initial tree view from the backend
+   * recursively, avoiding multiple round-trips.
+   */
+  initializeFromTree(root: NodeWithChildren) {
+    console.log('[ReactiveStructureTree] Initializing from tree for root:', root.node.id);
+    
+    // Clear existing data? Or merge? 
+    // For now, we assume this is initializing a subtree or the whole tree.
+    // If we want to support partial updates, we should merge.
+    // But since this is "initialize", we might want to be careful.
+    // Let's just populate the map.
+    
+    this.processNodeWithChildren(root);
+    
+    // Increment version to trigger reactivity
+    this.version++;
+    
+    console.log('[ReactiveStructureTree] Tree initialization complete');
+  }
+
+  /**
+   * Recursively process a node and its children to populate the tree map
+   */
+  private processNodeWithChildren(item: NodeWithChildren) {
+    const parentId = item.node.id;
+    
+    if (item.children && item.children.length > 0) {
+      const childInfos: ChildInfo[] = [];
+      
+      for (const child of item.children) {
+        // Use the order from the edge if available, otherwise default to 0
+        // The backend should provide this now.
+        const order = child.order ?? 0;
+        
+        childInfos.push({
+          nodeId: child.node.id,
+          order
+        });
+        
+        // Recursively process the child
+        this.processNodeWithChildren(child);
+      }
+      
+      // Sort children by order
+      childInfos.sort((a, b) => a.order - b.order);
+      
+      // Update the map
+      this.children.set(parentId, childInfos);
+    }
+  }
+
+  /**
    * TEST ONLY: Direct access to addChild for testing binary search algorithm
    * @internal
    */
   __testOnly_addChild(edge: HierarchyRelationship) {
     this.addChild(edge);
   }
+}
+
+// Interface matching the Rust NodeWithChildren struct
+export interface NodeWithChildren {
+  node: {
+    id: string;
+    [key: string]: any;
+  };
+  order?: number;
+  children: NodeWithChildren[];
 }
 
 // Export singleton instance

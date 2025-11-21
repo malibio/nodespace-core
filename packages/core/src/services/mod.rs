@@ -22,6 +22,8 @@ pub mod schema_service;
 
 #[cfg(test)]
 mod node_service_root_test;
+#[cfg(test)]
+mod node_service_tree_test;
 
 pub use embedding_processor::EmbeddingProcessor;
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};

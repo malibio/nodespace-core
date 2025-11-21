@@ -31,6 +31,7 @@ use crate::services::error::NodeServiceError;
 use crate::services::migration_registry::MigrationRegistry;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
@@ -242,6 +243,19 @@ fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
     ))
 }
 
+/// Node with nested children for recursive tree structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeWithChildren {
+    #[serde(flatten)]
+    pub node: Node,
+
+    /// Order from the parent-child edge (fractional index)
+    pub order: Option<f64>,
+
+    #[serde(default)]
+    pub children: Vec<NodeWithChildren>,
+}
+
 /// Core service for node CRUD and hierarchy operations
 ///
 /// # Examples
@@ -289,6 +303,63 @@ impl<C> NodeService<C>
 where
     C: surrealdb::Connection,
 {
+    /// Get a node and its children recursively as a nested tree
+    ///
+    /// Uses SurrealDB's recursive FETCH capabilities to retrieve the entire
+    /// subtree structure in a single query, optimizing initial load performance.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - The ID of the root node to fetch
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(tree))` - The root node with populated children
+    /// * `Ok(None)` - Root node not found
+    /// * `Err` - Database error
+    pub async fn get_children_tree(
+        &self,
+        root_id: &str,
+    ) -> Result<Option<NodeWithChildren>, NodeServiceError> {
+        // Validate ID format first
+        if !is_valid_node_id(root_id) {
+            return Ok(None);
+        }
+
+        // Use the recursive projection syntax provided by the user
+        // This allows for infinite depth fetching in a single query
+        // The @ symbol tells SurrealDB to repeat the projection recursively
+        //
+        // UPDATE: We project from the EDGE (->has_child) to capture the 'order' field
+        // and then expand the target node (out.*) into the result.
+        let sql = r#"
+            SELECT
+                *,
+                ->has_child[ORDER BY order].{
+                    order,
+                    out.*,
+                    children: out->has_child[ORDER BY order].@
+                } AS children
+            FROM type::thing('node', $id)
+        "#;
+
+        let mut response = self
+            .store
+            .db()
+            .query(sql)
+            .bind(("id", root_id.to_string()))
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Get the first result (should be the root node)
+        let result: Option<NodeWithChildren> = response.take(0).map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to parse tree result: {}", e))
+        })?;
+
+        Ok(result)
+    }
+
+    /// Create a new NodeService
     /// Create a new NodeService
     ///
     /// Initializes the service with SurrealStore and creates a default

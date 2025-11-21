@@ -506,6 +506,36 @@ pub async fn get_children(
     service.get_children(&parent_id).await.map_err(Into::into)
 }
 
+/// Get a node and its children recursively as a nested tree
+///
+/// Uses SurrealDB's recursive FETCH capabilities to retrieve the entire
+/// subtree structure in a single query.
+///
+/// # Arguments
+/// * `service` - Node service instance from Tauri state
+/// * `root_id` - ID of the root node to fetch
+///
+/// # Returns
+/// * `Ok(Option<NodeWithChildren>)` - Root node with populated children if found
+/// * `Err(CommandError)` - Error with details if operation fails
+///
+/// # Example Frontend Usage
+/// ```typescript
+/// const tree = await invoke('get_children_tree', {
+///   rootId: 'root-123'
+/// });
+/// ```
+#[tauri::command]
+pub async fn get_children_tree(
+    service: State<'_, NodeService>,
+    root_id: String,
+) -> Result<Option<nodespace_core::services::node_service::NodeWithChildren>, CommandError> {
+    service
+        .get_children_tree(&root_id)
+        .await
+        .map_err(Into::into)
+}
+
 /// Bulk fetch all nodes belonging to a root node (viewer/page)
 ///
 /// This is the efficient way to load a complete document tree:

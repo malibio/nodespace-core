@@ -207,6 +207,7 @@ pub fn run() {
             commands::nodes::delete_node,
             commands::nodes::get_children,
             commands::nodes::get_nodes_by_root_id,
+            commands::nodes::get_children_tree,
             commands::nodes::query_nodes_simple,
             commands::nodes::mention_autocomplete,
             commands::nodes::save_node_with_parent,
