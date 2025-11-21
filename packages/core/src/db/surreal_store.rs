@@ -844,17 +844,6 @@ where
 
         // Create spoke record if needed
         if should_create_spoke && has_properties {
-            // For schema nodes, stringify the fields array because SurrealDB cannot properly
-            // deserialize records containing Rust enums (ProtectionLevel) via serde_json::Value
-            let mut properties_to_store = props_with_schema.clone();
-            if node.node_type == "schema" {
-                if let Some(Value::Array(fields)) = properties_to_store.get("fields") {
-                    let fields_json = serde_json::to_string(fields)
-                        .unwrap_or_else(|_| "[]".to_string());
-                    properties_to_store.insert("fields".to_string(), Value::String(fields_json));
-                }
-            }
-
             // CREATE spoke record with properties using simpler table:id syntax
             // Note: IDs with special characters (hyphens, spaces, etc.) need backtick-quoting
             let spoke_query = format!(
@@ -862,10 +851,21 @@ where
                 node.node_type, node.id
             );
 
+            // For schema type, convert fields array to JSON string to preserve complex nested structures
+            // during SurrealDB binary protocol serialization
+            let mut bound_properties = props_with_schema.clone();
+            if node.node_type == "schema" {
+                if let Some(fields_value) = bound_properties.get("fields") {
+                    let fields_str = serde_json::to_string(fields_value)
+                        .context("Failed to stringify schema fields")?;
+                    bound_properties.insert("fields".to_string(), serde_json::Value::String(fields_str));
+                }
+            }
+
             let mut spoke_response = self
                 .db
                 .query(&spoke_query)
-                .bind(("properties", Value::Object(properties_to_store.clone())))
+                .bind(("properties", Value::Object(bound_properties)))
                 .await
                 .context("Failed to create spoke record")?;
 
@@ -1160,9 +1160,13 @@ where
                             Ok(records) => {
                                 let props_opt = records.into_iter().next().map(|map| {
                                     tracing::debug!(
-                                        "Raw properties from {}: {:?}",
+                                        "Raw properties from {} - keys: {:?}",
                                         node.node_type,
-                                        map
+                                        map.keys().collect::<Vec<_>>()
+                                    );
+                                    tracing::debug!(
+                                        "Raw properties full: {}",
+                                        serde_json::to_string_pretty(&serde_json::Value::Object(map.clone().into_iter().collect())).unwrap_or_default()
                                     );
                                     serde_json::Value::Object(map.into_iter().collect())
                                 });
@@ -1186,15 +1190,13 @@ where
                 };
 
                 if let Some(mut props) = result {
-                    // For schema nodes, parse the stringified fields back to an array
+                    // If schema fields were stored as JSON string, parse them back
                     if node.node_type == "schema" {
-                        if let Some(Value::String(fields_str)) = props.get("fields") {
-                            let fields_str = fields_str.clone();
-                            if let Ok(fields_array) =
-                                serde_json::from_str::<Vec<serde_json::Value>>(&fields_str)
-                            {
+                        if let Some(serde_json::Value::String(fields_str)) = props.get("fields") {
+                            if let Ok(fields_value) = serde_json::from_str::<serde_json::Value>(fields_str) {
+                                // Replace the stringified value with the parsed array
                                 if let Some(obj) = props.as_object_mut() {
-                                    obj.insert("fields".to_string(), Value::Array(fields_array));
+                                    obj.insert("fields".to_string(), fields_value);
                                 }
                             }
                         }
@@ -1287,21 +1289,22 @@ where
         // If properties were provided and node type has type-specific table, update it there too
         if let Some(mut updated_props) = update.properties {
             if TYPES_WITH_PROPERTIES.contains(&updated_node_type.as_str()) {
-                // For schema nodes, stringify the fields array
-                if updated_node_type == "schema" {
-                    if let Some(Value::Array(fields)) = updated_props.get("fields") {
-                        let fields_json =
-                            serde_json::to_string(fields).unwrap_or_else(|_| "[]".to_string());
-                        if let Some(obj) = updated_props.as_object_mut() {
-                            obj.insert("fields".to_string(), Value::String(fields_json));
-                        }
-                    }
-                }
-
                 // UPSERT with MERGE to preserve existing spoke data on type reconversions
                 // Scenario: text→task creates task:uuid, task→text preserves it, text→task reconnects
                 // MERGE ensures old task properties (priority, due_date) aren't lost on reconversion
                 // Only adds missing defaults, preserves user-set values
+
+                // For schema type, stringify fields array before binding
+                if updated_node_type == "schema" {
+                    if let Some(fields_value) = updated_props.get("fields") {
+                        let fields_str = serde_json::to_string(fields_value)
+                            .context("Failed to stringify schema fields in update")?;
+                        if let Some(obj) = updated_props.as_object_mut() {
+                            obj.insert("fields".to_string(), serde_json::Value::String(fields_str));
+                        }
+                    }
+                }
+
                 self.db
                     .query("UPSERT type::thing($table, $id) MERGE $properties;")
                     .bind(("table", updated_node_type.clone()))
@@ -1415,8 +1418,17 @@ where
         };
 
         // Prepare properties
-        let props_with_schema = new_properties.as_object().cloned().unwrap_or_default();
+        let mut props_with_schema = new_properties.as_object().cloned().unwrap_or_default();
         let has_new_type_table = TYPES_WITH_PROPERTIES.contains(&new_type.as_str());
+
+        // For schema type, stringify fields array before binding
+        if new_type == "schema" {
+            if let Some(fields_value) = props_with_schema.get("fields") {
+                let fields_str = serde_json::to_string(fields_value)
+                    .context("Failed to stringify schema fields in switch_node_type")?;
+                props_with_schema.insert("fields".to_string(), serde_json::Value::String(fields_str));
+            }
+        }
 
         // Build atomic transaction using Thing parameters
         let transaction_query = if has_new_type_table && !props_with_schema.is_empty() {

@@ -76,14 +76,13 @@ DEFINE TABLE IF NOT EXISTS schema SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS node ON TABLE schema TYPE option<record>;  -- Reverse link to hub node
 
 -- Core schema fields
+-- NOTE: Storing entire schema as JSON string due to SurrealDB binary protocol limitations
+-- with nested arrays containing enums. The properties binding converts the object to a
+-- JSON string on CREATE/UPDATE, and we deserialize it on retrieval.
 DEFINE FIELD IF NOT EXISTS is_core ON TABLE schema TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS version ON TABLE schema TYPE int DEFAULT 1;
 DEFINE FIELD IF NOT EXISTS description ON TABLE schema TYPE string DEFAULT "";
--- Note: fields stored as string to work around SurrealDB enum deserialization issues
--- The serde attributes on ProtectionLevel and SchemaField serialize correctly to JSON,
--- but SurrealDB cannot deserialize them back when using serde_json::Value.
--- Solution: Store as JSON string, parse on retrieval. See CLAUDE.md for details.
-DEFINE FIELD IF NOT EXISTS fields ON TABLE schema TYPE string DEFAULT "[]";
+DEFINE FIELD IF NOT EXISTS fields ON TABLE schema TYPE option<string> DEFAULT NONE;
 
 -- Note: SCHEMAFULL allows undefined fields by default (flexible)
 
