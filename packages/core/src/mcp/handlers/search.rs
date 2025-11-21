@@ -108,9 +108,10 @@ pub async fn handle_semantic_search(
     let formatted_results: Vec<SemanticSearchResult> = results
         .into_iter()
         .map(|(node, similarity)| {
-            // Truncate content to 200 chars for snippet
-            let snippet = if node.content.len() > 200 {
-                format!("{}...", &node.content[..197])
+            // Truncate content to 200 chars for snippet (Unicode-safe)
+            let snippet = if node.content.chars().count() > 200 {
+                let truncated: String = node.content.chars().take(197).collect();
+                format!("{}...", truncated)
             } else {
                 node.content.clone()
             };
@@ -134,8 +135,7 @@ pub async fn handle_semantic_search(
     }))
 }
 
-// Legacy alias for backward compatibility
-// TODO: Remove after clients migrate to semantic_search
+/// Legacy alias - delegates to semantic_search
 pub async fn handle_search_containers(
     service: &Arc<NodeEmbeddingService>,
     params: Value,
