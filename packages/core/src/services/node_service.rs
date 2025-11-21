@@ -794,11 +794,11 @@ where
             .await?
             .ok_or_else(|| NodeServiceError::node_not_found(mentioning_node_id))?;
 
-        // Get container ID via edge traversal
-        let container_id = self.get_container_id(mentioning_node_id).await?;
+        // Get root ID via edge traversal
+        let root_id = self.get_root_id(mentioning_node_id).await?;
 
-        // Prevent container-level self-references (child mentioning its own container)
-        if container_id == mentioned_node_id {
+        // Prevent root-level self-references (child mentioning its own root)
+        if root_id == mentioned_node_id {
             return Err(NodeServiceError::ValidationFailed(
                 crate::models::ValidationError::InvalidParent(
                     "Cannot mention own container (container-level self-reference)".to_string(),
@@ -807,15 +807,15 @@ where
         }
 
         // Get container ID with special handling for tasks
-        // Tasks are always treated as their own containers (exception rule)
-        let final_container_id = if mentioning_node.node_type == "task" {
+        // Tasks are always treated as their own roots (exception rule)
+        let final_root_id = if mentioning_node.node_type == "task" {
             mentioning_node_id
         } else {
-            &container_id
+            &root_id
         };
 
         self.store
-            .create_mention(mentioning_node_id, mentioned_node_id, final_container_id)
+            .create_mention(mentioning_node_id, mentioned_node_id, final_root_id)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -1466,19 +1466,19 @@ where
         Ok(parent)
     }
 
-    /// Get the container (root ancestor) of a node
+    /// Get the root (root ancestor) of a node
     ///
     /// Traverses up the parent chain until finding a root node (no parent).
-    /// This replaces the old `container_node_id` field.
+    /// This replaces the old `root_node_id` field.
     ///
     /// # Arguments
     ///
-    /// * `node_id` - The node ID to find the container for
+    /// * `node_id` - The node ID to find the root for
     ///
     /// # Returns
     ///
-    /// The container node ID, or the node itself if it's already a root
-    pub async fn get_container_id(&self, node_id: &str) -> Result<String, NodeServiceError> {
+    /// The root node ID, or the node itself if it's already a root
+    pub async fn get_root_id(&self, node_id: &str) -> Result<String, NodeServiceError> {
         let mut current_id = node_id.to_string();
 
         // Traverse up the parent chain until we find a root
@@ -1490,7 +1490,7 @@ where
                     current_id = parent_node.id;
                 }
                 None => {
-                    // Found the root - this is the container
+                    // Found the root
                     return Ok(current_id);
                 }
             }
@@ -1524,17 +1524,17 @@ where
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
     /// # let service = NodeService::new(db)?;
     /// // Fetch all nodes for a date page
-    /// let nodes = service.get_nodes_by_container_id("2025-10-05").await?;
+    /// let nodes = service.get_nodes_by_root_id("2025-10-05").await?;
     /// println!("Found {} nodes in this document", nodes.len());
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_nodes_by_container_id(
+    pub async fn get_nodes_by_root_id(
         &self,
-        container_node_id: &str,
+        root_node_id: &str,
     ) -> Result<Vec<Node>, NodeServiceError> {
         // Hierarchy is now managed via edges - use get_children instead
-        self.get_children(container_node_id).await
+        self.get_children(root_node_id).await
     }
 
     /// Move a node to a new parent

@@ -326,7 +326,7 @@ where
             // Get the container by traversing up to the root
             // If parent is a root (no parent of its own), use the parent as the container
             // Otherwise, get the parent's container recursively
-            let container_id = self.node_service.get_container_id(parent_id).await?;
+            let container_id = self.node_service.get_root_id(parent_id).await?;
             return Ok(container_id);
         }
 
@@ -614,7 +614,7 @@ where
         // Note: Container relationship is NOT stored as an edge.
         // Container is determined by traversing UP the parent chain to find the root node.
         // The final_container_id is used for validation/queries but doesn't create database edges.
-        // See NodeService::get_container_id() for the graph traversal implementation.
+        // See NodeService::get_root_id() for the graph traversal implementation.
 
         Ok(created_id)
     }
@@ -703,10 +703,7 @@ where
         &self,
         container_id: &str,
     ) -> Result<Vec<Node>, NodeOperationError> {
-        Ok(self
-            .node_service
-            .get_nodes_by_container_id(container_id)
-            .await?)
+        Ok(self.node_service.get_nodes_by_root_id(container_id).await?)
     }
 
     /// Get the parent ID of a node
@@ -742,9 +739,9 @@ where
     /// # Returns
     ///
     /// The container node ID (the node itself if it's already a root)
-    pub async fn get_container_id(&self, node_id: &str) -> Result<String, NodeOperationError> {
+    pub async fn get_root_id(&self, node_id: &str) -> Result<String, NodeOperationError> {
         // Delegate to NodeService which implements the traversal algorithm
-        Ok(self.node_service.get_container_id(node_id).await?)
+        Ok(self.node_service.get_root_id(node_id).await?)
     }
 
     // =========================================================================
@@ -1066,11 +1063,11 @@ where
                 .ok_or_else(|| NodeOperationError::node_not_found(parent_id.to_string()))?;
 
             // Get container from parent using service method
-            self.node_service.get_container_id(parent_id).await?
+            self.node_service.get_root_id(parent_id).await?
         } else {
             // Moving to root - node must have explicit container
             // Get current container
-            self.node_service.get_container_id(node_id).await?
+            self.node_service.get_root_id(node_id).await?
         };
 
         // Delegate to NodeService to perform the edge operations:
