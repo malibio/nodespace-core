@@ -850,8 +850,8 @@ where
             if node.node_type == "schema" {
                 if let Some(Value::Array(fields)) = properties_to_store.get("fields") {
                     // Convert the fields array to a JSON string
-                    let fields_json = serde_json::to_string(fields)
-                        .unwrap_or_else(|_| "[]".to_string());
+                    let fields_json =
+                        serde_json::to_string(fields).unwrap_or_else(|_| "[]".to_string());
                     properties_to_store.insert("fields".to_string(), Value::String(fields_json));
                     tracing::debug!("Stringified fields for schema storage");
                 }
@@ -1193,7 +1193,9 @@ where
                         if let Some(Value::String(fields_str)) = props.get("fields") {
                             let fields_str = fields_str.clone();
                             // Try to parse the fields string back to an array
-                            if let Ok(fields_array) = serde_json::from_str::<Vec<serde_json::Value>>(&fields_str) {
+                            if let Ok(fields_array) =
+                                serde_json::from_str::<Vec<serde_json::Value>>(&fields_str)
+                            {
                                 if let Some(obj) = props.as_object_mut() {
                                     obj.insert("fields".to_string(), Value::Array(fields_array));
                                 }
@@ -1293,8 +1295,8 @@ where
                 // For schema nodes, stringify the fields array before storage
                 if updated_node_type == "schema" {
                     if let Some(Value::Array(fields)) = updated_props.get("fields") {
-                        let fields_json = serde_json::to_string(fields)
-                            .unwrap_or_else(|_| "[]".to_string());
+                        let fields_json =
+                            serde_json::to_string(fields).unwrap_or_else(|_| "[]".to_string());
                         if let Some(obj) = updated_props.as_object_mut() {
                             obj.insert("fields".to_string(), Value::String(fields_json));
                         }
