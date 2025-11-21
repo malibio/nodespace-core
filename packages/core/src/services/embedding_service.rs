@@ -122,11 +122,14 @@ impl NodeEmbeddingService {
         }
     }
 
-    /// Build embeddable content by combining node + children contributions
+    /// Build embeddable content by combining node + immediate children contributions
     ///
-    /// Recursively walks the tree and combines:
+    /// Combines content from the node and its direct children:
     /// 1. Node's own embeddable content (if it's a root)
-    /// 2. Each child's contribution to this node
+    /// 2. Each immediate child's contribution to this node
+    ///
+    /// Note: Only processes direct children (one level deep), not grandchildren.
+    /// This keeps embeddings focused on the node's immediate context.
     ///
     /// The two-level system means:
     /// - Level 1: Root embeddability (should this node be embedded?)
