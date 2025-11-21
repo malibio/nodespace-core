@@ -21,7 +21,6 @@ import {
 } from '../../lib/services/reactive-node-service.svelte.js';
 import type { NodeManagerEvents } from '../../lib/services/reactive-node-service.svelte.js';
 import { createTestNode } from '../helpers';
-import { sharedNodeStore as _sharedNodeStore } from '../../lib/services/shared-node-store';
 
 // Performance test scaling based on environment variable
 const FULL_PERFORMANCE = process.env.TEST_FULL_PERFORMANCE === '1';
@@ -90,7 +89,7 @@ describe('NodeManager Performance Tests', () => {
   };
 
   test(`initializes ${PERF_SCALE.init} nodes efficiently (< ${PERF_THRESHOLDS.init}ms)`, () => {
-    const { nodes: largeDataset, hierarchyMap: _hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.init);
+    const { nodes: largeDataset } = generateLargeNodeDataset(PERF_SCALE.init);
 
     // Populate hierarchy cache BEFORE initializeNodes for graph-native architecture
     // This simulates what the backend adapter would do when loading from database
@@ -117,7 +116,7 @@ describe('NodeManager Performance Tests', () => {
   });
 
   test(`node lookup performance with ${PERF_SCALE.lookup}+ nodes (< 1ms)`, () => {
-    const { nodes: largeDataset, hierarchyMap: _hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.lookup);
+    const { nodes: largeDataset } = generateLargeNodeDataset(PERF_SCALE.lookup);
     // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy
 
     nodeManager.initializeNodes(largeDataset);
@@ -137,7 +136,7 @@ describe('NodeManager Performance Tests', () => {
   });
 
   test(`combineNodes performance with large document (< ${PERF_THRESHOLDS.combine}ms)`, () => {
-    const { nodes: largeDataset, hierarchyMap: _hierarchyMap } = generateLargeNodeDataset(PERF_SCALE.combine);
+    const { nodes: largeDataset } = generateLargeNodeDataset(PERF_SCALE.combine);
     // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy
 
     nodeManager.initializeNodes(largeDataset);
