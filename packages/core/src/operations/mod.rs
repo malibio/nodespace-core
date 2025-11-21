@@ -330,8 +330,8 @@ where
             return Ok(container_id);
         }
 
-        // Cannot resolve container
-        Err(NodeOperationError::non_container_must_have_container(
+        // Cannot resolve root
+        Err(NodeOperationError::non_root_must_have_root(
             node_id.to_string(),
             node_type.to_string(),
         ))
@@ -1538,15 +1538,15 @@ mod tests {
             })
             .await;
 
-        // Verify error is ParentContainerMismatch
+        // Verify error is ParentRootMismatch
         assert!(
             result.is_err(),
-            "Should error when parent and child have different containers"
+            "Should error when parent and child have different roots"
         );
         let error = result.unwrap_err();
         assert!(
-            matches!(error, NodeOperationError::ParentContainerMismatch { .. }),
-            "Error should be ParentContainerMismatch, got: {:?}",
+            matches!(error, NodeOperationError::ParentRootMismatch { .. }),
+            "Error should be ParentRootMismatch, got: {:?}",
             error
         );
     }
