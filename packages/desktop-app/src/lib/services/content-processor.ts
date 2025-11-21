@@ -221,7 +221,7 @@ export class ContentProcessor {
   }
 
   private constructor() {
-    // Constructor - initialization happens on demand
+    // Private constructor enforces singleton pattern via getInstance()
   }
 
   /**
@@ -232,7 +232,13 @@ export class ContentProcessor {
   }
 
   /**
-   * Invalidate cached references for a specific node
+   * Invalidate cached references for a specific node.
+   *
+   * Call this method when a node's content or properties change to ensure
+   * that any cached references to that node are refreshed on next access.
+   * This is typically needed after node updates, deletions, or title changes.
+   *
+   * @param nodeId - The ID of the node whose cached references should be invalidated
    */
   public invalidateReferenceCache(nodeId: string): void {
     const urisToRemove: string[] = [];
