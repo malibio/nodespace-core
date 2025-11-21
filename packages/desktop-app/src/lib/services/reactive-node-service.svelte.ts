@@ -29,6 +29,7 @@ import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { schemaService } from './schema-service';
+import { moveNode as moveNodeCommand } from './tauri-commands';
 
 // No-op event emitter (eventBus removed - LIVE SELECT handles real-time sync)
 const eventBus = {
@@ -727,8 +728,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Atomic backend operation - backend handles fractional ordering
     try {
-      // Import tauri-commands inline for moveNode
-      const { moveNode: moveNodeCommand } = await import('./tauri-commands');
       await moveNodeCommand(nodeId, targetParentId, null);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
@@ -819,7 +818,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Atomic backend operation for main node - backend handles fractional ordering
     try {
-      await (await import('./tauri-commands')).moveNode(nodeId, newParentId, null);
+      await moveNodeCommand(nodeId, newParentId, null);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -875,7 +874,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
           // Atomic backend operation - backend handles fractional ordering
           try {
-            await (await import('./tauri-commands')).moveNode(siblingId, nodeId, null);
+            await moveNodeCommand(siblingId, nodeId, null);
           } catch (error) {
             // Check if error is ignorable
             const isIgnorableError =

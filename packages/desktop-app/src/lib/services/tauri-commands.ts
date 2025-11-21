@@ -8,10 +8,38 @@
  * - All database operations go through Tauri invoke
  * - LIVE SELECT events are handled by tauri-sync-listener.ts
  * - No intermediate service layer needed
+ * - In test environment, operations are no-ops (mocked)
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { isTestEnvironment } from '$lib/utils/test-environment';
 import type { Node } from '$lib/types';
+
+// Lazy-loaded invoke function - only imported in non-test environment
+let _invoke: typeof import('@tauri-apps/api/core').invoke | null = null;
+
+/**
+ * Get the Tauri invoke function, lazily loaded to avoid test environment errors.
+ * In test environment, returns a no-op mock that silently succeeds.
+ * This allows SharedNodeStore persistence logic to run without actual database calls.
+ */
+async function getInvoke(): Promise<typeof import('@tauri-apps/api/core').invoke> {
+  if (isTestEnvironment()) {
+    // In test environment, return a no-op mock
+    // SharedNodeStore tests use in-memory state; actual Tauri calls are not needed
+    // This prevents unhandled rejection errors during debounced persistence
+    return (async <T>(): Promise<T> => {
+      // Return sensible defaults for different command types
+      // Most commands return void or empty results in test mode
+      return undefined as T;
+    }) as unknown as typeof import('@tauri-apps/api/core').invoke;
+  }
+
+  if (!_invoke) {
+    const tauriCore = await import('@tauri-apps/api/core');
+    _invoke = tauriCore.invoke;
+  }
+  return _invoke;
+}
 
 // ============================================================================
 // Types for Tauri Commands
@@ -65,6 +93,7 @@ export interface EdgeRecord {
  * Accepts either CreateNodeInput or a full Node object
  */
 export async function createNode(input: CreateNodeInput | Node): Promise<string> {
+  const invoke = await getInvoke();
   // Handle both CreateNodeInput and Node formats
   const node = 'nodeType' in input && !('node_type' in input)
     ? {
@@ -91,6 +120,7 @@ export async function createNode(input: CreateNodeInput | Node): Promise<string>
  * Get a node by ID
  */
 export async function getNode(id: string): Promise<Node | null> {
+  const invoke = await getInvoke();
   return invoke<Node | null>('get_node', { id });
 }
 
@@ -102,6 +132,7 @@ export async function updateNode(
   version: number,
   update: UpdateNodeInput
 ): Promise<Node> {
+  const invoke = await getInvoke();
   return invoke<Node>('update_node', { id, version, update });
 }
 
@@ -109,6 +140,7 @@ export async function updateNode(
  * Delete a node by ID
  */
 export async function deleteNode(id: string, version: number): Promise<DeleteResult> {
+  const invoke = await getInvoke();
   return invoke<DeleteResult>('delete_node', { id, version });
 }
 
@@ -120,6 +152,7 @@ export async function deleteNode(id: string, version: number): Promise<DeleteRes
  * Get child nodes of a parent
  */
 export async function getChildren(parentId: string): Promise<Node[]> {
+  const invoke = await getInvoke();
   return invoke<Node[]>('get_children', { parent_id: parentId });
 }
 
@@ -127,6 +160,7 @@ export async function getChildren(parentId: string): Promise<Node[]> {
  * Get nodes by container ID (for page loading)
  */
 export async function getNodesByContainerId(containerNodeId: string): Promise<Node[]> {
+  const invoke = await getInvoke();
   return invoke<Node[]>('get_nodes_by_container_id', { container_node_id: containerNodeId });
 }
 
@@ -138,6 +172,7 @@ export async function moveNode(
   newParentId: string | null,
   newBeforeSiblingId: string | null
 ): Promise<void> {
+  const invoke = await getInvoke();
   return invoke<void>('move_node', {
     node_id: nodeId,
     new_parent_id: newParentId,
@@ -153,6 +188,7 @@ export async function reorderNode(
   version: number,
   beforeSiblingId: string | null
 ): Promise<void> {
+  const invoke = await getInvoke();
   return invoke<void>('reorder_node', {
     node_id: nodeId,
     version,
@@ -164,6 +200,7 @@ export async function reorderNode(
  * Get all edges (for bulk tree loading)
  */
 export async function getAllEdges(): Promise<EdgeRecord[]> {
+  const invoke = await getInvoke();
   return invoke<EdgeRecord[]>('get_all_edges', {});
 }
 
@@ -178,6 +215,7 @@ export async function createMention(
   mentioningNodeId: string,
   mentionedNodeId: string
 ): Promise<void> {
+  const invoke = await getInvoke();
   return invoke<void>('create_node_mention', {
     mentioning_node_id: mentioningNodeId,
     mentioned_node_id: mentionedNodeId
@@ -191,6 +229,7 @@ export async function deleteMention(
   mentioningNodeId: string,
   mentionedNodeId: string
 ): Promise<void> {
+  const invoke = await getInvoke();
   return invoke<void>('delete_node_mention', {
     mentioning_node_id: mentioningNodeId,
     mentioned_node_id: mentionedNodeId
@@ -201,6 +240,7 @@ export async function deleteMention(
  * Get outgoing mentions from a node
  */
 export async function getOutgoingMentions(nodeId: string): Promise<string[]> {
+  const invoke = await getInvoke();
   return invoke<string[]>('get_outgoing_mentions', { node_id: nodeId });
 }
 
@@ -208,6 +248,7 @@ export async function getOutgoingMentions(nodeId: string): Promise<string[]> {
  * Get incoming mentions (backlinks) to a node
  */
 export async function getIncomingMentions(nodeId: string): Promise<string[]> {
+  const invoke = await getInvoke();
   return invoke<string[]>('get_incoming_mentions', { node_id: nodeId });
 }
 
@@ -215,6 +256,7 @@ export async function getIncomingMentions(nodeId: string): Promise<string[]> {
  * Get containers of nodes that mention the target node
  */
 export async function getMentioningContainers(nodeId: string): Promise<string[]> {
+  const invoke = await getInvoke();
   return invoke<string[]>('get_mentioning_containers', { node_id: nodeId });
 }
 
@@ -234,6 +276,7 @@ export interface NodeQuery {
 }
 
 export async function queryNodes(query: NodeQuery): Promise<Node[]> {
+  const invoke = await getInvoke();
   return invoke<Node[]>('query_nodes_simple', { query });
 }
 
@@ -241,6 +284,7 @@ export async function queryNodes(query: NodeQuery): Promise<Node[]> {
  * Mention autocomplete query
  */
 export async function mentionAutocomplete(query: string, limit?: number): Promise<Node[]> {
+  const invoke = await getInvoke();
   return invoke<Node[]>('mention_autocomplete', { query, limit });
 }
 
@@ -259,6 +303,7 @@ export interface CreateContainerInput {
 }
 
 export async function createContainerNode(input: CreateContainerInput): Promise<string> {
+  const invoke = await getInvoke();
   return invoke<string>('create_container_node', {
     input: {
       content: input.content,
@@ -282,6 +327,7 @@ export interface SaveNodeWithParentInput {
 }
 
 export async function saveNodeWithParent(input: SaveNodeWithParentInput): Promise<void> {
+  const invoke = await getInvoke();
   return invoke<void>('save_node_with_parent', {
     input: {
       node_id: input.nodeId,

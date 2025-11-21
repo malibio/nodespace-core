@@ -146,6 +146,37 @@ class SimplePersistenceCoordinator {
     return this.pendingOperations.has(nodeId);
   }
 
+  /**
+   * Flush all pending operations immediately.
+   * Used on window close to prevent data loss.
+   *
+   * @returns Promise that resolves when all pending operations complete or timeout
+   */
+  async flushPending(): Promise<void> {
+    const nodeIds = Array.from(this.pendingOperations.keys());
+    if (nodeIds.length === 0) return;
+
+    // Execute all pending operations immediately by clearing their timeouts and running them
+    const promises: Promise<void>[] = [];
+    for (const [nodeId, pending] of this.pendingOperations) {
+      clearTimeout(pending.timeoutId);
+      // Execute the operation directly - start the execution, then wait on the pending promise
+      pending.operation().then(
+        () => pending.resolve(),
+        (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
+      ).finally(() => {
+        this.pendingOperations.delete(nodeId);
+      });
+      promises.push(pending.promise.catch(() => {})); // Ignore errors, just wait for completion
+    }
+
+    // Wait for all to complete with a timeout
+    await Promise.race([
+      Promise.all(promises),
+      new Promise<void>((resolve) => setTimeout(resolve, 5000)) // 5 second timeout
+    ]);
+  }
+
   async waitForPersistence(nodeIds: string[], timeoutMs = 5000): Promise<Set<string>> {
     const failed = new Set<string>();
     const promises = nodeIds.map(async (nodeId) => {
@@ -1823,6 +1854,24 @@ export class SharedNodeStore {
   hasPendingWrites(): boolean {
     const metrics = PersistenceCoordinator.getInstance().getMetrics();
     return metrics.pendingOperations > 0;
+  }
+
+  /**
+   * Flush all pending persistence operations immediately.
+   * Used on window close to prevent data loss.
+   *
+   * This will:
+   * 1. Commit any active batches
+   * 2. Execute all debounced persistence operations immediately
+   *
+   * @returns Promise that resolves when all pending operations complete
+   */
+  async flushAllPending(): Promise<void> {
+    // First, commit all active batches
+    this.commitAllBatches();
+
+    // Then flush all pending persistence operations
+    await PersistenceCoordinator.getInstance().flushPending();
   }
 
   /**

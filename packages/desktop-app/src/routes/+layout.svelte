@@ -1,9 +1,10 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
   import '../app.css';
   import AppShell from '$lib/components/layout/app-shell.svelte';
   import { initializeSchemaPluginSystem } from '$lib/plugins/schema-plugin-loader';
   import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener';
+  import { sharedNodeStore } from '$lib/services/shared-node-store';
 
   // Initialize schema plugin auto-registration system on mount
   onMount(async () => {
@@ -37,9 +38,26 @@
 
   // Flush pending saves on window close to prevent data loss
   onMount(() => {
-    // Note: PersistenceCoordinator was removed in #558
-    // Pending flush operations are now handled differently
-    // TODO: Implement new cleanup mechanism if needed
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      // Check if there are pending writes
+      if (sharedNodeStore.hasPendingWrites()) {
+        // Try to flush pending operations
+        // Note: beforeunload has limited async support, but we try our best
+        event.preventDefault();
+        // returnValue assignment is required for Chrome
+        event.returnValue = '';
+
+        // Flush pending operations synchronously if possible
+        // Note: async operations may not complete in beforeunload, but we try
+        sharedNodeStore.flushAllPending();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
   });
 </script>
 
