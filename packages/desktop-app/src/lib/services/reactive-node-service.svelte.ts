@@ -832,21 +832,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const deletionDependencies = [previousNodeId]; // Content update must persist first
     const currentNodeParents = sharedNodeStore.getParentsForNode(currentNodeId);
     const currentParentId = currentNodeParents.length > 0 ? currentNodeParents[0].id : null;
-    const siblings = sharedNodeStore.getNodesForParent(currentParentId);
-    const nextSibling = siblings.find((n) => n.beforeSiblingId === currentNodeId);
-    if (nextSibling) {
-      deletionDependencies.push(nextSibling.id); // Sibling chain repair must complete
-    }
     const children = sharedNodeStore.getNodesForParent(currentNodeId);
     if (children.length > 0) {
       deletionDependencies.push(...children.map((c) => c.id)); // Child promotions must complete
     }
 
-    // Remove node from sibling chain BEFORE deletion to prevent orphans
-    const currentBeforeSiblingId = currentNode.beforeSiblingId;
-    removeFromSiblingChain(currentNodeId, currentBeforeSiblingId, currentParentId);
-
     // Delete with dependencies - PersistenceCoordinator ensures correct order
+    // Backend handles sibling chain integrity with atomic moveNode
     sharedNodeStore.deleteNode(currentNodeId, viewerSource, false, deletionDependencies);
     delete _uiState[currentNodeId];
 
@@ -907,42 +899,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * @see outdentNode() for implementation example
    */
 
-  /**
-   * Removes a node from its current sibling chain by updating the next sibling's beforeSiblingId.
-   * This prevents orphaned nodes when a node is moved (indent/outdent) or deleted.
-   *
-   * @param nodeId - The node being removed from its current parent
-   * @param oldBeforeSiblingId - The node's old beforeSiblingId value (before it was moved)
-   * @param parentId - The parent ID (optional, will query if not provided)
-   */
-  function removeFromSiblingChain(
-    nodeId: string,
-    oldBeforeSiblingId: string | null,
-    parentId?: string | null
-  ): string | null {
-    // Use provided parentId or query from graph
-    let actualParentId = parentId;
-    if (actualParentId === undefined) {
-      const parents = sharedNodeStore.getParentsForNode(nodeId);
-      actualParentId = parents.length > 0 ? parents[0].id : null;
-    }
-
-    const siblings = sharedNodeStore.getNodesForParent(actualParentId);
-    const nextSibling = siblings.find((n) => n.beforeSiblingId === nodeId);
-
-    if (nextSibling) {
-      // Update next sibling to point to our predecessor, "splicing us out" of the chain
-      sharedNodeStore.updateNode(
-        nextSibling.id,
-        { beforeSiblingId: oldBeforeSiblingId },
-        viewerSource,
-        { skipConflictDetection: true } // Sequential structural updates
-      );
-      return nextSibling.id; // Return the ID of the updated sibling
-    }
-    return null;
-  }
-
   async function indentNode(nodeId: string): Promise<boolean> {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return false;
@@ -975,14 +931,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const originalUIState = { ..._uiState[nodeId] };
     const originalRootNodeIds = [..._rootNodeIds];
 
-    // Calculate where to insert in target parent's children
-    const existingChildren = sharedNodeStore.getNodesForParent(targetParentId).map((n) => n.id);
-    let beforeSiblingId: string | null = null;
-    if (existingChildren.length > 0) {
-      const sortedChildren = sortChildrenByBeforeSiblingId(existingChildren, targetParentId);
-      beforeSiblingId = sortedChildren[sortedChildren.length - 1];
-    }
-
     // Optimistic UI update: Show the move immediately
     _uiState[nodeId] = { ..._uiState[nodeId], depth: (targetParentUIState?.depth || 0) + 1 };
     updateDescendantDepths(nodeId);
@@ -997,9 +945,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.removeChildFromCache(currentParentId, nodeId);
     sharedNodeStore.addChildToCache(targetParentId, nodeId);
 
-    // Atomic backend operation
+    // Atomic backend operation - moveNode handles all ordering internally
     try {
-      await backendAdapter.moveNode(nodeId, targetParentId, beforeSiblingId);
+      await backendAdapter.moveNode(nodeId, targetParentId, null);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -1024,19 +972,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Save old beforeSiblingId before updating
-    const oldBeforeSiblingId = node.beforeSiblingId;
-
-    // Update node's parentId FIRST to move it to the new parent
+    // Update node's parentId to reflect the backend move
     sharedNodeStore.updateNode(
       nodeId,
-      { parentId: targetParentId, beforeSiblingId },
+      { parentId: targetParentId },
       { type: 'database', reason: 'indent-node' },
       { isComputedField: true }
     );
-
-    // THEN remove from old sibling chain using the OLD beforeSiblingId
-    removeFromSiblingChain(nodeId, oldBeforeSiblingId, currentParentId);
 
     events.hierarchyChanged();
     _updateTrigger++;
@@ -1075,7 +1017,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const originalRootNodeIds = [..._rootNodeIds];
 
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
-    const positionBeforeSibling = oldParentId;
 
     // Optimistic UI updates for main node
     _uiState[nodeId] = { ..._uiState[nodeId], depth: newDepth };
@@ -1094,9 +1035,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.removeChildFromCache(oldParentId, nodeId);
     sharedNodeStore.addChildToCache(newParentId, nodeId);
 
-    // Atomic backend operation for main node
+    // Atomic backend operation for main node - moveNode handles all ordering internally
     try {
-      await backendAdapter.moveNode(nodeId, newParentId, positionBeforeSibling);
+      await backendAdapter.moveNode(nodeId, newParentId, null);
     } catch (error) {
       // Check if error is ignorable (unit test environment or unpersisted nodes)
       const isIgnorableError =
@@ -1121,33 +1062,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Ignorable error: continue with UI updates (for unit tests without server)
     }
 
-    // Save old beforeSiblingId before updating
-    const oldBeforeSiblingId = node.beforeSiblingId;
-
-    // Update node's parentId FIRST to move it to the new parent
+    // Update node's parentId to reflect the backend move
     sharedNodeStore.updateNode(
       nodeId,
-      { parentId: newParentId, beforeSiblingId: positionBeforeSibling },
+      { parentId: newParentId },
       { type: 'database', reason: 'outdent-node' },
       { isComputedField: true }
     );
 
-    // THEN remove from old sibling chain using the OLD beforeSiblingId
-    removeFromSiblingChain(nodeId, oldBeforeSiblingId, oldParentId);
-
     // Transfer siblings below as children
     if (siblingsBelow.length > 0) {
-      const existingChildren = sharedNodeStore
-        .getNodesForParent(nodeId)
-        .filter((n) => !siblingsBelow.includes(n.id))
-        .map((n) => n.id);
-
-      let lastSiblingId: string | null = null;
-      if (existingChildren.length > 0) {
-        const sortedChildren = sortChildrenByBeforeSiblingId(existingChildren, nodeId);
-        lastSiblingId = sortedChildren[sortedChildren.length - 1];
-      }
-
       // Transfer each sibling
       for (let i = 0; i < siblingsBelow.length; i++) {
         const siblingId = siblingsBelow[i];
@@ -1155,8 +1079,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         if (sibling) {
           // Save state for rollback
           const siblingOriginalUIState = { ..._uiState[siblingId] };
-
-          const siblingBeforeSiblingId = i === 0 ? lastSiblingId : siblingsBelow[i - 1];
 
           // Optimistic UI update
           const siblingDepth = newDepth + 1;
@@ -1167,9 +1089,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           sharedNodeStore.removeChildFromCache(oldParentId, siblingId);
           sharedNodeStore.addChildToCache(nodeId, siblingId);
 
-          // Atomic backend operation
+          // Atomic backend operation - moveNode handles all ordering internally
           try {
-            await backendAdapter.moveNode(siblingId, nodeId, siblingBeforeSiblingId);
+            await backendAdapter.moveNode(siblingId, nodeId, null);
           } catch (error) {
             // Check if error is ignorable
             const isIgnorableError =
@@ -1193,19 +1115,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             // Ignorable error: continue with UI updates (for unit tests without server)
           }
 
-          // Save old beforeSiblingId before updating
-          const oldSiblingBeforeSiblingId = sibling.beforeSiblingId;
-
-          // Update parentId FIRST to move sibling to new parent
+          // Update parentId to reflect the backend move
           sharedNodeStore.updateNode(
             siblingId,
-            { parentId: nodeId, beforeSiblingId: siblingBeforeSiblingId },
+            { parentId: nodeId },
             { type: 'database', reason: 'outdent-transfer' },
             { isComputedField: true }
           );
-
-          // THEN remove from old sibling chain using the OLD beforeSiblingId
-          removeFromSiblingChain(siblingId, oldSiblingBeforeSiblingId, oldParentId);
         }
       }
 
@@ -1268,36 +1184,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
     }
 
-    // Find existing children of the new parent to append after them
-    const existingChildren = sharedNodeStore
-      .getNodesForParent(newParentForChildren)
-      .filter((n) => !children.find((c) => c.id === n.id))
-      .map((n) => n.id);
-
-    let lastSiblingId: string | null = null;
-    if (existingChildren.length > 0) {
-      const sortedChildren = sortChildrenByBeforeSiblingId(existingChildren, newParentForChildren);
-      lastSiblingId = sortedChildren[sortedChildren.length - 1];
-    }
-
-    const sortedDeletedChildren = sortChildrenByBeforeSiblingId(
-      children.map((c) => c.id),
-      nodeId
-    );
-    const firstChildId = sortedDeletedChildren[0];
-
     // Process each child individually
     // Note: We could optimize this with a batch update API, but typical nodes have <10 children
     // and PersistenceCoordinator already handles batching at a lower level
     for (const child of children) {
-      const updates: Partial<Node> = {};
-
-      if (child.id === firstChildId) {
-        updates.beforeSiblingId = lastSiblingId;
-      }
-
-      // NOTE: parentId and containerNodeId removed - hierarchy managed by backend via parent_of edges
-      sharedNodeStore.updateNode(child.id, updates, viewerSource);
+      // Update parentId to promote child to new parent
+      // Backend handles sibling ordering with atomic moveNode
+      sharedNodeStore.updateNode(
+        child.id,
+        { parentId: newParentForChildren },
+        viewerSource
+      );
 
       // CRITICAL: Update children cache when promoting children to new parent
       sharedNodeStore.removeChildFromCache(nodeId, child.id);
@@ -1312,7 +1209,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Update depth
       const currentChildDepth = _uiState[child.id]?.depth ?? 0;
       const targetDepth = newParentForChildren
-        ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
+        ? (_uiState[newParentForChildren]?.depth || 0) + 1
         : 0;
       const newDepth = Math.min(currentChildDepth, targetDepth);
 
@@ -1354,9 +1251,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     cleanupDebouncedOperations(nodeId);
 
-    // Remove node from sibling chain BEFORE deletion to prevent orphans
-    const nodeBeforeSiblingId = node.beforeSiblingId;
-    removeFromSiblingChain(nodeId, nodeBeforeSiblingId, parentId);
+    // Backend handles sibling chain integrity with atomic operations
 
     // CRITICAL: Update children cache to remove this node from its parent
     sharedNodeStore.removeChildFromCache(parentId, nodeId);
