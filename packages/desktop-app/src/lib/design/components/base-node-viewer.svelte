@@ -550,16 +550,15 @@
   // this mismatch and persist the correction.
   // ============================================================================
   // previousStructure is updated in three places (all necessary):
-  // 1. Deletion watcher (line ~218): Cleans up beforeSiblingId references to deleted nodes
+  // 1. Deletion watcher (line ~218): Cleans up deleted nodes
   // 2. This watcher (line ~388): Tracks nodes on first sight
   // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
-  // Issue #575: Simplified - beforeSiblingId removed from Node type
-  // These Maps are kept for cleanup logic but no longer track beforeSiblingId
-  let previousStructure = new Map<string, Record<string, never>>();
+  // Issue #575: Simplified - tracks node presence for cleanup (no beforeSiblingId)
+  let previousStructure = new Set<string>();
 
   // Track what structure was actually persisted to database (#479)
-  // Issue #575: Simplified - no longer tracking beforeSiblingId
-  let persistedStructure = new Map<string, Record<string, never>>();
+  // Issue #575: Simplified - only tracks node presence
+  let persistedStructure = new Set<string>();
 
   // Issue #575: Sibling index removed - sibling ordering now handled by backend
 
@@ -568,7 +567,7 @@
    * Original function tracked beforeSiblingId changes
    */
   function trackStructureChange(nodeId: string): void {
-    previousStructure.set(nodeId, {});
+    previousStructure.add(nodeId);
   }
 
   // Issue #575: Simplified structural watcher - beforeSiblingId no longer tracked
@@ -583,13 +582,13 @@
       trackStructureChange(node.id);
       // Mark as persisted if it exists in database
       if (!persistedStructure.has(node.id) && sharedNodeStore.isNodePersisted(node.id)) {
-        persistedStructure.set(node.id, {});
+        persistedStructure.add(node.id);
       }
     }
 
     // Clean up tracking for nodes that no longer exist
     const currentNodeIds = new Set(visibleNodes.map((n) => n.id));
-    for (const [trackedNodeId] of previousStructure) {
+    for (const trackedNodeId of previousStructure) {
       if (!currentNodeIds.has(trackedNodeId)) {
         previousStructure.delete(trackedNodeId);
       }
