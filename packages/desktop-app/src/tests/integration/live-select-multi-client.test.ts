@@ -26,6 +26,9 @@ import type {
 	NodeEventData
 } from '$lib/services/event-types';
 
+// Maximum allowed latency for synchronization events (from Issue #559 Acceptance Criteria)
+const MAX_SYNC_LATENCY_MS = 100;
+
 // Mock Tauri API for testing
 const mockTauriEvents = new Map<string, Array<(event: { payload: unknown }) => void>>();
 
@@ -125,7 +128,7 @@ describe('Multi-Client Integration Tests for LIVE SELECT', () => {
 			// Assert: Event received within 100ms
 			expect(receivedEvents).toHaveLength(1);
 			const latency = receivedEvents[0].receivedAt - emitTime;
-			expect(latency).toBeLessThan(100);
+			expect(latency).toBeLessThan(MAX_SYNC_LATENCY_MS);
 			expect(receivedEvents[0].event.nodeData.content).toBe('New task from MCP server');
 		});
 
@@ -196,7 +199,7 @@ describe('Multi-Client Integration Tests for LIVE SELECT', () => {
 			// Assert: Hierarchy update received within 100ms
 			expect(edgeEvents).toHaveLength(1);
 			const latency = edgeEvents[0].receivedAt - emitTime;
-			expect(latency).toBeLessThan(100);
+			expect(latency).toBeLessThan(MAX_SYNC_LATENCY_MS);
 			expect(edgeEvents[0].event.edgeData.in).toBe('node:mcp-parent');
 			expect(edgeEvents[0].event.edgeData.out).toBe('node:mcp-child');
 		});
@@ -233,7 +236,7 @@ describe('Multi-Client Integration Tests for LIVE SELECT', () => {
 			// Assert: Hierarchy update within 100ms
 			expect(edgeUpdateEvents).toHaveLength(1);
 			const latency = edgeUpdateEvents[0].receivedAt - emitTime;
-			expect(latency).toBeLessThan(100);
+			expect(latency).toBeLessThan(MAX_SYNC_LATENCY_MS);
 			expect(edgeUpdateEvents[0].event.edgeData.order).toBe(1.5);
 		});
 
