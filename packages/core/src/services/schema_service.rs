@@ -604,8 +604,9 @@ where
         // Process fields and generate DDL statements
         let mut ddl_statements = Vec::new();
 
-        // Create spoke table (SCHEMALESS for user types)
-        ddl_statements.push(format!("DEFINE TABLE {} SCHEMALESS;", type_name));
+        // Create spoke table (SCHEMAFULL for all types - core and user-defined)
+        // SCHEMAFULL with FLEXIBLE fields allows enforcing core fields while accepting user-defined fields
+        ddl_statements.push(format!("DEFINE TABLE {} SCHEMAFULL;", type_name));
 
         // Process fields to determine storage strategy and generate relation tables
         let schema_fields = self.process_fields(type_name, &fields, &mut ddl_statements)?;
@@ -647,12 +648,15 @@ where
 
         // Execute all DDL statements
         for ddl in &ddl_statements {
-            db.query(ddl).await.map_err(|e| {
+            let mut response = db.query(ddl).await.map_err(|e| {
                 NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
                     "Failed to execute DDL '{}': {}",
                     ddl, e
                 )))
             })?;
+
+            // Consume the response to ensure DDL is fully executed
+            let _: Result<Vec<serde_json::Value>, _> = response.take(0);
         }
 
         // Create schema node using NodeService (handles hub-spoke architecture correctly)
@@ -675,10 +679,11 @@ where
     ///
     /// **IMPORTANT: Nested Object Behavior**
     ///
-    /// User schemas are created as SCHEMALESS tables. Nested object schemas are captured
-    /// in the schema node metadata (FieldDefinition.schema) but are NOT enforced at the
-    /// database level. This allows flexibility for user-defined schemas while maintaining
-    /// the nested structure documentation for future validation at the application level.
+    /// All schemas (core and user-defined) are created as SCHEMAFULL tables with FLEXIBLE fields.
+    /// Nested object schemas are captured in the schema node metadata (FieldDefinition.schema)
+    /// but are NOT enforced at the database level. This allows flexibility for user-defined schemas
+    /// while maintaining type safety on core fields and the nested structure documentation for
+    /// future validation at the application level.
     ///
     /// # Arguments
     ///
@@ -979,7 +984,8 @@ where
     /// Synchronize schema definition to database schema
     ///
     /// Creates or updates database table and field definitions based on schema.
-    /// Uses SCHEMAFULL mode for core types, SCHEMALESS for user types.
+    /// Uses SCHEMAFULL mode for all types (core and user-defined) to maintain type safety
+    /// while supporting flexible user-defined fields.
     ///
     /// # Arguments
     ///
@@ -1015,12 +1021,9 @@ where
             )));
         }
 
-        // Determine table mode: SCHEMAFULL for core types, SCHEMALESS for user types
-        let table_mode = if schema.is_core {
-            "SCHEMAFULL"
-        } else {
-            "SCHEMALESS"
-        };
+        // Use SCHEMAFULL for all types (core and user-defined)
+        // SCHEMAFULL with FLEXIBLE fields allows enforcing core fields while accepting user-defined fields
+        let table_mode = "SCHEMAFULL";
 
         // Get database connection
         let db = self.node_service.store.db();
@@ -1029,12 +1032,15 @@ where
         let define_table_query =
             format!("DEFINE TABLE IF NOT EXISTS {} {};", type_name, table_mode);
 
-        db.query(&define_table_query).await.map_err(|e| {
+        let mut response = db.query(&define_table_query).await.map_err(|e| {
             NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
                 "Failed to define table '{}': {}",
                 type_name, e
             )))
         })?;
+
+        // Consume the response to ensure the query is fully executed
+        let _: Result<Vec<serde_json::Value>, _> = response.take(0);
 
         tracing::info!("Synced table '{}' with mode {}", type_name, table_mode);
 
@@ -1111,12 +1117,15 @@ where
                 quoted_field, table, db_type
             );
 
-            db.query(&define_field_query).await.map_err(|e| {
+            let mut response = db.query(&define_field_query).await.map_err(|e| {
                 NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
                     "Failed to define field '{}' on table '{}': {}",
                     field_path, table, e
                 )))
             })?;
+
+            // Consume the response to ensure the query is fully executed
+            let _: Result<Vec<serde_json::Value>, _> = response.take(0);
 
             tracing::info!(
                 "Defined field '{}' on table '{}' as type '{}'",
@@ -1287,12 +1296,15 @@ where
             index_name, table, quoted_field
         );
 
-        db.query(&define_index_query).await.map_err(|e| {
+        let mut response = db.query(&define_index_query).await.map_err(|e| {
             NodeServiceError::DatabaseError(crate::db::DatabaseError::OperationError(format!(
                 "Failed to create index '{}' on table '{}': {}",
                 index_name, table, e
             )))
         })?;
+
+        // Consume the response to ensure the query is fully executed
+        let _: Result<Vec<serde_json::Value>, _> = response.take(0);
 
         tracing::info!(
             "Created index '{}' on table '{}' for field '{}'",
