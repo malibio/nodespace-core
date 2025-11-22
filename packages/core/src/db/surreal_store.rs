@@ -769,23 +769,6 @@ where
         Ok(())
     }
 
-    /// Convert Turso-style ID to SurrealDB Record ID format
-    ///
-    /// Turso IDs are plain UUIDs. SurrealDB uses `table:uuid` format.
-    /// This method extracts the type from the node and constructs the Record ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_type` - The node type (becomes table name)
-    /// * `id` - The UUID portion
-    ///
-    /// # Returns
-    ///
-    /// SurrealDB Record ID string: `table:uuid`
-    fn to_record_id(node_type: &str, id: &str) -> String {
-        format!("{}:{}", node_type, id)
-    }
-
     /// Parse SurrealDB Record ID into (table, uuid) components
     ///
     /// # Arguments
@@ -1835,14 +1818,9 @@ where
     pub async fn query_nodes(&self, query: NodeQuery) -> Result<Vec<Node>> {
         // Handle mentioned_by query using graph traversal
         if let Some(ref mentioned_node_id) = query.mentioned_by {
-            // Get the mentioned node to construct proper Record ID
-            let mentioned_node = self
-                .get_node(mentioned_node_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Target node not found: {}", mentioned_node_id))?;
-
-            let record_id = Self::to_record_id(&mentioned_node.node_type, &mentioned_node.id);
-            let thing = Thing::from(("nodes", Id::String(record_id)));
+            // Construct Thing for the mentioned node in the hub table
+            let thing =
+                surrealdb::sql::Thing::from(("node".to_string(), mentioned_node_id.to_string()));
 
             // Query nodes that have mentions pointing to this node
             let sql = if query.limit.is_some() {
@@ -2665,22 +2643,9 @@ where
         target_id: &str,
         root_id: &str,
     ) -> Result<()> {
-        // Get node types to construct proper Record IDs
-        let source_node = self
-            .get_node(source_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Source node not found: {}", source_id))?;
-        let target_node = self
-            .get_node(target_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Target node not found: {}", target_id))?;
-
-        // Construct Thing objects for proper Record ID binding
-        let source_record_id = Self::to_record_id(&source_node.node_type, &source_node.id);
-        let target_record_id = Self::to_record_id(&target_node.node_type, &target_node.id);
-
-        let source_thing = Thing::from(("nodes", Id::String(source_record_id)));
-        let target_thing = Thing::from(("nodes", Id::String(target_record_id)));
+        // Mentions relate nodes in the hub table, so we reference the node table directly
+        let source_thing = surrealdb::sql::Thing::from(("node".to_string(), source_id.to_string()));
+        let target_thing = surrealdb::sql::Thing::from(("node".to_string(), target_id.to_string()));
 
         // Check if mention already exists (for idempotency)
         let check_query = "SELECT VALUE id FROM mentions WHERE in = $source AND out = $target;";
@@ -2714,22 +2679,9 @@ where
     }
 
     pub async fn delete_mention(&self, source_id: &str, target_id: &str) -> Result<()> {
-        // Get node types to construct proper Record IDs
-        let source_node = self
-            .get_node(source_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Source node not found: {}", source_id))?;
-        let target_node = self
-            .get_node(target_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Target node not found: {}", target_id))?;
-
-        // Construct Thing objects for proper Record ID binding
-        let source_record_id = Self::to_record_id(&source_node.node_type, &source_node.id);
-        let target_record_id = Self::to_record_id(&target_node.node_type, &target_node.id);
-
-        let source_thing = Thing::from(("nodes", Id::String(source_record_id)));
-        let target_thing = Thing::from(("nodes", Id::String(target_record_id)));
+        // Mentions relate nodes in the hub table, so we reference the node table directly
+        let source_thing = surrealdb::sql::Thing::from(("node".to_string(), source_id.to_string()));
+        let target_thing = surrealdb::sql::Thing::from(("node".to_string(), target_id.to_string()));
 
         self.db
             .query("DELETE FROM mentions WHERE in = $source AND out = $target;")
@@ -2742,15 +2694,8 @@ where
     }
 
     pub async fn get_outgoing_mentions(&self, node_id: &str) -> Result<Vec<String>> {
-        // Get node type to construct proper Record ID
-        let node = self
-            .get_node(node_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found: {}", node_id))?;
-
-        // Construct Thing for proper Record ID binding
-        let record_id = Self::to_record_id(&node.node_type, &node.id);
-        let thing = Thing::from(("nodes", Id::String(record_id)));
+        // Construct Thing for the node in the hub table
+        let thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.to_string()));
 
         let query = "SELECT out FROM mentions WHERE in = $node_thing;";
         let mut response = self
@@ -2785,15 +2730,8 @@ where
     }
 
     pub async fn get_incoming_mentions(&self, node_id: &str) -> Result<Vec<String>> {
-        // Get node type to construct proper Record ID
-        let node = self
-            .get_node(node_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found: {}", node_id))?;
-
-        // Construct Thing for proper Record ID binding
-        let record_id = Self::to_record_id(&node.node_type, &node.id);
-        let thing = Thing::from(("nodes", Id::String(record_id)));
+        // Construct Thing for the node in the hub table
+        let thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.to_string()));
 
         let query = "SELECT in FROM mentions WHERE out = $node_thing;";
         let mut response = self
@@ -2828,16 +2766,8 @@ where
     }
 
     pub async fn get_mentioning_containers(&self, node_id: &str) -> Result<Vec<Node>> {
-        // Get node type to construct proper Record ID
-        // If node doesn't exist, return empty array (not an error)
-        let node = match self.get_node(node_id).await? {
-            Some(n) => n,
-            None => return Ok(Vec::new()),
-        };
-
-        // Construct Thing for proper Record ID binding
-        let record_id = Self::to_record_id(&node.node_type, &node.id);
-        let thing = Thing::from(("nodes", Id::String(record_id)));
+        // Construct Thing for the node in the hub table
+        let thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.to_string()));
 
         let query = "SELECT root_id FROM mentions WHERE out = $node_thing;";
         let mut response = self
