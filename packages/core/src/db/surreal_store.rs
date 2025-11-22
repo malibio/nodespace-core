@@ -1817,19 +1817,17 @@ where
 
     pub async fn query_nodes(&self, query: NodeQuery) -> Result<Vec<Node>> {
         // Handle mentioned_by query using graph traversal
+        // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
         if let Some(ref mentioned_node_id) = query.mentioned_by {
-            // Construct Thing for the mentioned node in the hub table
-            let thing =
-                surrealdb::sql::Thing::from(("node".to_string(), mentioned_node_id.to_string()));
-
-            // Query nodes that have mentions pointing to this node
+            // Use graph traversal to get IDs, then fetch full nodes
+            // We can't use SELECT <-mentions<-node.* directly because it returns nested structure
             let sql = if query.limit.is_some() {
-                "SELECT VALUE in FROM mentions WHERE out = $target_thing LIMIT $limit;"
+                "SELECT VALUE <-mentions<-node.id FROM type::thing('node', $node_id) LIMIT $limit;"
             } else {
-                "SELECT VALUE in FROM mentions WHERE out = $target_thing;"
+                "SELECT VALUE <-mentions<-node.id FROM type::thing('node', $node_id);"
             };
 
-            let mut query_builder = self.db.query(sql).bind(("target_thing", thing));
+            let mut query_builder = self.db.query(sql).bind(("node_id", mentioned_node_id.to_string()));
 
             if let Some(limit) = query.limit {
                 query_builder = query_builder.bind(("limit", limit));
@@ -1839,25 +1837,24 @@ where
                 .await
                 .context("Failed to query mentioned_by nodes")?;
 
-            let source_things: Vec<Thing> = response
+            // SELECT VALUE with graph traversal returns nested array - flatten it
+            // Result format: [[thing1, thing2], [thing3]] from multiple source nodes
+            let source_things_nested: Vec<Vec<Thing>> = response
                 .take(0)
-                .context("Failed to extract source nodes from mentions")?;
+                .context("Failed to extract source node IDs from mentions")?;
 
-            // Fetch full node records for each source
+            let source_things: Vec<Thing> = source_things_nested.into_iter().flatten().collect();
+
+            // Extract UUIDs and fetch full node records
             let mut nodes = Vec::new();
             for thing in source_things {
                 if let Id::String(id_str) = &thing.id {
-                    // Extract UUID from "node_type:uuid" format
-                    if let Some(uuid) = id_str.split(':').nth(1) {
-                        if let Some(node) = self.get_node(uuid).await? {
-                            nodes.push(node);
-                        }
+                    // id_str is just the UUID
+                    if let Some(node) = self.get_node(id_str).await? {
+                        nodes.push(node);
                     }
                 }
             }
-
-            // Note: include_containers_and_tasks filter not applicable for semantic search
-            // (would require additional graph query to check hierarchy)
 
             return Ok(nodes);
         }
@@ -2694,100 +2691,112 @@ where
     }
 
     pub async fn get_outgoing_mentions(&self, node_id: &str) -> Result<Vec<String>> {
-        // Construct Thing for the node in the hub table
-        let thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.to_string()));
+        // Use SurrealDB graph traversal syntax for optimal performance
+        // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
+        // Returns array<record> which we need to extract IDs from
+        let query = "SELECT ->mentions->node.id AS mentioned_ids FROM type::thing('node', $node_id);";
 
-        let query = "SELECT out FROM mentions WHERE in = $node_thing;";
         let mut response = self
             .db
             .query(query)
-            .bind(("node_thing", thing))
+            .bind(("node_id", node_id.to_string()))
             .await
             .context("Failed to get outgoing mentions")?;
 
         #[derive(Debug, Deserialize)]
-        struct MentionOut {
-            out: Thing,
+        struct MentionResult {
+            mentioned_ids: Vec<Thing>,
         }
 
-        let results: Vec<MentionOut> = response
+        // Graph traversal returns object with mentioned_ids array
+        let results: Vec<MentionResult> = response
             .take(0)
             .context("Failed to extract outgoing mentions from response")?;
 
-        // Extract UUIDs from Thing Record IDs
-        // Thing.id is Id::String("node_type:uuid"), so we need to extract just the UUID part
-        Ok(results
+        // Extract UUIDs from Thing Record IDs (format: node:uuid -> uuid)
+        let mentioned_ids: Vec<String> = results
             .into_iter()
-            .filter_map(|m| {
-                if let Id::String(id_str) = &m.out.id {
-                    // id_str format: "node_type:uuid", extract UUID (after last colon)
-                    id_str.split(':').nth(1).map(String::from)
+            .flat_map(|r| r.mentioned_ids)
+            .filter_map(|thing| {
+                if let Id::String(id_str) = &thing.id {
+                    // id_str is just the UUID part
+                    Some(id_str.clone())
                 } else {
                     None
                 }
             })
-            .collect())
+            .collect();
+
+        Ok(mentioned_ids)
     }
 
     pub async fn get_incoming_mentions(&self, node_id: &str) -> Result<Vec<String>> {
-        // Construct Thing for the node in the hub table
-        let thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.to_string()));
+        // Use SurrealDB graph traversal syntax for backlinks (reverse lookup)
+        // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
+        // Returns array<record> which we need to extract IDs from
+        let query = "SELECT <-mentions<-node.id AS mentioned_by_ids FROM type::thing('node', $node_id);";
 
-        let query = "SELECT in FROM mentions WHERE out = $node_thing;";
         let mut response = self
             .db
             .query(query)
-            .bind(("node_thing", thing))
+            .bind(("node_id", node_id.to_string()))
             .await
             .context("Failed to get incoming mentions")?;
 
         #[derive(Debug, Deserialize)]
-        struct MentionIn {
-            #[serde(rename = "in")]
-            in_field: Thing,
+        struct MentionResult {
+            mentioned_by_ids: Vec<Thing>,
         }
 
-        let results: Vec<MentionIn> = response
+        // Graph traversal returns object with mentioned_by_ids array
+        let results: Vec<MentionResult> = response
             .take(0)
             .context("Failed to extract incoming mentions from response")?;
 
-        // Extract UUIDs from Thing Record IDs
-        Ok(results
+        // Extract UUIDs from Thing Record IDs (format: node:uuid -> uuid)
+        let mentioned_by_ids: Vec<String> = results
             .into_iter()
-            .filter_map(|m| {
-                if let Id::String(id_str) = &m.in_field.id {
-                    // id_str format: "node_type:uuid", extract UUID (after first colon)
-                    id_str.split(':').nth(1).map(String::from)
+            .flat_map(|r| r.mentioned_by_ids)
+            .filter_map(|thing| {
+                if let Id::String(id_str) = &thing.id {
+                    // id_str is just the UUID part
+                    Some(id_str.clone())
                 } else {
                     None
                 }
             })
-            .collect())
+            .collect();
+
+        Ok(mentioned_by_ids)
     }
 
     pub async fn get_mentioning_containers(&self, node_id: &str) -> Result<Vec<Node>> {
-        // Construct Thing for the node in the hub table
-        let thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.to_string()));
+        // Use graph traversal to get root_id from incoming mention edges
+        // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
+        let query = "SELECT <-mentions.root_id AS root_ids FROM type::thing('node', $node_id);";
 
-        let query = "SELECT root_id FROM mentions WHERE out = $node_thing;";
         let mut response = self
             .db
             .query(query)
-            .bind(("node_thing", thing))
+            .bind(("node_id", node_id.to_string()))
             .await
             .context("Failed to get mentioning roots")?;
 
         #[derive(Debug, Deserialize)]
-        struct MentionRecord {
-            root_id: String,
+        struct RootResult {
+            root_ids: Vec<String>,
         }
 
-        let mention_records: Vec<MentionRecord> = response
+        // Graph traversal from single node returns array with one result containing root_ids array
+        let results: Vec<RootResult> = response
             .take(0)
             .context("Failed to extract root IDs from response")?;
 
-        // Deduplicate root IDs
-        let mut root_ids: Vec<String> = mention_records.into_iter().map(|m| m.root_id).collect();
+        // Flatten and deduplicate root IDs
+        let mut root_ids: Vec<String> = results
+            .into_iter()
+            .flat_map(|r| r.root_ids)
+            .collect();
         root_ids.sort();
         root_ids.dedup();
 
