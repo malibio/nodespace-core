@@ -163,7 +163,10 @@ fn validate_node_type(node_type: &str) -> Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SurrealNode {
     // Record ID is stored in the 'id' field returned by SurrealDB (e.g., node:⟨uuid⟩)
-    id: Thing, // SurrealDB record ID (table:id format)
+    // Skip deserializing because Thing types can fail to deserialize when included with other fields
+    // Use OMIT id in queries and provide the id separately when needed
+    #[serde(skip_deserializing, default)]
+    id: Option<Thing>, // SurrealDB record ID (table:id format)
     #[serde(rename = "nodeType")]
     node_type: String,
     content: String,
@@ -226,12 +229,22 @@ impl From<SurrealNode> for Node {
         let embedding_vector = sn.embedding_vector;
 
         // Extract UUID from Thing record ID (e.g., node:⟨uuid⟩ -> uuid)
-        let id = match &sn.id.id {
-            Id::String(s) => {
-                // Format is "node:uuid", extract the UUID part
-                s.split(':').nth(1).unwrap_or(s).to_string()
+        // id is now Option<Thing> due to skip_deserializing with OMIT id in queries
+        let id = match &sn.id {
+            Some(thing) => {
+                match &thing.id {
+                    Id::String(s) => {
+                        // Format is "node:uuid", extract the UUID part
+                        s.split(':').nth(1).unwrap_or(s).to_string()
+                    }
+                    _ => thing.id.to_string(),
+                }
             }
-            _ => sn.id.id.to_string(),
+            None => {
+                // id wasn't deserializ (due to skip_deserializing)
+                // The caller should override this for get_node()
+                String::new()
+            }
         };
 
         // Extract properties:
@@ -1150,7 +1163,11 @@ where
         // Note: We don't use FETCH data because it causes deserialization issues
         // with the polymorphic data field (Thing vs Object)
         // IDs with special characters need backtick-quoting
-        let query = format!("SELECT * FROM node:`{}`;", id);
+        // Omit Thing-typed fields (id, mentions, mentioned_by) that fail to deserialize
+        let query = format!(
+            "SELECT * OMIT id, mentions, mentioned_by FROM node:`{}`;",
+            id
+        );
         let mut response = self
             .db
             .query(&query)
@@ -1161,7 +1178,16 @@ where
             .take(0)
             .context("Failed to extract query results")?;
 
-        let mut node_opt: Option<Node> = surreal_nodes.into_iter().map(Into::into).next();
+        // Convert SurrealNode to Node, providing the id from the function parameter
+        let mut node_opt: Option<Node> = surreal_nodes
+            .into_iter()
+            .map(|sn| {
+                let mut node: Node = sn.into();
+                // Override the id with the parameter we received (since we OMITted it from SELECT)
+                node.id = id.to_string();
+                node
+            })
+            .next();
 
         // If node exists and has properties (types: task, schema), fetch them separately
         if let Some(ref mut node) = node_opt {
@@ -1971,7 +1997,13 @@ where
             use std::collections::HashMap as IDHashMap;
             let mut node_map: IDHashMap<String, SurrealNode> = IDHashMap::new();
             for node in fetched_nodes {
-                let id_str = format!("{}", node.id);
+                let id_str = match &node.id {
+                    Some(thing) => format!("{}", thing),
+                    None => {
+                        tracing::warn!("Node in bulk fetch has no id field - skipping");
+                        continue;
+                    }
+                };
                 node_map.insert(id_str, node);
             }
 
@@ -3023,7 +3055,7 @@ where
             .into_iter()
             .map(|nws| {
                 let surreal_node = SurrealNode {
-                    id: nws.id,
+                    id: Some(nws.id),
                     node_type: nws.node_type,
                     content: nws.content,
                     before_sibling_id: nws.before_sibling_id,
