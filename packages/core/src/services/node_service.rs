@@ -2914,10 +2914,7 @@ mod tests {
 
         // Reorder child1 to be before child2 (making child1 first)
         // Using insert_after=None means insert at beginning
-        service
-            .reorder_child(&child1_id, None)
-            .await
-            .unwrap();
+        service.reorder_child(&child1_id, None).await.unwrap();
 
         // Verify new order - child1 should now be first
         let children_after = service.get_children(&parent_id).await.unwrap();

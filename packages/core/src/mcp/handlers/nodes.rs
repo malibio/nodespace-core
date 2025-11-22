@@ -722,11 +722,7 @@ pub async fn handle_move_child_to_index(
 
     // 4. Use reorder_node operation (which handles edge ordering)
     operations
-        .reorder_node(
-            &params.node_id,
-            params.version,
-            insert_after.as_deref(),
-        )
+        .reorder_node(&params.node_id, params.version, insert_after.as_deref())
         .await
         .map_err(operation_error_to_mcp)?;
 
