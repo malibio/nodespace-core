@@ -3,6 +3,11 @@
 **Date:** 2025-11-12
 **Context:** Addresses test coverage gaps that allowed persistence bugs to reach production
 
+> **Note (Issue #614)**: This document references `beforeSiblingId` field which has been
+> removed from the node model. Sibling ordering now uses fractional `order` field on
+> `has_child` edges. The testing patterns still apply, but sibling ordering tests should
+> use the new edge-based ordering API.
+
 ## Problem Statement
 
 Despite ~2000 passing tests, the NodeSpace persistence system experiences repeated regression bugs in production. This document identifies **why tests don't catch these bugs** and proposes a comprehensive testing strategy.

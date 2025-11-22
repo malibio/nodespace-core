@@ -19,7 +19,6 @@ CREATE TABLE nodes (
     content TEXT NOT NULL,                  -- Primary content/text
     parent_id TEXT,                         -- Hierarchy parent (NULL = root-level node)
     origin_node_id TEXT,                    -- Which viewer/page created this (for bulk fetch)
-    before_sibling_id TEXT,                 -- Single-pointer sibling ordering (linked list)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     properties JSON NOT NULL DEFAULT '{}',  -- ALL entity-specific fields (no complementary tables)
@@ -28,6 +27,8 @@ CREATE TABLE nodes (
     FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
     FOREIGN KEY (origin_node_id) REFERENCES nodes(id)
 );
+-- Note: Sibling ordering is stored on has_child edges with `order` field (fractional ordering)
+-- See Issue #614 and PR #616 for migration from before_sibling_id to edge-based ordering
 
 -- Core indexes (no ALTER TABLE ever required)
 CREATE INDEX idx_nodes_type ON nodes(node_type);
@@ -44,7 +45,7 @@ CREATE INDEX idx_nodes_content ON nodes(content); -- For text search
 - **Hierarchy semantics**:
   - `parent_id`: Hierarchical parent relationship (enables indent/outdent, tree structure)
   - `origin_node_id`: Which viewer/page originally created this node (enables bulk fetch via single query)
-  - `before_sibling_id`: Linked-list sibling ordering (maintains node order independent of creation time)
+  - Sibling ordering: Stored on `has_child` edges with fractional `order` field (Issue #614)
 - **Bulk fetch optimization**: Single query fetches all nodes by `origin_node_id`, hierarchy built in-memory
 - **Dynamic indexes**: JSON path indexes created based on query frequency (rule-based)
 
@@ -698,15 +699,14 @@ impl SurrealStore {
                 content TEXT NOT NULL,
                 parent_id TEXT,
                 origin_node_id TEXT,
-                before_sibling_id TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 properties JSON NOT NULL DEFAULT '{}',
                 embedding_vector BLOB,
                 FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE,
-                FOREIGN KEY (origin_node_id) REFERENCES nodes(id) ON DELETE CASCADE,
-                FOREIGN KEY (before_sibling_id) REFERENCES nodes(id) ON DELETE SET NULL
+                FOREIGN KEY (origin_node_id) REFERENCES nodes(id) ON DELETE CASCADE
             )",
+            // Note: Sibling ordering is on has_child edges, not on nodes (Issue #614)
             ()
         ).await?;
 

@@ -149,7 +149,7 @@ Content-Type: application/json
   "content": "Hello World",
   "parentId": null,
   "containerNodeId": null,
-  "beforeSiblingId": null,
+  "insertAfter": null,  // Optional: sibling to insert after (Issue #614)
   "properties": {}
 }
 
@@ -295,7 +295,7 @@ curl -X POST http://localhost:3001/api/nodes \
     "content": "Hello World",
     "parentId": null,
     "containerNodeId": null,
-    "beforeSiblingId": null,
+    "insertAfter": null,
     "properties": {}
   }'
 

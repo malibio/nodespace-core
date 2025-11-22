@@ -69,12 +69,12 @@ pub struct Node {
     pub content: String,                 // Primary content/text
     pub parent_id: Option<String>,       // Hierarchy parent
     pub root_id: String,                 // Root node reference
-    pub before_sibling_id: Option<String>, // Single-pointer sibling ordering
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
     pub metadata: serde_json::Value,     // Type-specific JSON properties
     pub embedding_vector: Option<Vec<u8>>, // AI embeddings (BLOB)
 }
+// Note: Sibling ordering is on has_child edges with `order` field (Issue #614)
 ```
 
 **Design Benefits:**
@@ -132,12 +132,12 @@ CREATE TABLE nodes (
     content TEXT NOT NULL,
     parent_id TEXT,
     root_id TEXT NOT NULL,
-    before_sibling_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     metadata JSON,
     embedding_vector BLOB
 );
+-- Sibling ordering is on has_child edges with `order` field (Issue #614)
 ```
 
 **Complementary Tables for Performance:**
@@ -219,7 +219,7 @@ impl NodeOperations {
         content: String,
         parent_id: Option<String>,
         root_id: Option<String>,
-        before_sibling_id: Option<String>,
+        insert_after: Option<String>,  // Sibling to insert after (Issue #614)
         properties: Value,
     ) -> Result<String, NodeOperationError>;
 
@@ -230,7 +230,7 @@ impl NodeOperations {
     // UPDATE Operations with restrictions
     pub async fn update_node(&self, node_id: &str, content: Option<String>, node_type: Option<String>, properties: Option<Value>) -> Result<(), NodeOperationError>;
     pub async fn move_node(&self, node_id: &str, new_parent_id: Option<&str>) -> Result<(), NodeOperationError>;
-    pub async fn reorder_node(&self, node_id: &str, before_sibling_id: Option<&str>) -> Result<(), NodeOperationError>;
+    pub async fn reorder_node(&self, node_id: &str, insert_after: Option<&str>) -> Result<(), NodeOperationError>;
 
     // DELETE Operations
     pub async fn delete_node(&self, id: &str) -> Result<DeleteResult, NodeOperationError>;
@@ -240,7 +240,7 @@ impl NodeOperations {
 **Enforced Business Rules:**
 1. **Root Node Validation**: Root types (date, topic, project) force all hierarchy fields to None
 2. **Root Requirement**: Every non-root node MUST have root_id (inferred from parent if missing)
-3. **Sibling Position Calculation**: If before_sibling_id not provided, automatically calculate last sibling
+3. **Sibling Position Calculation**: If insert_after not provided, automatically append at end (fractional ordering on edges)
 4. **Parent-Root Consistency**: Parent and child must be in same root
 5. **Update Restrictions**: Content updates cannot change hierarchy; use move_node() or reorder_node() explicitly
 
@@ -335,11 +335,11 @@ pub async fn create_node(
     content: String,
     parent_id: Option<String>,
     root_id: Option<String>,
-    before_sibling_id: Option<String>,
+    insert_after: Option<String>,  // Sibling to insert after (Issue #614)
     properties: serde_json::Value,
 ) -> Result<String, String> {
     operations
-        .create_node(node_type, content, parent_id, root_id, before_sibling_id, properties)
+        .create_node(node_type, content, parent_id, root_id, insert_after, properties)
         .await
         .map_err(|e| e.to_string())
 }
@@ -374,7 +374,7 @@ async fn handle_create_node(operations: Arc<NodeOperations>, params: CreateNodeP
         params.content,
         params.parent_id,
         params.root_id,
-        params.before_sibling_id,
+        params.insert_after,  // Sibling to insert after (Issue #614)
         params.properties,
     ).await
 }

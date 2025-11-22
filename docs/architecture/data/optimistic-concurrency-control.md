@@ -83,11 +83,11 @@ CREATE TABLE nodes (
     content TEXT NOT NULL,
     properties TEXT,
     parent_id TEXT,
-    before_sibling_id TEXT,
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL,
     FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
+-- Sibling ordering is on has_child edges with `order` field (Issue #614)
 
 -- Index for efficient version checks
 CREATE INDEX idx_nodes_version ON nodes(id, version);
@@ -157,37 +157,37 @@ All mutating operations use version checking:
 | `reorder_node()` | Sibling position change | Checks node being reordered |
 | Sibling chain fixes | Sibling updates | Uses retry loop (see below) |
 
-### Sibling Chain Race Condition Fix
+### Sibling Reorder Race Condition Fix
 
-**Problem**: Reordering nodes requires updating multiple siblings' `before_sibling_id` pointers. Without OCC, concurrent operations can corrupt the chain.
+**Problem**: Reordering nodes requires updating the `has_child` edge `order` field. Without OCC, concurrent operations can corrupt ordering.
 
 **Scenario**:
 ```
-Initial: A → B → C
-Thread 1: Move B to first (B → A → C) - needs to fix A's before_sibling_id
-Thread 2: Update C's properties concurrently
-Result: Thread 1 overwrites C's property changes when fixing chain ❌
+Initial: A(order=1.0) → B(order=2.0) → C(order=3.0)
+Thread 1: Move B to first (needs to update B's edge order to 0.5)
+Thread 2: Update B's content concurrently
+Result: Potential version conflict ❌
 ```
 
-**Solution**: Retry loop with exponential backoff
+**Solution**: Version bump on edge ordering changes with retry loop (Issue #614)
 
 ```rust
-// When fixing sibling pointers during reorder/delete
+// When updating edge order during reorder
 for attempt in 0..MAX_RETRIES {
-    // Fetch fresh sibling state (with current version)
-    let fresh_sibling = self.node_service.get_node(&sibling_id).await?;
+    // Fetch fresh node state (with current version)
+    let fresh_node = self.node_service.get_node(&node_id).await?;
 
-    // Attempt update with current version
-    let rows_affected = self.node_service
-        .update_with_version_check(
-            &sibling_id,
-            fresh_sibling.version,  // Use fresh version
-            NodeUpdate::new().with_before_sibling_id(new_position)
+    // Attempt reorder with current version (bumps version on success)
+    let result = self.node_service
+        .reorder_child_with_version_check(
+            &node_id,
+            fresh_node.version,  // Use fresh version
+            insert_after.as_deref(),  // New position
         )
-        .await?;
+        .await;
 
     // Success - break out of retry loop
-    if rows_affected > 0 {
+    if result.is_ok() {
         break;
     }
 
