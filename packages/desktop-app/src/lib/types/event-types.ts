@@ -32,25 +32,44 @@ export interface NodeEventData {
  * Hierarchy relationship event data from LIVE SELECT
  * Represents parent-child relationships in the node tree
  *
- * Note: The `in` and `out` field names come from SurrealDB's graph edge format.
- * Frontend code should use the domain-friendly aliases: parentId and childId.
+ * Backend converts SurrealDB edge format to this type at the
+ * serialization boundary, isolating database implementation details.
  */
 export interface HierarchyRelationship {
-  id: string;
-  in: string; // Parent node ID (SurrealDB edge format)
-  out: string; // Child node ID (SurrealDB edge format)
+  parentId: string; // Parent node ID
+  childId: string; // Child node ID
   order: number; // Sort order for children (fractional ordering)
 }
 
-// Domain-friendly getters for the relationship
-export function getParentId(rel: HierarchyRelationship): string {
-  return rel.in;
-}
+// ============================================================================
+// Nested Tree Structure (for Recursive FETCH optimization)
+// ============================================================================
 
-export function getChildId(rel: HierarchyRelationship): string {
-  return rel.out;
-}
+/**
+ * Node with nested children structure for recursive tree fetching
+ *
+ * Represents a single node with all its descendants recursively nested.
+ * Used for optimizing initial load by fetching the entire subtree in
+ * a single database query instead of reconstructing the tree in the frontend.
+ */
+export interface NodeWithChildren {
+  // Node fields (same as Node interface)
+  id: string;
+  nodeType: string;
+  content: string;
+  version: number;
+  createdAt: string;
+  modifiedAt: string;
+  properties?: Record<string, unknown>;
+  embeddingVector?: number[];
+  embeddingStale?: boolean;
+  mentions?: string[];
+  mentionedBy?: string[];
+  _schema_version?: number;
 
+  // Nested children (recursive)
+  children?: NodeWithChildren[];
+}
 
 // ============================================================================
 // Error Events

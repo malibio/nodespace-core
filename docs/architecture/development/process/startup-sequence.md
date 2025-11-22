@@ -26,12 +26,16 @@ git fetch origin && git pull origin main
 
 ### 3. Run Test Suite Baseline
 ```bash
-# Run full test suite to establish baseline
-bun run test:all
+# Run frontend and backend tests in PARALLEL for faster baseline:
+bun run test & bun run rust:test & wait
+
+# Or run sequentially if you prefer cleaner output:
+bun run test           # Frontend (Vitest + Happy-DOM) ~10-20s
+bun run rust:test      # Backend (Rust/Cargo tests) ~30-60s
 
 # Record the results:
-# - How many tests are passing?
-# - How many tests are failing?
+# - How many frontend tests are passing/failing?
+# - How many backend tests are passing/failing?
 # - Which specific tests are failing?
 ```
 
@@ -44,8 +48,8 @@ bun run test:all
 **Record your baseline:** Create a comment in the issue noting:
 ```
 Starting work - baseline test status:
-- Frontend: X passing, Y failing
-- Backend: X passing, Y failing
+- Frontend: X passing, Y failing (bun run test)
+- Backend: X passing, Y failing (bun run rust:test)
 - Known failures: [list specific test names]
 ```
 
