@@ -164,14 +164,11 @@ fn validate_node_type(node_type: &str) -> Result<()> {
 struct SurrealNode {
     // Record ID is stored in the 'id' field returned by SurrealDB (e.g., node:⟨uuid⟩)
     id: Thing, // SurrealDB record ID (table:id format)
-    #[serde(rename = "nodeType")]
     node_type: String,
     content: String,
     before_sibling_id: Option<String>,
     version: i64,
-    #[serde(rename = "createdAt")]
     created_at: String,
-    #[serde(rename = "modifiedAt")]
     modified_at: String,
     embedding_vector: Option<Vec<f32>>,
     #[serde(default)]
@@ -814,12 +811,12 @@ where
         let hub_query = format!(
             r#"
             CREATE node:`{}` CONTENT {{
-                nodeType: $node_type,
+                node_type: $node_type,
                 content: $content,
                 version: $version,
                 before_sibling_id: $before_sibling_id,
-                createdAt: time::now(),
-                modifiedAt: time::now(),
+                created_at: time::now(),
+                modified_at: time::now(),
                 embedding_vector: [],
                 embedding_stale: false,
                 mentions: [],
@@ -1059,18 +1056,18 @@ where
                 -- Step 3: Create hub (universal metadata) with forward link to spoke
                 CREATE $node_id CONTENT {
                     id: $node_id,
-                    nodeType: $node_type,
+                    node_type: $node_type,
                     content: $content,
                     data: $type_id,
                     version: 1,
-                    createdAt: time::now(),
-                    modifiedAt: time::now()
+                    created_at: time::now(),
+                    modified_at: time::now()
                 };
 
                 -- Step 4: Create parent-child edge (parent->has_child->child)
                 RELATE $parent_id->has_child->$node_id CONTENT {
                     order: $order,
-                    createdAt: time::now(),
+                    created_at: time::now(),
                     version: 1
                 };
 
@@ -1085,18 +1082,18 @@ where
                 -- Create hub only (no spoke needed for simple types)
                 CREATE $node_id CONTENT {
                     id: $node_id,
-                    nodeType: $node_type,
+                    node_type: $node_type,
                     content: $content,
                     data: NONE,
                     version: 1,
-                    createdAt: time::now(),
-                    modifiedAt: time::now()
+                    created_at: time::now(),
+                    modified_at: time::now()
                 };
 
                 -- Create parent-child edge (parent->has_child->child)
                 RELATE $parent_id->has_child->$node_id CONTENT {
                     order: $order,
-                    createdAt: time::now(),
+                    created_at: time::now(),
                     version: 1
                 };
 
@@ -1298,7 +1295,7 @@ where
                 "
                 UPDATE type::thing('node', $id) SET
                     content = $content,
-                    type = $node_type,
+                    node_type = $node_type,
                     before_sibling_id = $before_sibling_id,
                     modified_at = time::now(),
                     version = version + 1,
@@ -1312,7 +1309,7 @@ where
                 "
                 UPDATE type::thing('node', $id) SET
                     content = $content,
-                    type = $node_type,
+                    node_type = $node_type,
                     before_sibling_id = $before_sibling_id,
                     modified_at = time::now(),
                     version = version + 1,
@@ -1476,8 +1473,8 @@ where
 
                 -- Update node type, variants map, and data link
                 UPDATE $node_id SET
-                    nodeType = $new_type,
-                    modifiedAt = time::now(),
+                    node_type = $new_type,
+                    modified_at = time::now(),
                     version = version + 1,
                     variants[$old_type] = $old_type_record,
                     variants[$new_type] = $new_type_id,
@@ -1493,8 +1490,8 @@ where
 
                 -- Update node type and variants map
                 UPDATE $node_id SET
-                    nodeType = $new_type,
-                    modifiedAt = time::now(),
+                    node_type = $new_type,
+                    modified_at = time::now(),
                     version = version + 1,
                     variants[$old_type] = $old_type_record,
                     variants[$new_type] = $new_type_record,
@@ -1597,7 +1594,7 @@ where
         let query = "
             UPDATE type::thing('node', $id) SET
                 content = $content,
-                type = $node_type,
+                node_type = $node_type,
                 before_sibling_id = $before_sibling_id,
                 properties = $properties,
                 modified_at = time::now(),
@@ -1840,7 +1837,7 @@ where
         let mut conditions = Vec::new();
 
         if query.node_type.is_some() {
-            conditions.push("type = $node_type".to_string());
+            conditions.push("node_type = $node_type".to_string());
         }
 
         // Note: include_containers_and_tasks field removed - use graph edges and separate queries instead
@@ -2532,7 +2529,7 @@ where
                 -- Create new parent edge with fractional order
                 RELATE $parent_id->has_child->$node_id CONTENT {
                     order: $order,
-                    createdAt: time::now()
+                    created_at: time::now()
                 };
 
                 COMMIT TRANSACTION;
@@ -3115,7 +3112,7 @@ where
             let update_stmt = format!(
                 "UPDATE type::thing('node', $id_{idx}) SET
                     content = $content_{idx},
-                    type = $node_type_{idx},
+                    node_type = $node_type_{idx},
                     before_sibling_id = $before_sibling_id_{idx},
                     modified_at = time::now(),
                     version = version + 1,
