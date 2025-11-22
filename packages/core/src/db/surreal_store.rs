@@ -878,36 +878,23 @@ where
         if should_create_spoke && has_properties {
             // CREATE spoke record with properties using simpler table:id syntax
             // Note: IDs with special characters (hyphens, spaces, etc.) need backtick-quoting
-            // Create and populate spoke record in a single statement
-            // Use UPSERT with MERGE to ensure the record is created with all properties
-            let spoke_query = format!(
-                "UPSERT {}:`{}` MERGE $properties;",
+            // Two-step approach: create empty record, then update with properties
+            // This ensures the record exists and then populates it
+            let create_query = format!("CREATE {}:`{}`; ", node.node_type, node.id);
+
+            let _ = self.db.query(&create_query).await;
+
+            // Now update the record with properties using MERGE
+            let update_query = format!(
+                "UPDATE {}:`{}` MERGE $properties;",
                 node.node_type, node.id
             );
 
-            let mut upsert_response = self
-                .db
-                .query(&spoke_query)
+            self.db
+                .query(&update_query)
                 .bind(("properties", Value::Object(props_with_schema.clone())))
                 .await
-                .context("Failed to execute upsert statement")?;
-
-            // Try to consume the response and log it
-            let upsert_result: Result<Vec<serde_json::Value>, _> = upsert_response.take(0);
-            match upsert_result {
-                Ok(records) => {
-                    tracing::info!(
-                        "UPSERT {}:{} succeeded, returned {} records",
-                        node.node_type, node.id, records.len()
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "UPSERT {}:{} returned deserialize error: {:?}",
-                        node.node_type, node.id, e
-                    );
-                }
-            }
+                .context("Failed to update spoke properties")?;
 
             // Verify the spoke record was actually created
             let verify_spoke_query =
