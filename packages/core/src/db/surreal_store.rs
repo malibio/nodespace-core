@@ -804,6 +804,13 @@ where
 
         // Create hub node using simpler table:id syntax
         // Note: IDs with special characters (hyphens, spaces, etc.) need to be backtick-quoted
+        // For types without spoke tables, store properties directly on the hub
+        let properties_for_hub = if !should_create_spoke && has_properties {
+            Some(node.properties.clone())
+        } else {
+            None
+        };
+
         let hub_query = format!(
             r#"
             CREATE node:`{}` CONTENT {{
@@ -817,7 +824,8 @@ where
                 embedding_stale: false,
                 mentions: [],
                 mentioned_by: [],
-                data: $data
+                data: $data,
+                properties: $properties
             }};
         "#,
             node.id
@@ -831,6 +839,7 @@ where
             .bind(("version", node.version))
             .bind(("before_sibling_id", node.before_sibling_id.clone()))
             .bind(("data", None::<String>))
+            .bind(("properties", properties_for_hub))
             .await
             .context("Failed to create node in universal table")?;
 
@@ -1030,6 +1039,13 @@ where
             None
         };
 
+        // Prepare hub properties for non-spoke types (text, date, etc.)
+        let hub_properties = if !has_type_table {
+            Some(properties.clone())
+        } else {
+            None
+        };
+
         // Calculate fractional order using FractionalOrderCalculator (Issue #550)
         let order = new_order;
 
@@ -1072,15 +1088,18 @@ where
             .to_string()
         } else {
             // For types without dedicated tables (text, date, etc.) - no spoke needed
+            // Store properties directly on the hub node
             r#"
                 BEGIN TRANSACTION;
 
                 -- Create hub only (no spoke needed for simple types)
+                -- Properties stored directly on hub for non-spoke types
                 CREATE $node_id CONTENT {
                     id: $node_id,
                     node_type: $node_type,
                     content: $content,
                     data: NONE,
+                    properties: $hub_properties,
                     version: 1,
                     created_at: time::now(),
                     modified_at: time::now()
@@ -1117,6 +1136,11 @@ where
         // Conditionally bind spoke_properties for types with dedicated tables
         if let Some(spoke_props) = spoke_properties {
             query = query.bind(("spoke_properties", spoke_props));
+        }
+
+        // Conditionally bind hub_properties for types without dedicated tables
+        if let Some(hub_props) = hub_properties {
+            query = query.bind(("hub_properties", hub_props));
         }
 
         let response = query.await.context(format!(
@@ -2756,10 +2780,7 @@ where
             .context("Failed to extract root IDs from response")?;
 
         // Collect root IDs
-        let mut root_ids: Vec<String> = results
-            .into_iter()
-            .filter_map(|r| r.root_id)
-            .collect();
+        let mut root_ids: Vec<String> = results.into_iter().filter_map(|r| r.root_id).collect();
 
         // Deduplicate root IDs
         root_ids.sort();

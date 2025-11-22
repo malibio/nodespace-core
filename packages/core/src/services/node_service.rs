@@ -3646,9 +3646,18 @@ mod tests {
             let task_id = service.create_node(task).await.unwrap();
 
             // Establish hierarchy: children belong to their containers
-            service.move_node(&child1_id, Some(&container1_id)).await.unwrap();
-            service.move_node(&child2_id, Some(&container2_id)).await.unwrap();
-            service.move_node(&task_id, Some(&container3_id)).await.unwrap();
+            service
+                .move_node(&child1_id, Some(&container1_id))
+                .await
+                .unwrap();
+            service
+                .move_node(&child2_id, Some(&container2_id))
+                .await
+                .unwrap();
+            service
+                .move_node(&task_id, Some(&container3_id))
+                .await
+                .unwrap();
 
             // Create target node (separate root)
             let target = Node::new_with_id(
