@@ -315,23 +315,17 @@ async fn batch_fetch_properties<C: surrealdb::Connection>(
     for node_id in node_ids {
         // Query spoke table using backtick-quoted ID (same pattern as get_node)
         // IDs with special characters (hyphens, etc.) need backtick-quoting in SurrealDB
-        let query = format!(
-            "SELECT * OMIT id, node FROM {}:`{}`;",
-            node_type, node_id
-        );
+        let query = format!("SELECT * OMIT id, node FROM {}:`{}`;", node_type, node_id);
 
         // Clone node_id so we own it
         let node_id_owned = node_id.clone();
 
-        let mut response = db
-            .query(&query)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to fetch properties for type '{}' id '{}'",
-                    node_type, node_id_owned
-                )
-            })?;
+        let mut response = db.query(&query).await.with_context(|| {
+            format!(
+                "Failed to fetch properties for type '{}' id '{}'",
+                node_type, node_id_owned
+            )
+        })?;
 
         // Deserialize as generic Value
         let records: Vec<Value> = response.take(0).with_context(|| {
@@ -3199,12 +3193,14 @@ where
     /// # }
     /// ```
     pub async fn get_all_edges(&self) -> Result<Vec<EdgeRecord>> {
+        // SurrealDB returns Thing types for id, in, out fields on relation tables
+        // We need to deserialize as Thing and extract the string ID
         #[derive(Deserialize)]
         struct EdgeOut {
-            id: String,
+            id: Thing,
             #[serde(rename = "in")]
-            in_node: String,
-            out: String,
+            in_node: Thing,
+            out: Thing,
             order: f64,
         }
 
@@ -3216,13 +3212,31 @@ where
 
         let edges: Vec<EdgeOut> = response.take(0).context("Failed to extract edges")?;
 
+        // Extract string IDs from Thing types
         let result = edges
             .into_iter()
-            .map(|edge| EdgeRecord {
-                id: edge.id,
-                in_node: edge.in_node,
-                out_node: edge.out,
-                order: edge.order,
+            .map(|edge| {
+                let id_str = match &edge.id.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => edge.id.to_string(),
+                };
+                let in_str = match &edge.in_node.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => edge.in_node.to_string(),
+                };
+                let out_str = match &edge.out.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => edge.out.to_string(),
+                };
+                EdgeRecord {
+                    id: id_str,
+                    in_node: in_str,
+                    out_node: out_str,
+                    order: edge.order,
+                }
             })
             .collect();
 
