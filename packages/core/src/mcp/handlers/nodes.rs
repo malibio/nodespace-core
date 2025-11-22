@@ -57,8 +57,6 @@ pub struct MCPCreateNodeParams {
     #[serde(default)]
     pub root_id: Option<String>,
     #[serde(default)]
-    pub before_sibling_id: Option<String>,
-    #[serde(default)]
     pub properties: Value,
 }
 
@@ -184,8 +182,6 @@ pub struct TreeNode {
     pub depth: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub before_sibling_id: Option<String>,
     pub child_count: usize,
     pub children: Vec<TreeNode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,13 +204,14 @@ pub async fn handle_create_node(
 
     // Create node via NodeOperations (enforces all business rules)
     // Note: root_id is auto-derived from parent chain by backend
+    // Note: Sibling ordering is now handled via has_child edge order field
     let node_id = operations
         .create_node(CreateNodeParams {
             id: None, // MCP generates IDs server-side
             node_type: mcp_params.node_type.clone(),
             content: mcp_params.content,
             parent_id: mcp_params.parent_id,
-            before_sibling_id: mcp_params.before_sibling_id,
+            before_sibling_id: None, // Ordering handled by edge order field
             properties: mcp_params.properties,
         })
         .await
@@ -562,7 +559,6 @@ fn build_tree_node<'a>(
             node_type: node.node_type.clone(),
             depth,
             parent_id,
-            before_sibling_id: node.before_sibling_id.clone(),
             child_count,
             children,
             content: if include_content {
