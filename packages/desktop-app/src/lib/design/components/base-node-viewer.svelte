@@ -616,8 +616,8 @@
     placeholder: Node,
     parentNodeId: string,
     overrides: { content?: string; nodeType?: string }
-  ): Node & { _parentId?: string } {
-    // CRITICAL FIX (Issue #528): Include transient _parentId field
+  ): Node & { parentId?: string } {
+    // CRITICAL FIX (Issue #528): Include transient parentId field
     // This field is NOT part of the Node model (which stores hierarchy as graph edges)
     // but is needed by the backend HTTP API to create the parent-child edge relationship
     // The backend will extract this field and call operations.create_node() with it
@@ -633,7 +633,7 @@
       properties: placeholder.properties,
       mentions: placeholder.mentions || [],
       // Transient field for backend edge creation (not persisted in Node model)
-      _parentId: parentNodeId // Root/container auto-derived from parent chain by backend
+      parentId: parentNodeId // Root/container auto-derived from parent chain by backend
     };
   }
 
@@ -688,10 +688,13 @@
           // No children at all - create initial placeholder
           // Issue #479 Phase 1: Placeholder is completely viewer-local (NOT added to SharedNodeStore)
           // It's rendered via nodesToRender derived state and promoted to real node when user adds content
-          const placeholderId = globalThis.crypto.randomUUID();
+          const newPlaceholderId = globalThis.crypto.randomUUID();
+
+          // Store ID in state to keep in sync with reactive $effect
+          placeholderId = newPlaceholderId;
 
           viewerPlaceholder = {
-            id: placeholderId,
+            id: newPlaceholderId,
             nodeType: 'text',
             content: '',
             createdAt: new Date().toISOString(),
@@ -700,6 +703,9 @@
             properties: {},
             mentions: []
           };
+
+          // Focus is handled by BaseNode's onMount when autoFocus=true
+          // See nodesToRender derived state which sets autoFocus for placeholder
 
           // DON'T call initializeNodes() - keep placeholder completely viewer-local!
           // It will be rendered by nodesToRender derived state (line 1475-1487)
@@ -1358,6 +1364,9 @@
         properties: {},
         mentions: []
       };
+
+      // Focus is handled by BaseNode's onMount when autoFocus=true
+      // See nodesToRender derived state which sets autoFocus for placeholder
     } else if (!shouldShowPlaceholder && viewerPlaceholder) {
       viewerPlaceholder = null;
     }

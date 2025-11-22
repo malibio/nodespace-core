@@ -1040,12 +1040,17 @@ export class SharedNodeStore {
       // Add nodes to store with database source
       // Database source type will automatically mark nodes as persisted (see determinePersistenceBehavior)
       const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
-      for (const node of nodes) {
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
         this.setNode(node, databaseSource); // skipPersistence removed - database source handles it
+
+        // CRITICAL FIX: Register parent-child edge in structureTree for browser mode
+        // In Tauri mode, LIVE SELECT events populate structureTree automatically.
+        // In browser mode (HTTP adapter), we must register edges manually here.
+        // Use index as order since backend returns children in sorted order.
+        structureTree.addInMemoryRelationship(parentId, node.id, i + 1);
       }
 
-      // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via LIVE SELECT events
-      // Nodes are automatically discovered by ReactiveStructureTree when edges are created in backend
       return nodes;
     } catch (error) {
       // Suppress expected errors in in-memory test mode

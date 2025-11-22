@@ -30,6 +30,7 @@ import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { schemaService } from './schema-service';
 import { moveNode as moveNodeCommand } from './tauri-commands';
+import { registerChildWithParent } from '$lib/utils/node-hierarchy';
 
 
 export interface NodeManagerEvents {
@@ -269,7 +270,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.setNode(newNode, viewerSource, skipPersistence);
     _uiState[nodeId] = newUIState;
 
-    // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via LIVE SELECT events
+    // CRITICAL FIX: Register parent-child edge in ReactiveStructureTree for browser mode
+    // In Tauri mode, LIVE SELECT events populate the tree, but in browser mode we must do it manually
+    // This ensures the new node appears in visibleNodesFromStores immediately
+    if (newParentId) {
+      registerChildWithParent(newParentId, nodeId);
+    }
 
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
