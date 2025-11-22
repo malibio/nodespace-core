@@ -70,6 +70,7 @@ export interface NodeWithChildren {
   version: number;
   createdAt: string;
   modifiedAt: string;
+  properties?: Record<string, unknown>;
   embeddingVector?: number[];
   embeddingStale?: boolean;
   mentions?: string[];

@@ -528,7 +528,7 @@ pub async fn get_children(
 /// # Example Frontend Usage
 /// ```typescript
 /// const tree = await invoke('get_children_tree', {
-///   parentId: 'my-root-id'
+///   parent_id: 'my-root-id'
 /// });
 /// // tree has structure:
 /// // {
