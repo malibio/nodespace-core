@@ -1459,7 +1459,7 @@ where
         let has_new_type_table = TYPES_WITH_PROPERTIES.contains(&new_type.as_str());
 
         // Build atomic transaction using Thing parameters
-        // Note: Field names are camelCase (nodeType, modifiedAt) to match hub schema
+        // Note: Field names use snake_case (node_type, modified_at) to match hub schema
         let transaction_query = if has_new_type_table && !props_with_schema.is_empty() {
             // New type has properties table
             r#"
