@@ -40,7 +40,8 @@ DEFINE INDEX IF NOT EXISTS idx_node_modified ON TABLE node COLUMNS modifiedAt;
 -- ============================================================================
 
 -- Task spoke: Status, priority, due dates with efficient indexing
-DEFINE TABLE IF NOT EXISTS task SCHEMAFULL;
+-- Using SCHEMALESS to allow flexible property storage while still supporting indexes
+DEFINE TABLE IF NOT EXISTS task SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS node ON TABLE task TYPE option<record>;  -- Reverse link to hub node
 
 -- Core task fields (indexed for queries)
@@ -59,7 +60,7 @@ DEFINE INDEX IF NOT EXISTS idx_task_due_date ON TABLE task COLUMNS due_date;
 -- ============================================================================
 
 -- Date spoke: Timezone, holiday tracking
-DEFINE TABLE IF NOT EXISTS date SCHEMAFULL;
+DEFINE TABLE IF NOT EXISTS date SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS node ON TABLE date TYPE option<record>;  -- Reverse link to hub node
 
 -- Core date fields
@@ -71,7 +72,7 @@ DEFINE FIELD IF NOT EXISTS is_holiday ON TABLE date TYPE bool DEFAULT false;
 -- ============================================================================
 
 -- Schema spoke: Type definitions
-DEFINE TABLE IF NOT EXISTS schema SCHEMAFULL;
+DEFINE TABLE IF NOT EXISTS schema SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS node ON TABLE schema TYPE option<record>;  -- Reverse link to hub node
 
 -- Core schema fields

@@ -878,52 +878,34 @@ where
         if should_create_spoke && has_properties {
             // CREATE spoke record with properties using simpler table:id syntax
             // Note: IDs with special characters (hyphens, spaces, etc.) need backtick-quoting
+            // Create and populate spoke record in a single statement
+            // Use UPSERT with MERGE to ensure the record is created with all properties
             let spoke_query = format!(
-                "CREATE {}:`{}` CONTENT $properties;",
+                "UPSERT {}:`{}` MERGE $properties;",
                 node.node_type, node.id
             );
 
-            let mut spoke_response = self
+            let mut upsert_response = self
                 .db
                 .query(&spoke_query)
                 .bind(("properties", Value::Object(props_with_schema.clone())))
                 .await
-                .context("Failed to execute spoke CREATE statement")?;
+                .context("Failed to execute upsert statement")?;
 
-            // Consume the CREATE response
-            // For schema types, deserialize using SchemaDefinition to handle enums properly
-            // For other types, use generic JSON (HashMap deserialization for properties)
-            let create_result: Result<Vec<serde_json::Value>, _> = if node.node_type == "schema" {
-                // Schema types have enums, use SchemaDefinition for proper deserialization
-                spoke_response
-                    .take(0usize)
-                    .map(|records: Vec<SchemaDefinition>| {
-                        records
-                            .into_iter()
-                            .map(|sd| serde_json::to_value(sd).unwrap_or_default())
-                            .collect()
-                    })
-            } else {
-                // Other types, generic JSON
-                spoke_response.take(0usize)
-            };
-
-            // Log the result for debugging
-            match &create_result {
+            // Try to consume the response and log it
+            let upsert_result: Result<Vec<serde_json::Value>, _> = upsert_response.take(0);
+            match upsert_result {
                 Ok(records) => {
-                    tracing::debug!(
-                        "CREATE {}:{} - response contained {} records",
-                        node.node_type,
-                        node.id,
-                        records.len()
+                    tracing::info!(
+                        "UPSERT {}:{} succeeded, returned {} records",
+                        node.node_type, node.id, records.len()
                     );
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "CREATE {}:{} - deserialization error (expected for some response types): {:?}",
+                        "UPSERT {}:{} returned deserialize error: {:?}",
                         node.node_type, node.id, e
                     );
-                    // Don't fail - CREATE may have succeeded even if response deserialization failed
                 }
             }
 
