@@ -352,6 +352,7 @@ async fn test_create_node() {
 ## Related Documentation
 
 - [SurrealDB Schema Design](./surrealdb-schema-design.md) - Detailed schema documentation
+- [SurrealDB Deserialization Patterns](./surrealdb-deserialization-patterns.md) - Rust enum handling and expert patterns
 - [System Overview](../core/system-overview.md) - Overall architecture
 - [Technology Stack](../core/technology-stack.md) - Technology choices
 
