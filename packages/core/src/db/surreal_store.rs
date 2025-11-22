@@ -2618,14 +2618,16 @@ where
 
         // Only create mention if it doesn't exist
         if existing_mention_ids.is_empty() {
-            // RELATE statement using Thing objects
-            let query = "RELATE $source->mentions->$target CONTENT { root_id: $root_id };";
+            // RELATE statement with embedded root_id value (binding doesn't work for SET fields in RELATE)
+            let query = format!(
+                "RELATE $source->mentions->$target SET root_id = '{}';",
+                root_id.replace('\'', "''") // Escape single quotes
+            );
 
             self.db
-                .query(query)
+                .query(&query)
                 .bind(("source", source_thing))
                 .bind(("target", target_thing))
-                .bind(("root_id", root_id.to_string()))
                 .await
                 .context("Failed to create mention")?;
         }
@@ -2731,29 +2733,35 @@ where
     }
 
     pub async fn get_mentioning_containers(&self, node_id: &str) -> Result<Vec<Node>> {
-        // Use graph traversal to get root_id from incoming mention edges
-        // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
-        let query = "SELECT <-mentions.root_id AS root_ids FROM type::thing('node', $node_id);";
+        // Query mention edges directly to get root_id values
+        // Graph traversal syntax `<-mentions.root_id` can return Null in some SurrealDB versions
+        let target_thing = Thing::from(("node".to_string(), node_id.to_string()));
+        let query = "SELECT root_id FROM mentions WHERE out = $target;";
 
         let mut response = self
             .db
             .query(query)
-            .bind(("node_id", node_id.to_string()))
+            .bind(("target", target_thing))
             .await
             .context("Failed to get mentioning roots")?;
 
+        // Parse the response - each row has a root_id field
         #[derive(Debug, Deserialize)]
-        struct RootResult {
-            root_ids: Vec<String>,
+        struct MentionRow {
+            root_id: Option<String>,
         }
 
-        // Graph traversal from single node returns array with one result containing root_ids array
-        let results: Vec<RootResult> = response
+        let results: Vec<MentionRow> = response
             .take(0)
             .context("Failed to extract root IDs from response")?;
 
-        // Flatten and deduplicate root IDs
-        let mut root_ids: Vec<String> = results.into_iter().flat_map(|r| r.root_ids).collect();
+        // Collect root IDs
+        let mut root_ids: Vec<String> = results
+            .into_iter()
+            .filter_map(|r| r.root_id)
+            .collect();
+
+        // Deduplicate root IDs
         root_ids.sort();
         root_ids.dedup();
 

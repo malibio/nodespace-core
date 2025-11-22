@@ -3380,7 +3380,7 @@ mod tests {
             let root = Node::new("text".to_string(), "Root page".to_string(), json!({}));
             let root_id = service.create_node(root).await.unwrap();
 
-            // Create a child text node in the root
+            // Create a child text node
             let child = Node::new_with_id(
                 "child-text".to_string(),
                 "text".to_string(),
@@ -3389,7 +3389,10 @@ mod tests {
             );
             let child_id = service.create_node(child).await.unwrap();
 
-            // Create target node
+            // Make child a child of root (establish hierarchy)
+            service.move_node(&child_id, Some(&root_id)).await.unwrap();
+
+            // Create target node (separate root)
             let target = Node::new_with_id(
                 "target".to_string(),
                 "text".to_string(),
@@ -3420,7 +3423,7 @@ mod tests {
             let root = Node::new("text".to_string(), "Root page".to_string(), json!({}));
             let root_id = service.create_node(root).await.unwrap();
 
-            // Create two child nodes in the same root
+            // Create two child nodes
             let child1 = Node::new_with_id(
                 "child-1".to_string(),
                 "text".to_string(),
@@ -3437,7 +3440,11 @@ mod tests {
             );
             let child2_id = service.create_node(child2).await.unwrap();
 
-            // Create target node
+            // Establish hierarchy: both children belong to root
+            service.move_node(&child1_id, Some(&root_id)).await.unwrap();
+            service.move_node(&child2_id, Some(&root_id)).await.unwrap();
+
+            // Create target node (separate root)
             let target = Node::new_with_id(
                 "target-dedup".to_string(),
                 "text".to_string(),
@@ -3476,7 +3483,7 @@ mod tests {
             let root = Node::new("text".to_string(), "Root page".to_string(), json!({}));
             let root_id = service.create_node(root).await.unwrap();
 
-            // Create a task node (child of root)
+            // Create a task node
             let task = Node::new_with_id(
                 "task-1".to_string(),
                 "task".to_string(),
@@ -3485,7 +3492,10 @@ mod tests {
             );
             let task_id = service.create_node(task).await.unwrap();
 
-            // Create target node
+            // Make task a child of root
+            service.move_node(&task_id, Some(&root_id)).await.unwrap();
+
+            // Create target node (separate root)
             let target = Node::new_with_id(
                 "target-task".to_string(),
                 "text".to_string(),
@@ -3599,7 +3609,7 @@ mod tests {
         async fn mixed_containers() {
             let (service, _temp) = create_test_service().await;
 
-            // Create three different containers
+            // Create three different containers (roots)
             let container1 = Node::new("text".to_string(), "Container page".to_string(), json!({}));
             let container1_id = service.create_node(container1).await.unwrap();
 
@@ -3609,7 +3619,7 @@ mod tests {
             let container3 = Node::new("text".to_string(), "Container 3".to_string(), json!({}));
             let container3_id = service.create_node(container3).await.unwrap();
 
-            // Create children in different containers
+            // Create children
             let child1 = Node::new_with_id(
                 "child-c1".to_string(),
                 "text".to_string(),
@@ -3626,7 +3636,7 @@ mod tests {
             );
             let child2_id = service.create_node(child2).await.unwrap();
 
-            // Create task in container 3 (should return itself)
+            // Create task (will be in container 3 but treated as its own container)
             let task = Node::new_with_id(
                 "task-c3".to_string(),
                 "task".to_string(),
@@ -3635,7 +3645,12 @@ mod tests {
             );
             let task_id = service.create_node(task).await.unwrap();
 
-            // Create target node
+            // Establish hierarchy: children belong to their containers
+            service.move_node(&child1_id, Some(&container1_id)).await.unwrap();
+            service.move_node(&child2_id, Some(&container2_id)).await.unwrap();
+            service.move_node(&task_id, Some(&container3_id)).await.unwrap();
+
+            // Create target node (separate root)
             let target = Node::new_with_id(
                 "target-mixed".to_string(),
                 "text".to_string(),
@@ -3658,7 +3673,7 @@ mod tests {
             // Get mentioning containers
             let containers = service.get_mentioning_containers(&target_id).await.unwrap();
 
-            // Should return 3 unique containers (2 dates + task)
+            // Should return 3 unique containers (2 roots + task)
             assert_eq!(
                 containers.len(),
                 3,

@@ -117,6 +117,7 @@ DEFINE TABLE IF NOT EXISTS mentions SCHEMAFULL TYPE RELATION IN node OUT node;
 DEFINE FIELD IF NOT EXISTS created_at ON TABLE mentions TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS context ON TABLE mentions TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS offset ON TABLE mentions TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS root_id ON TABLE mentions TYPE option<string>;  -- Root node of mentioning node's tree
 
 -- Indexes for efficient queries
 DEFINE INDEX IF NOT EXISTS idx_mentions_in ON TABLE mentions COLUMNS in;
