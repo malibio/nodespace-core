@@ -1747,6 +1747,60 @@ where
         Ok(())
     }
 
+    /// Bump a node's version without changing any content.
+    ///
+    /// Used by operations like reorder that need OCC (optimistic concurrency control)
+    /// even though they don't modify the node's content directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The ID of the node to update
+    /// * `expected_version` - The version the caller expects (for OCC)
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if version bump succeeds, Err if version mismatch or node not found
+    pub async fn update_node_with_version_bump(
+        &self,
+        node_id: &str,
+        expected_version: i64,
+    ) -> Result<(), NodeServiceError> {
+        // Get current node to preserve its values
+        let node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
+
+        // Create update with current values (no actual changes, just version bump)
+        let node_update = crate::models::NodeUpdate {
+            node_type: Some(node.node_type.clone()),
+            content: Some(node.content.clone()),
+            properties: Some(node.properties.clone()),
+            embedding_vector: if node.embedding_vector.is_some() {
+                Some(node.embedding_vector.clone())
+            } else {
+                None
+            },
+        };
+
+        // Perform atomic update with version check
+        let result = self
+            .store
+            .update_node_with_version_check(node_id, expected_version, node_update)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Check if update succeeded (version matched)
+        if result.is_none() {
+            return Err(NodeServiceError::query_failed(format!(
+                "Version conflict: expected version {} for node {}",
+                expected_version, node_id
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Query nodes with filtering
     ///
     /// Executes a filtered query using NodeFilter.

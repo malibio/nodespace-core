@@ -705,24 +705,27 @@ pub async fn handle_move_child_to_index(
         .filter(|c| c.node_id != params.node_id)
         .collect();
 
-    // 3. Calculate new before_sibling_id
-    // API semantics: before_sibling_id = the sibling to insert BEFORE
-    // - Index 0 → before_sibling_id = siblings[0] (insert before first sibling, if any)
-    // - Index N → before_sibling_id = siblings[N] (insert before Nth sibling)
-    // - Index >= siblings.len() → before_sibling_id = None (append at end)
-    let before_sibling_id = if params.index >= siblings.len() {
-        None // Append at end
+    // 3. Calculate insert_after from target index
+    // API semantics: insert_after = the sibling to insert AFTER
+    // - Index 0 → insert_after = None (insert at beginning)
+    // - Index N → insert_after = siblings[N-1] (insert after the (N-1)th sibling)
+    // - Index >= siblings.len() → insert_after = last sibling (append at end)
+    let insert_after = if params.index == 0 {
+        None // Insert at beginning
+    } else if params.index >= siblings.len() {
+        // Append at end - insert after last sibling
+        siblings.last().map(|s| s.node_id.clone())
     } else {
-        // Move before the sibling at this index
-        Some(siblings[params.index].node_id.clone())
+        // Insert after the sibling at index-1 (so node ends up at index)
+        Some(siblings[params.index - 1].node_id.clone())
     };
 
-    // 4. Use reorder_node operation (which now handles sibling chain integrity)
+    // 4. Use reorder_node operation (which handles edge ordering)
     operations
         .reorder_node(
             &params.node_id,
             params.version,
-            before_sibling_id.as_deref(),
+            insert_after.as_deref(),
         )
         .await
         .map_err(operation_error_to_mcp)?;

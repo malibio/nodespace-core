@@ -1078,6 +1078,13 @@ where
             .reorder_child(node_id, insert_after)
             .await?;
 
+        // Bump the node's version to support OCC (optimistic concurrency control).
+        // Even though we're only modifying edge ordering, we bump the node version
+        // so that concurrent reorder operations will fail with version conflict.
+        self.node_service
+            .update_node_with_version_bump(node_id, expected_version)
+            .await?;
+
         Ok(())
     }
 
