@@ -524,19 +524,8 @@ async fn sse_handler(
         }
     });
 
-    // Add keepalive comments every 30 seconds to prevent connection timeouts
-    let keepalive_stream = async_stream::stream! {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            yield Ok::<Event, Infallible>(Event::default().comment("keepalive"));
-        }
-    };
-
-    // Merge the event stream with keepalive
-    let merged = futures::stream::select(stream, keepalive_stream);
-
-    Sse::new(merged).keep_alive(
+    // Use Axum's built-in keepalive to prevent connection timeouts
+    Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(Duration::from_secs(30))
             .text("keepalive"),

@@ -68,38 +68,3 @@ export type SseEvent =
   | NodeDeletedEvent
   | EdgeCreatedEvent
   | EdgeDeletedEvent;
-
-/**
- * Type guard for NodeCreatedEvent
- */
-export function isNodeCreatedEvent(event: SseEvent): event is NodeCreatedEvent {
-  return event.type === 'nodeCreated';
-}
-
-/**
- * Type guard for NodeUpdatedEvent
- */
-export function isNodeUpdatedEvent(event: SseEvent): event is NodeUpdatedEvent {
-  return event.type === 'nodeUpdated';
-}
-
-/**
- * Type guard for NodeDeletedEvent
- */
-export function isNodeDeletedEvent(event: SseEvent): event is NodeDeletedEvent {
-  return event.type === 'nodeDeleted';
-}
-
-/**
- * Type guard for EdgeCreatedEvent
- */
-export function isEdgeCreatedEvent(event: SseEvent): event is EdgeCreatedEvent {
-  return event.type === 'edgeCreated';
-}
-
-/**
- * Type guard for EdgeDeletedEvent
- */
-export function isEdgeDeletedEvent(event: SseEvent): event is EdgeDeletedEvent {
-  return event.type === 'edgeDeleted';
-}
