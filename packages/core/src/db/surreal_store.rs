@@ -2132,63 +2132,60 @@ where
     /// FROM node:root_uuid;
     /// ```
     pub async fn get_node_tree(&self, root_id: &str) -> Result<Option<serde_json::Value>> {
-        use surrealdb::sql::Thing;
+        // NOTE: SurrealDB's `@` recursive repeat operator is NOT supported with RocksDB storage
+        // (returns UnsupportedRepeatRecurse error). We use Rust recursion instead.
+        //
+        // This fetches the tree by:
+        // 1. Getting the root node
+        // 2. Recursively fetching children using get_children()
+        // 3. Building nested JSON structure
 
-        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
+        // First, get the root node
+        let root_node = match self.get_node(root_id).await? {
+            Some(node) => node,
+            None => return Ok(None),
+        };
 
-        // Recursive query with @ operator for infinite depth traversal
-        let query = "
-            SELECT
-                id,
-                type,
-                content,
-                version,
-                created_at,
-                modified_at,
-                embedding_vector,
-                embedding_stale,
-                mentions,
-                mentioned_by,
-                data,
-                variants,
-                _schema_version,
-                ->has_child->node.{
-                    id,
-                    type,
-                    content,
-                    version,
-                    created_at,
-                    modified_at,
-                    embedding_vector,
-                    embedding_stale,
-                    mentions,
-                    mentioned_by,
-                    data,
-                    variants,
-                    _schema_version,
-                    children: ->has_child->node.@
-                } AS children
-            FROM $root_thing
-            FETCH data;
-        ";
+        // Build nested tree recursively
+        let tree = self.build_node_tree_recursive(&root_node).await?;
+        Ok(Some(tree))
+    }
 
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("root_thing", root_thing))
-            .await
-            .context("Failed to fetch node tree")?;
+    /// Recursively build a node tree as JSON with nested children
+    fn build_node_tree_recursive<'a>(
+        &'a self,
+        node: &'a Node,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            // Get ordered children for this node (get_children returns Vec<Node> already ordered)
+            let children_nodes = self.get_children(Some(&node.id)).await?;
 
-        let results: Vec<serde_json::Value> = response
-            .take(0)
-            .context("Failed to parse node tree results")?;
+            // Recursively build children trees
+            let mut children_json = Vec::new();
+            for child_node in &children_nodes {
+                let child_tree = self.build_node_tree_recursive(child_node).await?;
+                children_json.push(child_tree);
+            }
 
-        if results.is_empty() {
-            return Ok(None);
-        }
-
-        // Return the tree as raw JSON (frontend can deserialize as needed)
-        Ok(Some(results[0].clone()))
+            // Build JSON for this node with children
+            // NOTE: Use bare node.id without "node:" prefix to match frontend expectations
+            Ok(serde_json::json!({
+                "id": node.id,
+                "type": node.node_type,
+                "content": node.content,
+                "version": node.version,
+                "created_at": node.created_at,
+                "modified_at": node.modified_at,
+                "embedding_vector": node.embedding_vector,
+                "mentions": node.mentions,
+                "mentioned_by": node.mentioned_by,
+                "data": node.properties,
+                "variants": serde_json::Value::Null,
+                "_schema_version": 1,
+                "children": children_json
+            }))
+        })
     }
 
     pub async fn search_nodes_by_content(

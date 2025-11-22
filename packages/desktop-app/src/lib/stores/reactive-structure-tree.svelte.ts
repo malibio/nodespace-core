@@ -165,8 +165,9 @@ class ReactiveStructureTree {
 
   /**
    * Add a child with binary search insertion to maintain sort by order
+   * @param skipVersionBump - If true, don't increment version (for batch operations)
    */
-  private addChild(rel: HierarchyRelationship) {
+  private addChild(rel: HierarchyRelationship, skipVersionBump: boolean = false) {
     const parentId = rel.parentId;
     const childId = rel.childId;
     const order = rel.order;
@@ -220,8 +221,10 @@ class ReactiveStructureTree {
     children.splice(insertIndex, 0, newChild);
     // Notify Svelte of the change
     this.children.set(parentId, children);
-    // Increment version to trigger reactivity in derived states
-    this.version++;
+    // Increment version to trigger reactivity in derived states (unless batching)
+    if (!skipVersionBump) {
+      this.version++;
+    }
   }
 
   /**
@@ -311,17 +314,30 @@ class ReactiveStructureTree {
    * @param parentId - Parent node ID
    * @param childId - Child node ID
    * @param order - Sort order (use 1.0 for first child, or get max order + 1)
+   * @param skipVersionBump - If true, don't increment version (use in batch operations)
    *
    * @note This creates a temporary in-memory relationship. Once Issue #603 is complete
    * (backend returns relationship data from createNode API), this workaround can be
    * replaced with proper optimistic updates from backend responses.
    */
-  addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0) {
+  addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0, skipVersionBump: boolean = false) {
     this.addChild({
       parentId,
       childId,
       order
-    });
+    }, skipVersionBump);
+  }
+
+  /**
+   * Batch add multiple relationships without triggering reactivity until done.
+   * Use this when loading tree data to avoid effect loops.
+   */
+  batchAddRelationships(relationships: Array<{parentId: string, childId: string, order: number}>) {
+    for (const rel of relationships) {
+      this.addChild(rel, true); // Skip version bump for each
+    }
+    // Single version bump after all additions
+    this.version++;
   }
 
   /**

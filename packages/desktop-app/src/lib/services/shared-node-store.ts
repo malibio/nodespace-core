@@ -1085,12 +1085,13 @@ export class SharedNodeStore {
       }
 
       const allNodes: Node[] = [];
+      const allRelationships: Array<{parentId: string, childId: string, order: number}> = [];
       const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
 
-      // Helper to recursively process NodeWithChildren and register edges
+      // Helper to recursively process NodeWithChildren and collect edges
       const processNode = (nodeWithChildren: import('$lib/types').NodeWithChildren, nodeParentId: string, order: number) => {
         // Extract Node fields (exclude 'children' property)
-         
+
         const { children, ...nodeFields } = nodeWithChildren;
         const node: Node = nodeFields as Node;
 
@@ -1098,8 +1099,8 @@ export class SharedNodeStore {
         this.setNode(node, databaseSource);
         allNodes.push(node);
 
-        // Register parent-child edge in structureTree
-        structureTree.addInMemoryRelationship(nodeParentId, node.id, order);
+        // Collect parent-child edge (don't add to structureTree yet)
+        allRelationships.push({ parentId: nodeParentId, childId: node.id, order });
 
         // Recursively process children
         if (children && children.length > 0) {
@@ -1114,6 +1115,12 @@ export class SharedNodeStore {
         for (let i = 0; i < tree.children.length; i++) {
           processNode(tree.children[i], parentId, i + 1);
         }
+      }
+
+      // Batch register all relationships to avoid effect loops
+      // This triggers only ONE reactivity update instead of N updates
+      if (allRelationships.length > 0) {
+        structureTree.batchAddRelationships(allRelationships);
       }
 
       return allNodes;
