@@ -354,6 +354,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/nodes/:id/parent", post(set_parent))
         // Query endpoints
         .route("/api/nodes/:id/children", get(get_children))
+        .route("/api/nodes/:id/children-tree", get(get_children_tree))
         .route("/api/query", post(query_nodes))
         .route(
             "/api/nodes/by-container/:container_id",
@@ -606,6 +607,19 @@ async fn get_children(
         .map_err(map_node_service_error)?;
 
     Ok(Json(children))
+}
+
+async fn get_children_tree(
+    State(state): State<AppState>,
+    Path(parent_id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let tree = state
+        .node_service
+        .get_children_tree(&parent_id)
+        .await
+        .map_err(map_node_service_error)?;
+
+    Ok(Json(tree))
 }
 
 async fn query_nodes(

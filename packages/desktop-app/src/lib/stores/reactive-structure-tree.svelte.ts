@@ -325,6 +325,45 @@ class ReactiveStructureTree {
   }
 
   /**
+   * Move a child from one parent to another in-memory (for browser dev mode)
+   * This is necessary because LIVE SELECT events don't fire in browser mode.
+   *
+   * @param oldParentId - The current parent ID (null if root)
+   * @param newParentId - The new parent ID
+   * @param childId - The child node ID being moved
+   * @param order - Optional order value for the new position (defaults to appending)
+   */
+  moveInMemoryRelationship(
+    oldParentId: string | null,
+    newParentId: string,
+    childId: string,
+    order?: number
+  ) {
+    // Remove from old parent
+    if (oldParentId) {
+      this.removeChild({
+        parentId: oldParentId,
+        childId,
+        order: 0 // order not used for removal
+      });
+    }
+
+    // Calculate order if not provided - append to end
+    let newOrder = order;
+    if (newOrder === undefined) {
+      const existingChildren = this.children.get(newParentId) || [];
+      newOrder = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+    }
+
+    // Add to new parent
+    this.addChild({
+      parentId: newParentId,
+      childId,
+      order: newOrder
+    });
+  }
+
+  /**
    * TEST ONLY: Direct access to addChild for testing binary search algorithm
    * @internal
    */

@@ -671,6 +671,9 @@
           allNodes = cached;
         } else {
           // Cache miss - fetch from database
+          // NOTE: In browser mode, this loads only direct children. Nested hierarchies
+          // require expand/collapse to trigger additional loads. This is a known limitation
+          // until Issue #602 implements recursive FETCH on the backend.
           allNodes = await sharedNodeStore.loadChildrenForParent(nodeId);
         }
       } else {

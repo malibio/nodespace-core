@@ -31,6 +31,7 @@ import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { schemaService } from './schema-service';
 import { moveNode as moveNodeCommand } from './tauri-commands';
 import { registerChildWithParent } from '$lib/utils/node-hierarchy';
+import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
 
 export interface NodeManagerEvents {
@@ -678,7 +679,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       { isComputedField: true }
     );
 
-    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
+    // CRITICAL FIX: Update ReactiveStructureTree for browser mode
+    // In Tauri mode, LIVE SELECT events update the tree, but in browser mode we must do it manually
+    structureTree.moveInMemoryRelationship(currentParentId, targetParentId, nodeId);
 
     events.hierarchyChanged();
     _updateTrigger++;
@@ -760,7 +763,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       { isComputedField: true }
     );
 
-    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
+    // CRITICAL FIX: Update ReactiveStructureTree for browser mode
+    // In Tauri mode, LIVE SELECT events update the tree, but in browser mode we must do it manually
+    if (newParentId) {
+      structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId);
+    }
 
     // Transfer siblings below as children
     if (siblingsBelow.length > 0) {

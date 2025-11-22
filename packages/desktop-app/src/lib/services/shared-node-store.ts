@@ -1063,6 +1063,71 @@ export class SharedNodeStore {
   }
 
   /**
+   * Load entire children tree recursively from database for a parent
+   *
+   * This method uses getChildrenTree which returns nested NodeWithChildren structure.
+   * It recursively flattens all nodes into the store and registers ALL parent-child
+   * edges in the structureTree, enabling proper expand/collapse for nested hierarchies.
+   *
+   * CRITICAL FOR BROWSER MODE: In Tauri mode, LIVE SELECT events populate the
+   * structureTree automatically. In browser mode (HTTP adapter), we must load
+   * the entire tree upfront and register edges manually.
+   *
+   * @param parentId - The parent node ID to load tree for
+   * @returns Array of ALL nodes (flattened) loaded from database
+   */
+  async loadChildrenTree(parentId: string): Promise<Node[]> {
+    try {
+      const tree = await tauriCommands.getChildrenTree(parentId);
+
+      if (!tree) {
+        return [];
+      }
+
+      const allNodes: Node[] = [];
+      const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
+
+      // Helper to recursively process NodeWithChildren and register edges
+      const processNode = (nodeWithChildren: import('$lib/types').NodeWithChildren, nodeParentId: string, order: number) => {
+        // Extract Node fields (exclude 'children' property)
+         
+        const { children, ...nodeFields } = nodeWithChildren;
+        const node: Node = nodeFields as Node;
+
+        // Add node to store
+        this.setNode(node, databaseSource);
+        allNodes.push(node);
+
+        // Register parent-child edge in structureTree
+        structureTree.addInMemoryRelationship(nodeParentId, node.id, order);
+
+        // Recursively process children
+        if (children && children.length > 0) {
+          for (let i = 0; i < children.length; i++) {
+            processNode(children[i], node.id, i + 1);
+          }
+        }
+      };
+
+      // Process all direct children of the parent
+      if (tree.children && tree.children.length > 0) {
+        for (let i = 0; i < tree.children.length; i++) {
+          processNode(tree.children[i], parentId, i + 1);
+        }
+      }
+
+      return allNodes;
+    } catch (error) {
+      // Suppress expected errors in in-memory test mode
+      if (shouldLogDatabaseErrors()) {
+        console.error(`[SharedNodeStore] Failed to load children tree for parent ${parentId}:`, error);
+      }
+
+      throw error;
+    }
+  }
+
+  /**
    * Check if a node has been persisted to the database
    * @param nodeId - Node ID to check
    * @returns True if node exists in database, false if only in memory
