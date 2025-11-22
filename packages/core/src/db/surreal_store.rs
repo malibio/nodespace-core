@@ -876,29 +876,54 @@ where
 
         // Create spoke record if needed
         if should_create_spoke && has_properties {
-            // CREATE spoke record with properties using simpler table:id syntax
-            // Note: IDs with special characters (hyphens, spaces, etc.) need backtick-quoting
-            // Two-step approach: create empty record, then update with properties
-            // This ensures the record exists and then populates it
-            let create_query = format!("CREATE {}:`{}`; ", node.node_type, node.id);
+            // CREATE spoke record using EXACTLY the same pattern as hub nodes (which works)
+            // Use inline property assignments in the CONTENT block rather than passing $properties
 
-            let _ = self.db.query(&create_query).await;
+            // Build the property assignments list
+            let mut property_bindings = String::new();
+            let mut binding_pairs = Vec::new();
 
-            // Now update the record with properties using MERGE
-            let update_query = format!(
-                "UPDATE {}:`{}` MERGE $properties;",
-                node.node_type, node.id
+            for (key, value) in props_with_schema.iter() {
+                property_bindings.push_str(&format!("{}: ${},\n                ", key, key));
+                binding_pairs.push((key.clone(), value.clone()));
+            }
+
+            // Remove trailing comma and newline
+            property_bindings = property_bindings
+                .trim_end_matches(",\n                ")
+                .to_string();
+
+            let create_spoke_query = format!(
+                r#"
+                CREATE {}:`{}` CONTENT {{
+                    {}
+                }};
+                "#,
+                node.node_type, node.id, property_bindings
             );
 
-            self.db
-                .query(&update_query)
-                .bind(("properties", Value::Object(props_with_schema.clone())))
+            let mut query_builder = self.db.query(&create_spoke_query);
+
+            // Bind all property values using owned strings for keys
+            for (key, value) in binding_pairs {
+                query_builder = query_builder.bind((key, value));
+            }
+
+            let _spoke_response = query_builder
                 .await
-                .context("Failed to update spoke properties")?;
+                .context("Failed to create spoke record")?;
+
+            // DO NOT try to consume the response - it contains Thing types (record IDs)
+            // which cannot deserialize to serde_json::Value. The query execution itself
+            // succeeding (no error from .await) means the record was created.
 
             // Verify the spoke record was actually created
-            let verify_spoke_query =
-                format!("SELECT * FROM {}:`{}` LIMIT 1;", node.node_type, node.id);
+            // CRITICAL: OMIT id and node fields because they are Thing types that
+            // cannot deserialize to generic JSON (see commit 629d84e)
+            let verify_spoke_query = format!(
+                "SELECT * OMIT id, node FROM {}:`{}` LIMIT 1;",
+                node.node_type, node.id
+            );
             let mut verify_spoke_response = self
                 .db
                 .query(&verify_spoke_query)
