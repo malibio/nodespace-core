@@ -888,11 +888,44 @@ where
                 .query(&spoke_query)
                 .bind(("properties", Value::Object(props_with_schema.clone())))
                 .await
-                .context("Failed to create spoke record")?;
+                .context("Failed to execute spoke CREATE statement")?;
 
-            // Consume spoke response - we don't need the returned data
-            // Ignore deserialization errors from CREATE response (may contain enum types)
-            let _: Result<Vec<serde_json::Value>, _> = spoke_response.take(0usize);
+            // Consume the CREATE response
+            // For schema types, deserialize using SchemaDefinition to handle enums properly
+            // For other types, use generic JSON (HashMap deserialization for properties)
+            let create_result: Result<Vec<serde_json::Value>, _> = if node.node_type == "schema" {
+                // Schema types have enums, use SchemaDefinition for proper deserialization
+                spoke_response
+                    .take(0usize)
+                    .map(|records: Vec<SchemaDefinition>| {
+                        records
+                            .into_iter()
+                            .map(|sd| serde_json::to_value(sd).unwrap_or_default())
+                            .collect()
+                    })
+            } else {
+                // Other types, generic JSON
+                spoke_response.take(0usize)
+            };
+
+            // Log the result for debugging
+            match &create_result {
+                Ok(records) => {
+                    tracing::debug!(
+                        "CREATE {}:{} - response contained {} records",
+                        node.node_type,
+                        node.id,
+                        records.len()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "CREATE {}:{} - deserialization error (expected for some response types): {:?}",
+                        node.node_type, node.id, e
+                    );
+                    // Don't fail - CREATE may have succeeded even if response deserialization failed
+                }
+            }
 
             // Verify the spoke record was actually created
             let verify_spoke_query =
@@ -903,10 +936,35 @@ where
                 .await
                 .context("Failed to verify spoke record creation")?;
 
-            let _: Vec<serde_json::Value> = verify_spoke_response.take(0).context(format!(
-                "Spoke record '{}:{}' was not created - verification query returned no results",
-                node.node_type, node.id
-            ))?;
+            // For schema types, use SchemaDefinition deserialization (handles enums correctly)
+            // For other types, use generic JSON deserialization
+            if node.node_type == "schema" {
+                let records: Vec<SchemaDefinition> =
+                    verify_spoke_response.take(0).context(format!(
+                    "Spoke record '{}:{}' was not created - verification query returned no results",
+                    node.node_type, node.id
+                ))?;
+                if records.is_empty() {
+                    anyhow::bail!(
+                        "Spoke record '{}:{}' was not created - verification returned empty result",
+                        node.node_type,
+                        node.id
+                    );
+                }
+            } else {
+                let records: Vec<serde_json::Value> =
+                    verify_spoke_response.take(0).context(format!(
+                    "Spoke record '{}:{}' was not created - verification query returned no results",
+                    node.node_type, node.id
+                ))?;
+                if records.is_empty() {
+                    anyhow::bail!(
+                        "Spoke record '{}:{}' was not created - verification returned empty result",
+                        node.node_type,
+                        node.id
+                    );
+                }
+            }
 
             // Set bidirectional links: hub -> spoke and spoke -> hub
             let link_query = format!(

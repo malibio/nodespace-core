@@ -54,8 +54,7 @@ DEFINE INDEX IF NOT EXISTS idx_task_status ON TABLE task COLUMNS status;
 DEFINE INDEX IF NOT EXISTS idx_task_priority ON TABLE task COLUMNS priority;
 DEFINE INDEX IF NOT EXISTS idx_task_due_date ON TABLE task COLUMNS due_date;
 
--- Note: SCHEMAFULL allows undefined fields by default (flexible)
--- Only defined fields above have type checking
+-- Note: SCHEMALESS allows undefined fields (flexible)
 
 -- ============================================================================
 
