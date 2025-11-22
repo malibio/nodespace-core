@@ -62,7 +62,7 @@ sharedNodeStore.updateNode(nodeId, { content: 'New content' }, source);
 **Scenario:** Combining two nodes involves:
 1. Update previous node content (must persist)
 2. Update children parentId (must persist)
-3. Update sibling beforeSiblingId (must persist)
+3. Update sibling ordering via edge reorder (must persist) - Issue #614
 4. Delete current node (must wait for all above)
 
 **Implementation:**
@@ -133,10 +133,13 @@ sharedNodeStore.setNode(child, source);       // Auto-depends on parent + grandp
 
 ### Structural Changes (Immediate Mode)
 ```typescript
+// Parent change - persists immediately
 sharedNodeStore.updateNode(nodeId, {
-  parentId: newParent,
-  beforeSiblingId: newSibling
+  parentId: newParent
 }, viewerSource);
+
+// Sibling reorder - uses edge-based ordering (Issue #614)
+nodeOperations.reorder_node(nodeId, version, insert_after);
 // Persists immediately (mode: 'immediate')
 ```
 
@@ -148,11 +151,12 @@ sharedNodeStore.updateNode(nodeId, {
 // Debounced 500ms to avoid excessive writes
 ```
 
-**Implementation Details** (shared-node-store.ts:252-254):
+**Implementation Details** (shared-node-store.ts):
 ```typescript
 const isStructuralChange = 'parentId' in changes ||
-                          'beforeSiblingId' in changes ||
                           'containerNodeId' in changes;
+// Note: Sibling reordering now uses edge-based ordering (Issue #614)
+// and is handled via NodeOperations.reorder_node(), not updateNode()
 const mode = isStructuralChange ? 'immediate' : 'debounce';
 ```
 

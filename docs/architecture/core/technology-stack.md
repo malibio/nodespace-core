@@ -222,12 +222,13 @@ pub struct Node {
     pub content: String,                        // Primary content/text
     pub parent_id: Option<String>,              // Where created (creation context)
     pub root_id: Option<String>,                // Root document (NULL = is root)
-    pub before_sibling_id: Option<String>,      // Sibling ordering
     pub created_at: String,                     // ISO 8601 timestamp
     pub modified_at: String,                    // ISO 8601 timestamp
     pub properties: serde_json::Value,          // ALL entity-specific fields (Pure JSON)
     pub embedding_vector: Option<Vec<u8>>,      // F32_BLOB for AI embeddings
 }
+// Note: Sibling ordering is stored on has_child edge `order` field (fractional ordering)
+// NOT on the node itself. See Issue #614 and PR #616 for details.
 
 // Schema definition (stored as node with node_type = "schema", id = type_name)
 #[derive(Debug, Deserialize, Serialize)]

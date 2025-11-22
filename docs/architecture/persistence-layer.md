@@ -438,11 +438,9 @@ async function deleteNode(nodeId: string): Promise<void> {
 // ✅ CORRECT - Declarative dependencies
 function deleteNode(nodeId: string): void {
   // 1. Identify what must complete first
+  // Note: Sibling ordering now uses edge-based ordering (Issue #614)
+  // so sibling chain repair is handled via edge reorder operations
   const dependencies: string[] = [];
-  const nextSibling = siblings.find(n => n.beforeSiblingId === nodeId);
-  if (nextSibling) {
-    dependencies.push(nextSibling.id);
-  }
 
   // 2. Queue preparatory operations
   removeFromSiblingChain(nodeId);  // Auto-persists via SharedNodeStore
@@ -540,11 +538,11 @@ function deleteNode(nodeId): void {
 ```
 User calls: indentNode('node-3')
   ↓
-1. Identify dependencies: [nextSibling.id = 'node-4']
+1. Identify dependencies: [edge reorder operation]
   ↓
 2. Call removeFromSiblingChain('node-3')
-   → Queues: UPDATE node-4 SET beforeSiblingId = 'node-2'
-   → Status: node-4 = 'pending'
+   → Queues: UPDATE has_child edge order (Issue #614)
+   → Status: edge update = 'pending'
   ↓
 3. Call updateNode('node-3', ..., { persistenceDependencies: ['node-4'] })
    → Queues: UPDATE node-3 SET parentId = 'node-2'

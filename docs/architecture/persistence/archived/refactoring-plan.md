@@ -1,5 +1,9 @@
 # NodeSpace Persistence System - Refactoring Plan
 
+> **ARCHIVED DOCUMENT (Issue #614)**: References to `beforeSiblingId` in this document
+> reflect historical architecture. Current architecture uses fractional `order` field on
+> `has_child` edges for sibling ordering. See PR #616 for migration details.
+
 **Date:** 2025-11-12
 **Status:** Proposal
 **Depends On:** persistence-system-review.md

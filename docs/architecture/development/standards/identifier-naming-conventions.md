@@ -494,7 +494,7 @@ if (field.type === 'enum') {
 // ✅ Correct - Clear these are IDs
 parentId: string;
 rootId: string;
-beforeSiblingId: string;
+insertAfter: string;  // Sibling to insert after (Issue #614 - edge-based ordering)
 mentionedById: string[];
 
 // ❌ Incorrect - Ambiguous
