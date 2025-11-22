@@ -625,7 +625,6 @@ impl DateNodeBehavior {
             content: date.to_string(),         // Content matches ID
             parent_id: None,
             root_id: date.to_string(),         // Self-referencing root
-            before_sibling_id: None,
             created_at: now,
             modified_at: now,
             metadata: json!({
@@ -634,6 +633,7 @@ impl DateNodeBehavior {
             }),
             embedding_vector: None,            // Dates don't need embeddings
         })
+        // Note: Sibling ordering handled via has_child edge `order` field (Issue #614)
     }
 }
 ```

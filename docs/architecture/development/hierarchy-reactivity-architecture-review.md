@@ -1,9 +1,18 @@
 # NodeSpace Hierarchy Persistence and Reactivity Architecture Review
 
 **Date**: 2025-01-18
-**Status**: Final Recommendation - Complete Separation Architecture
+**Status**: ✅ **COMPLETED** - Implemented in Issue #614, PR #616
 **Context**: Post-Graph Migration (PR #523)
 **Purpose**: Establish foundation for multi-client consistency and eliminate reactivity anti-patterns
+
+> **📋 Implementation Complete (2025-11-22)**
+>
+> This architectural analysis led to **Issue #614** which was implemented in **PR #616**.
+> The `beforeSiblingId` field has been removed from the node model and replaced with
+> fractional ordering on `has_child` edges. References to `beforeSiblingId` in this
+> document represent the **original problem analysis**, not the current architecture.
+>
+> **Current Architecture**: Edge-based fractional ordering on `has_child.order` field.
 
 ---
 

@@ -240,16 +240,17 @@ All nodes use a **single unified schema** rather than separate tables per type:
 ```typescript
 interface NodeSpaceNode {
   id: string;
-  type: string;                           // Node type identifier  
+  type: string;                           // Node type identifier
   content: string;                        // Primary content
-  parent_id: string | null;               // Hierarchy parent
+  parent_id: string | null;               // Hierarchy parent (creation context)
   root_id: string;                        // Root node ID
-  before_sibling_id: string | null;       // Single-pointer sibling ordering
   created_at: string;                     // Creation timestamp
   mentions: string[];                     // Referenced node IDs (backlink system)
   metadata: Record<string, unknown>;      // Type-specific JSON properties
   embedding_vector: Float32Array | null;  // AI/ML integration
 }
+// Note: Sibling ordering is stored in has_child edge `order` field (fractional ordering)
+// See PR #616 for migration from before_sibling_id to edge-based ordering
 ```
 
 #### Universal Schema Benefits
@@ -260,9 +261,9 @@ interface NodeSpaceNode {
 - **Metadata**: Type-specific properties in flexible JSON field
 
 #### Hierarchy Navigation
-- **Single-pointer approach**: Uses `before_sibling_id` for sibling ordering
-- **Sibling chain building**: Reconstruct full sibling order from pointers
-- **Future-ready**: Architecture supports dual-pointer optimization later
+- **Edge-based ordering**: Sibling order stored in `has_child` edge `order` field (fractional ordering)
+- **Direct database sorting**: Children returned pre-sorted via `ORDER BY has_child.order ASC`
+- **Concurrent-safe**: OCC version bumping on edges prevents ordering conflicts
 
 ---
 
@@ -281,7 +282,6 @@ const textNode: NodeSpaceNode = {
     content: "# My Document\nContent...",   // Markdown-supported text
     parent_id: "parent-001",                // Hierarchy parent
     root_id: "root-001",                    // Root node reference
-    before_sibling_id: null,                // First sibling in order
     created_at: "2025-01-21T10:00:00Z",
     mentions: ["node-002", "node-003"],     // Referenced nodes (backlinks)
     metadata: {                             // Type-specific properties
@@ -291,6 +291,7 @@ const textNode: NodeSpaceNode = {
     },
     embedding_vector: null                  // Computed by AI service
 }
+// Sibling order is stored on the has_child edge, not on the node itself
 ```
 
 **Features:**

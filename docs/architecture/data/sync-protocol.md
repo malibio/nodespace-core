@@ -65,7 +65,7 @@ pub enum OperationData {
     },
     Move {
         new_parent_id: Option<String>,
-        new_before_sibling_id: Option<String>,
+        insert_after: Option<String>,  // Sibling to insert after (Issue #614)
     },
     Metadata {
         changes: JsonValue,                // Only metadata changes

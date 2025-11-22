@@ -2,6 +2,10 @@
 
 These documents describe previous or alternative architectural approaches that are no longer current.
 
+> **Note (Issue #614, 2025-11-22)**: References to `before_sibling_id` / `beforeSiblingId` in
+> archived documents reflect historical architecture. Current architecture uses fractional
+> `order` field on `has_child` edges for sibling ordering. See PR #616 for migration details.
+
 ## Archived Documents
 
 ### storage-architecture-turso.md
