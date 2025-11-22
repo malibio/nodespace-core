@@ -2642,10 +2642,19 @@ where
 
         // Only create mention if it doesn't exist
         if existing_mention_ids.is_empty() {
-            // RELATE statement with embedded root_id value (binding doesn't work for SET fields in RELATE)
+            // TECH DEBT: SurrealDB Binding Limitation
+            // ----------------------------------------
+            // SurrealDB's RELATE statement does not support parameter binding for SET field values.
+            // We must embed root_id directly in the query string.
+            //
+            // Security mitigation: root_id is a system-generated UUID from Node.id, not user input.
+            // The single-quote escaping is a defense-in-depth measure, but this should be refactored
+            // to use parameterized queries if SurrealDB adds support for SET bindings in RELATE.
+            //
+            // See: https://surrealdb.com/docs/surrealql/statements/relate
             let query = format!(
                 "RELATE $source->mentions->$target SET root_id = '{}';",
-                root_id.replace('\'', "''") // Escape single quotes
+                root_id.replace('\'', "''")
             );
 
             self.db
