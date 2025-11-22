@@ -888,6 +888,7 @@ let query = "SELECT * FROM type::thing('node', $id);";
 - [SurrealDB Schema Definition](https://surrealdb.com/docs/surrealql/statements/define/table)
 - NodeSpace Phase 1: `/docs/architecture/data/node-store-abstraction.md`
 - NodeSpace Migration Guide: `/docs/architecture/data/surrealdb-migration-guide.md`
+- NodeSpace Deserialization Patterns: `/docs/architecture/data/surrealdb-deserialization-patterns.md`
 
 ---
 
