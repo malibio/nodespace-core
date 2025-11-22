@@ -1827,7 +1827,10 @@ where
                 "SELECT VALUE <-mentions<-node.id FROM type::thing('node', $node_id);"
             };
 
-            let mut query_builder = self.db.query(sql).bind(("node_id", mentioned_node_id.to_string()));
+            let mut query_builder = self
+                .db
+                .query(sql)
+                .bind(("node_id", mentioned_node_id.to_string()));
 
             if let Some(limit) = query.limit {
                 query_builder = query_builder.bind(("limit", limit));
@@ -2694,7 +2697,8 @@ where
         // Use SurrealDB graph traversal syntax for optimal performance
         // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
         // Returns array<record> which we need to extract IDs from
-        let query = "SELECT ->mentions->node.id AS mentioned_ids FROM type::thing('node', $node_id);";
+        let query =
+            "SELECT ->mentions->node.id AS mentioned_ids FROM type::thing('node', $node_id);";
 
         let mut response = self
             .db
@@ -2734,7 +2738,8 @@ where
         // Use SurrealDB graph traversal syntax for backlinks (reverse lookup)
         // See: docs/architecture/data/surrealdb-schema-design.md - Graph Traversal Patterns
         // Returns array<record> which we need to extract IDs from
-        let query = "SELECT <-mentions<-node.id AS mentioned_by_ids FROM type::thing('node', $node_id);";
+        let query =
+            "SELECT <-mentions<-node.id AS mentioned_by_ids FROM type::thing('node', $node_id);";
 
         let mut response = self
             .db
@@ -2793,10 +2798,7 @@ where
             .context("Failed to extract root IDs from response")?;
 
         // Flatten and deduplicate root IDs
-        let mut root_ids: Vec<String> = results
-            .into_iter()
-            .flat_map(|r| r.root_ids)
-            .collect();
+        let mut root_ids: Vec<String> = results.into_iter().flat_map(|r| r.root_ids).collect();
         root_ids.sort();
         root_ids.dedup();
 
