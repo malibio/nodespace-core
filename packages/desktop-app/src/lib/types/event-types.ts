@@ -51,10 +51,6 @@ export function getChildId(rel: HierarchyRelationship): string {
   return rel.out;
 }
 
-/**
- * @deprecated Use HierarchyRelationship instead. This alias exists for backward compatibility.
- */
-export type EdgeEventData = HierarchyRelationship;
 
 // ============================================================================
 // Error Events

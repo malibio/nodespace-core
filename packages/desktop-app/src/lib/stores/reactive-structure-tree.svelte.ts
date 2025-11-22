@@ -312,8 +312,9 @@ class ReactiveStructureTree {
    * @param childId - Child node ID
    * @param order - Sort order (use 1.0 for first child, or get max order + 1)
    *
-   * @deprecated This creates a temporary in-memory relationship. Prefer backend API
-   * calls that return complete relationship data with proper optimistic updates.
+   * @note This creates a temporary in-memory relationship. Once Issue #603 is complete
+   * (backend returns relationship data from createNode API), this workaround can be
+   * replaced with proper optimistic updates from backend responses.
    */
   addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0) {
     this.addChild({

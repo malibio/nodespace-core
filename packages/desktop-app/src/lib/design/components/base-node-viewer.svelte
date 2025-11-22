@@ -133,9 +133,9 @@
    */
   const visibleNodesFromStores = $derived.by(() => {
     if (!nodeId) return [];
-    // Track ReactiveStructureTree version to ensure reactivity on edge changes
-    // Access the version to establish reactive dependency
-    reactiveStructureTree.version;
+    // Establish reactive dependency on structure tree changes.
+    // Reading this value causes Svelte to re-run this derived when edges change.
+    void reactiveStructureTree.version;
 
     // Helper function to recursively flatten visible nodes with depth
     function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {
@@ -1617,7 +1617,11 @@
                     // Clear placeholder ID so fresh one is created if needed later
                     placeholderId = null;
 
-                    // Clear promotion flag AFTER all reactive updates complete
+                    // Clear promotion flag after Svelte's microtask queue flushes.
+                    // tick() ensures our synchronous state changes above (viewerPlaceholder=null,
+                    // placeholderId=null) have propagated through $derived computations before
+                    // we allow new promotions. This is sufficient because the race condition
+                    // was caused by stale state, not async operations.
                     tick().then(() => {
                       isPromoting = false;
                     });

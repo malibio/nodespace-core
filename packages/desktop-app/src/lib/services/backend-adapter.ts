@@ -386,8 +386,10 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getDescendants(rootNodeId: string): Promise<Node[]> {
-    // Returns all descendants of a node (entire subtree)
-    // Using the /api/nodes/:id/children endpoint which calls get_children
+    // TODO(#602): HttpAdapter returns only direct children, not full subtree.
+    // TauriAdapter correctly uses get_nodes_by_container_id for recursive lookup.
+    // This is a known limitation in browser dev mode until #602 implements
+    // recursive FETCH on the backend.
     return this.getChildren(rootNodeId);
   }
 
@@ -555,8 +557,8 @@ class MockAdapter implements BackendAdapter {
   async updateNode(_id: string, _version: number, _update: UpdateNodeInput): Promise<Node> {
     return {} as Node;
   }
-  async deleteNode(_id: string, _version: number): Promise<DeleteResult> {
-    return { deletedId: _id, deletedChildCount: 0 };
+  async deleteNode(id: string, _version: number): Promise<DeleteResult> {
+    return { deletedId: id, deletedChildCount: 0 };
   }
   async getChildren(_parentId: string): Promise<Node[]> {
     return [];
