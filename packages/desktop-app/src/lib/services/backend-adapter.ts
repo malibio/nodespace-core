@@ -179,9 +179,19 @@ class TauriAdapter implements BackendAdapter {
   }
 
   async getDescendants(rootNodeId: string): Promise<Node[]> {
-    const invoke = await this.getInvoke();
-    // Note: Backend command still uses legacy name - can be renamed in backend separately
-    return invoke<Node[]>('get_nodes_by_container_id', { container_node_id: rootNodeId });
+    // Recursively fetch all descendants using getChildren
+    const allNodes: Node[] = [];
+    const queue: string[] = [rootNodeId];
+
+    while (queue.length > 0) {
+      const parentId = queue.shift()!;
+      const children = await this.getChildren(parentId);
+      allNodes.push(...children);
+      // Add children to queue for recursive traversal
+      queue.push(...children.map((c) => c.id));
+    }
+
+    return allNodes;
   }
 
   async getChildrenTree(parentId: string): Promise<NodeWithChildren | null> {
@@ -397,11 +407,19 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getDescendants(rootNodeId: string): Promise<Node[]> {
-    // TODO(#602): HttpAdapter returns only direct children, not full subtree.
-    // TauriAdapter correctly uses get_nodes_by_container_id for recursive lookup.
-    // This is a known limitation in browser dev mode until #602 implements
-    // recursive FETCH on the backend.
-    return this.getChildren(rootNodeId);
+    // Recursively fetch all descendants using getChildren
+    const allNodes: Node[] = [];
+    const queue: string[] = [rootNodeId];
+
+    while (queue.length > 0) {
+      const parentId = queue.shift()!;
+      const children = await this.getChildren(parentId);
+      allNodes.push(...children);
+      // Add children to queue for recursive traversal
+      queue.push(...children.map((c) => c.id));
+    }
+
+    return allNodes;
   }
 
   async getChildrenTree(parentId: string): Promise<NodeWithChildren | null> {

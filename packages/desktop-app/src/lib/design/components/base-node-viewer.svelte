@@ -671,14 +671,13 @@
           allNodes = cached;
         } else {
           // Cache miss - fetch from database
-          // NOTE: In browser mode, this loads only direct children. Nested hierarchies
-          // require expand/collapse to trigger additional loads. This is a known limitation
-          // until Issue #602 implements recursive FETCH on the backend.
-          allNodes = await sharedNodeStore.loadChildrenForParent(nodeId);
+          // Use loadChildrenTree which returns nested structure AND registers
+          // parent-child edges in structureTree (critical for expand control visibility)
+          allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
         }
       } else {
         // Force refresh - bypass cache and fetch from database
-        allNodes = await sharedNodeStore.loadChildrenForParent(nodeId);
+        allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
       }
 
       // Check if we have any nodes at all (reuse allNodes - no redundant cache check needed)

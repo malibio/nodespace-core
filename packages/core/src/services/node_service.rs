@@ -1432,14 +1432,13 @@ where
         &self,
         parent_id: &str,
     ) -> Result<serde_json::Value, NodeServiceError> {
+        // Use recursive get_node_tree which uses SurrealDB's @ operator
+        // for efficient recursive traversal in a single query
         self.store
-            .get_children(Some(parent_id))
+            .get_node_tree(parent_id)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
-            .map(|nodes| {
-                // Convert nodes to JSON tree structure
-                serde_json::to_value(nodes).unwrap_or(serde_json::Value::Array(vec![]))
-            })
+            .map(|opt| opt.unwrap_or(serde_json::Value::Null))
     }
 
     /// Check if a node is a root node (has no parent)

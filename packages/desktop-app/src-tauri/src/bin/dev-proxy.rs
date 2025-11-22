@@ -356,10 +356,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/nodes/:id/children", get(get_children))
         .route("/api/nodes/:id/children-tree", get(get_children_tree))
         .route("/api/query", post(query_nodes))
-        .route(
-            "/api/nodes/by-container/:container_id",
-            get(get_children_by_parent),
-        )
         // Mention endpoints
         .route("/api/mentions", post(create_mention))
         .route("/api/mentions", delete(delete_mention))
@@ -629,21 +625,6 @@ async fn query_nodes(
     let nodes = state
         .node_service
         .query_nodes(filter)
-        .await
-        .map_err(map_node_service_error)?;
-
-    Ok(Json(nodes))
-}
-
-async fn get_children_by_parent(
-    State(state): State<AppState>,
-    Path(parent_id): Path<String>,
-) -> ApiResult<Vec<Node>> {
-    // Phase 5 (Issue #511): Use get_children instead of get_nodes_by_root_id
-    // Graph edges replace root_id field
-    let nodes = state
-        .node_service
-        .get_children(&parent_id)
         .await
         .map_err(map_node_service_error)?;
 
