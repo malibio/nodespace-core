@@ -313,16 +313,18 @@ async fn batch_fetch_properties<C: surrealdb::Connection>(
     let mut result = std::collections::HashMap::new();
 
     for node_id in node_ids {
-        // Query spoke table using OMIT id to exclude Thing-typed id field
-        // This matches the pattern from individual get_node() fetching (line 1136)
-        let query = format!("SELECT * OMIT id FROM type::thing('{}', $id);", node_type);
+        // Query spoke table using backtick-quoted ID (same pattern as get_node)
+        // IDs with special characters (hyphens, etc.) need backtick-quoting in SurrealDB
+        let query = format!(
+            "SELECT * OMIT id, node FROM {}:`{}`;",
+            node_type, node_id
+        );
 
-        // Clone node_id so we own it and can pass to bind
+        // Clone node_id so we own it
         let node_id_owned = node_id.clone();
 
         let mut response = db
             .query(&query)
-            .bind(("id", node_id_owned.clone()))
             .await
             .with_context(|| {
                 format!(
