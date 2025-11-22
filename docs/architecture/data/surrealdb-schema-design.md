@@ -490,13 +490,13 @@ CREATE nodes CONTENT {
     content: 'Finish migration',
     parent_id: NONE,
     root_id: NONE,
-    before_sibling_id: NONE,
     embedding_vector: NONE,
     embedding_stale: true,
     version: 1,
     created_at: time::now(),
     modified_at: time::now()
 };
+-- Note: Sibling ordering is on has_child edge `order` field (Issue #614)
 
 -- Insert into type-specific table (same ID!)
 CREATE task CONTENT {
@@ -586,10 +586,10 @@ LIMIT 10;
 ### 2. Hierarchy Queries (Type-Agnostic)
 
 ```sql
--- Get all children of a node (any type)
-SELECT * FROM nodes
-WHERE parent_id = $parent_id
-ORDER BY before_sibling_id;
+-- Get all children of a node (any type) - ordered by edge order field
+SELECT out.* FROM has_child
+WHERE in = $parent_id
+ORDER BY order ASC;
 
 -- Get all descendants (recursive)
 SELECT * FROM nodes
@@ -599,13 +599,8 @@ WHERE parent_id INSIDE (
     SELECT id FROM nodes WHERE parent_id = $root_id
     -- ... recursive traversal
 );
-
--- Get sibling chain (linked list ordering)
-SELECT * FROM nodes
-WHERE parent_id = $parent_id
-START WITH before_sibling_id = NONE
-FOLLOW before_sibling_id;
 ```
+-- Note: Sibling ordering uses fractional `order` field on has_child edges (Issue #614)
 
 **Why Fast:**
 - No JOINs needed (all hierarchy in one table)
@@ -736,7 +731,6 @@ CREATE TABLE nodes (
     content TEXT NOT NULL,
     parent_id TEXT,
     container_node_id TEXT,
-    before_sibling_id TEXT,
     version INTEGER DEFAULT 1,
     properties TEXT, -- JSON blob
     embedding_vector BLOB,
@@ -744,6 +738,7 @@ CREATE TABLE nodes (
     created_at TEXT,
     modified_at TEXT
 );
+-- Note: before_sibling_id removed - ordering is on has_child edges (Issue #614)
 ```
 
 **SurrealDB Schema (Target):**

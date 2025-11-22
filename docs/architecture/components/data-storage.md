@@ -24,12 +24,12 @@ interface NodeSpaceNode {
   content: string;                        // Primary content/text
   parent_id: string | null;               // Hierarchy parent (null for root-level nodes)
   origin_node_id: string | null;          // Which viewer/page created this (for bulk fetch)
-  before_sibling_id: string | null;       // Single-pointer sibling ordering (linked list)
   created_at: string;                     // ISO 8601 timestamp
   mentions: string[];                     // Array of referenced node IDs
   metadata: Record<string, unknown>;      // Type-specific JSON properties
   embedding_vector: Float32Array | null;  // AI/ML embeddings (computed)
 }
+// Note: Sibling ordering is stored on has_child edge `order` field (Issue #614)
 ```
 
 ### Field Descriptions
@@ -43,7 +43,7 @@ interface NodeSpaceNode {
 #### Hierarchy Management
 - **`parent_id`**: Direct parent in hierarchy (null for root-level nodes, changes with indent/outdent)
 - **`origin_node_id`**: Which viewer/page originally created this node (immutable, enables bulk fetch)
-- **`before_sibling_id`**: Linked-list sibling ordering (maintains order independent of creation time)
+- **Sibling ordering**: Stored on `has_child` edge `order` field using fractional ordering (Issue #614)
 
 #### Relationship System
 - **`mentions`**: Array of node IDs that this node references or mentions
@@ -77,7 +77,7 @@ class HierarchyService {
       filter: `origin_node_id = '${originNodeId}'`
     });
 
-    return allNodes; // Client reconstructs hierarchy from parent_id and before_sibling_id
+    return allNodes; // Client reconstructs hierarchy from parent_id and edge ordering
   }
   
   // Client-side hierarchy reconstruction
@@ -96,7 +96,7 @@ class HierarchyService {
     const children = Array.from(nodeMap.values())
       .filter(n => n.parent_id === node.id);
     
-    // Order siblings using before_sibling_id chain
+    // Order siblings using edge-based ordering (has_child.order)
     const orderedChildren = this.orderSiblings(children);
     
     return {
@@ -116,53 +116,43 @@ class HierarchyService {
 - **Offline Support**: Complete hierarchy available for disconnected operation
 - **Bandwidth**: Optimal for desktop apps with local database
 
-### Single-Pointer Sibling Ordering
+### Edge-Based Sibling Ordering (Issue #614)
 
-NodeSpace uses a **single-pointer approach** with `before_sibling_id` for sibling navigation:
+NodeSpace uses **fractional ordering on `has_child` edges** for sibling navigation:
 
 ```typescript
-// Sibling ordering chain example:
-// Node A (before_sibling_id: null) -> First sibling
-// Node B (before_sibling_id: A.id) -> Second sibling  
-// Node C (before_sibling_id: B.id) -> Third sibling
+// Sibling ordering via edge order field:
+// has_child edge (parent->A, order: 1.0) -> First sibling
+// has_child edge (parent->B, order: 2.0) -> Second sibling
+// has_child edge (parent->C, order: 3.0) -> Third sibling
+// Inserting between A and B uses order: 1.5
 
 class HierarchyService {
   async getSiblings(nodeId: string): Promise<string[]> {
     const node = await this.getNode(nodeId);
     if (!node.parent_id) return [nodeId]; // Root node
-    
-    // Build complete sibling chain from before_sibling_id pointers
-    return await this.buildSiblingChain(node.parent_id);
+
+    // Get children ordered by edge order field (database-side sorting)
+    return await this.getOrderedChildren(node.parent_id);
   }
-  
-  private async buildSiblingChain(parentId: string): Promise<string[]> {
-    const children = await this.getNodesByParent(parentId);
-    
-    // Build ordered chain following before_sibling_id pointers
-    const siblingOrder: string[] = [];
-    const nodeMap = new Map(children.map(c => [c.id, c]));
-    
-    // Find first sibling (before_sibling_id is null)
-    const firstSibling = children.find(c => c.before_sibling_id === null);
-    if (!firstSibling) return [];
-    
-    // Follow the chain
-    let currentNode = firstSibling;
-    while (currentNode) {
-      siblingOrder.push(currentNode.id);
-      currentNode = children.find(c => c.before_sibling_id === currentNode!.id);
-    }
-    
-    return siblingOrder;
+
+  private async getOrderedChildren(parentId: string): Promise<string[]> {
+    // Query returns children already sorted by edge order
+    const result = await this.database.query(`
+      SELECT out.id FROM has_child
+      WHERE in = $parentId
+      ORDER BY order ASC
+    `);
+    return result.map(r => r.id);
   }
 }
 ```
 
 ### Hierarchy Benefits
-- **Performance**: O(n) sibling reconstruction where n = number of siblings
-- **Simplicity**: Single field manages ordering
-- **Integrity**: Clear parent-child relationships
-- **Future-Ready**: Can upgrade to dual-pointer system later
+- **Performance**: O(1) database-side sorting via ORDER BY edge.order
+- **Simplicity**: Fractional ordering on edges (no linked-list traversal)
+- **Integrity**: Clear parent-child relationships via graph edges
+- **Concurrent-safe**: OCC version bumping prevents ordering conflicts
 
 ## Backlink System Integration
 

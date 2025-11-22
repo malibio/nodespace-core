@@ -3,6 +3,10 @@
 ## Status
 Accepted (2025-01-21)
 
+> **Update (Issue #614, 2025-11-22)**: The `before_sibling_id` field referenced in this ADR
+> has been removed from the node model. Sibling ordering now uses fractional `order` field
+> on `has_child` edges. See PR #616 for implementation details.
+
 ## Context
 
 Epic #69 Phase 1.3 (Issue #75) requires migrating core hierarchy and node operations from Rust backend to TypeScript frontend services. This migration is part of a broader architectural shift toward a simplified desktop application with embedded database.

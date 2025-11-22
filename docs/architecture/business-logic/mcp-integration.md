@@ -482,7 +482,6 @@ async fn handle_create_node(
         content: params.content,
         parent_id: params.parent_id,
         root_id: params.root_id,
-        before_sibling_id: None,
         created_at: chrono::Utc::now(),
         modified_at: chrono::Utc::now(),
         properties: params.properties,
@@ -490,6 +489,7 @@ async fn handle_create_node(
         mentions: Vec::new(),
         mentioned_by: Vec::new(),
     };
+    // Note: Sibling ordering is handled via has_child edge `order` field (Issue #614)
 
     let node_id = service.create_node(node.clone()).await
         .map_err(|e| MCPError {
@@ -841,7 +841,7 @@ NodeSpace uses a **custom line-by-line markdown parser** instead of pulldown-cma
 1. **Inline formatting preservation**: Stores `**bold**` and `*italic*` syntax intact (not stripped), allowing users to edit markdown directly in the outliner
 2. **Hierarchical node creation**: Designed specifically for parent-child-sibling database relationships, not HTML rendering
 3. **Round-trip fidelity**: Import → export preserves original markdown formatting exactly
-4. **Explicit sibling ordering**: Maintains `before_sibling_id` chains that pulldown-cmark's event stream doesn't provide
+4. **Explicit sibling ordering**: Maintains sibling order via `has_child` edge `order` field (fractional ordering, Issue #614)
 
 The custom parser is ~100 lines with helper functions and handles:
 - Headers (#, ##, ###)

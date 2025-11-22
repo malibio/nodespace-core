@@ -1,5 +1,10 @@
 # Elegant Persistence Solution: Priority-Based Flush Control
 
+> **Note (Issue #614)**: This document references `beforeSiblingId` field which has been
+> removed from the node model. Sibling ordering now uses fractional `order` field on
+> `has_child` edges. The persistence patterns still apply, but sibling ordering is now
+> handled via edge updates rather than node field updates.
+
 ## Problem Statement
 
 Current architecture has dual persistence paths:

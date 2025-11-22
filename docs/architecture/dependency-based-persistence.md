@@ -1,5 +1,10 @@
 # Dependency-Based Persistence Architecture
 
+> **Note (Issue #614)**: This document references `beforeSiblingId` field which has been
+> removed from the node model. Sibling ordering now uses fractional `order` field on
+> `has_child` edges. The dependency coordination patterns still apply, but the specific
+> fields mentioned need to be updated to reflect edge-based ordering.
+
 ## Core Concept
 
 Instead of manually coordinating with `waitForPersistence()`, **declare dependencies upfront** and let the system enforce ordering automatically.
