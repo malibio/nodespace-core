@@ -375,17 +375,68 @@ CREATE project:abc-123 CONTENT {
 
 ```sql
 -- Mention relationships (for [[links]] and @mentions)
-DEFINE TABLE mentions SCHEMAFULL TYPE RELATION
-    FROM nodes TO nodes;
-DEFINE FIELD root_id ON mentions TYPE record(nodes);
-DEFINE FIELD created_at ON mentions TYPE datetime;
+DEFINE TABLE mentions SCHEMAFULL TYPE RELATION IN node OUT node;
+DEFINE FIELD createdAt ON mentions TYPE datetime DEFAULT time::now();
+DEFINE FIELD context ON mentions TYPE string DEFAULT "";
+DEFINE FIELD offset ON mentions TYPE int DEFAULT 0;
+
+-- Indexes for efficient bidirectional queries
+DEFINE INDEX idx_mentions_in ON mentions COLUMNS in;
+DEFINE INDEX idx_mentions_out ON mentions COLUMNS out;
+DEFINE INDEX idx_unique_mention ON mentions COLUMNS in, out UNIQUE;
 
 -- Example usage:
-RELATE (task:⟨uuid1⟩)->mentions->(text:⟨uuid2⟩)
+RELATE node:⟨uuid1⟩->mentions->node:⟨uuid2⟩
     CONTENT {
-        root_id: date:2025-01-03,
-        created_at: time::now()
+        context: "Check this out @NodeB...",
+        createdAt: time::now()
     };
+```
+
+#### Graph Traversal Patterns for Mentions
+
+**CRITICAL**: Always use SurrealDB's native graph traversal syntax (`->` and `<-`) instead of manually querying the edge table.
+
+**✅ CORRECT - Use Graph Traversal:**
+```rust
+// Forward lookup: "Who did I mention?"
+let query = "SELECT ->mentions->node.id AS mentioned_ids FROM node:⟨source_uuid⟩;";
+
+// Reverse lookup: "Who mentioned me?" (backlinks)
+let query = "SELECT <-mentions<-node.id AS mentioned_by_ids FROM node:⟨target_uuid⟩;";
+
+// Rich retrieval with edge metadata
+let query = "
+    SELECT
+        <-mentions.createdAt AS mentioned_at,
+        <-mentions.context AS snippet,
+        <-mentions<-node.id AS source_ids,
+        <-mentions<-node.content AS source_content
+    FROM node:⟨target_uuid⟩;
+";
+```
+
+**❌ WRONG - Manual Edge Table Queries:**
+```rust
+// Don't do this - inefficient and verbose
+let query = "SELECT out FROM mentions WHERE in = $node_thing;";
+let query = "SELECT in FROM mentions WHERE out = $node_thing;";
+```
+
+**Why Graph Traversal is Superior:**
+- ✅ **Native optimization** - SurrealDB optimizes graph operations internally
+- ✅ **Cleaner syntax** - Expresses intent clearly
+- ✅ **Bidirectional for free** - `<-` operator gives backlinks without maintaining separate lists
+- ✅ **Edge metadata access** - Can access both edge properties and destination node properties
+- ✅ **Composable** - Easy to chain multiple traversals
+
+**Architecture Rule**: Always RELATE between hub nodes (`node` table), never between spoke tables:
+```rust
+// ✅ CORRECT - Hub-to-hub edges
+RELATE node:A->mentions->node:B
+
+// ❌ WRONG - Spoke-to-spoke edges break when types change
+RELATE task:A->mentions->person:B
 ```
 
 ## Record ID Format
@@ -602,14 +653,25 @@ ORDER BY modified_at DESC;
 
 ```sql
 -- Get all nodes this node mentions (outgoing)
-SELECT ->mentions->nodes.* FROM $node_id;
+SELECT ->mentions->node.* FROM $node_id;
 
--- Get all nodes that mention this node (incoming)
-SELECT <-mentions<-nodes.* FROM $node_id;
+-- Get all nodes that mention this node (incoming/backlinks)
+SELECT <-mentions<-node.* FROM $node_id;
 
--- Get root nodes where this node is mentioned (backlinks)
-SELECT DISTINCT root_id FROM mentions
-WHERE out = $node_id;
+-- Get just the IDs of mentioned nodes
+SELECT ->mentions->node.id AS mentioned_ids FROM $node_id;
+
+-- Get just the IDs of nodes that mention this one
+SELECT <-mentions<-node.id AS mentioned_by_ids FROM $node_id;
+
+-- Rich retrieval with context (for "References" UI section)
+SELECT
+    <-mentions.createdAt AS when_mentioned,
+    <-mentions.context AS snippet,
+    <-mentions<-node.id AS source_id,
+    <-mentions<-node.content AS source_content,
+    <-mentions<-node.nodeType AS source_type
+FROM $node_id;
 ```
 
 ## Dynamic Schema Creation
