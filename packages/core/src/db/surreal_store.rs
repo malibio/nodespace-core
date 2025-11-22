@@ -883,22 +883,10 @@ where
                 node.node_type, node.id
             );
 
-            // For schema type, convert fields array to JSON string to preserve complex nested structures
-            // during SurrealDB binary protocol serialization
-            let mut bound_properties = props_with_schema.clone();
-            if node.node_type == "schema" {
-                if let Some(fields_value) = bound_properties.get("fields") {
-                    let fields_str = serde_json::to_string(fields_value)
-                        .context("Failed to stringify schema fields")?;
-                    bound_properties
-                        .insert("fields".to_string(), serde_json::Value::String(fields_str));
-                }
-            }
-
             let mut spoke_response = self
                 .db
                 .query(&spoke_query)
-                .bind(("properties", Value::Object(bound_properties)))
+                .bind(("properties", Value::Object(props_with_schema.clone())))
                 .await
                 .context("Failed to create spoke record")?;
 
@@ -1266,20 +1254,7 @@ where
                     }
                 };
 
-                if let Some(mut props) = result {
-                    // If schema fields were stored as JSON string, parse them back
-                    if node.node_type == "schema" {
-                        if let Some(serde_json::Value::String(fields_str)) = props.get("fields") {
-                            if let Ok(fields_value) =
-                                serde_json::from_str::<serde_json::Value>(fields_str)
-                            {
-                                // Replace the stringified value with the parsed array
-                                if let Some(obj) = props.as_object_mut() {
-                                    obj.insert("fields".to_string(), fields_value);
-                                }
-                            }
-                        }
-                    }
+                if let Some(props) = result {
                     node.properties = props;
                 }
             }
