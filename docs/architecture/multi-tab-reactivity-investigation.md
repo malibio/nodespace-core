@@ -464,6 +464,14 @@ getNode(nodeId) {
 - **Issue #622:** SSE for browser mode sync (necessary for browser multi-pane reactivity)
 - **Issue #594:** EventBus deletion (removed old sync mechanism that predates current architecture)
 
+### Follow-Up Issues (Created from This Investigation)
+
+- **Issue #640:** Fix subscription cleanup leak in ReactiveNodeService (HIGH)
+- **Issue #641:** Add multi-tab/pane integration tests for reactivity system (MEDIUM)
+- **Issue #642:** Implement conflict resolution UI for concurrent edits (MEDIUM)
+- **Issue #643:** Add SSE event ordering tests for browser mode sync (MEDIUM)
+- **Issue #644:** Clarify focus manager isolation design for multi-pane editing (LOW)
+
 ## Conclusion
 
 The multi-tab/pane reactivity system is **fundamentally sound**:
