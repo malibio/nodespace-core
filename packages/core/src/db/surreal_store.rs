@@ -2304,9 +2304,8 @@ where
                 .await
                 .context("Failed to query children")?;
 
-            let child_things: Vec<Thing> = response
-                .take(0)
-                .context("Failed to extract child IDs")?;
+            let child_things: Vec<Thing> =
+                response.take(0).context("Failed to extract child IDs")?;
 
             if child_things.is_empty() {
                 break;
