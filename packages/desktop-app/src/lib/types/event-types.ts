@@ -42,6 +42,38 @@ export interface HierarchyRelationship {
 }
 
 // ============================================================================
+// Mention Event Data (Bidirectional References)
+// ============================================================================
+
+/**
+ * Mention relationship event data from LIVE SELECT
+ * Represents bidirectional references between nodes
+ *
+ * Unlike hierarchies, mentions are not parent-child relationships
+ * and do not have ordering. They represent connections or references.
+ */
+export interface MentionRelationship {
+  sourceId: string; // Node making the reference
+  targetId: string; // Node being referenced
+}
+
+// ============================================================================
+// Edge Relationship Type (Union of all edge types)
+// ============================================================================
+
+/**
+ * Edge relationship event data from LIVE SELECT
+ * Tagged union type representing different relationship types
+ *
+ * Backend emits this as:
+ * - Hierarchy: { type: "hierarchy", hierarchy: { parentId, childId, order } }
+ * - Mention: { type: "mention", mention: { sourceId, targetId } }
+ */
+export type EdgeRelationship =
+  | { type: 'hierarchy'; hierarchy: HierarchyRelationship }
+  | { type: 'mention'; mention: MentionRelationship };
+
+// ============================================================================
 // Nested Tree Structure (for Recursive FETCH optimization)
 // ============================================================================
 
