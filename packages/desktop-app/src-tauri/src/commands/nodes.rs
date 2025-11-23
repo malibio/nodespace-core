@@ -142,7 +142,7 @@ pub async fn create_node(
             parent_id: node.parent_id,
             // root_id removed - backend auto-derives root from parent chain (Issue #533)
             // before_sibling_id removed - backend uses fractional ordering on has_child edges (Issue #616)
-            before_sibling_id: None,
+            insert_after_node_id: None,
             properties: node.properties,
         })
         .await
@@ -219,7 +219,7 @@ pub async fn create_root_node(
             content: input.content,
             parent_id: None, // parent_id = None for root nodes
             // root is derived from parent chain (Issue #533)
-            before_sibling_id: None, // before_sibling_id = None for root nodes
+            insert_after_node_id: None, // before_sibling_id = None for root nodes
             properties: input.properties,
         })
         .await?;

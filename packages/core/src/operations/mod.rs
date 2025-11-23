@@ -33,7 +33,7 @@
 //! 2. **Auto-Derive Root from Parent Chain**: Every non-root node's container/root
 //!    is automatically derived by traversing parent edges to find the top-level node.
 //!
-//! 3. **Sibling Position Calculation**: If before_sibling_id is not provided,
+//! 3. **Sibling Position Calculation**: If insert_after_node_id is not provided,
 //!    the node is placed as the last sibling automatically.
 //!
 //! 4. **Update Operations Restrictions**: Content updates cannot change hierarchy.
@@ -60,7 +60,7 @@
 //!         node_type: "text".to_string(),
 //!         content: "Hello World".to_string(),
 //!         parent_id: Some("parent-id".to_string()),
-//!         before_sibling_id: None, // Will be placed as last sibling
+//!         insert_after_node_id: None, // Will be placed as last sibling
 //!         properties: json!({}),
 //!     }).await?;
 //!
@@ -125,7 +125,7 @@ use std::sync::Arc;
 ///     node_type: "text".to_string(),
 ///     content: "Hello World".to_string(),
 ///     parent_id: Some("parent-123".to_string()),
-///     before_sibling_id: None,
+///     insert_after_node_id: None,
 ///     properties: json!({}),
 /// };
 ///
@@ -136,7 +136,7 @@ use std::sync::Arc;
 ///     node_type: "text".to_string(),
 ///     content: "Tracked by frontend".to_string(),
 ///     parent_id: None,
-///     before_sibling_id: None,
+///     insert_after_node_id: None,
 ///     properties: json!({}),
 /// };
 /// ```
@@ -151,7 +151,7 @@ pub struct CreateNodeParams {
     /// Optional parent node ID (container/root will be auto-derived from parent chain)
     pub parent_id: Option<String>,
     /// Optional sibling to insert before (if None, appends to end)
-    pub before_sibling_id: Option<String>,
+    pub insert_after_node_id: Option<String>,
     /// Additional node properties as JSON
     pub properties: Value,
 }
@@ -187,7 +187,7 @@ pub struct CreateNodeParams {
 ///     node_type: "text".to_string(),
 ///     content: "Content".to_string(),
 ///     parent_id: Some("parent-id".to_string()),
-///     before_sibling_id: None, // Placed as last sibling
+///     insert_after_node_id: None, // Placed as last sibling
 ///     properties: json!({}),
 /// }).await?;
 /// # Ok(())
@@ -339,29 +339,31 @@ where
 
     /// Calculate sibling position for a new/moved node
     ///
-    /// Business Rule 3: If before_sibling_id is not provided, place the node
+    /// Business Rule 3: If insert_after_node_id is not provided, place the node
     /// as the last sibling automatically.
     ///
     /// # Arguments
     ///
     /// * `parent_id` - Parent node ID (may be None for root nodes)
-    /// * `before_sibling_id` - Explicitly provided sibling position (may be None)
+    /// * `insert_after_node_id` - Sibling to insert after (None means append at end)
     ///
     /// # Returns
     ///
-    /// The calculated before_sibling_id (None means last position)
+    /// The insert_after_node_id to use:
+    /// - Some(id) if explicitly provided (validated) or if last child found (append at end)
+    /// - None if no siblings exist (will insert at beginning, which is also the end)
     ///
     /// # Errors
     ///
-    /// - `InvalidSiblingChain` if before_sibling_id is invalid
-    /// - `NodeNotFound` if before_sibling doesn't exist
+    /// - `InvalidSiblingChain` if insert_after_node_id is invalid
+    /// - `NodeNotFound` if the sibling doesn't exist
     async fn calculate_sibling_position(
         &self,
         parent_id: Option<&str>,
-        before_sibling_id: Option<String>,
+        insert_after_node_id: Option<String>,
     ) -> Result<Option<String>, NodeOperationError> {
         // If explicitly provided, validate it exists
-        if let Some(ref sibling_id) = before_sibling_id {
+        if let Some(ref sibling_id) = insert_after_node_id {
             // Verify sibling exists
             self.node_service
                 .get_node(sibling_id)
@@ -379,10 +381,20 @@ where
                 )));
             }
 
-            return Ok(before_sibling_id);
+            return Ok(insert_after_node_id);
         }
 
-        // No explicit sibling provided - place as last sibling (None)
+        // No explicit sibling provided - find last child to append at end
+        // Note: create_parent_edge treats None as "insert at beginning", so we need
+        // to explicitly find the last child if we want "append at end" behavior.
+        if let Some(parent_id) = parent_id {
+            let children = self.node_service.get_children(parent_id).await?;
+            if let Some(last_child) = children.last() {
+                return Ok(Some(last_child.id.clone()));
+            }
+        }
+
+        // No parent or no existing children - None means "first position" (only position)
         Ok(None)
     }
 
@@ -425,7 +437,7 @@ where
     /// * `node_type` - Type identifier (e.g., "text", "task", "date")
     /// * `content` - Primary content/text
     /// * `parent_id` - Optional parent node reference (root auto-derived from parent chain)
-    /// * `before_sibling_id` - Optional sibling ordering (calculated as last if None)
+    /// * `insert_after_node_id` - Optional sibling to insert after (calculated as last if None)
     /// * `properties` - JSON object with entity-specific fields
     ///
     /// # Returns
@@ -459,7 +471,7 @@ where
     ///     node_type: "date".to_string(),
     ///     content: "2025-01-03".to_string(),
     ///     parent_id: None, // Root nodes have no parent
-    ///     before_sibling_id: None, // Root nodes have no siblings
+    ///     insert_after_node_id: None, // Root nodes have no siblings
     ///     properties: json!({}),
     /// }).await?;
     ///
@@ -469,7 +481,7 @@ where
     ///     node_type: "text".to_string(),
     ///     content: "Hello".to_string(),
     ///     parent_id: Some(date_id.clone()), // Root auto-derived from date_id
-    ///     before_sibling_id: None, // Placed as last sibling
+    ///     insert_after_node_id: None, // Placed as last sibling
     ///     properties: json!({}),
     /// }).await?;
     /// # Ok(())
@@ -492,7 +504,7 @@ where
     ///     node_type: "date".to_string(),
     ///     content: "2025-10-23".to_string(),  // This becomes the ID
     ///     parent_id: None,
-    ///     before_sibling_id: None,
+    ///     insert_after_node_id: None,
     ///     properties: json!({}),
     /// }).await?;
     ///
@@ -529,7 +541,10 @@ where
 
             // Business Rule 2: Calculate sibling position
             let calculated_sibling = self
-                .calculate_sibling_position(params.parent_id.as_deref(), params.before_sibling_id)
+                .calculate_sibling_position(
+                    params.parent_id.as_deref(),
+                    params.insert_after_node_id,
+                )
                 .await?;
 
             (
@@ -541,7 +556,7 @@ where
             // Node has NO parent - it's a root-level node
             // Root nodes can still have siblings (other root-level nodes)
             let calculated_sibling = self
-                .calculate_sibling_position(None, params.before_sibling_id)
+                .calculate_sibling_position(None, params.insert_after_node_id)
                 .await?;
 
             (None, None, calculated_sibling)
@@ -597,7 +612,7 @@ where
         // Create parent edge atomically if parent_id was specified
         // This establishes the has_child graph edge: parent->has_child->child
         if let Some(parent_id) = final_parent_id {
-            // Use create_parent_edge which preserves before_sibling_id atomically
+            // Use create_parent_edge which preserves insert_after_node_id atomically
             self.node_service
                 .create_parent_edge(&created_id, &parent_id, final_sibling_id.as_deref())
                 .await?;
@@ -1018,7 +1033,7 @@ where
     /// # Arguments
     ///
     /// * `node_id` - The node to reorder
-    /// * `before_sibling_id` - The sibling to place this node before (None = last)
+    /// * `insert_after` - The sibling to place this node after (None = first position)
     ///
     /// # Errors
     ///
@@ -1094,19 +1109,9 @@ where
 
     /// Delete a node with sibling chain integrity preservation
     ///
-    /// This method fixes the critical bug where deleting a node left dangling
-    /// before_sibling_id references pointing to the deleted node.
-    ///
-    /// # Sibling Chain Fix
-    ///
-    /// Before deletion:
-    /// - Node A (before_sibling_id=None)
-    /// - Node B (before_sibling_id="A")  ← Deleting this
-    /// - Node C (before_sibling_id="B")
-    ///
-    /// After deletion (with fix):
-    /// - Node A (before_sibling_id=None)
-    /// - Node C (before_sibling_id="A")  ← Fixed! Now points to A instead of deleted B
+    /// With graph-native architecture using fractional ordering on has_child edges,
+    /// sibling chain integrity is automatically maintained. Deleting a node simply
+    /// removes its edge, and remaining siblings keep their relative order.
     ///
     /// # Arguments
     ///
@@ -1250,7 +1255,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1263,7 +1268,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child content".to_string(),
                 parent_id: Some(date_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1288,7 +1293,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1300,7 +1305,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-04".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1313,7 +1318,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent in date1".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1326,7 +1331,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child in date2".to_string(),
                 parent_id: Some(parent.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await;
@@ -1355,21 +1360,21 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
             .unwrap();
 
         // Create first node under date container
-        // API behavior: before_sibling_id = None means "append at end"
+        // API behavior: insert_after_node_id = None means "append at end"
         let first = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "text".to_string(),
                 content: "First".to_string(),
                 parent_id: Some(date.clone()),
-                before_sibling_id: None, // Appends at end (first child)
+                insert_after_node_id: None, // Appends at end (first child)
                 properties: json!({}),
             })
             .await
@@ -1382,21 +1387,21 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Second".to_string(),
                 parent_id: Some(date.clone()),
-                before_sibling_id: None, // Appends at end (after first)
+                insert_after_node_id: None, // Appends at end (after first)
                 properties: json!({}),
             })
             .await
             .unwrap();
 
-        // Create third node BEFORE second under date container
-        // This should place third before second in the children order
+        // Create third node AFTER first under date container
+        // This should place third between first and second in the children order
         let third = operations
             .create_node(CreateNodeParams {
                 id: None, // Test generates ID
                 node_type: "text".to_string(),
                 content: "Third".to_string(),
                 parent_id: Some(date.clone()),
-                before_sibling_id: Some(second.clone()), // Insert before second
+                insert_after_node_id: Some(first.clone()), // Insert after first
                 properties: json!({}),
             })
             .await
@@ -1409,7 +1414,7 @@ mod tests {
         // With documented API behavior (None = append at end):
         // - first was added at end (only child at time)
         // - second was added at end (after first)
-        // - third was added before second (between first and second)
+        // - third was added after first (between first and second)
         // So final order should be: [first, third, second]
         assert_eq!(
             children[0].id, first,
@@ -1417,11 +1422,11 @@ mod tests {
         );
         assert_eq!(
             children[1].id, third,
-            "Third should be in the middle (added before second)"
+            "Third should be in the middle (added after first)"
         );
         assert_eq!(
             children[2].id, second,
-            "Second should be last (third was inserted before it)"
+            "Second should be last (third was inserted after first)"
         );
     }
 
@@ -1440,7 +1445,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1453,7 +1458,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "A".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1465,7 +1470,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "B".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1477,7 +1482,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "C".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1513,7 +1518,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1526,7 +1531,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "First".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1538,7 +1543,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Second".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1568,7 +1573,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1581,7 +1586,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "First".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1593,7 +1598,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Last".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1623,7 +1628,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1636,7 +1641,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1648,7 +1653,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Sibling".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1661,7 +1666,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(parent.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1711,7 +1716,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Frontend-tracked node".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1749,7 +1754,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-10-31".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1778,7 +1783,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await;
@@ -1809,7 +1814,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1823,7 +1828,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(parent_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1846,7 +1851,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Auto-generated ID".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1878,7 +1883,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original content".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1946,7 +1951,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1959,7 +1964,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent 1".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1971,7 +1976,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent 2".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -1984,7 +1989,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child node".to_string(),
                 parent_id: Some(parent1_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2027,7 +2032,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-01-03".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2040,7 +2045,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2053,7 +2058,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Node A".to_string(),
                 parent_id: Some(parent_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2065,7 +2070,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Node B".to_string(),
                 parent_id: Some(parent_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2103,7 +2108,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test content".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2150,7 +2155,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test content".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2188,7 +2193,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2252,7 +2257,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2264,7 +2269,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2296,7 +2301,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2309,7 +2314,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2322,7 +2327,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2353,7 +2358,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2365,7 +2370,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Parent".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2377,7 +2382,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2407,7 +2412,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2419,7 +2424,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2447,7 +2452,7 @@ mod tests {
                 node_type: "date".to_string(),
                 content: "2025-11-13".to_string(),
                 parent_id: None,
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await
@@ -2459,7 +2464,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Original".to_string(),
                 parent_id: Some(root_id.clone()),
-                before_sibling_id: None,
+                insert_after_node_id: None,
                 properties: json!({}),
             })
             .await

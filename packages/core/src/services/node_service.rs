@@ -1518,7 +1518,7 @@ where
     ///
     /// This is the efficient way to load a complete document tree:
     /// 1. Single database query fetches all nodes with the same root_id
-    /// 2. In-memory hierarchy reconstruction using parent_id and before_sibling_id
+    /// 2. In-memory hierarchy reconstruction using parent_id and edge ordering
     ///
     /// This avoids making multiple queries for each level of the tree.
     ///
@@ -1622,7 +1622,7 @@ where
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
-    /// Create parent-child edge atomically with before_sibling_id
+    /// Create parent-child edge atomically with insert_after_node_id
     ///
     /// Used during node creation to establish parent relationship while preserving
     /// sibling ordering. This is separate from move_node() which is for moving existing nodes.
@@ -1631,54 +1631,23 @@ where
     ///
     /// * `child_id` - ID of the child node (must already exist)
     /// * `parent_id` - ID of the parent node
-    /// * `before_sibling_id` - Optional sibling to insert before (None = end of list)
+    /// * `insert_after_node_id` - Optional sibling to insert after (None = insert at beginning)
     pub async fn create_parent_edge(
         &self,
         child_id: &str,
         parent_id: &str,
-        before_sibling_id: Option<&str>,
+        insert_after_node_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
-        // Convert before_sibling_id to insert_after_sibling_id for store.move_node
+        // API semantics match store.move_node directly:
+        //   insert_after_node_id = Some(id) → "insert AFTER this sibling"
+        //   insert_after_node_id = None → "insert at beginning"
         //
-        // API semantics (documented in CreateNodeParams):
-        //   before_sibling_id = Some(id) → "place me BEFORE this sibling"
-        //   before_sibling_id = None → "append at end of list"
-        //
-        // store.move_node semantics:
-        //   insert_after_sibling_id = Some(id) → "insert AFTER this sibling"
-        //   insert_after_sibling_id = None → "insert at beginning"
-        //
-        // Translation:
-        //   before_sibling_id = Some(id) → find sibling before target, insert after it
-        //   before_sibling_id = None → find last child, insert after it (append at end)
-        let insert_after_id = if let Some(target_sibling_id) = before_sibling_id {
-            // Get all children in order
-            let children = self.get_children(parent_id).await?;
-
-            // Find the position of the target sibling
-            let target_pos = children.iter().position(|c| c.id == target_sibling_id);
-
-            if let Some(pos) = target_pos {
-                if pos == 0 {
-                    // Target is first child, insert at beginning
-                    None
-                } else {
-                    // Insert after the child right before the target
-                    Some(children[pos - 1].id.clone())
-                }
-            } else {
-                // Target sibling not found, append at end
-                children.last().map(|c| c.id.clone())
-            }
-        } else {
-            // No before_sibling_id specified = append at END of list
-            let children = self.get_children(parent_id).await?;
-            children.last().map(|c| c.id.clone())
-        };
+        // Callers that want "append at end" must explicitly find the last child
+        // and pass its ID as insert_after_node_id.
 
         // Use store's move_node which creates the has_child edge atomically
         self.store
-            .move_node(child_id, Some(parent_id), insert_after_id.as_deref())
+            .move_node(child_id, Some(parent_id), insert_after_node_id)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
@@ -2258,7 +2227,7 @@ where
         node_type: &str,
         parent_id: &str,
         _root_id: &str, // Deprecated: hierarchy now managed via edges
-        before_sibling_id: Option<&str>,
+        insert_after_node_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         // Ensure parent exists (create if missing)
         if self
@@ -2299,7 +2268,7 @@ where
                 })?;
             // Update parent relationship via edge (handles sibling ordering)
             self.store
-                .move_node(node_id, Some(parent_id), before_sibling_id)
+                .move_node(node_id, Some(parent_id), insert_after_node_id)
                 .await
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to update parent: {}", e))
@@ -2323,7 +2292,7 @@ where
             })?;
             // Create parent relationship via edge (handles sibling ordering)
             self.store
-                .move_node(node_id, Some(parent_id), before_sibling_id)
+                .move_node(node_id, Some(parent_id), insert_after_node_id)
                 .await
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to set parent: {}", e))

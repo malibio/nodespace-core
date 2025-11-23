@@ -712,7 +712,7 @@ async fn create_node(
             node_type: node_type.to_string(),
             content: content.to_string(),
             parent_id,
-            before_sibling_id: None, // Ordering handled by edge order field
+            insert_after_node_id: None, // Ordering handled by edge order field
             properties,
         })
         .await

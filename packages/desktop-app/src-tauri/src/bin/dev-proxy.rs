@@ -271,7 +271,7 @@ struct CreateNodeRequest {
     // The operations layer (NodeOperations::create_node) handles edge creation
     // Note (Issue #533): root_id removed - backend auto-derives root from parent chain
     pub parent_id: Option<String>,
-    pub before_sibling_id: Option<String>,
+    pub insert_after_node_id: Option<String>,
     pub properties: serde_json::Value,
     // TODO: Implement embedding_vector and mentions support in operations layer
     #[allow(dead_code)]
@@ -446,7 +446,7 @@ async fn create_node(
         node_type: req.node_type,
         content: req.content,
         parent_id: req.parent_id,
-        before_sibling_id: req.before_sibling_id,
+        insert_after_node_id: req.insert_after_node_id,
         properties: req.properties,
     };
 
