@@ -290,6 +290,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // When creating a node from a parent with children, transfer those children to the new node
     // This matches pre-migration behavior: new node appears between parent and children
     const children = sharedNodeStore.getNodesForParent(afterNodeId);
+    const structureChildren = structureTree.getChildren(afterNodeId);
+
+    console.log('[createNode] Child transfer check:', {
+      afterNodeId,
+      insertAtBeginning,
+      sharedNodeStoreChildren: children.length,
+      structureTreeChildren: structureChildren.length,
+      children: children.map(c => c.id),
+      structureIds: structureChildren
+    });
 
     // IMPORTANT: Always transfer children when not inserting at beginning,
     // regardless of expanded state (expanded state is UI-only, doesn't affect structure)

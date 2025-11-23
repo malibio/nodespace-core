@@ -17,7 +17,7 @@ pub struct CreateNodeInput {
     pub content: String,
     pub parent_id: Option<String>,
     // root_id removed - backend auto-derives root from parent chain (Issue #533)
-    pub before_sibling_id: Option<String>,
+    // before_sibling_id removed - backend uses fractional ordering on has_child edges (Issue #616)
     pub properties: serde_json::Value,
     #[serde(default)]
     pub embedding_vector: Option<Vec<u8>>,
@@ -141,7 +141,8 @@ pub async fn create_node(
             content: node.content,
             parent_id: node.parent_id,
             // root_id removed - backend auto-derives root from parent chain (Issue #533)
-            before_sibling_id: node.before_sibling_id,
+            // before_sibling_id removed - backend uses fractional ordering on has_child edges (Issue #616)
+            before_sibling_id: None,
             properties: node.properties,
         })
         .await
@@ -169,8 +170,7 @@ pub struct SaveNodeWithParentInput {
     pub node_type: String,
     pub parent_id: String,
     pub root_id: String,
-    #[serde(default)]
-    pub before_sibling_id: Option<String>,
+    // before_sibling_id removed - backend uses fractional ordering on has_child edges (Issue #616)
 }
 
 /// Create a new root node (top-level node that can contain other nodes)
@@ -180,7 +180,6 @@ pub struct SaveNodeWithParentInput {
 /// Node type must have a corresponding schema defined in the system.
 /// NodeOperations ensures they have:
 /// - parent_id = None
-/// - before_sibling_id = None
 ///
 /// # Arguments
 /// * `operations` - NodeOperations instance from Tauri state
@@ -746,7 +745,7 @@ pub async fn save_node_with_parent(
             &input.node_type,
             &input.parent_id,
             &input.root_id,
-            input.before_sibling_id.as_deref(),
+            None, // before_sibling_id removed - backend uses fractional ordering (Issue #616)
         )
         .await
         .map_err(Into::into)
