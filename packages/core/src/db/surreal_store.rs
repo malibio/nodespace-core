@@ -2283,13 +2283,14 @@ where
             .await
             .context("Failed to fetch subtree edges")?;
 
+        // Use Thing type for SurrealDB record IDs (consistent with get_all_edges)
         #[derive(serde::Deserialize)]
         struct EdgeRow {
-            id: String,
+            id: Thing,
             #[serde(rename = "in")]
-            in_node: String,
+            in_node: Thing,
             #[serde(rename = "out")]
-            out_node: String,
+            out_node: Thing,
             order: f64,
         }
 
@@ -2297,13 +2298,31 @@ where
             .take(0)
             .context("Failed to extract subtree edges from response")?;
 
+        // Extract string IDs from Thing types (consistent with get_all_edges)
         Ok(edges
             .into_iter()
-            .map(|e| EdgeRecord {
-                id: e.id,
-                in_node: e.in_node,
-                out_node: e.out_node,
-                order: e.order,
+            .map(|e| {
+                let id_str = match &e.id.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => e.id.to_string(),
+                };
+                let in_str = match &e.in_node.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => e.in_node.to_string(),
+                };
+                let out_str = match &e.out_node.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => e.out_node.to_string(),
+                };
+                EdgeRecord {
+                    id: id_str,
+                    in_node: in_str,
+                    out_node: out_str,
+                    order: e.order,
+                }
             })
             .collect())
     }
@@ -4245,6 +4264,109 @@ mod tests {
         assert!(child_ids.contains(&child1.id), "Should contain child1 ID");
         assert!(child_ids.contains(&child2.id), "Should contain child2 ID");
         assert!(child_ids.contains(&child3.id), "Should contain child3 ID");
+
+        Ok(())
+    }
+
+    // NOTE: The following tests are for the adjacency list strategy.
+    // The queries use invalid SurrealDB syntax ({..+collect} doesn't exist).
+    // This is a pre-existing bug in the original implementation (Issue #630).
+    // Tests are ignored until the queries are fixed with valid SurrealDB syntax.
+    // See SurrealDB docs: https://surrealdb.com/docs/surrealdb/models/graph
+
+    #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
+    #[tokio::test]
+    async fn test_get_nodes_in_subtree_returns_descendants() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // Create a tree structure: root -> child -> grandchild
+        let root = Node::new("text".to_string(), "Root".to_string(), json!({}));
+        let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+        let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
+
+        store.create_node(root.clone()).await?;
+        store.create_node(child.clone()).await?;
+        store.create_node(grandchild.clone()).await?;
+
+        // Create edges: root -> child -> grandchild
+        store.move_node(&child.id, Some(&root.id), None).await?;
+        store
+            .move_node(&grandchild.id, Some(&child.id), None)
+            .await?;
+
+        // Get nodes in subtree of root - should include child and grandchild
+        let subtree_nodes = store.get_nodes_in_subtree(&root.id).await?;
+
+        assert_eq!(
+            subtree_nodes.len(),
+            2,
+            "Should have 2 descendants (child and grandchild)"
+        );
+        let ids: Vec<_> = subtree_nodes.iter().map(|n| n.id.clone()).collect();
+        assert!(ids.contains(&child.id), "Should contain child");
+        assert!(ids.contains(&grandchild.id), "Should contain grandchild");
+
+        Ok(())
+    }
+
+    #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
+    #[tokio::test]
+    async fn test_get_nodes_in_subtree_leaf_node_returns_empty() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // Create a leaf node with no children
+        let leaf = Node::new("text".to_string(), "Leaf".to_string(), json!({}));
+        store.create_node(leaf.clone()).await?;
+
+        // Get nodes in subtree of leaf - should return empty vec
+        let subtree_nodes = store.get_nodes_in_subtree(&leaf.id).await?;
+
+        assert!(
+            subtree_nodes.is_empty(),
+            "Leaf node should have no descendants"
+        );
+
+        Ok(())
+    }
+
+    #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
+    #[tokio::test]
+    async fn test_get_edges_in_subtree_returns_subtree_edges() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // Create a tree structure: root -> child -> grandchild
+        let root = Node::new("text".to_string(), "Root".to_string(), json!({}));
+        let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+        let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
+
+        store.create_node(root.clone()).await?;
+        store.create_node(child.clone()).await?;
+        store.create_node(grandchild.clone()).await?;
+
+        // Create edges: root -> child -> grandchild
+        store.move_node(&child.id, Some(&root.id), None).await?;
+        store
+            .move_node(&grandchild.id, Some(&child.id), None)
+            .await?;
+
+        // Get edges in subtree of root - should include both edges
+        let subtree_edges = store.get_edges_in_subtree(&root.id).await?;
+
+        assert_eq!(subtree_edges.len(), 2, "Should have 2 edges in subtree");
+
+        // Verify the edges are correct
+        let edge_pairs: Vec<_> = subtree_edges
+            .iter()
+            .map(|e| (e.in_node.clone(), e.out_node.clone()))
+            .collect();
+        assert!(
+            edge_pairs.contains(&(root.id.clone(), child.id.clone())),
+            "Should contain root->child edge"
+        );
+        assert!(
+            edge_pairs.contains(&(child.id.clone(), grandchild.id.clone())),
+            "Should contain child->grandchild edge"
+        );
 
         Ok(())
     }
