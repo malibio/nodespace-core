@@ -2191,15 +2191,16 @@ where
         Ok(Some(results[0].clone()))
     }
 
-    /// Get all nodes in a subtree using adjacency list strategy
+    /// Get all nodes in a subtree using breadth-first traversal
     ///
     /// Fetches all nodes that are descendants of the given root node (not including the root itself).
     /// This is the first step in building an adjacency list structure for efficient tree navigation.
     ///
     /// # Query Strategy
     ///
-    /// Uses SurrealDB recursive traversal: `$root->has_child->node{..+collect}`
-    /// This finds all nodes recursively connected via has_child edges in one efficient query.
+    /// Uses iterative breadth-first traversal: queries each level's children until no more
+    /// children are found. This approach is more compatible across SurrealDB configurations
+    /// than recursive syntax.
     ///
     /// # Arguments
     ///
@@ -2207,35 +2208,93 @@ where
     ///
     /// # Returns
     ///
-    /// Vector of all descendant nodes (flat, unsorted)
+    /// Vector of all descendant nodes (flat, in breadth-first order)
     ///
     /// # Performance
     ///
-    /// Single database query regardless of tree depth
+    /// O(depth) queries where depth is the tree depth. Each level is fetched in 2 queries
+    /// (one for edges, one for node data).
     pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
         use surrealdb::sql::Thing;
 
-        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
+        // Strategy: Iterative breadth-first traversal using edge queries
+        // This avoids SurrealDB's recursive syntax which has compatibility issues
+        let mut all_descendants = Vec::new();
+        let mut current_level = vec![root_id.to_string()];
 
-        // Query: Recursively traverse all descendant nodes via has_child edges
-        // The {..+collect} syntax means: traverse all has_child edges, collecting unique nodes at all levels
-        let query = "
-            SELECT * FROM $root_thing->has_child->node{..+collect}
-            FETCH data;
-        ";
+        // Maximum depth to prevent infinite loops (256 is SurrealDB's max recursion depth)
+        const MAX_DEPTH: usize = 256;
 
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("root_thing", root_thing))
-            .await
-            .context("Failed to fetch subtree nodes")?;
+        for _ in 0..MAX_DEPTH {
+            if current_level.is_empty() {
+                break;
+            }
 
-        let surreal_nodes: Vec<SurrealNode> = response
-            .take(0)
-            .context("Failed to extract subtree nodes from response")?;
+            // Build query for all children of current level nodes
+            // Use type::thing() to properly construct record IDs
+            let parent_ids: Vec<String> = current_level
+                .iter()
+                .map(|id| format!("type::thing('node', '{}')", id))
+                .collect();
 
-        Ok(surreal_nodes.into_iter().map(Into::into).collect())
+            let query = format!(
+                "SELECT VALUE out FROM has_child WHERE in IN [{}];",
+                parent_ids.join(", ")
+            );
+
+            let mut response = self
+                .db
+                .query(&query)
+                .await
+                .context("Failed to query children")?;
+
+            let child_things: Vec<Thing> = response
+                .take(0)
+                .context("Failed to extract child IDs")?;
+
+            if child_things.is_empty() {
+                break;
+            }
+
+            // Extract string IDs for next level
+            let child_ids: Vec<String> = child_things
+                .iter()
+                .map(|t| match &t.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => t.id.to_string(),
+                })
+                .collect();
+
+            // Fetch full node data for these children
+            // Use type::thing() to properly construct record IDs (UUIDs need proper quoting)
+            let child_id_list: Vec<String> = child_ids
+                .iter()
+                .map(|id| format!("type::thing('node', '{}')", id))
+                .collect();
+
+            let nodes_query = format!(
+                "SELECT * FROM node WHERE id IN [{}] FETCH data;",
+                child_id_list.join(", ")
+            );
+
+            let mut nodes_response = self
+                .db
+                .query(&nodes_query)
+                .await
+                .context("Failed to fetch child nodes")?;
+
+            let surreal_nodes: Vec<SurrealNode> = nodes_response
+                .take(0)
+                .context("Failed to extract child nodes")?;
+
+            all_descendants.extend(surreal_nodes.into_iter().map(Into::into));
+
+            // Move to next level
+            current_level = child_ids;
+        }
+
+        Ok(all_descendants)
     }
 
     /// Get all edges in a subtree using adjacency list strategy
@@ -2244,10 +2303,10 @@ where
     /// Combined with `get_nodes_in_subtree()`, this enables building an in-memory adjacency list
     /// for efficient tree construction and navigation.
     ///
-    /// # Query Strategy
+    /// # Strategy
     ///
-    /// Uses SurrealDB edge traversal with recursive collection:
-    /// Finds all has_child edges where both parent and child are descendants of the root.
+    /// First gets all descendant node IDs using `get_nodes_in_subtree()`, then queries
+    /// all edges where the parent is either the root or a descendant.
     ///
     /// # Arguments
     ///
@@ -2256,29 +2315,43 @@ where
     /// # Returns
     ///
     /// Vector of all edges within the subtree (parent-child relationships)
-    ///
-    /// # Performance
-    ///
-    /// Single database query regardless of tree depth
     pub async fn get_edges_in_subtree(&self, root_id: &str) -> Result<Vec<EdgeRecord>> {
         use surrealdb::sql::Thing;
 
         let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
 
-        // Query: Get all has_child edges within the subtree
-        // We need all edges where the parent node is a descendant of root
-        // This includes edges from root's children, their children, etc.
-        let query = "
-            SELECT id, in, out, order FROM has_child
-            WHERE in IN (
-                SELECT id FROM $root_thing->has_child->node{..+collect}
-            ) OR in = $root_thing
-            ORDER BY order ASC;
-        ";
+        // Get all descendant nodes first
+        let descendants = self.get_nodes_in_subtree(root_id).await?;
+
+        // Build a list of all node IDs (root + descendants) for the WHERE clause
+        let all_node_ids: Vec<String> = descendants.iter().map(|n| n.id.clone()).collect();
+
+        // Query edges where parent is either root or a descendant
+        // If no descendants, just query edges from root
+        let query = if all_node_ids.is_empty() {
+            "SELECT id, in, out, order FROM has_child WHERE in = $root_thing ORDER BY order ASC;"
+                .to_string()
+        } else {
+            // Include root ID in the list
+            // Use type::thing() to properly construct record IDs (UUIDs need proper quoting)
+            let id_list = std::iter::once(format!("type::thing('node', '{}')", root_id))
+                .chain(
+                    all_node_ids
+                        .iter()
+                        .map(|id| format!("type::thing('node', '{}')", id)),
+                )
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!(
+                "SELECT id, in, out, order FROM has_child WHERE in IN [{}] ORDER BY order ASC;",
+                id_list
+            )
+        };
 
         let mut response = self
             .db
-            .query(query)
+            .query(&query)
             .bind(("root_thing", root_thing.clone()))
             .await
             .context("Failed to fetch subtree edges")?;
@@ -4268,13 +4341,9 @@ mod tests {
         Ok(())
     }
 
-    // NOTE: The following tests are for the adjacency list strategy.
-    // The queries use invalid SurrealDB syntax ({..+collect} doesn't exist).
-    // This is a pre-existing bug in the original implementation (Issue #630).
-    // Tests are ignored until the queries are fixed with valid SurrealDB syntax.
-    // See SurrealDB docs: https://surrealdb.com/docs/surrealdb/models/graph
+    // Tests for the adjacency list strategy (recursive graph traversal)
+    // Uses SurrealDB's .{..}(->edge->target) syntax for recursive queries
 
-    #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
     #[tokio::test]
     async fn test_get_nodes_in_subtree_returns_descendants() -> Result<()> {
         let (store, _temp) = create_test_store().await?;
@@ -4309,7 +4378,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
     #[tokio::test]
     async fn test_get_nodes_in_subtree_leaf_node_returns_empty() -> Result<()> {
         let (store, _temp) = create_test_store().await?;
@@ -4329,7 +4397,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
     #[tokio::test]
     async fn test_get_edges_in_subtree_returns_subtree_edges() -> Result<()> {
         let (store, _temp) = create_test_store().await?;

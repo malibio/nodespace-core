@@ -1542,20 +1542,23 @@ where
         let mut json =
             serde_json::to_value(node).unwrap_or(serde_json::Value::Object(Default::default()));
 
-        // Add children array if this node has children
-        if let Some(children_ids) = adjacency_list.get(&node.id) {
-            let children: Vec<serde_json::Value> = children_ids
-                .iter()
-                .filter_map(|(child_id, _order)| {
-                    node_map.get(child_id).map(|child_node| {
-                        self.build_node_tree_recursive(child_node, node_map, adjacency_list)
+        // Build children array (always present, even if empty for consistency)
+        let children: Vec<serde_json::Value> =
+            if let Some(children_ids) = adjacency_list.get(&node.id) {
+                children_ids
+                    .iter()
+                    .filter_map(|(child_id, _order)| {
+                        node_map.get(child_id).map(|child_node| {
+                            self.build_node_tree_recursive(child_node, node_map, adjacency_list)
+                        })
                     })
-                })
-                .collect();
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
-            if let Some(obj) = json.as_object_mut() {
-                obj.insert("children".to_string(), serde_json::Value::Array(children));
-            }
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert("children".to_string(), serde_json::Value::Array(children));
         }
 
         json
@@ -4321,14 +4324,10 @@ mod tests {
     mod adjacency_list_tests {
         use super::*;
 
-        // NOTE: The following tests are for the adjacency list strategy.
-        // The underlying queries use invalid SurrealDB syntax ({..+collect} doesn't exist).
-        // This is a pre-existing bug in the original implementation (Issue #630).
-        // Tests are ignored until the queries are fixed with valid SurrealDB syntax.
-        // See SurrealDB docs: https://surrealdb.com/docs/surrealdb/models/graph
+        // Tests for the adjacency list strategy (recursive graph traversal)
+        // Uses SurrealDB's .{..}(->edge->target) syntax for recursive queries
 
         /// Test get_children_tree with a leaf node (no children)
-        #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
         #[tokio::test]
         async fn test_get_children_tree_leaf_node() {
             let (service, _temp) = create_test_service().await;
@@ -4346,7 +4345,6 @@ mod tests {
         }
 
         /// Test get_children_tree with single-level children
-        #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
         #[tokio::test]
         async fn test_get_children_tree_single_level() {
             let (service, _temp) = create_test_service().await;
@@ -4381,7 +4379,6 @@ mod tests {
         }
 
         /// Test get_children_tree with multi-level deep tree
-        #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
         #[tokio::test]
         async fn test_get_children_tree_deep_hierarchy() {
             let (service, _temp) = create_test_service().await;
@@ -4422,7 +4419,6 @@ mod tests {
         }
 
         /// Test sibling ordering is preserved (insertion order since create_parent_edge appends)
-        #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
         #[tokio::test]
         async fn test_get_children_tree_sibling_ordering() {
             let (service, _temp) = create_test_service().await;
@@ -4464,7 +4460,6 @@ mod tests {
         }
 
         /// Test get_children_tree with non-existent root returns empty object
-        #[ignore = "Pre-existing bug: {..+collect} is invalid SurrealDB syntax - needs fix in Issue #630"]
         #[tokio::test]
         async fn test_get_children_tree_nonexistent_root() {
             let (service, _temp) = create_test_service().await;
