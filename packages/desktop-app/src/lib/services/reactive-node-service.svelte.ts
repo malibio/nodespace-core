@@ -290,40 +290,30 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // When creating a node from a parent with children, transfer those children to the new node
     // This matches pre-migration behavior: new node appears between parent and children
     const children = sharedNodeStore.getNodesForParent(afterNodeId);
-    const structureChildren = structureTree.getChildren(afterNodeId);
-    console.log('[createNode] Transfer check:', {
-      afterNodeId,
-      insertAtBeginning,
-      expanded: afterUIState.expanded,
-      childrenCount: children.length,
-      structureChildrenIds: structureChildren,
-      structureChildrenCount: structureChildren.length
-    });
 
     // IMPORTANT: Always transfer children when not inserting at beginning,
     // regardless of expanded state (expanded state is UI-only, doesn't affect structure)
     if (!insertAtBeginning && children.length > 0) {
-        console.log('[createNode] TRANSFERRING CHILDREN:', children.map(c => c.id));
         // CRITICAL: Wait for newNode to be persisted before transferring children
         // This prevents FOREIGN KEY constraint violations when children reference the new parent
         // Use Promise to defer execution until after current synchronous stack completes
         Promise.resolve().then(async () => {
           // Wait for newNode to be persisted to database
           await sharedNodeStore.waitForNodeSaves([nodeId]);
-          console.log('[createNode] Node persisted, starting child transfer');
 
           // Now safe to transfer children - newNode exists in database
           // Transfer children from afterNode to newNode using moveNode
           // This properly updates the has_child graph edges in SurrealDB
           for (const child of children) {
-            console.log('[createNode] Transferring child:', child.id, 'to new parent:', nodeId);
             // Import moveNode dynamically to avoid circular dependency
             const { moveNode } = await import('$lib/services/tauri-commands');
             // Move child to be under the new node
             await moveNode(child.id, nodeId);
-            console.log('[createNode] Child transferred successfully:', child.id);
+
+            // CRITICAL FIX: Update ReactiveStructureTree for browser mode
+            // In Tauri mode, LIVE SELECT events update the tree, but in browser mode we must do it manually
+            structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
           }
-          console.log('[createNode] All children transferred');
         });
     }
 
