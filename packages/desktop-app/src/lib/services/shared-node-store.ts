@@ -331,6 +331,9 @@ export class SharedNodeStore {
   // Used for pattern conversions where content + nodeType must persist together
   private activeBatches = new Map<string, ActiveBatch>();
 
+  // Track pending tree loads to prevent duplicate concurrent loads from multiple tabs
+  private pendingTreeLoads = new Map<string, Promise<Node[]>>();
+
   private constructor() {
     // Private constructor for singleton
   }
@@ -1077,6 +1080,27 @@ export class SharedNodeStore {
    * @returns Array of ALL nodes (flattened) loaded from database
    */
   async loadChildrenTree(parentId: string): Promise<Node[]> {
+    // Check if a load is already in progress for this parent
+    const existingLoad = this.pendingTreeLoads.get(parentId);
+    if (existingLoad) {
+      console.log(`[SharedNodeStore] Reusing pending load for parent: ${parentId}`);
+      return existingLoad;
+    }
+
+    // Create new load promise and track it
+    const loadPromise = this.doLoadChildrenTree(parentId);
+    this.pendingTreeLoads.set(parentId, loadPromise);
+
+    try {
+      const result = await loadPromise;
+      return result;
+    } finally {
+      // Clean up tracking after load completes (success or failure)
+      this.pendingTreeLoads.delete(parentId);
+    }
+  }
+
+  private async doLoadChildrenTree(parentId: string): Promise<Node[]> {
     try {
       const tree = await tauriCommands.getChildrenTree(parentId);
 
