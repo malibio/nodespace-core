@@ -45,7 +45,7 @@ Backend Database
 │   ┌─────────────────────────────────────┐ │
 │   │ ReactiveStructureTree ($state Map)   │ │
 │   │ - parent→children hierarchy          │ │
-│   │ - version counter (triggers reactivity)
+│   │ - version counter (triggers reactivity)│ │
 │   │ - Subscribes: edge:created/deleted   │ │
 │   └─────────────────────────────────────┘ │
 └───────────────────────────────────────────┘
