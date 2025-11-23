@@ -2188,6 +2188,123 @@ where
         Ok(Some(results[0].clone()))
     }
 
+    /// Get all nodes in a subtree using adjacency list strategy
+    ///
+    /// Fetches all nodes that are descendants of the given root node (not including the root itself).
+    /// This is the first step in building an adjacency list structure for efficient tree navigation.
+    ///
+    /// # Query Strategy
+    ///
+    /// Uses SurrealDB recursive traversal: `$root->has_child->node{..+collect}`
+    /// This finds all nodes recursively connected via has_child edges in one efficient query.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - ID of the root node to fetch descendants for
+    ///
+    /// # Returns
+    ///
+    /// Vector of all descendant nodes (flat, unsorted)
+    ///
+    /// # Performance
+    ///
+    /// Single database query regardless of tree depth
+    pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
+        use surrealdb::sql::Thing;
+
+        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
+
+        // Query: Recursively traverse all descendant nodes via has_child edges
+        // The {..+collect} syntax means: traverse all has_child edges, collecting unique nodes at all levels
+        let query = "
+            SELECT * FROM $root_thing->has_child->node{..+collect}
+            FETCH data;
+        ";
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("root_thing", root_thing))
+            .await
+            .context("Failed to fetch subtree nodes")?;
+
+        let surreal_nodes: Vec<SurrealNode> = response
+            .take(0)
+            .context("Failed to extract subtree nodes from response")?;
+
+        Ok(surreal_nodes.into_iter().map(Into::into).collect())
+    }
+
+    /// Get all edges in a subtree using adjacency list strategy
+    ///
+    /// Fetches all parent-child relationships (has_child edges) within a subtree.
+    /// Combined with `get_nodes_in_subtree()`, this enables building an in-memory adjacency list
+    /// for efficient tree construction and navigation.
+    ///
+    /// # Query Strategy
+    ///
+    /// Uses SurrealDB edge traversal with recursive collection:
+    /// Finds all has_child edges where both parent and child are descendants of the root.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - ID of the root node to fetch descendant edges for
+    ///
+    /// # Returns
+    ///
+    /// Vector of all edges within the subtree (parent-child relationships)
+    ///
+    /// # Performance
+    ///
+    /// Single database query regardless of tree depth
+    pub async fn get_edges_in_subtree(&self, root_id: &str) -> Result<Vec<EdgeRecord>> {
+        use surrealdb::sql::Thing;
+
+        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
+
+        // Query: Get all has_child edges within the subtree
+        // We need all edges where the parent node is a descendant of root
+        // This includes edges from root's children, their children, etc.
+        let query = "
+            SELECT id, in, out, order FROM has_child
+            WHERE in IN (
+                SELECT id FROM $root_thing->has_child->node{..+collect}
+            ) OR in = $root_thing
+            ORDER BY order ASC;
+        ";
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("root_thing", root_thing.clone()))
+            .await
+            .context("Failed to fetch subtree edges")?;
+
+        #[derive(serde::Deserialize)]
+        struct EdgeRow {
+            id: String,
+            #[serde(rename = "in")]
+            in_node: String,
+            #[serde(rename = "out")]
+            out_node: String,
+            order: f64,
+        }
+
+        let edges: Vec<EdgeRow> = response
+            .take(0)
+            .context("Failed to extract subtree edges from response")?;
+
+        Ok(edges
+            .into_iter()
+            .map(|e| EdgeRecord {
+                id: e.id,
+                in_node: e.in_node,
+                out_node: e.out_node,
+                order: e.order,
+            })
+            .collect())
+    }
+
     pub async fn search_nodes_by_content(
         &self,
         search_query: &str,

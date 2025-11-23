@@ -1424,35 +1424,153 @@ where
         Ok(children)
     }
 
-    /// Get a node with all its descendants recursively nested (optimized for initial load)
+    /// Get a complete nested tree structure using efficient adjacency list strategy
     ///
-    /// Uses SurrealDB's recursive FETCH to return the entire subtree in a single query.
-    /// This eliminates the need for O(n) tree reconstruction on the frontend.
+    /// Fetches the entire subtree in 2 optimized queries:
+    /// 1. Get all nodes in the subtree (single efficient query)
+    /// 2. Get all edges in the subtree (single efficient query)
     ///
-    /// The returned structure contains:
-    /// - The parent node with all fields (id, nodeType, content, version, etc.)
-    /// - A `children` array containing recursively nested child nodes
-    /// - Each child node has the same structure, allowing infinite depth traversal
+    /// Then constructs the nested tree structure in-memory using an adjacency list,
+    /// which separates data fetching from tree construction and enables client-side logic.
+    ///
+    /// # Performance
+    ///
+    /// - **2 queries total** regardless of tree depth or node count
+    /// - O(n) in-memory tree construction where n = number of nodes
+    /// - Much faster than recursive queries with complex projections
     ///
     /// # Arguments
     ///
-    /// * `parent_id` - The parent node ID
+    /// * `parent_id` - The root node ID to fetch tree for
     ///
     /// # Returns
     ///
-    /// `serde_json::Value` containing the nested tree structure
+    /// `serde_json::Value` containing the nested tree structure with all descendants
     pub async fn get_children_tree(
         &self,
         parent_id: &str,
     ) -> Result<serde_json::Value, NodeServiceError> {
-        self.store
-            .get_children(Some(parent_id))
+        // Fetch all nodes and edges in the subtree efficiently
+        let nodes = self
+            .store
+            .get_nodes_in_subtree(parent_id)
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
-            .map(|nodes| {
-                // Convert nodes to JSON tree structure
-                serde_json::to_value(nodes).unwrap_or(serde_json::Value::Array(vec![]))
-            })
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to fetch subtree nodes: {}", e))
+            })?;
+
+        let edges = self
+            .store
+            .get_edges_in_subtree(parent_id)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to fetch subtree edges: {}", e))
+            })?;
+
+        // Build tree structure using adjacency list strategy
+        let tree = self
+            .build_tree_from_adjacency_list(parent_id, &nodes, &edges)
+            .await?;
+        Ok(tree)
+    }
+
+    /// Build a nested tree structure from nodes and edges using adjacency list strategy
+    ///
+    /// Constructs a nested JSON tree by:
+    /// 1. Creating a HashMap mapping parent_id → Vec<child_id> (adjacency list)
+    /// 2. Recursively walking the tree structure using the adjacency list
+    /// 3. Building JSON nodes with `children` arrays
+    ///
+    /// This separates data fetching from tree construction, making the logic testable
+    /// and enabling client-side tree modifications.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - The root node ID
+    /// * `nodes` - All nodes in the subtree (flat list)
+    /// * `edges` - All parent-child relationships in the subtree
+    ///
+    /// # Returns
+    ///
+    /// JSON structure with nested children arrays, or empty object if root not found
+    async fn build_tree_from_adjacency_list(
+        &self,
+        root_id: &str,
+        nodes: &[Node],
+        edges: &[crate::EdgeRecord],
+    ) -> Result<serde_json::Value, NodeServiceError> {
+        use std::collections::HashMap;
+
+        // Create a map of node_id → Node for O(1) lookup
+        let mut node_map: HashMap<String, Node> = HashMap::new();
+        for node in nodes {
+            node_map.insert(node.id.clone(), node.clone());
+        }
+
+        // Create adjacency list: parent_id → Vec of (child_id, order)
+        // Sorted by order to maintain sibling sequence
+        let mut adjacency_list: HashMap<String, Vec<(String, f64)>> = HashMap::new();
+        for edge in edges {
+            adjacency_list
+                .entry(edge.in_node.clone())
+                .or_default()
+                .push((edge.out_node.clone(), edge.order));
+        }
+
+        // Sort children by order for each parent
+        for children in adjacency_list.values_mut() {
+            children.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // Fetch root node to include in response
+        let root_node = self.get_node(root_id).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to fetch root node: {}", e))
+        })?;
+
+        match root_node {
+            Some(root) => {
+                // Recursively build tree structure
+                let tree_json = self.build_node_tree_recursive(&root, &node_map, &adjacency_list);
+                Ok(tree_json)
+            }
+            None => {
+                // Root node not found, return empty object
+                Ok(serde_json::json!({}))
+            }
+        }
+    }
+
+    /// Recursively build a tree node with its children
+    ///
+    /// Helper function for `build_tree_from_adjacency_list` that recursively
+    /// constructs JSON nodes with nested children arrays.
+    #[allow(clippy::only_used_in_recursion)]
+    fn build_node_tree_recursive(
+        &self,
+        node: &Node,
+        node_map: &std::collections::HashMap<String, Node>,
+        adjacency_list: &std::collections::HashMap<String, Vec<(String, f64)>>,
+    ) -> serde_json::Value {
+        let mut json =
+            serde_json::to_value(node).unwrap_or(serde_json::Value::Object(Default::default()));
+
+        // Add children array if this node has children
+        if let Some(children_ids) = adjacency_list.get(&node.id) {
+            let children: Vec<serde_json::Value> = children_ids
+                .iter()
+                .filter_map(|(child_id, _order)| {
+                    node_map.get(child_id).map(|child_node| {
+                        self.build_node_tree_recursive(child_node, node_map, adjacency_list)
+                    })
+                })
+                .collect();
+
+            if let Some(obj) = json.as_object_mut() {
+                obj.insert("children".to_string(), serde_json::Value::Array(children));
+            }
+        }
+
+        json
     }
 
     /// Check if a node is a root node (has no parent)
