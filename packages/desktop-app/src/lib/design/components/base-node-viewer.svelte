@@ -137,6 +137,10 @@
     // Reading this value causes Svelte to re-run this derived when edges change.
     void reactiveStructureTree.version;
 
+    // Establish reactive dependency on node content/property changes via ReactiveNodeService
+    // The _updateTrigger is incremented by SharedNodeStore.subscribeAll callback
+    void nodeManager._updateTrigger;
+
     // Helper function to recursively flatten visible nodes with depth
     function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {
       // TRANSITION PERIOD (Issue #580): Try reactive structure tree first, fall back to sharedNodeStore
