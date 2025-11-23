@@ -20,13 +20,33 @@
 use crate::models::Node;
 use serde::{Deserialize, Serialize};
 
-/// Represents hierarchy relationships between nodes
+/// Represents hierarchy relationships between nodes (parent-child with ordering)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HierarchyRelationship {
     pub parent_id: String,
     pub child_id: String,
     pub order: f64,
+}
+
+/// Represents mention relationships between nodes (bidirectional references)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionRelationship {
+    pub source_id: String,
+    pub target_id: String,
+}
+
+/// Represents different types of edge relationships between nodes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum EdgeRelationship {
+    /// Hierarchical parent-child relationship with ordering
+    #[serde(rename = "hierarchy")]
+    Hierarchy(HierarchyRelationship),
+    /// Bidirectional mention/reference relationship
+    #[serde(rename = "mention")]
+    Mention(MentionRelationship),
 }
 
 /// Domain events emitted by SurrealStore
@@ -44,13 +64,13 @@ pub enum DomainEvent {
     /// A node was deleted
     NodeDeleted { id: String },
 
-    /// A new hierarchy relationship (edge) was created
-    EdgeCreated(HierarchyRelationship),
+    /// A new edge relationship (hierarchy or mention) was created
+    EdgeCreated(EdgeRelationship),
 
-    /// An existing hierarchy relationship was updated
-    EdgeUpdated(HierarchyRelationship),
+    /// An existing edge relationship was updated
+    EdgeUpdated(EdgeRelationship),
 
-    /// A hierarchy relationship was deleted
+    /// An edge relationship was deleted
     EdgeDeleted { id: String },
 }
 
