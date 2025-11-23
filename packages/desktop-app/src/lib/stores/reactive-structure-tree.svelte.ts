@@ -23,10 +23,9 @@ interface ChildInfo {
 }
 
 class ReactiveStructureTree {
-  // Reactive map using Svelte 5 $state - automatically triggers reactivity
-  children = $state(new Map<string, ChildInfo[]>());
-  // Version counter to ensure reactivity triggers on Map mutations
-  version = $state(0);
+  // Reactive map using Svelte 5 $state.raw() - Map mutations trigger reactivity automatically
+  // Using $state.raw() instead of $state() allows direct Map mutations to be tracked
+  children = $state.raw(new Map<string, ChildInfo[]>());
   private unlisteners: UnlistenFn[] = [];
   private initialized = false;
 
@@ -165,9 +164,8 @@ class ReactiveStructureTree {
 
   /**
    * Add a child with binary search insertion to maintain sort by order
-   * @param skipVersionBump - If true, don't increment version (for batch operations)
    */
-  private addChild(rel: HierarchyRelationship, skipVersionBump: boolean = false) {
+  private addChild(rel: HierarchyRelationship) {
     const parentId = rel.parentId;
     const childId = rel.childId;
     const order = rel.order;
@@ -217,12 +215,8 @@ class ReactiveStructureTree {
     };
 
     children.splice(insertIndex, 0, newChild);
-    // Notify Svelte of the change
+    // Notify Svelte of the change ($state.raw() tracks this automatically)
     this.children.set(parentId, children);
-    // Increment version to trigger reactivity in derived states (unless batching)
-    if (!skipVersionBump) {
-      this.version++;
-    }
   }
 
   /**
@@ -312,30 +306,27 @@ class ReactiveStructureTree {
    * @param parentId - Parent node ID
    * @param childId - Child node ID
    * @param order - Sort order (use 1.0 for first child, or get max order + 1)
-   * @param skipVersionBump - If true, don't increment version (use in batch operations)
    *
    * @note This creates a temporary in-memory relationship. Once Issue #603 is complete
    * (backend returns relationship data from createNode API), this workaround can be
    * replaced with proper optimistic updates from backend responses.
    */
-  addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0, skipVersionBump: boolean = false) {
+  addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0) {
     this.addChild({
       parentId,
       childId,
       order
-    }, skipVersionBump);
+    });
   }
 
   /**
-   * Batch add multiple relationships without triggering reactivity until done.
-   * Use this when loading tree data to avoid effect loops.
+   * Batch add multiple relationships.
+   * With $state.raw(), reactivity is automatic so no special batching needed.
    */
   batchAddRelationships(relationships: Array<{parentId: string, childId: string, order: number}>) {
     for (const rel of relationships) {
-      this.addChild(rel, true); // Skip version bump for each
+      this.addChild(rel);
     }
-    // Single version bump after all additions
-    this.version++;
   }
 
   /**

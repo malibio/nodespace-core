@@ -133,9 +133,8 @@
    */
   const visibleNodesFromStores = $derived.by(() => {
     if (!nodeId) return [];
-    // Establish reactive dependency on structure tree changes.
-    // Reading this value causes Svelte to re-run this derived when edges change.
-    void reactiveStructureTree.version;
+    // Reactive dependency on structure tree is automatic with $state.raw()
+    // Svelte will re-run this derived when reactiveStructureTree.children changes
 
     // Establish reactive dependency on node content/property changes via ReactiveNodeService
     // The _updateTrigger is incremented by SharedNodeStore.subscribeAll callback
