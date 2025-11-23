@@ -1119,8 +1119,16 @@ export class SharedNodeStore {
 
       // Batch register all relationships to avoid effect loops
       // This triggers only ONE reactivity update instead of N updates
+      // Filter out relationships that already exist to avoid duplicate detection overhead
       if (allRelationships.length > 0) {
-        structureTree.batchAddRelationships(allRelationships);
+        const newRelationships = allRelationships.filter(rel => {
+          const existingChildren = structureTree.getChildren(rel.parentId);
+          return !existingChildren.includes(rel.childId);
+        });
+
+        if (newRelationships.length > 0) {
+          structureTree.batchAddRelationships(newRelationships);
+        }
       }
 
       return allNodes;
