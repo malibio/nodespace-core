@@ -1109,6 +1109,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     /**
      * Cleanup method to prevent subscription memory leaks.
      * MUST be called when the service instance is no longer needed (e.g., on component unmount).
+     * Safe to call multiple times (idempotent).
      * Failing to call this will result in subscription accumulation and unnecessary processing.
      */
     destroy() {
