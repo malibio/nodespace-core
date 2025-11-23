@@ -46,7 +46,7 @@
 //! }
 //! ```
 
-use crate::db::events::DomainEvent;
+use crate::db::events::{DomainEvent, HierarchyRelationship};
 use crate::db::fractional_ordering::FractionalOrderCalculator;
 use crate::models::schema::SchemaDefinition;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
@@ -62,6 +62,13 @@ use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 use tokio::sync::broadcast;
+
+/// Broadcast channel capacity for domain events.
+///
+/// 128 provides sufficient headroom for burst operations (bulk node creation)
+/// while limiting memory overhead. Observer lag is acceptable - we only track
+/// the current state, not historical events.
+const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Represents a has_child edge from the database
 ///
@@ -417,8 +424,8 @@ impl SurrealStore<Db> {
         // Seed core schemas (create schema nodes)
         Self::seed_core_schemas(&db).await?;
 
-        // Initialize broadcast channel for domain events (128 subscriber capacity)
-        let (event_tx, _) = broadcast::channel(128);
+        // Initialize broadcast channel for domain events
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
         Ok(Self { db, event_tx })
     }
@@ -492,8 +499,8 @@ impl SurrealStore<Client> {
 
         tracing::info!("✅ Connected to SurrealDB HTTP server");
 
-        // Initialize broadcast channel for domain events (128 subscriber capacity)
-        let (event_tx, _) = broadcast::channel(128);
+        // Initialize broadcast channel for domain events
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
         Ok(Self { db, event_tx })
     }
@@ -587,7 +594,7 @@ where
         tracing::info!("🌱 Seeding core schemas...");
 
         // Create temporary SurrealStore to use create_node method
-        let (event_tx, _) = broadcast::channel(128);
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
         let store = SurrealStore::<Db> {
             db: Arc::clone(db),
             event_tx,
@@ -1188,9 +1195,20 @@ where
         ))?;
 
         // Fetch and return created node (ensures timestamps match database values)
-        self.get_node(&node_id)
+        let node = self
+            .get_node(&node_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))?;
+
+        // Emit domain events for observers
+        self.emit_event(DomainEvent::NodeCreated(node.clone()));
+        self.emit_event(DomainEvent::EdgeCreated(HierarchyRelationship {
+            parent_id,
+            child_id: node_id,
+            order,
+        }));
+
+        Ok(node)
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
@@ -1584,9 +1602,15 @@ where
         ))?;
 
         // Fetch and return updated node
-        self.get_node(&node_id)
+        let node = self
+            .get_node(&node_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))?;
+
+        // Emit domain event for observers
+        self.emit_event(DomainEvent::NodeUpdated(node.clone()));
+
+        Ok(node)
     }
 
     /// Update a node with version check (optimistic locking)
@@ -1688,7 +1712,12 @@ where
         }
 
         // Convert and return the updated node
-        Ok(Some(updated_nodes.into_iter().next().unwrap().into()))
+        let node: Node = updated_nodes.into_iter().next().unwrap().into();
+
+        // Emit domain event for observers
+        self.emit_event(DomainEvent::NodeUpdated(node.clone()));
+
+        Ok(Some(node))
     }
 
     pub async fn delete_node(&self, id: &str) -> Result<DeleteResult> {
@@ -1802,6 +1831,9 @@ where
                 "Failed to delete node '{}' (type: {}) with cascade",
                 node_id, node_type
             ))?;
+
+        // Emit domain event for observers
+        self.emit_event(DomainEvent::NodeDeleted { id: node.id });
 
         Ok(DeleteResult { existed: true })
     }

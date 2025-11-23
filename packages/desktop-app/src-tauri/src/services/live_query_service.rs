@@ -8,6 +8,12 @@ use tracing::{debug, error, info};
 
 use nodespace_core::SurrealStore;
 
+/// Payload for deleted node/edge events
+#[derive(Serialize)]
+struct DeletedPayload {
+    id: String,
+}
+
 /// Service for managing real-time database synchronization
 ///
 /// Subscribes to domain events from SurrealStore and forwards them to the Tauri frontend.
@@ -76,10 +82,6 @@ impl LiveQueryService {
                 }
             }
             DomainEvent::NodeDeleted { id } => {
-                #[derive(Serialize)]
-                struct DeletedPayload {
-                    id: String,
-                }
                 let payload = DeletedPayload { id: id.clone() };
                 if let Err(e) = self.app.emit("node:deleted", &payload) {
                     error!("Failed to emit node:deleted: {}", e);
@@ -96,10 +98,6 @@ impl LiveQueryService {
                 }
             }
             DomainEvent::EdgeDeleted { id } => {
-                #[derive(Serialize)]
-                struct DeletedPayload {
-                    id: String,
-                }
                 let payload = DeletedPayload { id: id.clone() };
                 if let Err(e) = self.app.emit("edge:deleted", &payload) {
                     error!("Failed to emit edge:deleted: {}", e);
