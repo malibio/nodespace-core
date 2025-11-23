@@ -173,13 +173,15 @@
         }
 
         // Build node with UI state
+        // Get UI state from ReactiveNodeService (has expanded: true by default)
+        const uiState = nodeManager.getUIState(node.id);
         const nodeWithUI = {
           ...node,
           depth,
           children,
-          expanded: expandedState.get(node.id) ?? false,
+          expanded: uiState?.expanded ?? true, // Default to true (expanded by default)
           autoFocus: autoFocusNodes.has(node.id),
-          inheritHeaderLevel: 0,
+          inheritHeaderLevel: uiState?.inheritHeaderLevel ?? 0,
           isPlaceholder: false
         };
 
