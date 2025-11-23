@@ -63,15 +63,19 @@ export interface MentionRelationship {
 
 /**
  * Edge relationship event data from LIVE SELECT
- * Tagged union type representing different relationship types
+ * Internally-tagged union type representing different relationship types
  *
- * Backend emits this as:
- * - Hierarchy: { type: "hierarchy", hierarchy: { parentId, childId, order } }
- * - Mention: { type: "mention", mention: { sourceId, targetId } }
+ * Rust uses #[serde(tag = "type")] which produces an internally-tagged format
+ * where the discriminator is merged with the struct fields (NOT nested):
+ *
+ * - Hierarchy: { type: "hierarchy", parentId: "...", childId: "...", order: 1.0 }
+ * - Mention: { type: "mention", sourceId: "...", targetId: "..." }
+ *
+ * TypeScript intersection types model this correctly.
  */
-export type EdgeRelationship =
-  | { type: 'hierarchy'; hierarchy: HierarchyRelationship }
-  | { type: 'mention'; mention: MentionRelationship };
+export type HierarchyEdge = { type: 'hierarchy' } & HierarchyRelationship;
+export type MentionEdge = { type: 'mention' } & MentionRelationship;
+export type EdgeRelationship = HierarchyEdge | MentionEdge;
 
 // ============================================================================
 // Nested Tree Structure (for Recursive FETCH optimization)

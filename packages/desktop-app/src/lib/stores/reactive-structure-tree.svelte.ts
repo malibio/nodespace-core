@@ -91,13 +91,14 @@ class ReactiveStructureTree {
     try {
       // Edge created event
       const unlistenCreated = await listen<EdgeRelationship>('edge:created', (event) => {
-        // Extract hierarchy relationship from the tagged union
+        // Serde internally-tagged format: fields are merged at top level
         if (event.payload.type === 'hierarchy') {
-          console.log('[ReactiveStructureTree] Hierarchy relationship created:', event.payload.hierarchy);
-          this.addChild(event.payload.hierarchy);
+          // TypeScript narrows to HierarchyEdge, fields are directly on payload
+          console.log('[ReactiveStructureTree] Hierarchy relationship created:', event.payload);
+          this.addChild(event.payload);
         } else if (event.payload.type === 'mention') {
           // Mentions don't affect the tree structure, just log for debugging
-          console.log('[ReactiveStructureTree] Mention created (ignored):', event.payload.mention);
+          console.log('[ReactiveStructureTree] Mention created (ignored):', event.payload);
         }
       });
       this.unlisteners.push(unlistenCreated);
@@ -109,13 +110,14 @@ class ReactiveStructureTree {
     try {
       // Edge deleted event
       const unlistenDeleted = await listen<EdgeRelationship>('edge:deleted', (event) => {
-        // Extract hierarchy relationship from the tagged union
+        // Serde internally-tagged format: fields are merged at top level
         if (event.payload.type === 'hierarchy') {
-          console.log('[ReactiveStructureTree] Hierarchy relationship deleted:', event.payload.hierarchy);
-          this.removeChild(event.payload.hierarchy);
+          // TypeScript narrows to HierarchyEdge, fields are directly on payload
+          console.log('[ReactiveStructureTree] Hierarchy relationship deleted:', event.payload);
+          this.removeChild(event.payload);
         } else if (event.payload.type === 'mention') {
           // Mentions don't affect the tree structure, just log for debugging
-          console.log('[ReactiveStructureTree] Mention deleted (ignored):', event.payload.mention);
+          console.log('[ReactiveStructureTree] Mention deleted (ignored):', event.payload);
         }
       });
       this.unlisteners.push(unlistenDeleted);
@@ -127,13 +129,14 @@ class ReactiveStructureTree {
     try {
       // Edge updated event (for order changes during rebalancing)
       const unlistenUpdated = await listen<EdgeRelationship>('edge:updated', (event) => {
-        // Extract hierarchy relationship from the tagged union
+        // Serde internally-tagged format: fields are merged at top level
         if (event.payload.type === 'hierarchy') {
-          console.log('[ReactiveStructureTree] Hierarchy relationship updated:', event.payload.hierarchy);
-          this.updateChildOrder(event.payload.hierarchy);
+          // TypeScript narrows to HierarchyEdge, fields are directly on payload
+          console.log('[ReactiveStructureTree] Hierarchy relationship updated:', event.payload);
+          this.updateChildOrder(event.payload);
         } else if (event.payload.type === 'mention') {
           // Mentions don't affect the tree structure, just log for debugging
-          console.log('[ReactiveStructureTree] Mention updated (ignored):', event.payload.mention);
+          console.log('[ReactiveStructureTree] Mention updated (ignored):', event.payload);
         }
       });
       this.unlisteners.push(unlistenUpdated);

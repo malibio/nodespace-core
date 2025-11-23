@@ -47,14 +47,15 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     // Listen for edge events (hierarchy and mention relationships)
+    // Serde internally-tagged format: fields are merged at top level (not nested)
     await listen<EdgeRelationship>('edge:created', (event) => {
       if (event.payload.type === 'hierarchy') {
         console.debug(
-          `[TauriSync] Hierarchy relationship created: ${event.payload.hierarchy.parentId} -> ${event.payload.hierarchy.childId}`
+          `[TauriSync] Hierarchy relationship created: ${event.payload.parentId} -> ${event.payload.childId}`
         );
       } else if (event.payload.type === 'mention') {
         console.debug(
-          `[TauriSync] Mention relationship created: ${event.payload.mention.sourceId} -> ${event.payload.mention.targetId}`
+          `[TauriSync] Mention relationship created: ${event.payload.sourceId} -> ${event.payload.targetId}`
         );
       }
     });
@@ -62,11 +63,11 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     await listen<EdgeRelationship>('edge:updated', (event) => {
       if (event.payload.type === 'hierarchy') {
         console.debug(
-          `[TauriSync] Hierarchy relationship updated: ${event.payload.hierarchy.parentId} -> ${event.payload.hierarchy.childId}`
+          `[TauriSync] Hierarchy relationship updated: ${event.payload.parentId} -> ${event.payload.childId}`
         );
       } else if (event.payload.type === 'mention') {
         console.debug(
-          `[TauriSync] Mention relationship updated: ${event.payload.mention.sourceId} -> ${event.payload.mention.targetId}`
+          `[TauriSync] Mention relationship updated: ${event.payload.sourceId} -> ${event.payload.targetId}`
         );
       }
     });
