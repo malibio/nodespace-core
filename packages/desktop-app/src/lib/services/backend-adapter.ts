@@ -102,7 +102,7 @@ export interface BackendAdapter {
   getChildren(parentId: string): Promise<Node[]>;
   getDescendants(rootNodeId: string): Promise<Node[]>;
   getChildrenTree(parentId: string): Promise<NodeWithChildren | null>;
-  moveNode(nodeId: string, newParentId: string | null, beforeSiblingId?: string | null): Promise<void>;
+  moveNode(nodeId: string, newParentId: string | null, insertAfterNodeId: string | null): Promise<void>;
   reorderNode(nodeId: string, beforeSiblingId: string | null): Promise<void>;
   getAllEdges(): Promise<EdgeRecord[]>;
 
@@ -204,12 +204,12 @@ class TauriAdapter implements BackendAdapter {
     return result as NodeWithChildren;
   }
 
-  async moveNode(nodeId: string, newParentId: string | null, beforeSiblingId?: string | null): Promise<void> {
+  async moveNode(nodeId: string, newParentId: string | null, insertAfterNodeId: string | null): Promise<void> {
     const invoke = await this.getInvoke();
     return invoke<void>('move_node', {
       node_id: nodeId,
       new_parent_id: newParentId,
-      before_sibling_id: beforeSiblingId
+      insert_after_node_id: insertAfterNodeId
     });
   }
 
@@ -432,11 +432,11 @@ class HttpAdapter implements BackendAdapter {
     return result as NodeWithChildren;
   }
 
-  async moveNode(nodeId: string, newParentId: string | null, _beforeSiblingId?: string | null): Promise<void> {
+  async moveNode(nodeId: string, newParentId: string | null, insertAfterNodeId: string | null): Promise<void> {
     const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/parent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parentId: newParentId })
+      body: JSON.stringify({ parentId: newParentId, insertAfterNodeId })
     });
     await this.handleResponse<void>(response);
   }
@@ -621,7 +621,7 @@ class MockAdapter implements BackendAdapter {
   async getDescendants(_rootNodeId: string): Promise<Node[]> {
     return [];
   }
-  async moveNode(_nodeId: string, _newParentId: string | null): Promise<void> {}
+  async moveNode(_nodeId: string, _newParentId: string | null, _insertAfterNodeId: string | null): Promise<void> {}
   async reorderNode(_nodeId: string, _beforeSiblingId: string | null): Promise<void> {}
   async getAllEdges(): Promise<EdgeRecord[]> {
     return [];

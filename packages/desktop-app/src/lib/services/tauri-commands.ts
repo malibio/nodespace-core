@@ -105,9 +105,9 @@ export async function getChildrenTree(parentId: string): Promise<NodeWithChildre
 export async function moveNode(
   nodeId: string,
   newParentId: string | null,
-  beforeSiblingId?: string | null
+  insertAfterNodeId?: string | null
 ): Promise<void> {
-  return backendAdapter.moveNode(nodeId, newParentId, beforeSiblingId);
+  return backendAdapter.moveNode(nodeId, newParentId, insertAfterNodeId ?? null);
 }
 
 /**

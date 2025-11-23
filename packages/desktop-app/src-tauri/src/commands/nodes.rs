@@ -415,13 +415,13 @@ pub async fn move_node(
     store: State<'_, SurrealStore>,
     node_id: String,
     new_parent_id: Option<String>,
-    new_before_sibling_id: Option<String>,
+    insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
     store
         .move_node(
             &node_id,
             new_parent_id.as_deref(),
-            new_before_sibling_id.as_deref(),
+            insert_after_node_id.as_deref(),
         )
         .await
         .map_err(|e| CommandError {
