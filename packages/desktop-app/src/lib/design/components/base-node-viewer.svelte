@@ -916,12 +916,12 @@
     // Create new node using NodeManager - placeholder if empty, real if has content
     let newNodeId: string;
 
-    // CRITICAL FIX: Use afterNode's parentId as the explicit parent
+    // CRITICAL FIX: Use afterNode's actual parent from parentsCache
     // The viewer's nodeId represents the viewer's display context (e.g., date node)
-    // but the actual parent is stored in the node's parentId field
-    // After indent, the node object's parentId is updated to reflect the new parent
-    const afterNode = nodeManager.findNode(afterNodeId);
-    const explicitParentId = afterNode?.parentId ?? nodeId ?? null;
+    // but the actual parent is stored in sharedNodeStore.getParentsForNode()
+    // After indent, the parent relationship is updated in the cache
+    const parents = sharedNodeStore.getParentsForNode(afterNodeId);
+    const explicitParentId = parents.length > 0 ? parents[0].id : (nodeId ?? null);
 
     // Add formatting syntax to the new content based on node type and header level
     // (applies to both empty and non-empty content for header inheritance)
