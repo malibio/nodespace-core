@@ -251,17 +251,17 @@ fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
 /// use nodespace_core::db::SurrealStore;
 /// use nodespace_core::models::Node;
 /// use std::path::PathBuf;
-/// use std::sync::Arc;
 /// use serde_json::json;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let db = SurrealStore::new(PathBuf::from("./data/test.db")).await?;
-///     let service = NodeService::new(Arc::new(db))?;
+///     let service = NodeService::new(db)?;
 ///
 ///     let node = Node::new(
 ///         "text".to_string(),
 ///         "Hello World".to_string(),
+///         None,
 ///         json!({}),
 ///     );
 ///
@@ -362,10 +362,11 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let node = Node::new(
     ///     "text".to_string(),
     ///     "My note".to_string(),
+    ///     None,
     ///     json!({}),
     /// );
     /// let id = service.create_node(node).await?;
@@ -751,7 +752,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// // Create mention: "daily-note" mentions "project-planning"
     /// service.create_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
@@ -835,7 +836,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// service.delete_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
     /// # }
@@ -872,7 +873,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// if let Some(node) = service.get_node("node-id-123").await? {
     ///     println!("Found: {}", node.content);
     /// }
@@ -942,7 +943,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let update = NodeUpdate::new()
     ///     .with_content("Updated content".to_string());
     /// service.update_node("node-id", update).await?;
@@ -1080,7 +1081,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust
     /// let rows = service.update_with_version_check(
     ///     "node-123",
     ///     5,  // Expected version
@@ -1304,7 +1305,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// service.delete_node("node-id-123").await?;
     /// # Ok(())
     /// # }
@@ -1347,7 +1348,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust
     /// let rows = service.delete_with_version_check("node-123", 5).await?;
     ///
     /// if rows == 0 {
@@ -1392,7 +1393,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let children = service.get_children("parent-id").await?;
     /// println!("Found {} children", children.len());
     /// # Ok(())
@@ -1410,34 +1411,157 @@ where
         Ok(children)
     }
 
-    /// Get a node with all its descendants recursively nested (optimized for initial load)
+    /// Get a complete nested tree structure using efficient adjacency list strategy
     ///
-    /// Uses SurrealDB's recursive FETCH to return the entire subtree in a single query.
-    /// This eliminates the need for O(n) tree reconstruction on the frontend.
+    /// Fetches the entire subtree in 3 optimized queries:
+    /// 1. Get all nodes in the subtree (descendants only)
+    /// 2. Get all edges in the subtree
+    /// 3. Get the root node (not included in descendants query)
     ///
-    /// The returned structure contains:
-    /// - The parent node with all fields (id, nodeType, content, version, etc.)
-    /// - A `children` array containing recursively nested child nodes
-    /// - Each child node has the same structure, allowing infinite depth traversal
+    /// Then constructs the nested tree structure in-memory using an adjacency list,
+    /// which separates data fetching from tree construction and enables client-side logic.
+    ///
+    /// # Performance
+    ///
+    /// - **3 queries total** regardless of tree depth or node count (constant vs O(depth))
+    /// - O(n) in-memory tree construction where n = number of nodes
+    /// - Much faster than recursive queries with complex projections
     ///
     /// # Arguments
     ///
-    /// * `parent_id` - The parent node ID
+    /// * `parent_id` - The root node ID to fetch tree for
     ///
     /// # Returns
     ///
-    /// `serde_json::Value` containing the nested tree structure
+    /// `serde_json::Value` containing the nested tree structure with all descendants
     pub async fn get_children_tree(
         &self,
         parent_id: &str,
     ) -> Result<serde_json::Value, NodeServiceError> {
-        // Use recursive get_node_tree which uses SurrealDB's @ operator
-        // for efficient recursive traversal in a single query
-        self.store
-            .get_node_tree(parent_id)
+        // Fetch all nodes and edges in the subtree efficiently
+        let nodes = self
+            .store
+            .get_nodes_in_subtree(parent_id)
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
-            .map(|opt| opt.unwrap_or(serde_json::Value::Null))
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to fetch subtree nodes: {}", e))
+            })?;
+
+        let edges = self
+            .store
+            .get_edges_in_subtree(parent_id)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to fetch subtree edges: {}", e))
+            })?;
+
+        // Build tree structure using adjacency list strategy
+        let tree = self
+            .build_tree_from_adjacency_list(parent_id, &nodes, &edges)
+            .await?;
+        Ok(tree)
+    }
+
+    /// Build a nested tree structure from nodes and edges using adjacency list strategy
+    ///
+    /// Constructs a nested JSON tree by:
+    /// 1. Creating a HashMap mapping parent_id → Vec<child_id> (adjacency list)
+    /// 2. Recursively walking the tree structure using the adjacency list
+    /// 3. Building JSON nodes with `children` arrays
+    ///
+    /// This separates data fetching from tree construction, making the logic testable
+    /// and enabling client-side tree modifications.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - The root node ID
+    /// * `nodes` - All nodes in the subtree (flat list)
+    /// * `edges` - All parent-child relationships in the subtree
+    ///
+    /// # Returns
+    ///
+    /// JSON structure with nested children arrays, or empty object if root not found
+    async fn build_tree_from_adjacency_list(
+        &self,
+        root_id: &str,
+        nodes: &[Node],
+        edges: &[crate::EdgeRecord],
+    ) -> Result<serde_json::Value, NodeServiceError> {
+        use std::collections::HashMap;
+
+        // Create a map of node_id → Node for O(1) lookup
+        let mut node_map: HashMap<String, Node> = HashMap::new();
+        for node in nodes {
+            node_map.insert(node.id.clone(), node.clone());
+        }
+
+        // Create adjacency list: parent_id → Vec of (child_id, order)
+        // Sorted by order to maintain sibling sequence
+        let mut adjacency_list: HashMap<String, Vec<(String, f64)>> = HashMap::new();
+        for edge in edges {
+            adjacency_list
+                .entry(edge.in_node.clone())
+                .or_default()
+                .push((edge.out_node.clone(), edge.order));
+        }
+
+        // Sort children by order for each parent
+        for children in adjacency_list.values_mut() {
+            children.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // Fetch root node to include in response
+        let root_node = self.get_node(root_id).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to fetch root node: {}", e))
+        })?;
+
+        match root_node {
+            Some(root) => {
+                // Recursively build tree structure
+                let tree_json = self.build_node_tree_recursive(&root, &node_map, &adjacency_list);
+                Ok(tree_json)
+            }
+            None => {
+                // Root node not found, return empty object
+                Ok(serde_json::json!({}))
+            }
+        }
+    }
+
+    /// Recursively build a tree node with its children
+    ///
+    /// Helper function for `build_tree_from_adjacency_list` that recursively
+    /// constructs JSON nodes with nested children arrays.
+    #[allow(clippy::only_used_in_recursion)]
+    fn build_node_tree_recursive(
+        &self,
+        node: &Node,
+        node_map: &std::collections::HashMap<String, Node>,
+        adjacency_list: &std::collections::HashMap<String, Vec<(String, f64)>>,
+    ) -> serde_json::Value {
+        let mut json =
+            serde_json::to_value(node).unwrap_or(serde_json::Value::Object(Default::default()));
+
+        // Build children array (always present, even if empty for consistency)
+        let children: Vec<serde_json::Value> =
+            if let Some(children_ids) = adjacency_list.get(&node.id) {
+                children_ids
+                    .iter()
+                    .filter_map(|(child_id, _order)| {
+                        node_map.get(child_id).map(|child_node| {
+                            self.build_node_tree_recursive(child_node, node_map, adjacency_list)
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert("children".to_string(), serde_json::Value::Array(children));
+        }
+
+        json
     }
 
     /// Check if a node is a root node (has no parent)
@@ -1517,7 +1641,7 @@ where
     ///
     /// This is the efficient way to load a complete document tree:
     /// 1. Single database query fetches all nodes with the same root_id
-    /// 2. In-memory hierarchy reconstruction using parent_id and edge ordering
+    /// 2. In-memory hierarchy reconstruction using parent_id and before_sibling_id
     ///
     /// This avoids making multiple queries for each level of the tree.
     ///
@@ -1538,7 +1662,7 @@ where
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// // Fetch all nodes for a date page
     /// let nodes = service.get_nodes_by_root_id("2025-10-05").await?;
     /// println!("Found {} nodes in this document", nodes.len());
@@ -1578,7 +1702,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// // Move node under new parent
     /// service.move_node("node-id", Some("new-parent-id")).await?;
     ///
@@ -1621,7 +1745,7 @@ where
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
-    /// Create parent-child edge atomically with insert_after_node_id
+    /// Create parent-child edge atomically with before_sibling_id
     ///
     /// Used during node creation to establish parent relationship while preserving
     /// sibling ordering. This is separate from move_node() which is for moving existing nodes.
@@ -1630,23 +1754,54 @@ where
     ///
     /// * `child_id` - ID of the child node (must already exist)
     /// * `parent_id` - ID of the parent node
-    /// * `insert_after_node_id` - Optional sibling to insert after (None = insert at beginning)
+    /// * `before_sibling_id` - Optional sibling to insert before (None = end of list)
     pub async fn create_parent_edge(
         &self,
         child_id: &str,
         parent_id: &str,
-        insert_after_node_id: Option<&str>,
+        before_sibling_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
-        // API semantics match store.move_node directly:
-        //   insert_after_node_id = Some(id) → "insert AFTER this sibling"
-        //   insert_after_node_id = None → "insert at beginning"
+        // Convert before_sibling_id to insert_after_sibling_id for store.move_node
         //
-        // Callers that want "append at end" must explicitly find the last child
-        // and pass its ID as insert_after_node_id.
+        // API semantics (documented in CreateNodeParams):
+        //   before_sibling_id = Some(id) → "place me BEFORE this sibling"
+        //   before_sibling_id = None → "append at end of list"
+        //
+        // store.move_node semantics:
+        //   insert_after_sibling_id = Some(id) → "insert AFTER this sibling"
+        //   insert_after_sibling_id = None → "insert at beginning"
+        //
+        // Translation:
+        //   before_sibling_id = Some(id) → find sibling before target, insert after it
+        //   before_sibling_id = None → find last child, insert after it (append at end)
+        let insert_after_id = if let Some(target_sibling_id) = before_sibling_id {
+            // Get all children in order
+            let children = self.get_children(parent_id).await?;
+
+            // Find the position of the target sibling
+            let target_pos = children.iter().position(|c| c.id == target_sibling_id);
+
+            if let Some(pos) = target_pos {
+                if pos == 0 {
+                    // Target is first child, insert at beginning
+                    None
+                } else {
+                    // Insert after the child right before the target
+                    Some(children[pos - 1].id.clone())
+                }
+            } else {
+                // Target sibling not found, append at end
+                children.last().map(|c| c.id.clone())
+            }
+        } else {
+            // No before_sibling_id specified = append at END of list
+            let children = self.get_children(parent_id).await?;
+            children.last().map(|c| c.id.clone())
+        };
 
         // Use store's move_node which creates the has_child edge atomically
         self.store
-            .move_node(child_id, Some(parent_id), insert_after_node_id)
+            .move_node(child_id, Some(parent_id), insert_after_id.as_deref())
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
@@ -1669,7 +1824,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// // Position node after sibling
     /// service.reorder_child("node-id", Some("sibling-id")).await?;
     ///
@@ -1790,7 +1945,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let filter = NodeFilter::new()
     ///     .with_node_type("task".to_string())
     ///     .with_limit(10);
@@ -1857,7 +2012,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// // Query by ID
     /// let query = NodeQuery::by_id("node-123".to_string());
     /// let nodes = service.query_nodes_simple(query).await?;
@@ -1868,6 +2023,10 @@ where
     ///
     /// // Full-text search
     /// let query = NodeQuery::content_contains("search term".to_string()).with_limit(10);
+    /// let nodes = service.query_nodes_simple(query).await?;
+    ///
+    /// // Filter-only query (return all containers and tasks)
+    /// let query = NodeQuery { include_containers_and_tasks: Some(true), ..Default::default() };
     /// let nodes = service.query_nodes_simple(query).await?;
     /// # Ok(())
     /// # }
@@ -1880,12 +2039,14 @@ where
     /// 2. `mentioned_by` - Nodes that reference the specified node
     /// 3. `content_contains` + optional `node_type` - Full-text content search
     /// 4. `node_type` - Filter by node type
-    /// 5. Empty query - Returns empty vec (safer than returning all nodes)
+    /// 5. `include_containers_and_tasks` - Filter-only query (returns all matching nodes)
+    /// 6. Empty query - Returns empty vec (safer than returning all nodes)
     ///
     /// # Note on Empty Queries
     ///
-    /// Queries with no parameters (all fields `None`) will return an empty vector.
+    /// Queries with no parameters (all fields `None` or `false`) will return an empty vector.
     /// This is intentional to prevent accidentally fetching all nodes from the database.
+    /// To query all containers and tasks, use `include_containers_and_tasks: Some(true)`.
     /// Helper function to generate container/task filter SQL clause
     ///
     /// Returns a SQL WHERE clause fragment that filters to only include:
@@ -2014,7 +2175,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let nodes = vec![
     ///     Node::new("text".to_string(), "Note 1".to_string(), json!({})),
     ///     Node::new("text".to_string(), "Note 2".to_string(), json!({})),
@@ -2072,7 +2233,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let updates = vec![
     ///     ("node-1".to_string(), NodeUpdate::new().with_content("Updated 1".to_string())),
     ///     ("node-2".to_string(), NodeUpdate::new().with_content("Updated 2".to_string())),
@@ -2174,7 +2335,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let ids = vec!["node-1".to_string(), "node-2".to_string()];
     /// service.bulk_delete(ids).await?;
     /// # Ok(())
@@ -2220,7 +2381,7 @@ where
         node_type: &str,
         parent_id: &str,
         _root_id: &str, // Deprecated: hierarchy now managed via edges
-        insert_after_node_id: Option<&str>,
+        before_sibling_id: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         // Ensure parent exists (create if missing)
         if self
@@ -2261,7 +2422,7 @@ where
                 })?;
             // Update parent relationship via edge (handles sibling ordering)
             self.store
-                .move_node(node_id, Some(parent_id), insert_after_node_id)
+                .move_node(node_id, Some(parent_id), before_sibling_id)
                 .await
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to update parent: {}", e))
@@ -2285,7 +2446,7 @@ where
             })?;
             // Create parent relationship via edge (handles sibling ordering)
             self.store
-                .move_node(node_id, Some(parent_id), insert_after_node_id)
+                .move_node(node_id, Some(parent_id), before_sibling_id)
                 .await
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to set parent: {}", e))
@@ -2347,7 +2508,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// service.add_mention("node-123", "node-456").await?;
     /// # Ok(())
     /// # }
@@ -2413,7 +2574,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// service.remove_mention("node-123", "node-456").await?;
     /// # Ok(())
     /// # }
@@ -2452,7 +2613,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let mentions = service.get_mentions("node-123").await?;
     /// # Ok(())
     /// # }
@@ -2483,7 +2644,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// let backlinks = service.get_mentioned_by("node-456").await?;
     /// # Ok(())
     /// # }
@@ -2506,12 +2667,12 @@ where
     /// # Example
     /// ```no_run
     /// # use nodespace_core::services::node_service::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::services::database::DatabaseService;
     /// # use std::path::PathBuf;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
+    /// # let service = NodeService::new(db)?;
     /// // If nodes A and B (both children of Container X) mention target node,
     /// // returns ['container-x-id'] (deduplicated)
     /// let containers = service.get_mentioning_containers("target-node-id").await?;
@@ -4157,6 +4318,156 @@ mod tests {
                     "Modified timestamp should not change on backfill skip"
                 );
             }
+        }
+    }
+
+    mod adjacency_list_tests {
+        use super::*;
+
+        // Tests for the adjacency list strategy (recursive graph traversal)
+        // Uses SurrealDB's .{..}(->edge->target) syntax for recursive queries
+
+        /// Test get_children_tree with a leaf node (no children)
+        #[tokio::test]
+        async fn test_get_children_tree_leaf_node() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create a single node with no children
+            let leaf = Node::new("text".to_string(), "Leaf node".to_string(), json!({}));
+            let leaf_id = service.create_node(leaf).await.unwrap();
+
+            // Get tree for leaf node - should return the node with empty children array
+            let tree = service.get_children_tree(&leaf_id).await.unwrap();
+
+            assert_eq!(tree["id"], leaf_id);
+            assert_eq!(tree["content"], "Leaf node");
+            assert!(tree["children"].as_array().unwrap().is_empty());
+        }
+
+        /// Test get_children_tree with single-level children
+        #[tokio::test]
+        async fn test_get_children_tree_single_level() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create parent node
+            let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+            let parent_id = service.create_node(parent).await.unwrap();
+
+            // Create two children and add to parent using create_parent_edge
+            let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+            let child1_id = service.create_node(child1).await.unwrap();
+            service
+                .create_parent_edge(&child1_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
+            let child2_id = service.create_node(child2).await.unwrap();
+            service
+                .create_parent_edge(&child2_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            // Get tree - should have parent with 2 children
+            let tree = service.get_children_tree(&parent_id).await.unwrap();
+
+            assert_eq!(tree["id"], parent_id);
+            let children = tree["children"].as_array().unwrap();
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0]["content"], "Child 1");
+            assert_eq!(children[1]["content"], "Child 2");
+        }
+
+        /// Test get_children_tree with multi-level deep tree
+        #[tokio::test]
+        async fn test_get_children_tree_deep_hierarchy() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create a 3-level deep tree:
+            // Root -> Child -> Grandchild
+            let root = Node::new("text".to_string(), "Root".to_string(), json!({}));
+            let root_id = service.create_node(root).await.unwrap();
+
+            let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+            let child_id = service.create_node(child).await.unwrap();
+            service
+                .create_parent_edge(&child_id, &root_id, None)
+                .await
+                .unwrap();
+
+            let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
+            let grandchild_id = service.create_node(grandchild).await.unwrap();
+            service
+                .create_parent_edge(&grandchild_id, &child_id, None)
+                .await
+                .unwrap();
+
+            // Get tree - should have nested structure
+            let tree = service.get_children_tree(&root_id).await.unwrap();
+
+            assert_eq!(tree["id"], root_id);
+            assert_eq!(tree["content"], "Root");
+
+            let children = tree["children"].as_array().unwrap();
+            assert_eq!(children.len(), 1);
+            assert_eq!(children[0]["content"], "Child");
+
+            let grandchildren = children[0]["children"].as_array().unwrap();
+            assert_eq!(grandchildren.len(), 1);
+            assert_eq!(grandchildren[0]["content"], "Grandchild");
+            assert!(grandchildren[0]["children"].as_array().unwrap().is_empty());
+        }
+
+        /// Test sibling ordering is preserved (insertion order since create_parent_edge appends)
+        #[tokio::test]
+        async fn test_get_children_tree_sibling_ordering() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create parent node
+            let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+            let parent_id = service.create_node(parent).await.unwrap();
+
+            // Add children in order A, B, C - they should maintain this order
+            let child_a = Node::new("text".to_string(), "A".to_string(), json!({}));
+            let child_a_id = service.create_node(child_a).await.unwrap();
+            service
+                .create_parent_edge(&child_a_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            let child_b = Node::new("text".to_string(), "B".to_string(), json!({}));
+            let child_b_id = service.create_node(child_b).await.unwrap();
+            service
+                .create_parent_edge(&child_b_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            let child_c = Node::new("text".to_string(), "C".to_string(), json!({}));
+            let child_c_id = service.create_node(child_c).await.unwrap();
+            service
+                .create_parent_edge(&child_c_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            // Get tree - children should be in order A, B, C
+            let tree = service.get_children_tree(&parent_id).await.unwrap();
+
+            let children = tree["children"].as_array().unwrap();
+            assert_eq!(children.len(), 3);
+            assert_eq!(children[0]["content"], "A");
+            assert_eq!(children[1]["content"], "B");
+            assert_eq!(children[2]["content"], "C");
+        }
+
+        /// Test get_children_tree with non-existent root returns empty object
+        #[tokio::test]
+        async fn test_get_children_tree_nonexistent_root() {
+            let (service, _temp) = create_test_service().await;
+
+            // Get tree for non-existent node - should return empty object
+            let tree = service.get_children_tree("nonexistent-id").await.unwrap();
+
+            assert!(tree.as_object().unwrap().is_empty());
         }
     }
 }

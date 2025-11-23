@@ -46,6 +46,7 @@
 //! }
 //! ```
 
+use crate::db::events::{DomainEvent, HierarchyRelationship};
 use crate::db::fractional_ordering::FractionalOrderCalculator;
 use crate::models::schema::SchemaDefinition;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
@@ -60,6 +61,14 @@ use surrealdb::engine::remote::http::{Client, Http};
 use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
+use tokio::sync::broadcast;
+
+/// Broadcast channel capacity for domain events.
+///
+/// 128 provides sufficient headroom for burst operations (bulk node creation)
+/// while limiting memory overhead. Observer lag is acceptable - we only track
+/// the current state, not historical events.
+const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Represents a has_child edge from the database
 ///
@@ -349,12 +358,15 @@ async fn batch_fetch_properties<C: surrealdb::Connection>(
 /// - **HTTP Client**: Dev-proxy mode (Surreal<Client>)
 ///
 /// Uses hybrid dual-table architecture for optimal query performance.
+/// Emits domain events via broadcast channel when data changes.
 pub struct SurrealStore<C = Db>
 where
     C: surrealdb::Connection,
 {
     /// SurrealDB connection
     db: Arc<Surreal<C>>,
+    /// Broadcast channel for domain events (128 subscriber capacity)
+    event_tx: broadcast::Sender<DomainEvent>,
 }
 
 /// Type alias for embedded RocksDB store
@@ -412,7 +424,10 @@ impl SurrealStore<Db> {
         // Seed core schemas (create schema nodes)
         Self::seed_core_schemas(&db).await?;
 
-        Ok(Self { db })
+        // Initialize broadcast channel for domain events
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+
+        Ok(Self { db, event_tx })
     }
 }
 
@@ -484,7 +499,10 @@ impl SurrealStore<Client> {
 
         tracing::info!("✅ Connected to SurrealDB HTTP server");
 
-        Ok(Self { db })
+        // Initialize broadcast channel for domain events
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+
+        Ok(Self { db, event_tx })
     }
 }
 
@@ -498,6 +516,33 @@ where
     /// for operations like DEFINE TABLE or DEFINE FIELD.
     pub fn db(&self) -> &Arc<Surreal<C>> {
         &self.db
+    }
+
+    /// Subscribe to domain events emitted by this store
+    ///
+    /// Returns a receiver that will get notified when nodes or edges change.
+    /// Multiple subscribers are supported - each gets their own copy of events.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let mut rx = store.subscribe_to_events();
+    /// while let Ok(event) = rx.recv().await {
+    ///     match event {
+    ///         DomainEvent::NodeCreated(node) => println!("Node created: {}", node.id),
+    ///         DomainEvent::NodeUpdated(node) => println!("Node updated: {}", node.id),
+    ///         // ... handle other events
+    ///     }
+    /// }
+    /// ```
+    pub fn subscribe_to_events(&self) -> broadcast::Receiver<DomainEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Emit a domain event to all subscribers
+    fn emit_event(&self, event: DomainEvent) {
+        // Ignore error if no subscribers (expected in some tests)
+        let _ = self.event_tx.send(event);
     }
 
     /// Initialize database schema from schema.surql file (Issue #560)
@@ -549,7 +594,11 @@ where
         tracing::info!("🌱 Seeding core schemas...");
 
         // Create temporary SurrealStore to use create_node method
-        let store = SurrealStore::<Db> { db: Arc::clone(db) };
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+        let store = SurrealStore::<Db> {
+            db: Arc::clone(db),
+            event_tx,
+        };
 
         let now = Utc::now();
 
@@ -920,6 +969,9 @@ where
         // Note: Parent-child relationships are now established separately via move_node()
         // This allows cleaner separation of node creation from hierarchy management
 
+        // Emit domain event
+        self.emit_event(DomainEvent::NodeCreated(node.clone()));
+
         // Return the created node directly
         Ok(node)
     }
@@ -1143,9 +1195,20 @@ where
         ))?;
 
         // Fetch and return created node (ensures timestamps match database values)
-        self.get_node(&node_id)
+        let node = self
+            .get_node(&node_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))?;
+
+        // Emit domain events for observers
+        self.emit_event(DomainEvent::NodeCreated(node.clone()));
+        self.emit_event(DomainEvent::EdgeCreated(HierarchyRelationship {
+            parent_id,
+            child_id: node_id,
+            order,
+        }));
+
+        Ok(node)
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
@@ -1367,9 +1430,15 @@ where
         }
 
         // Fetch and return updated node
-        self.get_node(id)
+        let updated_node = self
+            .get_node(id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
+
+        // Emit domain event
+        self.emit_event(DomainEvent::NodeUpdated(updated_node.clone()));
+
+        Ok(updated_node)
     }
 
     /// Switch a node's type atomically, preserving old type in variants map
@@ -1533,9 +1602,15 @@ where
         ))?;
 
         // Fetch and return updated node
-        self.get_node(&node_id)
+        let node = self
+            .get_node(&node_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))?;
+
+        // Emit domain event for observers
+        self.emit_event(DomainEvent::NodeUpdated(node.clone()));
+
+        Ok(node)
     }
 
     /// Update a node with version check (optimistic locking)
@@ -1637,7 +1712,12 @@ where
         }
 
         // Convert and return the updated node
-        Ok(Some(updated_nodes.into_iter().next().unwrap().into()))
+        let node: Node = updated_nodes.into_iter().next().unwrap().into();
+
+        // Emit domain event for observers
+        self.emit_event(DomainEvent::NodeUpdated(node.clone()));
+
+        Ok(Some(node))
     }
 
     pub async fn delete_node(&self, id: &str) -> Result<DeleteResult> {
@@ -1664,6 +1744,11 @@ where
             .bind(("id", node.id.clone()))
             .await
             .context("Failed to delete node and relations")?;
+
+        // Emit domain event
+        self.emit_event(DomainEvent::NodeDeleted {
+            id: node.id.clone(),
+        });
 
         Ok(DeleteResult { existed: true })
     }
@@ -1746,6 +1831,9 @@ where
                 "Failed to delete node '{}' (type: {}) with cascade",
                 node_id, node_type
             ))?;
+
+        // Emit domain event for observers
+        self.emit_event(DomainEvent::NodeDeleted { id: node.id });
 
         Ok(DeleteResult { existed: true })
     }
@@ -2237,6 +2325,214 @@ where
         })
     }
 
+    /// Get all nodes in a subtree using breadth-first traversal
+    ///
+    /// Fetches all nodes that are descendants of the given root node (not including the root itself).
+    /// This is the first step in building an adjacency list structure for efficient tree navigation.
+    ///
+    /// # Query Strategy
+    ///
+    /// Uses iterative breadth-first traversal: queries each level's children until no more
+    /// children are found. This approach is more compatible across SurrealDB configurations
+    /// than recursive syntax.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - ID of the root node to fetch descendants for
+    ///
+    /// # Returns
+    ///
+    /// Vector of all descendant nodes (flat, in breadth-first order)
+    ///
+    /// # Performance
+    ///
+    /// O(depth) queries where depth is the tree depth. Each level is fetched in 2 queries
+    /// (one for edges, one for node data).
+    pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
+        use surrealdb::sql::Thing;
+
+        // Strategy: Iterative breadth-first traversal using edge queries
+        // This avoids SurrealDB's recursive syntax which has compatibility issues
+        let mut all_descendants = Vec::new();
+        let mut current_level = vec![root_id.to_string()];
+
+        // Maximum depth to prevent infinite loops (256 is SurrealDB's max recursion depth)
+        const MAX_DEPTH: usize = 256;
+
+        for _ in 0..MAX_DEPTH {
+            if current_level.is_empty() {
+                break;
+            }
+
+            // Build query for all children of current level nodes
+            // Use type::thing() to properly construct record IDs
+            let parent_ids: Vec<String> = current_level
+                .iter()
+                .map(|id| format!("type::thing('node', '{}')", id))
+                .collect();
+
+            let query = format!(
+                "SELECT VALUE out FROM has_child WHERE in IN [{}];",
+                parent_ids.join(", ")
+            );
+
+            let mut response = self
+                .db
+                .query(&query)
+                .await
+                .context("Failed to query children")?;
+
+            let child_things: Vec<Thing> =
+                response.take(0).context("Failed to extract child IDs")?;
+
+            if child_things.is_empty() {
+                break;
+            }
+
+            // Extract string IDs for next level
+            let child_ids: Vec<String> = child_things
+                .iter()
+                .map(|t| match &t.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => t.id.to_string(),
+                })
+                .collect();
+
+            // Fetch full node data for these children
+            // Use type::thing() to properly construct record IDs (UUIDs need proper quoting)
+            let child_id_list: Vec<String> = child_ids
+                .iter()
+                .map(|id| format!("type::thing('node', '{}')", id))
+                .collect();
+
+            let nodes_query = format!(
+                "SELECT * FROM node WHERE id IN [{}] FETCH data;",
+                child_id_list.join(", ")
+            );
+
+            let mut nodes_response = self
+                .db
+                .query(&nodes_query)
+                .await
+                .context("Failed to fetch child nodes")?;
+
+            let surreal_nodes: Vec<SurrealNode> = nodes_response
+                .take(0)
+                .context("Failed to extract child nodes")?;
+
+            all_descendants.extend(surreal_nodes.into_iter().map(Into::into));
+
+            // Move to next level
+            current_level = child_ids;
+        }
+
+        Ok(all_descendants)
+    }
+
+    /// Get all edges in a subtree using adjacency list strategy
+    ///
+    /// Fetches all parent-child relationships (has_child edges) within a subtree.
+    /// Combined with `get_nodes_in_subtree()`, this enables building an in-memory adjacency list
+    /// for efficient tree construction and navigation.
+    ///
+    /// # Strategy
+    ///
+    /// First gets all descendant node IDs using `get_nodes_in_subtree()`, then queries
+    /// all edges where the parent is either the root or a descendant.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - ID of the root node to fetch descendant edges for
+    ///
+    /// # Returns
+    ///
+    /// Vector of all edges within the subtree (parent-child relationships)
+    pub async fn get_edges_in_subtree(&self, root_id: &str) -> Result<Vec<EdgeRecord>> {
+        use surrealdb::sql::Thing;
+
+        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
+
+        // Get all descendant nodes first
+        let descendants = self.get_nodes_in_subtree(root_id).await?;
+
+        // Build a list of all node IDs (root + descendants) for the WHERE clause
+        let all_node_ids: Vec<String> = descendants.iter().map(|n| n.id.clone()).collect();
+
+        // Query edges where parent is either root or a descendant
+        // If no descendants, just query edges from root
+        let query = if all_node_ids.is_empty() {
+            "SELECT id, in, out, order FROM has_child WHERE in = $root_thing ORDER BY order ASC;"
+                .to_string()
+        } else {
+            // Include root ID in the list
+            // Use type::thing() to properly construct record IDs (UUIDs need proper quoting)
+            let id_list = std::iter::once(format!("type::thing('node', '{}')", root_id))
+                .chain(
+                    all_node_ids
+                        .iter()
+                        .map(|id| format!("type::thing('node', '{}')", id)),
+                )
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!(
+                "SELECT id, in, out, order FROM has_child WHERE in IN [{}] ORDER BY order ASC;",
+                id_list
+            )
+        };
+
+        let mut response = self
+            .db
+            .query(&query)
+            .bind(("root_thing", root_thing.clone()))
+            .await
+            .context("Failed to fetch subtree edges")?;
+
+        // Use Thing type for SurrealDB record IDs (consistent with get_all_edges)
+        #[derive(serde::Deserialize)]
+        struct EdgeRow {
+            id: Thing,
+            #[serde(rename = "in")]
+            in_node: Thing,
+            #[serde(rename = "out")]
+            out_node: Thing,
+            order: f64,
+        }
+
+        let edges: Vec<EdgeRow> = response
+            .take(0)
+            .context("Failed to extract subtree edges from response")?;
+
+        // Extract string IDs from Thing types (consistent with get_all_edges)
+        Ok(edges
+            .into_iter()
+            .map(|e| {
+                let id_str = match &e.id.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => e.id.to_string(),
+                };
+                let in_str = match &e.in_node.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => e.in_node.to_string(),
+                };
+                let out_str = match &e.out_node.id {
+                    Id::String(s) => s.clone(),
+                    Id::Number(n) => n.to_string(),
+                    _ => e.out_node.to_string(),
+                };
+                EdgeRecord {
+                    id: id_str,
+                    in_node: in_str,
+                    out_node: out_str,
+                    order: e.order,
+                }
+            })
+            .collect())
+    }
+
     pub async fn search_nodes_by_content(
         &self,
         search_query: &str,
@@ -2612,11 +2908,26 @@ where
         query_builder
             .bind(("order", new_order))
             .await
-            .map(|_| ())
             .context(format!(
                 "Failed to move node '{}' to parent '{:?}'",
                 node_id, new_parent_id
             ))?;
+
+        // Emit edge event after successful move
+        if let Some(parent_id) = &new_parent_id {
+            use crate::db::HierarchyRelationship;
+            let relationship = HierarchyRelationship {
+                parent_id: parent_id.clone(),
+                child_id: node_id.clone(),
+                order: new_order,
+            };
+            self.emit_event(DomainEvent::EdgeUpdated(relationship));
+        } else {
+            // Moving to root (deleting parent edge)
+            self.emit_event(DomainEvent::EdgeDeleted {
+                id: format!("has_child:{}:*", node_id),
+            });
+        }
 
         Ok(())
     }
@@ -2668,6 +2979,16 @@ where
                 .bind(("target", target_thing))
                 .await
                 .context("Failed to create mention")?;
+
+            // Emit edge created event for new mention
+            // Note: Order is 0.0 for mentions (they're not hierarchical)
+            use crate::db::HierarchyRelationship;
+            let relationship = HierarchyRelationship {
+                parent_id: source_id.to_string(),
+                child_id: target_id.to_string(),
+                order: 0.0,
+            };
+            self.emit_event(DomainEvent::EdgeCreated(relationship));
         }
 
         Ok(())
@@ -2684,6 +3005,11 @@ where
             .bind(("target", target_thing))
             .await
             .context("Failed to delete mention")?;
+
+        // Emit edge deleted event
+        self.emit_event(DomainEvent::EdgeDeleted {
+            id: format!("mentions:{}:{}", source_id, target_id),
+        });
 
         Ok(())
     }
@@ -4174,6 +4500,103 @@ mod tests {
         assert!(child_ids.contains(&child1.id), "Should contain child1 ID");
         assert!(child_ids.contains(&child2.id), "Should contain child2 ID");
         assert!(child_ids.contains(&child3.id), "Should contain child3 ID");
+
+        Ok(())
+    }
+
+    // Tests for the adjacency list strategy (recursive graph traversal)
+    // Uses SurrealDB's .{..}(->edge->target) syntax for recursive queries
+
+    #[tokio::test]
+    async fn test_get_nodes_in_subtree_returns_descendants() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // Create a tree structure: root -> child -> grandchild
+        let root = Node::new("text".to_string(), "Root".to_string(), json!({}));
+        let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+        let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
+
+        store.create_node(root.clone()).await?;
+        store.create_node(child.clone()).await?;
+        store.create_node(grandchild.clone()).await?;
+
+        // Create edges: root -> child -> grandchild
+        store.move_node(&child.id, Some(&root.id), None).await?;
+        store
+            .move_node(&grandchild.id, Some(&child.id), None)
+            .await?;
+
+        // Get nodes in subtree of root - should include child and grandchild
+        let subtree_nodes = store.get_nodes_in_subtree(&root.id).await?;
+
+        assert_eq!(
+            subtree_nodes.len(),
+            2,
+            "Should have 2 descendants (child and grandchild)"
+        );
+        let ids: Vec<_> = subtree_nodes.iter().map(|n| n.id.clone()).collect();
+        assert!(ids.contains(&child.id), "Should contain child");
+        assert!(ids.contains(&grandchild.id), "Should contain grandchild");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_nodes_in_subtree_leaf_node_returns_empty() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // Create a leaf node with no children
+        let leaf = Node::new("text".to_string(), "Leaf".to_string(), json!({}));
+        store.create_node(leaf.clone()).await?;
+
+        // Get nodes in subtree of leaf - should return empty vec
+        let subtree_nodes = store.get_nodes_in_subtree(&leaf.id).await?;
+
+        assert!(
+            subtree_nodes.is_empty(),
+            "Leaf node should have no descendants"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_edges_in_subtree_returns_subtree_edges() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // Create a tree structure: root -> child -> grandchild
+        let root = Node::new("text".to_string(), "Root".to_string(), json!({}));
+        let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+        let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
+
+        store.create_node(root.clone()).await?;
+        store.create_node(child.clone()).await?;
+        store.create_node(grandchild.clone()).await?;
+
+        // Create edges: root -> child -> grandchild
+        store.move_node(&child.id, Some(&root.id), None).await?;
+        store
+            .move_node(&grandchild.id, Some(&child.id), None)
+            .await?;
+
+        // Get edges in subtree of root - should include both edges
+        let subtree_edges = store.get_edges_in_subtree(&root.id).await?;
+
+        assert_eq!(subtree_edges.len(), 2, "Should have 2 edges in subtree");
+
+        // Verify the edges are correct
+        let edge_pairs: Vec<_> = subtree_edges
+            .iter()
+            .map(|e| (e.in_node.clone(), e.out_node.clone()))
+            .collect();
+        assert!(
+            edge_pairs.contains(&(root.id.clone(), child.id.clone())),
+            "Should contain root->child edge"
+        );
+        assert!(
+            edge_pairs.contains(&(child.id.clone(), grandchild.id.clone())),
+            "Should contain child->grandchild edge"
+        );
 
         Ok(())
     }

@@ -30,7 +30,6 @@ import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { schemaService } from './schema-service';
 import { moveNode as moveNodeCommand } from './tauri-commands';
-import { registerChildWithParent } from '$lib/utils/node-hierarchy';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
 
@@ -272,13 +271,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _uiState[nodeId] = newUIState;
 
     // CRITICAL FIX: Register parent-child edge in ReactiveStructureTree for browser mode
-    // In Tauri mode, LIVE SELECT events populate the tree, but in browser mode we must do it manually
-    // This ensures the new node appears in visibleNodesFromStores immediately
-    // Pass afterNodeId for correct positioning (insert after that node instead of at end)
-    if (newParentId) {
-      registerChildWithParent(newParentId, nodeId, insertAtBeginning ? undefined : afterNodeId);
-    }
-
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
     if (shouldFocusNewNode) {
