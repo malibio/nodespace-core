@@ -46,6 +46,7 @@
 //! }
 //! ```
 
+use crate::db::events::DomainEvent;
 use crate::db::fractional_ordering::FractionalOrderCalculator;
 use crate::models::schema::SchemaDefinition;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
@@ -60,6 +61,7 @@ use surrealdb::engine::remote::http::{Client, Http};
 use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
+use tokio::sync::broadcast;
 
 /// Represents a has_child edge from the database
 ///
@@ -349,12 +351,15 @@ async fn batch_fetch_properties<C: surrealdb::Connection>(
 /// - **HTTP Client**: Dev-proxy mode (Surreal<Client>)
 ///
 /// Uses hybrid dual-table architecture for optimal query performance.
+/// Emits domain events via broadcast channel when data changes.
 pub struct SurrealStore<C = Db>
 where
     C: surrealdb::Connection,
 {
     /// SurrealDB connection
     db: Arc<Surreal<C>>,
+    /// Broadcast channel for domain events (128 subscriber capacity)
+    event_tx: broadcast::Sender<DomainEvent>,
 }
 
 /// Type alias for embedded RocksDB store
@@ -412,7 +417,10 @@ impl SurrealStore<Db> {
         // Seed core schemas (create schema nodes)
         Self::seed_core_schemas(&db).await?;
 
-        Ok(Self { db })
+        // Initialize broadcast channel for domain events (128 subscriber capacity)
+        let (event_tx, _) = broadcast::channel(128);
+
+        Ok(Self { db, event_tx })
     }
 }
 
@@ -484,7 +492,10 @@ impl SurrealStore<Client> {
 
         tracing::info!("✅ Connected to SurrealDB HTTP server");
 
-        Ok(Self { db })
+        // Initialize broadcast channel for domain events (128 subscriber capacity)
+        let (event_tx, _) = broadcast::channel(128);
+
+        Ok(Self { db, event_tx })
     }
 }
 
@@ -498,6 +509,33 @@ where
     /// for operations like DEFINE TABLE or DEFINE FIELD.
     pub fn db(&self) -> &Arc<Surreal<C>> {
         &self.db
+    }
+
+    /// Subscribe to domain events emitted by this store
+    ///
+    /// Returns a receiver that will get notified when nodes or edges change.
+    /// Multiple subscribers are supported - each gets their own copy of events.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let mut rx = store.subscribe_to_events();
+    /// while let Ok(event) = rx.recv().await {
+    ///     match event {
+    ///         DomainEvent::NodeCreated(node) => println!("Node created: {}", node.id),
+    ///         DomainEvent::NodeUpdated(node) => println!("Node updated: {}", node.id),
+    ///         // ... handle other events
+    ///     }
+    /// }
+    /// ```
+    pub fn subscribe_to_events(&self) -> broadcast::Receiver<DomainEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Emit a domain event to all subscribers
+    fn emit_event(&self, event: DomainEvent) {
+        // Ignore error if no subscribers (expected in some tests)
+        let _ = self.event_tx.send(event);
     }
 
     /// Initialize database schema from schema.surql file (Issue #560)
@@ -549,7 +587,11 @@ where
         tracing::info!("🌱 Seeding core schemas...");
 
         // Create temporary SurrealStore to use create_node method
-        let store = SurrealStore::<Db> { db: Arc::clone(db) };
+        let (event_tx, _) = broadcast::channel(128);
+        let store = SurrealStore::<Db> {
+            db: Arc::clone(db),
+            event_tx,
+        };
 
         let now = Utc::now();
 
@@ -919,6 +961,9 @@ where
 
         // Note: Parent-child relationships are now established separately via move_node()
         // This allows cleaner separation of node creation from hierarchy management
+
+        // Emit domain event
+        self.emit_event(DomainEvent::NodeCreated(node.clone()));
 
         // Return the created node directly
         Ok(node)
@@ -1367,9 +1412,15 @@ where
         }
 
         // Fetch and return updated node
-        self.get_node(id)
+        let updated_node = self
+            .get_node(id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))
+            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
+
+        // Emit domain event
+        self.emit_event(DomainEvent::NodeUpdated(updated_node.clone()));
+
+        Ok(updated_node)
     }
 
     /// Switch a node's type atomically, preserving old type in variants map
@@ -1664,6 +1715,11 @@ where
             .bind(("id", node.id.clone()))
             .await
             .context("Failed to delete node and relations")?;
+
+        // Emit domain event
+        self.emit_event(DomainEvent::NodeDeleted {
+            id: node.id.clone(),
+        });
 
         Ok(DeleteResult { existed: true })
     }
@@ -2775,11 +2831,26 @@ where
         query_builder
             .bind(("order", new_order))
             .await
-            .map(|_| ())
             .context(format!(
                 "Failed to move node '{}' to parent '{:?}'",
                 node_id, new_parent_id
             ))?;
+
+        // Emit edge event after successful move
+        if let Some(parent_id) = &new_parent_id {
+            use crate::db::HierarchyRelationship;
+            let relationship = HierarchyRelationship {
+                parent_id: parent_id.clone(),
+                child_id: node_id.clone(),
+                order: new_order,
+            };
+            self.emit_event(DomainEvent::EdgeUpdated(relationship));
+        } else {
+            // Moving to root (deleting parent edge)
+            self.emit_event(DomainEvent::EdgeDeleted {
+                id: format!("has_child:{}:*", node_id),
+            });
+        }
 
         Ok(())
     }
@@ -2831,6 +2902,16 @@ where
                 .bind(("target", target_thing))
                 .await
                 .context("Failed to create mention")?;
+
+            // Emit edge created event for new mention
+            // Note: Order is 0.0 for mentions (they're not hierarchical)
+            use crate::db::HierarchyRelationship;
+            let relationship = HierarchyRelationship {
+                parent_id: source_id.to_string(),
+                child_id: target_id.to_string(),
+                order: 0.0,
+            };
+            self.emit_event(DomainEvent::EdgeCreated(relationship));
         }
 
         Ok(())
@@ -2847,6 +2928,11 @@ where
             .bind(("target", target_thing))
             .await
             .context("Failed to delete mention")?;
+
+        // Emit edge deleted event
+        self.emit_event(DomainEvent::EdgeDeleted {
+            id: format!("mentions:{}:{}", source_id, target_id),
+        });
 
         Ok(())
     }
