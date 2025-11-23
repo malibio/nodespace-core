@@ -29,7 +29,11 @@ import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-str
  * registerChildWithParent(parentNodeId, promotedNode.id); // ✅ Update cache
  * ```
  */
-export function registerChildWithParent(parentId: string, childId: string): void {
+export function registerChildWithParent(
+  parentId: string,
+  childId: string,
+  insertAfterNodeId?: string
+): void {
   // Validate parent exists in store
   const parent = sharedNodeStore.getNode(parentId);
   if (!parent) {
@@ -47,15 +51,34 @@ export function registerChildWithParent(parentId: string, childId: string): void
     return;
   }
 
-  // CRITICAL FIX: Manually add in-memory relationship to ReactiveStructureTree
-  // For placeholder promotion, the node hasn't been persisted yet so LIVE SELECT won't fire
-  // We need to manually register the relationship so visibleNodesFromStores includes the promoted node
-  // This prevents a new placeholder from being created immediately after promotion
-  //
-  // TODO: This is a workaround. The proper fix (per hierarchy-reactivity-architecture-review.md)
-  // is for the backend to return complete relationship data from node creation, allowing the
-  // frontend to apply a proper optimistic update instead of manufacturing relationship records.
-  // See Issue #528 for the placeholder promotion bug context.
-  const order = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+  // Calculate order based on positioning
+  let order: number;
+
+  if (insertAfterNodeId) {
+    // Insert after specific sibling - find its position and insert after it
+    const afterNodeIndex = existingChildren.indexOf(insertAfterNodeId);
+    if (afterNodeIndex >= 0) {
+      // Get the order of the node we're inserting after
+      const childrenInfo = reactiveStructureTree.getChildrenWithOrder(parentId);
+      const afterNodeOrder = childrenInfo.find(c => c.nodeId === insertAfterNodeId)?.order || 1.0;
+
+      // If there's a node after it, calculate midpoint
+      if (afterNodeIndex < existingChildren.length - 1) {
+        const nextNodeId = existingChildren[afterNodeIndex + 1];
+        const nextNodeOrder = childrenInfo.find(c => c.nodeId === nextNodeId)?.order || afterNodeOrder + 1.0;
+        order = (afterNodeOrder + nextNodeOrder) / 2;
+      } else {
+        // Inserting at end - add 1 to last order
+        order = afterNodeOrder + 1.0;
+      }
+    } else {
+      // afterNodeId not found, append at end
+      order = existingChildren.length + 1.0;
+    }
+  } else {
+    // No position specified - append at end (default behavior)
+    order = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+  }
+
   reactiveStructureTree.addInMemoryRelationship(parentId, childId, order);
 }

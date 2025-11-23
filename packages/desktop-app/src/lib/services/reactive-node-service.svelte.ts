@@ -274,8 +274,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // CRITICAL FIX: Register parent-child edge in ReactiveStructureTree for browser mode
     // In Tauri mode, LIVE SELECT events populate the tree, but in browser mode we must do it manually
     // This ensures the new node appears in visibleNodesFromStores immediately
+    // Pass afterNodeId for correct positioning (insert after that node instead of at end)
     if (newParentId) {
-      registerChildWithParent(newParentId, nodeId);
+      registerChildWithParent(newParentId, nodeId, insertAtBeginning ? undefined : afterNodeId);
     }
 
     // Set focus using FocusManager (single source of truth)
