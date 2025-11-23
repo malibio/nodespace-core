@@ -181,10 +181,8 @@ class ReactiveStructureTree {
     // Check if child already exists in current parent
     const existingIndex = children.findIndex((c) => c.nodeId === childId);
     if (existingIndex >= 0) {
-      console.warn(
-        `[ReactiveStructureTree] Duplicate relationship detected: ${childId} already child of ${parentId}`,
-        rel
-      );
+      // Duplicate detected - this is expected when relationships are loaded from multiple sources
+      // (e.g., bulk edge load + children-tree endpoint). Silently handle it.
       // Update order if different
       if (children[existingIndex].order !== order) {
         children[existingIndex].order = order;
