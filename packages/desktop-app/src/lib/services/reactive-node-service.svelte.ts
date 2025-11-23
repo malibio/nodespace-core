@@ -311,22 +311,33 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
         }
 
-        // BACKGROUND PERSISTENCE: Fire-and-forget database sync
+        // BACKGROUND PERSISTENCE: Database sync with error handling and rollback
         // Database updates happen asynchronously without blocking UI
         Promise.resolve().then(async () => {
-          // Wait for newNode to be persisted to database
-          // This prevents FOREIGN KEY constraint violations when children reference the new parent
-          await sharedNodeStore.waitForNodeSaves([nodeId]);
+          try {
+            // Wait for newNode to be persisted to database
+            // This prevents FOREIGN KEY constraint violations when children reference the new parent
+            await sharedNodeStore.waitForNodeSaves([nodeId]);
 
-          // Persist child transfers to database
-          // Structure tree already updated above, so UI is already correct
-          for (const child of children) {
-            // Import moveNode dynamically to avoid circular dependency
-            const { moveNode } = await import('$lib/services/tauri-commands');
-            // Move child to be under the new node in database
-            await moveNode(child.id, nodeId);
-            // Note: No need to call structureTree.moveInMemoryRelationship() again
-            // It was already done synchronously above for instant UI update
+            // Persist child transfers to database
+            // Structure tree already updated above, so UI is already correct
+            for (const child of children) {
+              // Import moveNode dynamically to avoid circular dependency
+              const { moveNode } = await import('$lib/services/tauri-commands');
+              // Move child to be under the new node in database
+              await moveNode(child.id, nodeId);
+              // Note: No need to call structureTree.moveInMemoryRelationship() again
+              // It was already done synchronously above for instant UI update
+            }
+          } catch (error) {
+            // ROLLBACK: Revert optimistic UI changes on failure
+            console.error('[createNode] Failed to transfer children to database, rolling back:', error);
+            for (const child of children) {
+              // Move children back to original parent in structure tree
+              structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
+            }
+            // TODO: Emit error event for UI notification (toast/banner)
+            // events.operationFailed?.('transfer_children', error);
           }
         });
     }

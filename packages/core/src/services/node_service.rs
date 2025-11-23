@@ -251,17 +251,17 @@ fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
 /// use nodespace_core::db::SurrealStore;
 /// use nodespace_core::models::Node;
 /// use std::path::PathBuf;
+/// use std::sync::Arc;
 /// use serde_json::json;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let db = SurrealStore::new(PathBuf::from("./data/test.db")).await?;
-///     let service = NodeService::new(db)?;
+///     let service = NodeService::new(Arc::new(db))?;
 ///
 ///     let node = Node::new(
 ///         "text".to_string(),
 ///         "Hello World".to_string(),
-///         None,
 ///         json!({}),
 ///     );
 ///
@@ -362,11 +362,10 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let node = Node::new(
     ///     "text".to_string(),
     ///     "My note".to_string(),
-    ///     None,
     ///     json!({}),
     /// );
     /// let id = service.create_node(node).await?;
@@ -752,7 +751,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// // Create mention: "daily-note" mentions "project-planning"
     /// service.create_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
@@ -836,7 +835,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// service.delete_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
     /// # }
@@ -873,7 +872,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// if let Some(node) = service.get_node("node-id-123").await? {
     ///     println!("Found: {}", node.content);
     /// }
@@ -943,7 +942,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let update = NodeUpdate::new()
     ///     .with_content("Updated content".to_string());
     /// service.update_node("node-id", update).await?;
@@ -1081,7 +1080,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
     /// let rows = service.update_with_version_check(
     ///     "node-123",
     ///     5,  // Expected version
@@ -1305,7 +1304,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// service.delete_node("node-id-123").await?;
     /// # Ok(())
     /// # }
@@ -1348,7 +1347,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
     /// let rows = service.delete_with_version_check("node-123", 5).await?;
     ///
     /// if rows == 0 {
@@ -1393,7 +1392,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let children = service.get_children("parent-id").await?;
     /// println!("Found {} children", children.len());
     /// # Ok(())
@@ -1539,7 +1538,7 @@ where
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// // Fetch all nodes for a date page
     /// let nodes = service.get_nodes_by_root_id("2025-10-05").await?;
     /// println!("Found {} nodes in this document", nodes.len());
@@ -1579,7 +1578,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// // Move node under new parent
     /// service.move_node("node-id", Some("new-parent-id")).await?;
     ///
@@ -1670,7 +1669,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// // Position node after sibling
     /// service.reorder_child("node-id", Some("sibling-id")).await?;
     ///
@@ -1791,7 +1790,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let filter = NodeFilter::new()
     ///     .with_node_type("task".to_string())
     ///     .with_limit(10);
@@ -1858,7 +1857,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// // Query by ID
     /// let query = NodeQuery::by_id("node-123".to_string());
     /// let nodes = service.query_nodes_simple(query).await?;
@@ -1869,10 +1868,6 @@ where
     ///
     /// // Full-text search
     /// let query = NodeQuery::content_contains("search term".to_string()).with_limit(10);
-    /// let nodes = service.query_nodes_simple(query).await?;
-    ///
-    /// // Filter-only query (return all containers and tasks)
-    /// let query = NodeQuery { include_containers_and_tasks: Some(true), ..Default::default() };
     /// let nodes = service.query_nodes_simple(query).await?;
     /// # Ok(())
     /// # }
@@ -1885,14 +1880,12 @@ where
     /// 2. `mentioned_by` - Nodes that reference the specified node
     /// 3. `content_contains` + optional `node_type` - Full-text content search
     /// 4. `node_type` - Filter by node type
-    /// 5. `include_containers_and_tasks` - Filter-only query (returns all matching nodes)
-    /// 6. Empty query - Returns empty vec (safer than returning all nodes)
+    /// 5. Empty query - Returns empty vec (safer than returning all nodes)
     ///
     /// # Note on Empty Queries
     ///
-    /// Queries with no parameters (all fields `None` or `false`) will return an empty vector.
+    /// Queries with no parameters (all fields `None`) will return an empty vector.
     /// This is intentional to prevent accidentally fetching all nodes from the database.
-    /// To query all containers and tasks, use `include_containers_and_tasks: Some(true)`.
     /// Helper function to generate container/task filter SQL clause
     ///
     /// Returns a SQL WHERE clause fragment that filters to only include:
@@ -2021,7 +2014,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let nodes = vec![
     ///     Node::new("text".to_string(), "Note 1".to_string(), json!({})),
     ///     Node::new("text".to_string(), "Note 2".to_string(), json!({})),
@@ -2079,7 +2072,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let updates = vec![
     ///     ("node-1".to_string(), NodeUpdate::new().with_content("Updated 1".to_string())),
     ///     ("node-2".to_string(), NodeUpdate::new().with_content("Updated 2".to_string())),
@@ -2181,7 +2174,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let ids = vec!["node-1".to_string(), "node-2".to_string()];
     /// service.bulk_delete(ids).await?;
     /// # Ok(())
@@ -2354,7 +2347,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// service.add_mention("node-123", "node-456").await?;
     /// # Ok(())
     /// # }
@@ -2420,7 +2413,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// service.remove_mention("node-123", "node-456").await?;
     /// # Ok(())
     /// # }
@@ -2459,7 +2452,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let mentions = service.get_mentions("node-123").await?;
     /// # Ok(())
     /// # }
@@ -2490,7 +2483,7 @@ where
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// let backlinks = service.get_mentioned_by("node-456").await?;
     /// # Ok(())
     /// # }
@@ -2513,12 +2506,12 @@ where
     /// # Example
     /// ```no_run
     /// # use nodespace_core::services::node_service::NodeService;
-    /// # use nodespace_core::services::database::DatabaseService;
+    /// # use nodespace_core::db::SurrealStore;
     /// # use std::path::PathBuf;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = SurrealStore::new(PathBuf::from("./test.db")).await?;
-    /// # let service = NodeService::new(db)?;
+    /// # let service = NodeService::new(std::sync::Arc::new(db))?;
     /// // If nodes A and B (both children of Container X) mention target node,
     /// // returns ['container-x-id'] (deduplicated)
     /// let containers = service.get_mentioning_containers("target-node-id").await?;

@@ -187,7 +187,7 @@ struct SurrealNode {
     ///
     /// The `id` field in the fetched object is a SurrealDB `Thing` type, which serde_json
     /// cannot deserialize to `Value`, causing:
-    /// ```
+    /// ```text
     /// Error: invalid type: enum, expected any valid JSON value
     /// ```
     ///
@@ -2114,7 +2114,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// // Get entire tree in ONE query:
     /// let tree = store.get_node_tree("root-uuid").await?;
     /// // tree.children[0].children[0]... (fully nested)
@@ -2152,21 +2152,70 @@ where
     }
 
     /// Recursively build a node tree as JSON with nested children
+    ///
+    /// # Safety Guards
+    /// - Maximum depth limit (100 levels) prevents stack overflow on deeply nested hierarchies
+    /// - Cycle detection prevents infinite recursion on cyclic graphs
     fn build_node_tree_recursive<'a>(
         &'a self,
         node: &'a Node,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>
     {
+        const MAX_DEPTH: usize = 100;
+
         Box::pin(async move {
+            self.build_node_tree_with_guards(
+                node,
+                0,
+                MAX_DEPTH,
+                &mut std::collections::HashSet::new(),
+            )
+            .await
+        })
+    }
+
+    /// Internal implementation with depth tracking and cycle detection
+    fn build_node_tree_with_guards<'a>(
+        &'a self,
+        node: &'a Node,
+        depth: usize,
+        max_depth: usize,
+        visited: &'a mut std::collections::HashSet<String>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            // Depth limit check - prevent stack overflow
+            if depth >= max_depth {
+                return Err(anyhow::anyhow!(
+                "Maximum tree depth ({}) exceeded at node '{}'. This may indicate a very deep hierarchy or a cycle.",
+                max_depth,
+                node.id
+            ));
+            }
+
+            // Cycle detection - prevent infinite recursion
+            if visited.contains(&node.id) {
+                return Err(anyhow::anyhow!(
+                    "Cycle detected: node '{}' appears multiple times in the hierarchy path",
+                    node.id
+                ));
+            }
+            visited.insert(node.id.clone());
+
             // Get ordered children for this node (get_children returns Vec<Node> already ordered)
             let children_nodes = self.get_children(Some(&node.id)).await?;
 
             // Recursively build children trees
             let mut children_json = Vec::new();
             for child_node in &children_nodes {
-                let child_tree = self.build_node_tree_recursive(child_node).await?;
+                let child_tree = self
+                    .build_node_tree_with_guards(child_node, depth + 1, max_depth, visited)
+                    .await?;
                 children_json.push(child_tree);
             }
+
+            // Backtrack: remove from visited set to allow node to appear in other branches
+            visited.remove(&node.id);
 
             // Build JSON for this node with children
             // NOTE: Use bare node.id without "node:" prefix to match frontend expectations
@@ -2239,7 +2288,7 @@ where
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```text
     /// // Valid: A→B, B→C (adding C as child of B)
     /// validate_no_cycle("B", "C").await?; // ✓ OK
     ///

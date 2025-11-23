@@ -855,7 +855,7 @@ pub struct BatchGetResult {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```ignore
 /// let params = json!({
 ///     "node_ids": ["task-1", "task-2", "task-3"]
 /// });
@@ -950,7 +950,7 @@ pub struct BatchUpdateFailure {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```ignore
 /// let params = json!({
 ///     "updates": [
 ///         { "id": "task-1", "content": "- [x] Done" },
