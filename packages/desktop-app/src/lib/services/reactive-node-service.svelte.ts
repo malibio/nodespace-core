@@ -294,25 +294,28 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // IMPORTANT: Always transfer children when not inserting at beginning,
     // regardless of expanded state (expanded state is UI-only, doesn't affect structure)
     if (!insertAtBeginning && children.length > 0) {
-        // CRITICAL: Wait for newNode to be persisted before transferring children
-        // This prevents FOREIGN KEY constraint violations when children reference the new parent
-        // Use Promise to defer execution until after current synchronous stack completes
+        // OPTIMISTIC UI: Update structure tree IMMEDIATELY for instant visual feedback
+        // This ensures the UI shows the correct hierarchy without waiting for database
+        for (const child of children) {
+          structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
+        }
+
+        // BACKGROUND PERSISTENCE: Fire-and-forget database sync
+        // Database updates happen asynchronously without blocking UI
         Promise.resolve().then(async () => {
           // Wait for newNode to be persisted to database
+          // This prevents FOREIGN KEY constraint violations when children reference the new parent
           await sharedNodeStore.waitForNodeSaves([nodeId]);
 
-          // Now safe to transfer children - newNode exists in database
-          // Transfer children from afterNode to newNode using moveNode
-          // This properly updates the has_child graph edges in SurrealDB
+          // Persist child transfers to database
+          // Structure tree already updated above, so UI is already correct
           for (const child of children) {
             // Import moveNode dynamically to avoid circular dependency
             const { moveNode } = await import('$lib/services/tauri-commands');
-            // Move child to be under the new node
+            // Move child to be under the new node in database
             await moveNode(child.id, nodeId);
-
-            // CRITICAL FIX: Update ReactiveStructureTree for browser mode
-            // In Tauri mode, LIVE SELECT events update the tree, but in browser mode we must do it manually
-            structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
+            // Note: No need to call structureTree.moveInMemoryRelationship() again
+            // It was already done synchronously above for instant UI update
           }
         });
     }
