@@ -30,7 +30,8 @@
   import {
     createTextareaController,
     type TextareaControllerEvents,
-    type TextareaControllerConfig
+    type TextareaControllerConfig,
+    type TextareaControllerState
   } from './textarea-controller.svelte.js';
   import { NodeAutocomplete, type NodeResult } from '$lib/components/ui/node-autocomplete';
   import { SlashCommandDropdown } from '$lib/components/ui/slash-command-dropdown';
@@ -123,7 +124,7 @@
   let textareaElement = $state<HTMLTextAreaElement | undefined>(undefined);
 
   // Controller will be initialized after controllerEvents is defined
-  let controller = $state<any>(null);
+  let controller = $state<TextareaControllerState | null>(null);
 
   // View mode element for rendering markdown
   let viewElement = $state<HTMLDivElement | undefined>(undefined);

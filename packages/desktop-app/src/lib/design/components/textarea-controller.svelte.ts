@@ -159,165 +159,14 @@ export interface TextareaControllerState {
 // Keep track of command registration state
 let keyboardCommandsRegistered = false;
 
-// Backwards compatibility: TextareaController constructor for tests
-// Tests can still instantiate the controller directly and use it.
-// This creates a minimal controller without Svelte 5 reactivity.
-// For component integration, use createTextareaController factory instead.
-export class TextareaController {
-  public element: HTMLTextAreaElement;
-  private nodeId: string;
-  private nodeType: string;
-  private paneId: string;
-  private config: TextareaControllerConfig;
-  public events: TextareaControllerEvents;
-
-  public slashCommandDropdownActive: boolean = false;
-  public autocompleteDropdownActive: boolean = false;
-  public recentEnter: boolean = false;
-  public justCreated: boolean = false;
-
-  private impl: TextareaControllerImpl;
-
-  constructor(
-    element: HTMLTextAreaElement,
-    nodeId: string,
-    nodeType: string,
-    paneId: string,
-    events: TextareaControllerEvents,
-    config: TextareaControllerConfig = {}
-  ) {
-    this.element = element;
-    this.nodeId = nodeId;
-    this.nodeType = nodeType;
-    this.paneId = paneId;
-    this.events = events;
-    this.config = { allowMultiline: false, ...config };
-
-    // Create internal implementation
-    this.impl = new TextareaControllerImpl(
-      element,
-      nodeId,
-      nodeType,
-      paneId,
-      events,
-      config
-    );
-  }
-
-  // Delegate all methods to internal implementation
-  public initialize(content: string, autoFocus: boolean = false): void {
-    this.impl.initialize(content, autoFocus);
-  }
-
-  public destroy(): void {
-    this.impl.destroy();
-  }
-
-  public updateContent(content: string): void {
-    this.impl.updateContent(content);
-  }
-
-  public forceUpdateContent(content: string): void {
-    this.impl.forceUpdateContent(content);
-  }
-
-  public updateNodeType(newNodeType: string): void {
-    this.impl.updateNodeType(newNodeType);
-  }
-
-  public prepareForArrowNavigation(): void {
-    this.impl.prepareForArrowNavigation();
-  }
-
-  public focus(): void {
-    this.impl.focus();
-  }
-
-  public positionCursorAtLineBeginning(lineNumber?: number, skipSyntax?: boolean): void {
-    this.impl.positionCursorAtLineBeginning(lineNumber, skipSyntax);
-  }
-
-  public getMarkdownContent(): string {
-    return this.impl.getMarkdownContent();
-  }
-
-  public adjustHeight(): void {
-    this.impl.adjustHeight();
-  }
-
-  public setCursorPosition(position: number): void {
-    this.impl.setCursorPosition(position);
-  }
-
-  public isAtFirstLine(): boolean {
-    return this.impl.isAtFirstLine();
-  }
-
-  public isAtLastLine(): boolean {
-    return this.impl.isAtLastLine();
-  }
-
-  public getCurrentColumn(): number {
-    return this.impl.getCurrentColumn();
-  }
-
-  public getCurrentPixelOffset(): number {
-    return this.impl.getCurrentPixelOffset();
-  }
-
-  public enterFromArrowNavigation(direction: 'up' | 'down', pixelOffset: number): void {
-    this.impl.enterFromArrowNavigation(direction, pixelOffset);
-  }
-
-  public setSlashCommandDropdownActive(active: boolean): void {
-    this.slashCommandDropdownActive = active;
-    this.impl.setSlashCommandDropdownActive(active);
-  }
-
-  public setAutocompleteDropdownActive(active: boolean): void {
-    this.autocompleteDropdownActive = active;
-    this.impl.setAutocompleteDropdownActive(active);
-  }
-
-  public insertNodeReference(nodeId: string): void {
-    this.impl.insertNodeReference(nodeId);
-  }
-
-  public insertSlashCommand(content: string, skipDetection: boolean, targetNodeType?: string): number {
-    return this.impl.insertSlashCommand(content, skipDetection, targetNodeType);
-  }
-
-  public toggleFormatting(marker: string): void {
-    this.impl.toggleFormatting(marker);
-  }
-
-  public isProcessingInput(): boolean {
-    return this.impl.isProcessingInput();
-  }
-
-  public getCursorPositionInMarkdown(): number {
-    return this.impl.getCursorPositionInMarkdown();
-  }
-
-  public convertHtmlToTextWithNewlines(html: string): string {
-    return this.impl.convertHtmlToTextWithNewlines(html);
-  }
-
-  public setLiveFormattedContent(content: string): void {
-    this.impl.setLiveFormattedContent(content);
-  }
-
-  public updateConfig(config: Partial<TextareaControllerConfig>): void {
-    this.impl.updateConfig(config);
-  }
-}
-
 // Module-level services and state
 const cursorService = CursorPositioningService.getInstance();
 const MAX_QUERY_LENGTH = 100;
 
-// Internal implementation class - not exported, only used by factory and TextareaController wrapper
-class TextareaControllerImpl {
+// TextareaController - Core implementation class
+// Can be used directly in tests with 'new TextareaController(...)'
+// Or used reactively via createTextareaController() factory in components
+export class TextareaController {
     public element: HTMLTextAreaElement;
     private nodeId: string;
     private nodeType: string;
@@ -362,7 +211,7 @@ class TextareaControllerImpl {
       this.events = events;
       this.config = { allowMultiline: false, ...config };
 
-      (this.element as unknown as Record<string, TextareaControllerImpl>)._textareaController =
+      (this.element as unknown as { _textareaController: TextareaController })._textareaController =
         this;
 
       this.registerKeyboardCommands();
@@ -509,7 +358,7 @@ class TextareaControllerImpl {
       this.element.selectionEnd = position;
     }
 
-    private getCursorPosition(): number {
+    public getCursorPosition(): number {
       return this.element.selectionStart;
     }
 
@@ -662,7 +511,7 @@ class TextareaControllerImpl {
       }
 
       const context = this.buildKeyboardContext(event);
-      const handled = await registry.execute(event, this as unknown as any, context);
+      const handled = await registry.execute(event, this, context);
 
       if (handled) {
         return;
@@ -990,7 +839,7 @@ export function createTextareaController(
   events: TextareaControllerEvents
 ): TextareaControllerState {
   // Internal mutable state (using $state for Svelte 5 reactivity)
-  let controller: TextareaControllerImpl | null = null;
+  let controller: TextareaController | null = null;
 
   // Watch for element changes and manage controller lifecycle
   $effect(() => {
@@ -1002,7 +851,7 @@ export function createTextareaController(
 
     untrack(() => {
       if (element && !controller) {
-        controller = new TextareaControllerImpl(
+        controller = new TextareaController(
           element,
           nodeId,
           nodeType,
@@ -1043,147 +892,7 @@ export function createTextareaController(
     };
   });
 
-  // Return public API
-  return {
-    get slashCommandDropdownActive(): boolean {
-      return controller?.slashCommandDropdownActive ?? false;
-    },
-    set slashCommandDropdownActive(value: boolean) {
-      if (controller) {
-        controller.slashCommandDropdownActive = value;
-      }
-    },
-
-    get autocompleteDropdownActive(): boolean {
-      return controller?.autocompleteDropdownActive ?? false;
-    },
-    set autocompleteDropdownActive(value: boolean) {
-      if (controller) {
-        controller.autocompleteDropdownActive = value;
-      }
-    },
-
-    get recentEnter(): boolean {
-      return controller?.recentEnter ?? false;
-    },
-    set recentEnter(value: boolean) {
-      if (controller) {
-        controller.recentEnter = value;
-      }
-    },
-
-    get justCreated(): boolean {
-      return controller?.justCreated ?? false;
-    },
-    set justCreated(value: boolean) {
-      if (controller) {
-        controller.justCreated = value;
-      }
-    },
-
-    getMarkdownContent(): string {
-      return controller?.getMarkdownContent() ?? '';
-    },
-
-    getCursorPosition(): number {
-      return controller ? (controller as any).getCursorPosition() : 0;
-    },
-
-    isAtFirstLine(): boolean {
-      return controller?.isAtFirstLine() ?? false;
-    },
-
-    isAtLastLine(): boolean {
-      return controller?.isAtLastLine() ?? false;
-    },
-
-    getCurrentColumn(): number {
-      return controller?.getCurrentColumn() ?? 0;
-    },
-
-    getCurrentPixelOffset(): number {
-      return controller?.getCurrentPixelOffset() ?? 0;
-    },
-
-    focus(): void {
-      controller?.focus();
-    },
-
-    setCursorPosition(position: number): void {
-      controller?.setCursorPosition(position);
-    },
-
-    updateContent(content: string): void {
-      controller?.updateContent(content);
-    },
-
-    forceUpdateContent(content: string): void {
-      controller?.forceUpdateContent(content);
-    },
-
-    adjustHeight(): void {
-      controller?.adjustHeight();
-    },
-
-    positionCursorAtLineBeginning(lineNumber?: number, skipSyntax?: boolean): void {
-      controller?.positionCursorAtLineBeginning(lineNumber, skipSyntax);
-    },
-
-    enterFromArrowNavigation(direction: 'up' | 'down', pixelOffset: number): void {
-      controller?.enterFromArrowNavigation(direction, pixelOffset);
-    },
-
-    setSlashCommandDropdownActive(active: boolean): void {
-      if (controller) {
-        controller.setSlashCommandDropdownActive(active);
-      }
-    },
-
-    setAutocompleteDropdownActive(active: boolean): void {
-      if (controller) {
-        controller.setAutocompleteDropdownActive(active);
-      }
-    },
-
-    insertNodeReference(nodeId: string): void {
-      controller?.insertNodeReference(nodeId);
-    },
-
-    insertSlashCommand(content: string, skipDetection: boolean, targetNodeType?: string): number {
-      return controller?.insertSlashCommand(content, skipDetection, targetNodeType) ?? 0;
-    },
-
-    toggleFormatting(marker: string): void {
-      controller?.toggleFormatting(marker);
-    },
-
-    isProcessingInput(): boolean {
-      return controller?.isProcessingInput() ?? false;
-    },
-
-    getCursorPositionInMarkdown(): number {
-      return controller?.getCursorPositionInMarkdown() ?? 0;
-    },
-
-    convertHtmlToTextWithNewlines(html: string): string {
-      return controller?.convertHtmlToTextWithNewlines(html) ?? '';
-    },
-
-    setLiveFormattedContent(content: string): void {
-      controller?.setLiveFormattedContent(content);
-    },
-
-    prepareForArrowNavigation(): void {
-      controller?.prepareForArrowNavigation();
-    },
-
-    updateNodeType(newNodeType: string): void {
-      controller?.updateNodeType(newNodeType);
-    },
-
-    destroy(): void {
-      controller?.destroy();
-      controller = null;
-    }
-  };
+  // Return the controller directly (simplified architecture)
+  // The factory wraps the controller with reactive effects for prop syncing
+  return controller as unknown as TextareaControllerState;
 }
