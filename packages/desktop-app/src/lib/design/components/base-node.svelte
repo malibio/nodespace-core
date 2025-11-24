@@ -617,6 +617,11 @@
         autocompletePosition = data.cursorPosition;
         showAutocomplete = true;
 
+        // Notify controller that autocomplete is active
+        if (controller) {
+          controller.setAutocompleteDropdownActive(true);
+        }
+
         // REMOVED: Effect that watched showAutocomplete - now call directly
         // Use real search if services are available
         if (services?.nodeManager) {
@@ -631,6 +636,11 @@
       showAutocomplete = false;
       currentQuery = '';
       autocompleteResults = [];
+
+      // Notify controller that autocomplete is inactive
+      if (controller) {
+        controller.setAutocompleteDropdownActive(false);
+      }
     },
     nodeReferenceSelected: (data: { nodeId: string; nodeTitle: string }) => {
       // Forward the event for potential parent component handling
@@ -648,11 +658,21 @@
       slashCommands = slashCommandService.filterCommands(currentSlashQuery);
 
       showSlashCommands = true;
+
+      // Notify controller that slash command dropdown is active
+      if (controller) {
+        controller.setSlashCommandDropdownActive(true);
+      }
     },
     slashCommandHidden: () => {
       showSlashCommands = false;
       currentSlashQuery = '';
       slashCommands = [];
+
+      // Notify controller that slash command dropdown is inactive
+      if (controller) {
+        controller.setSlashCommandDropdownActive(false);
+      }
     },
     slashCommandSelected: (data: {
       command: {
@@ -795,13 +815,7 @@
 
   // REMOVED: Content sync effect - now handled by reactive factory function
   // REMOVED: Config sync effect - now handled by reactive factory function
-  // Sync dropdown state directly when changed
-  $effect(() => {
-    if (controller) {
-      controller.setSlashCommandDropdownActive(showSlashCommands);
-      controller.setAutocompleteDropdownActive(showAutocomplete);
-    }
-  });
+  // REMOVED: Dropdown state sync - controller manages this internally through event handlers
 
   // AutoFocus on mount: When a node mounts with autoFocus=true, set it as the editing node
   // This is the standard Svelte pattern - request focus when component mounts
