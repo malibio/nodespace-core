@@ -22,19 +22,6 @@
   let viewerComponents = $state<Map<string, unknown>>(new Map());
   let viewerLoadErrors = $state<Map<string, string>>(new Map());
 
-  // Memoized callbacks to prevent unnecessary re-renders of child components
-  // Use $derived to capture current values but maintain referential stability
-  // The callbacks still reference current activeTabId and nodeType, but are only recreated
-  // when the deps actually change
-  const handleTitleChange = $derived.by(() => {
-    return (title: string) => updateTabTitle(activeTabId, title);
-  });
-
-  const handleNodeIdChange = $derived.by(() => {
-    return (newNodeId: string) =>
-      updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: activeTab?.content?.nodeType ?? 'text' });
-  });
-
   // Load viewer for active tab's node type
   $effect(() => {
     const nodeType = activeTab?.content?.nodeType;
@@ -88,8 +75,9 @@
         nodeId={content.nodeId}
         tabId={activeTabId}
         disableTitleUpdates={shouldDisableTitleUpdates}
-        onTitleChange={handleTitleChange}
-        onNodeIdChange={handleNodeIdChange}
+        onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
+        onNodeIdChange={(newNodeId: string) =>
+          updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType })}
       />
     {/key}
   {/if}
