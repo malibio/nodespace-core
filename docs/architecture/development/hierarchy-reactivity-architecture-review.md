@@ -14,6 +14,16 @@
 >
 > **Current Architecture**: Edge-based fractional ordering on `has_child.order` field.
 
+## ⚠️ IMPORTANT: Architecture Review Decision (2025-11-24)
+
+**This document describes the conceptual design goal (database-driven reactivity) but uses terminology that implies SurrealDB LIVE SELECT queries. This is INCORRECT.**
+
+**Actual Implementation:** NodeSpace uses **explicit event emission from the business logic layer**, not SurrealDB LIVE SELECT queries.
+
+- See **Section 13: Conclusion** below for the architectural decision rationale
+- The LIVE SELECT sections describe the design goal but not the actual implementation
+- Explicit event emission provides superior control, simplicity, and performance for NodeSpace's use case
+
 ---
 
 ## Executive Summary
