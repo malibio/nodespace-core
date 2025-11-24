@@ -23,28 +23,28 @@
   let viewerLoadErrors = $state<Map<string, string>>(new Map());
 
   // Load viewer for active tab's node type
-  // Use $effect.root to isolate state mutations from derived context
-  $effect.root(() => {
-    $effect(() => {
-      const nodeType = activeTab?.content?.nodeType;
-      if (nodeType && !viewerComponents.has(nodeType) && !viewerLoadErrors.has(nodeType)) {
-        (async () => {
-          try {
-            const viewer = await pluginRegistry.getViewer(nodeType);
-            if (viewer) {
-              viewerComponents.set(nodeType, viewer);
-              viewerComponents = new Map(viewerComponents); // Trigger reactivity
-            }
-          } catch (error) {
-            const errorMessage =
-              error instanceof Error ? error.message : 'Unknown error loading viewer';
-            console.error(`[PaneContent] Failed to load viewer for ${nodeType}:`, error);
-            viewerLoadErrors.set(nodeType, errorMessage);
-            viewerLoadErrors = new Map(viewerLoadErrors); // Trigger reactivity
+  // Track which node types are currently loading to prevent duplicate requests
+  let loadingNodeType = $state<string | null>(null);
+
+  $effect(() => {
+    const nodeType = activeTab?.content?.nodeType;
+    if (nodeType && !viewerComponents.has(nodeType) && !viewerLoadErrors.has(nodeType) && loadingNodeType !== nodeType) {
+      loadingNodeType = nodeType;
+      pluginRegistry.getViewer(nodeType).then(
+        (viewer) => {
+          if (viewer) {
+            viewerComponents = new Map(viewerComponents.set(nodeType, viewer));
           }
-        })();
-      }
-    });
+          loadingNodeType = null;
+        },
+        (error) => {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error loading viewer';
+          console.error(`[PaneContent] Failed to load viewer for ${nodeType}:`, error);
+          viewerLoadErrors = new Map(viewerLoadErrors.set(nodeType, errorMessage));
+          loadingNodeType = null;
+        }
+      );
+    }
   });
 </script>
 
