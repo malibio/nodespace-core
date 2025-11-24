@@ -236,35 +236,34 @@
   // ============================================================================
   // Track last loaded nodeId to prevent re-loading the same node
   let lastLoadedNodeId: string | null = null;
+  // Flag to prevent effect from firing multiple times while async load is in progress
+  let isLoadingChildren = $state(false);
 
   $effect(() => {
     if (nodeId) {
       // Prevent re-loading if we already loaded this nodeId
       if (lastLoadedNodeId === nodeId) {
-        console.log(`[PERF] Already loaded ${nodeId}, skipping`);
         return;
       }
 
-      // PERFORMANCE: Start timing
-      const perfStart = performance.now();
-      console.log(`[PERF] Effect fired for nodeId: ${nodeId} (lastLoaded: ${lastLoadedNodeId})`);
+      // Prevent race condition where effect fires multiple times before async load completes
+      if (isLoadingChildren) {
+        return;
+      }
 
       // Mark this nodeId as loaded
       lastLoadedNodeId = nodeId;
+      isLoadingChildren = true;
 
       // Capture disableTitleUpdates at effect creation time (not in async callback)
       const shouldDisableTitleUpdates = disableTitleUpdates;
 
       // Load children asynchronously
       // Note: loadChildrenForParent has internal cache checking, so this is efficient
-      const asyncStart = performance.now();
       loadChildrenForParent(nodeId).then(() => {
-        const asyncTime = performance.now() - asyncStart;
-        const totalTime = performance.now() - perfStart;
-        console.log(`[PERF] Load complete: ${asyncTime.toFixed(2)}ms, Total: ${totalTime.toFixed(2)}ms`);
-
         // CRITICAL: Prevent state updates after component destruction
         if (isDestroyed) {
+          isLoadingChildren = false;
           return;
         }
 
@@ -277,10 +276,16 @@
         if (!shouldDisableTitleUpdates) {
           updateTabTitle(headerContent);
         }
+
+        isLoadingChildren = false;
+      }).catch((error) => {
+        isLoadingChildren = false;
+        console.error('[BaseNodeViewer] Failed to load children:', error);
       });
     } else {
       // Clear when no nodeId
       currentViewedNode = null;
+      lastLoadedNodeId = null;
     }
   });
 
@@ -699,9 +704,6 @@
   }
 
   async function loadChildrenForParent(nodeId: string, forceRefresh = false) {
-    const loadStart = performance.now();
-    console.log(`[PERF] loadChildrenForParent called for ${nodeId}`);
-
     try {
       // Set loading flag to prevent watchers from triggering during initial load
       isLoadingInitialNodes = true;
@@ -719,24 +721,17 @@
         const cached = sharedNodeStore.getNodesForParent(nodeId);
         if (cached && cached.length > 0) {
           // Cache hit - use immediately (no database call!)
-          console.log(`[PERF] Children cache hit: ${cached.length} nodes`);
           allNodes = cached;
         } else {
           // Cache miss - fetch from database
           // Use loadChildrenTree which returns nested structure AND registers
           // parent-child edges in structureTree (critical for expand control visibility)
           // NOTE: This also loads the parent node internally (single HTTP call)
-          const childrenFetchStart = performance.now();
           allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
-          const childrenFetchTime = performance.now() - childrenFetchStart;
-          console.log(`[PERF] Single tree fetch (parent + children): ${childrenFetchTime.toFixed(2)}ms (${allNodes.length} nodes)`);
         }
       } else {
         // Force refresh - bypass cache and fetch from database
-        const childrenFetchStart = performance.now();
         allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
-        const childrenFetchTime = performance.now() - childrenFetchStart;
-        console.log(`[PERF] Force refresh tree fetch: ${childrenFetchTime.toFixed(2)}ms (${allNodes.length} nodes)`);
       }
 
       // Check if we have any nodes at all (reuse allNodes - no redundant cache check needed)
@@ -781,9 +776,6 @@
       // Must be inside try block (not finally) to ensure initializeNodes() has completed
       // Only register once per viewer instance (coordinator handles re-registration gracefully)
       NodeExpansionCoordinator.registerViewer(tabId, nodeManager);
-
-      const loadTotalTime = performance.now() - loadStart;
-      console.log(`[PERF] loadChildrenForParent complete: ${loadTotalTime.toFixed(2)}ms total`);
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children for parent:', nodeId, error);
     } finally {
