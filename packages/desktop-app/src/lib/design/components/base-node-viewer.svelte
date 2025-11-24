@@ -104,24 +104,30 @@
   let isPromoting = $state(false);
 
   // Stable placeholder ID - reused across placeholder recreations to prevent unnecessary component remounts
-  // NOT $state because we mutate it during derived evaluation (Svelte 5 restriction)
-  let placeholderId: string | null = null;
+  // Uses $state to avoid mutation during derived evaluation (Svelte 5 best practice)
+  let placeholderId = $state<string | null>(null);
 
-  // Lazy ID generator - idempotent after first call
-  // Simple mutable variable (not $state) allows mutation during derived evaluation
-  function getOrCreatePlaceholderId(): string {
-    return placeholderId ??= globalThis.crypto.randomUUID();
-  }
+  // Effect to manage placeholder ID lifecycle - creates/resets based on visibility
+  // This ensures we don't mutate state during derived evaluation
+  $effect(() => {
+    // Note: shouldShowPlaceholder is defined later in the file
+    // This forward reference is safe in Svelte 5
+    if (shouldShowPlaceholder && !placeholderId) {
+      // Create new ID when placeholder becomes visible
+      placeholderId = globalThis.crypto.randomUUID();
+    } else if (!shouldShowPlaceholder && placeholderId) {
+      // Reset ID when placeholder is hidden
+      placeholderId = null;
+    }
+  });
 
   // Viewer-local placeholder (not in sharedNodeStore until it gets content)
   // This placeholder is only visible to this viewer instance
-  // Derived from shouldShowPlaceholder instead of being set in $effect
+  // Derived from shouldShowPlaceholder and placeholderId (no mutations during evaluation)
   const viewerPlaceholder = $derived.by<Node | null>(() => {
-    // Note: shouldShowPlaceholder is defined later in the file
-    // This forward reference is safe in Svelte 5
-    if (shouldShowPlaceholder) {
+    if (shouldShowPlaceholder && placeholderId) {
       return {
-        id: getOrCreatePlaceholderId(),
+        id: placeholderId,
         nodeType: 'text',
         content: '',
         createdAt: new Date().toISOString(),
@@ -136,7 +142,8 @@
   });
 
   // Track the viewed node reactively for schema form display
-  let currentViewedNode = $state<Node | null>(null);
+  // Derived from sharedNodeStore - always up-to-date with the store
+  const currentViewedNode = $derived(nodeId ? sharedNodeStore.getNode(nodeId) : null);
 
   // Scroll position tracking
   // Reference to the scroll container element
@@ -235,7 +242,7 @@
 
   onMount(async () => {
     if (!nodeId) {
-      currentViewedNode = null;
+      // currentViewedNode is now $derived - no manual assignment needed
       return;
     }
 
@@ -255,7 +262,7 @@
       // After loading completes, initialize header content and update tab title
       const node = sharedNodeStore.getNode(nodeId);
       headerContent = node?.content || '';
-      currentViewedNode = node || null;
+      // currentViewedNode is now $derived - no manual assignment needed
 
       // Update tab title after node is loaded
       if (!shouldDisableTitleUpdates) {
@@ -444,12 +451,6 @@
       return;
     }
 
-    // Create a new promise for this content save phase
-    // The structural watcher will await this before processing updates
-    let resolvePhase: () => void;
-    // TODO: Implement content save phase tracking if needed
-    // This was part of the contentSavePhasePromise coordination system
-
     const nodes = visibleNodesFromStores;
 
     for (const node of nodes) {
@@ -510,10 +511,6 @@
         }
       }
     }
-
-    // Mark content save phase as complete by resolving the promise
-    // Use Promise.resolve().then() to ensure this happens after all synchronous code
-    Promise.resolve().then(() => resolvePhase());
   });
 
   // ============================================================================
