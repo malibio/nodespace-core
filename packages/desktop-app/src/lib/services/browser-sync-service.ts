@@ -3,16 +3,16 @@
  *
  * Provides real-time synchronization via Server-Sent Events when running
  * in browser mode (not Tauri desktop app). This is the browser-mode equivalent
- * of Tauri's LIVE SELECT event subscription.
+ * of Tauri's domain event subscription.
  *
  * Architecture:
- *   Browser ←──SSE──→ dev-proxy (port 3001) → SurrealDB (port 8000)
+ *   Browser ←──SSE──→ dev-proxy (port 3001) → SurrealStore (events)
  *                                                    ↑
- *   Surrealist ─────────────────────────────────────→
+ *   Surrealist ──────────────(direct DB changes)───→
  *
- * When changes are made via Surrealist (or any other DB client), the dev-proxy
- * broadcasts SSE events to connected browsers, which update the SharedNodeStore
- * and ReactiveStructureTree.
+ * The dev-proxy forwards domain events from SurrealStore as SSE to connected browsers,
+ * which update the SharedNodeStore and ReactiveStructureTree. This allows browser dev mode
+ * to have the same real-time sync as the desktop app.
  */
 
 /* global EventSource, MessageEvent */
