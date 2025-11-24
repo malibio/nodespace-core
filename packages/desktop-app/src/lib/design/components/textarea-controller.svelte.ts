@@ -1000,19 +1000,21 @@ export function createTextareaController(
     const paneId = getPaneId();
     const editableConfig = getEditableConfig();
 
-    if (element && !controller) {
-      controller = new TextareaControllerImpl(
-        element,
-        nodeId,
-        nodeType,
-        paneId,
-        events,
-        editableConfig
-      );
-    } else if (!element && controller) {
-      controller.destroy();
-      controller = null;
-    }
+    untrack(() => {
+      if (element && !controller) {
+        controller = new TextareaControllerImpl(
+          element,
+          nodeId,
+          nodeType,
+          paneId,
+          events,
+          editableConfig
+        );
+      } else if (!element && controller) {
+        controller.destroy();
+        controller = null;
+      }
+    });
   });
 
   // Reactive content sync - replaces manual $effect in base-node.svelte
