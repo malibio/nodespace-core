@@ -1183,6 +1183,12 @@ export class SharedNodeStore {
       const allRelationships: Array<{parentId: string, childId: string, order: number}> = [];
       const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
 
+      // OPTIMIZATION: Add parent node itself to the store
+      // This eliminates the need for a separate getNode() call in base-node-viewer
+      const { children: _children, ...parentNodeFields } = tree;
+      const parentNode: Node = parentNodeFields as Node;
+      allNodes.push(parentNode);
+
       // Helper to recursively process NodeWithChildren and collect nodes + edges
       // OPTIMIZED: Collects all nodes first, then batch adds them
       const processNode = (nodeWithChildren: import('$lib/types').NodeWithChildren, nodeParentId: string, order: number) => {

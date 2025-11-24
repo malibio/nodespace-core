@@ -10,13 +10,16 @@
   import { onMount, onDestroy, getContext, tick } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
-  import { pluginRegistry } from '$lib/components/viewers/index';
   import BaseNode from '$lib/design/components/base-node.svelte';
   import BacklinksPanel from '$lib/design/components/backlinks-panel.svelte';
   import SchemaPropertyForm from '$lib/components/property-forms/schema-property-form.svelte';
+  // Pre-import core node components for instant rendering (no async loading delay)
+  import TextNode from '$lib/components/text-node.svelte';
+  import HeaderNode from '$lib/design/components/header-node.svelte';
+  import TaskNode from '$lib/design/components/task-node.svelte';
+  import DateNode from '$lib/design/components/date-node.svelte';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store';
-  import * as tauriCommands from '$lib/services/tauri-commands';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
   import { nodeData as reactiveNodeData } from '$lib/stores/reactive-node-data.svelte';
@@ -223,33 +226,54 @@
     return flattenNodes(nodeId, 0);
   });
 
-  // Set view context, load children, and initialize header content when nodeId changes
-  $effect(() => {
-    // Removed setViewParentId - now pass nodeId directly to visibleNodes()
+  // ============================================================================
+  // LEGITIMATE $EFFECT: Async data loading when nodeId prop changes
+  // ============================================================================
+  // WHY THIS CAN'T BE ELIMINATED:
+  // - Async operation (loadChildrenForParent) can't be done in $derived
+  // - Needs to respond to prop changes (nodeId) - not a one-time onMount operation
+  // - Svelte 5 docs explicitly allow $effect for async side effects
+  // ============================================================================
+  // Track last loaded nodeId to prevent re-loading the same node
+  let lastLoadedNodeId: string | null = null;
 
+  $effect(() => {
     if (nodeId) {
+      // Prevent re-loading if we already loaded this nodeId
+      if (lastLoadedNodeId === nodeId) {
+        console.log(`[PERF] Already loaded ${nodeId}, skipping`);
+        return;
+      }
+
+      // PERFORMANCE: Start timing
+      const perfStart = performance.now();
+      console.log(`[PERF] Effect fired for nodeId: ${nodeId} (lastLoaded: ${lastLoadedNodeId})`);
+
+      // Mark this nodeId as loaded
+      lastLoadedNodeId = nodeId;
+
       // Capture disableTitleUpdates at effect creation time (not in async callback)
-      // This prevents stale closure issues when component is destroyed before callback fires
       const shouldDisableTitleUpdates = disableTitleUpdates;
 
-      // Load children asynchronously - this will load the parent node first
+      // Load children asynchronously
+      // Note: loadChildrenForParent has internal cache checking, so this is efficient
+      const asyncStart = performance.now();
       loadChildrenForParent(nodeId).then(() => {
+        const asyncTime = performance.now() - asyncStart;
+        const totalTime = performance.now() - perfStart;
+        console.log(`[PERF] Load complete: ${asyncTime.toFixed(2)}ms, Total: ${totalTime.toFixed(2)}ms`);
+
         // CRITICAL: Prevent state updates after component destruction
-        // This prevents memory leaks and state corruption from stale async callbacks
         if (isDestroyed) {
           return;
         }
 
         // After loading completes, initialize header content and update tab title
-        // This ensures the node is loaded before we try to read its content
         const node = sharedNodeStore.getNode(nodeId);
         headerContent = node?.content || '';
-
-        // Update reactive node reference for schema form
         currentViewedNode = node || null;
 
         // Update tab title after node is loaded
-        // Skip if parent component manages the title (e.g., DateNodeViewer)
         if (!shouldDisableTitleUpdates) {
           updateTabTitle(headerContent);
         }
@@ -420,11 +444,13 @@
   }
 
   // ============================================================================
-  // CONTENT SAVE WATCHER - Initiates content saves for new nodes
+  // LEGITIMATE $EFFECT.PRE: Content save watcher for new nodes
   // ============================================================================
-  // This watcher creates a promise that the structural watcher awaits, ensuring
-  // new nodes are saved to the database before structural updates reference them.
-  // This prevents FOREIGN KEY constraint errors.
+  // WHY THIS CAN'T BE ELIMINATED:
+  // - Must run BEFORE DOM updates ($effect.pre) to capture correct state
+  // - Watches derived state (visibleNodesFromStores) for new content
+  // - Coordinates with structural watcher to prevent FOREIGN KEY errors
+  // - Cannot be derived - performs side effects (database writes)
   // ============================================================================
   $effect.pre(() => {
     if (!nodeId) {
@@ -508,6 +534,15 @@
     Promise.resolve().then(() => resolvePhase());
   });
 
+  // ============================================================================
+  // LEGITIMATE $EFFECT: Node deletion detection via previous state tracking
+  // ============================================================================
+  // WHY THIS CAN'T BE ELIMINATED:
+  // - Needs to track previous state (previousNodeIds) to detect deletions
+  // - Cannot be derived - performs side effects (calls deleteNode API)
+  // - Deletion is inherently a side effect that requires coordination
+  // - Awaits structural updates before deletion to prevent CASCADE errors
+  // ============================================================================
   // Track node IDs to detect deletions
   // Use a regular variable, not $state, to avoid infinite loops
   let previousNodeIds = new Set<string>();
@@ -576,28 +611,25 @@
   });
 
   // ============================================================================
-  // STRUCTURAL CHANGE WATCHER - Persists structural changes
+  // LEGITIMATE $EFFECT.PRE: Structural change watcher for persistence
   // ============================================================================
-  // This watcher awaits contentSavePhasePromise to ensure new nodes are saved
-  // before structural updates reference them. This prevents FOREIGN KEY errors.
-  //
-  // ISSUE #479: Track PERSISTED structure vs in-memory structure
-  // When Enter+Tab happens rapidly, node is created with wrong parentId, then
-  // immediately indented in SharedNodeStore. The structural watcher must detect
-  // this mismatch and persist the correction.
+  // WHY THIS CAN'T BE ELIMINATED:
+  // - Must run BEFORE DOM updates ($effect.pre) to track structure correctly
+  // - Coordinates with content watcher to prevent FOREIGN KEY errors
+  // - Tracks persisted vs in-memory structure to detect mismatches (Issue #479)
+  // - Cannot be derived - performs side effects (tracks state for persistence)
+  // - Simplified in Issue #575 - only tracks node presence (no sibling ordering)
   // ============================================================================
   // previousStructure is updated in three places (all necessary):
-  // 1. Deletion watcher (line ~218): Cleans up deleted nodes
-  // 2. This watcher (line ~388): Tracks nodes on first sight
-  // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
+  // 1. Deletion watcher: Cleans up deleted nodes
+  // 2. This watcher: Tracks nodes on first sight
+  // 3. This watcher: Tracks successfully persisted structural changes (source of truth)
   // Issue #575: Simplified - tracks node presence for cleanup (no beforeSiblingId)
   let previousStructure = new Set<string>();
 
   // Track what structure was actually persisted to database (#479)
   // Issue #575: Simplified - only tracks node presence
   let persistedStructure = new Set<string>();
-
-  // Issue #575: Sibling index removed - sibling ordering now handled by backend
 
   /**
    * Issue #575: Simplified - just tracks node presence for cleanup
@@ -667,6 +699,9 @@
   }
 
   async function loadChildrenForParent(nodeId: string, forceRefresh = false) {
+    const loadStart = performance.now();
+    console.log(`[PERF] loadChildrenForParent called for ${nodeId}`);
+
     try {
       // Set loading flag to prevent watchers from triggering during initial load
       isLoadingInitialNodes = true;
@@ -674,21 +709,8 @@
       // Clear content tracking BEFORE loading to prevent watcher from firing on stale data
       lastSavedContent.clear();
 
-      // CRITICAL FIX: Load the parent node itself first (for header/title display)
-      // This is especially important for nodes viewed as pages where we need the node
-      // content for the title and properties before loading children.
-      // For virtual nodes (like date nodes), getNode returns null which we handle gracefully.
-      //
-      // SAFETY: Only load if node doesn't already exist in memory
-      // This prevents overwriting nodes with pending unsaved changes
-      if (!sharedNodeStore.hasNode(nodeId)) {
-        const parentNode = await tauriCommands.getNode(nodeId);
-        if (parentNode) {
-          // Add parent node to shared store so header can access it
-          // Database source type automatically marks node as persisted
-          sharedNodeStore.setNode(parentNode, { type: 'database', reason: 'loaded-from-db' });
-        }
-      }
+      // OPTIMIZATION: loadChildrenTree fetches parent + children in ONE call
+      // No need for separate getNode() call - eliminates redundant HTTP round-trip
 
       // Cache-first loading strategy: Check cache before hitting database (unless force refresh)
       let allNodes: Node[];
@@ -697,16 +719,24 @@
         const cached = sharedNodeStore.getNodesForParent(nodeId);
         if (cached && cached.length > 0) {
           // Cache hit - use immediately (no database call!)
+          console.log(`[PERF] Children cache hit: ${cached.length} nodes`);
           allNodes = cached;
         } else {
           // Cache miss - fetch from database
           // Use loadChildrenTree which returns nested structure AND registers
           // parent-child edges in structureTree (critical for expand control visibility)
+          // NOTE: This also loads the parent node internally (single HTTP call)
+          const childrenFetchStart = performance.now();
           allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
+          const childrenFetchTime = performance.now() - childrenFetchStart;
+          console.log(`[PERF] Single tree fetch (parent + children): ${childrenFetchTime.toFixed(2)}ms (${allNodes.length} nodes)`);
         }
       } else {
         // Force refresh - bypass cache and fetch from database
+        const childrenFetchStart = performance.now();
         allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
+        const childrenFetchTime = performance.now() - childrenFetchStart;
+        console.log(`[PERF] Force refresh tree fetch: ${childrenFetchTime.toFixed(2)}ms (${allNodes.length} nodes)`);
       }
 
       // Check if we have any nodes at all (reuse allNodes - no redundant cache check needed)
@@ -751,6 +781,9 @@
       // Must be inside try block (not finally) to ensure initializeNodes() has completed
       // Only register once per viewer instance (coordinator handles re-registration gracefully)
       NodeExpansionCoordinator.registerViewer(tabId, nodeManager);
+
+      const loadTotalTime = performance.now() - loadStart;
+      console.log(`[PERF] loadChildrenForParent complete: ${loadTotalTime.toFixed(2)}ms total`);
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children for parent:', nodeId, error);
     } finally {
@@ -1322,10 +1355,15 @@
 
   // Simple reactive access - let template handle reactivity directly
 
-  // Dynamic component loading - create stable component mapping for both viewers and nodes
-  let loadedViewers = $state(new Map<string, unknown>());
+  // Dynamic component loading - stable component mapping for nodes
+  // Pre-populate with core components for instant rendering (no async delay)
   // Proper Svelte 5 reactivity: use object instead of Map for reactive tracking
-  let loadedNodes = $state<Record<string, unknown>>({});
+  let loadedNodes = $state<Record<string, unknown>>({
+    text: TextNode,
+    header: HeaderNode,
+    task: TaskNode,
+    date: DateNode
+  });
 
   // Derive the list of nodes to render - either viewer placeholder or real children
   const nodesToRender = $derived(() => {
@@ -1365,18 +1403,8 @@
     return realChildren.length === 0;
   });
 
-  // Reactive effect: Create/clear placeholder based on derived state
-  // This is the ONLY effect needed - just for instantiating the placeholder object
-  $effect(() => {
-    if (shouldShowPlaceholder && !viewerPlaceholder) {
-      // Create placeholder with stable ID if available
-      const id = placeholderId ?? globalThis.crypto.randomUUID();
-      if (!placeholderId) placeholderId = id;
-
-      // Focus is handled by BaseNode's onMount when autoFocus=true
-      // See nodesToRender derived state which sets autoFocus for placeholder
-    }
-  });
+  // Placeholder creation is handled automatically by viewerPlaceholder $derived
+  // No explicit effect needed - the derived value handles everything reactively
 
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
@@ -1386,116 +1414,50 @@
     return Math.min(...nodes.map((n) => n.depth || 0));
   });
 
-  // Pre-load components when component mounts
-  onMount(async () => {
+  // Set up scroll management when component mounts
+  onMount(() => {
     // NOTE: Viewer registration with NodeExpansionCoordinator moved to loadChildrenForParent()
     // This ensures nodes are loaded BEFORE attempting to restore expansion states
     // Otherwise, all nodes are skipped as "missing" during restoration
 
-    async function preloadComponents() {
-      // Pre-load all known types
-      const knownTypes = ['text', 'header', 'date', 'task', 'ai-chat'];
+    // Core components are now pre-imported at module level for instant rendering
+    // No async loading needed - eliminates the placeholder flash
 
-      for (const nodeType of knownTypes) {
-        // Load viewers
-        if (!loadedViewers.has(nodeType)) {
-          try {
-            const customViewer = await pluginRegistry.getViewer(nodeType);
-            if (customViewer) {
-              loadedViewers.set(nodeType, customViewer);
-            } else {
-              // Fallback to BaseNode for unknown types
-              loadedViewers.set(nodeType, BaseNode);
-            }
-          } catch {
-            loadedViewers.set(nodeType, BaseNode);
-          }
-        }
-
-        // Load node components
-        if (!(nodeType in loadedNodes)) {
-          try {
-            const customNode = await pluginRegistry.getNodeComponent(nodeType);
-            if (customNode) {
-              loadedNodes[nodeType] = customNode;
-            } else {
-              // Fallback to BaseNode for unknown types
-              loadedNodes[nodeType] = BaseNode;
-            }
-          } catch (error) {
-            console.error(`💥 Error loading node component for ${nodeType}:`, error);
-            loadedNodes[nodeType] = BaseNode;
-          }
-        }
-      }
-    }
-
-    await preloadComponents();
-  });
-
-  // Scroll position management: Save scroll position when user scrolls
-  $effect(() => {
-    if (!scrollContainer) return;
-
-    const handleScroll = () => {
-      if (scrollContainer) {
-        saveScrollPosition(viewerId, scrollContainer.scrollTop);
-      }
-    };
-
-    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
-
-    return () => {
-      if (scrollContainer) {
-        scrollContainer.removeEventListener('scroll', handleScroll);
-      }
-    };
-  });
-
-  // Scroll position restoration: Restore when viewer becomes active or mounts
-  $effect(() => {
-    // Restore scroll position when the scroll container is available
-    if (scrollContainer && viewerId) {
+    // Set up scroll position management
+    if (scrollContainer) {
+      // Restore scroll position when viewer becomes active
       const savedPosition = getScrollPosition(viewerId);
-      // Capture current container reference to prevent race conditions
-      const currentContainer = scrollContainer;
       // Use requestAnimationFrame to ensure DOM is ready
       requestAnimationFrame(() => {
-        // Only restore if container hasn't changed (prevents stale updates)
-        if (scrollContainer === currentContainer) {
+        if (scrollContainer) {
           scrollContainer.scrollTop = savedPosition;
         }
       });
+
+      // Set up scroll position saving
+      const handleScroll = () => {
+        if (scrollContainer) {
+          saveScrollPosition(viewerId, scrollContainer.scrollTop);
+        }
+      };
+
+      scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+
+      // Clean up scroll listener on unmount
+      return () => {
+        if (scrollContainer) {
+          scrollContainer.removeEventListener('scroll', handleScroll);
+        }
+      };
     }
   });
 
-  // Reactively load components when node types change
-  $effect(() => {
-    const visibleNodes = nodesToRender();
+  // Scroll position management moved to onMount lifecycle hook above
+  // This eliminates two $effect blocks while preserving all functionality
 
-    // Collect all unique node types
-    const nodeTypes = new Set(visibleNodes.map((node) => node.nodeType));
-
-    // Load components for any new node types
-    for (const nodeType of nodeTypes) {
-      if (!(nodeType in loadedNodes)) {
-        // Load asynchronously
-        (async () => {
-          try {
-            const customNode = await pluginRegistry.getNodeComponent(nodeType);
-            if (customNode) {
-              loadedNodes[nodeType] = customNode;
-            } else {
-              loadedNodes[nodeType] = BaseNode;
-            }
-          } catch (error) {
-            console.error(`💥 Error loading node component for ${nodeType}:`, error);
-            loadedNodes[nodeType] = BaseNode;
-          }
-        })();
-      }
-    }
-  });
+  // Component loading: All core components are pre-imported at module level for instant rendering
+  // Unknown/future node types automatically fall back to BaseNode in the template
+  // No reactive loading needed - eliminates async delays and placeholder flashing
 
   // Clean up on component unmount and flush pending saves
   onDestroy(() => {
