@@ -89,6 +89,14 @@
   // Stable placeholder ID - reused across placeholder recreations to prevent unnecessary component remounts
   let placeholderId = $state<string | null>(null);
 
+  // Lazy getter to generate placeholder ID only when needed (pure function, no side effects in derived)
+  function getPlaceholderId(): string {
+    if (!placeholderId) {
+      placeholderId = globalThis.crypto.randomUUID();
+    }
+    return placeholderId;
+  }
+
   // Viewer-local placeholder (not in sharedNodeStore until it gets content)
   // This placeholder is only visible to this viewer instance
   // Derived from shouldShowPlaceholder instead of being set in $effect
@@ -96,13 +104,8 @@
     // Note: shouldShowPlaceholder is defined later in the file
     // This forward reference is safe in Svelte 5
     if (shouldShowPlaceholder) {
-      // Ensure stable ID exists
-      if (!placeholderId) {
-        placeholderId = globalThis.crypto.randomUUID();
-      }
-
       return {
-        id: placeholderId,
+        id: getPlaceholderId(),
         nodeType: 'text',
         content: '',
         createdAt: new Date().toISOString(),
@@ -113,8 +116,9 @@
       };
     }
 
-    // Clear placeholder ID when not showing placeholder
-    if (!shouldShowPlaceholder && placeholderId) {
+    // When placeholder is hidden, reset the ID for next show cycle
+    // This is safe in derived because we're in the "no placeholder" branch
+    if (placeholderId) {
       placeholderId = null;
     }
 
