@@ -22,7 +22,6 @@
   import { nodeData as reactiveNodeData } from '$lib/stores/reactive-node-data.svelte';
   import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
   import type { Node } from '$lib/types';
-  import type { UpdateSource } from '$lib/types/update-protocol';
   import type { Snippet } from 'svelte';
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
   import { getViewerId, saveScrollPosition, getScrollPosition } from '$lib/stores/scroll-state';
@@ -75,13 +74,6 @@
 
   const nodeManager = services.nodeManager;
 
-  // Define update source for all BaseNodeViewer operations
-  // Using 'viewer' type to indicate updates originating from this UI component
-  const VIEWER_SOURCE: UpdateSource = {
-    type: 'viewer',
-    viewerId: nodeId || 'root'
-  };
-
   // Editable header state (for default header when no custom snippet provided)
   // Initialized in onMount() instead of async $effect to prevent component unmount/remount cycle
   // Uses $state because header is editable (bound to input field)
@@ -89,13 +81,6 @@
 
   // Track last saved content to detect actual changes
   const lastSavedContent = new Map<string, string>();
-
-  // Cancellation flag to prevent database writes after component unmounts
-  let isDestroyed = false;
-
-  // Loading flag to prevent watchers from firing during initial load
-  // Start as true to prevent watcher from firing before loadChildrenForParent() completes
-  let isLoadingInitialNodes = true;
 
   // Placeholder promotion flag - blocks new placeholder creation during async promotion window
   // Prevents race condition where promotion triggers reactive effects before updates complete
@@ -228,14 +213,8 @@
     return flattenNodes(nodeId, 0);
   });
 
-  // Update tab title when headerContent changes (derived from sharedNodeStore)
-  // Using $effect for side effect (calling onTitleChange callback)
-  $effect(() => {
-    // Skip if parent component manages the title (e.g., DateNodeViewer)
-    if (!disableTitleUpdates && headerContent) {
-      updateTabTitle(headerContent);
-    }
-  });
+  // Title update moved to direct calls in handleHeaderInput() and onMount()
+  // No $effect needed - call updateTabTitle() when headerContent actually changes
 
   /**
    * Update tab title from header content
@@ -275,16 +254,7 @@
     }
   }
 
-  // Track pending content saves for new nodes (keyed by node ID)
-  // Structural updates must wait for these to complete to avoid FOREIGN KEY errors
-  const pendingContentSavePromises = new Map<string, Promise<void>>();
-
-  // Timeout configuration for promise coordination
-  const CONTENT_SAVE_TIMEOUT_MS = 5000; // 5 seconds
-
-  // Explicit coordination: Promise that resolves when structural updates complete
-  // The deletion watcher awaits this to ensure children are reassigned before parent deletion
-  let pendingStructuralUpdatesPromise: Promise<void> | null = null;
+  // Content saves and structural updates now handled via events - no watcher coordination needed
 
   /**
    * Node types that have structured content and cannot accept arbitrary merges
@@ -396,214 +366,15 @@
     );
   }
 
-  // ============================================================================
-  // CONTENT SAVE WATCHER - Initiates content saves for new nodes
-  // ============================================================================
-  // This watcher creates a promise that the structural watcher awaits, ensuring
-  // new nodes are saved to the database before structural updates reference them.
-  // This prevents FOREIGN KEY constraint errors.
-  // ============================================================================
-  $effect.pre(() => {
-    if (!nodeId) {
-      return;
-    }
+  // Content saving is handled via contentChanged events from BaseNode components
+  // No $effect watcher needed - events trigger saves directly through handleContentChanged
+  // (This was a redundant watcher that duplicated event-driven saves)
 
-    // Skip if we're still loading initial nodes from database
-    if (isLoadingInitialNodes) {
-      return;
-    }
+  // Deletion detection and structure tracking handled via handleDeleteNode event
+  // No $effect needed - explicit deletion events drive all cleanup logic
+  // Structure tracking happens in handleCreateNewNode, handleIndentNode, handleOutdentNode
 
-    // Create a new promise for this content save phase
-    // The structural watcher will await this before processing updates
-    let resolvePhase: () => void;
-    // TODO: Implement content save phase tracking if needed
-    // This was part of the contentSavePhasePromise coordination system
-
-    const nodes = visibleNodesFromStores;
-
-    for (const node of nodes) {
-      // Skip placeholder nodes
-      if (node.isPlaceholder) {
-        continue;
-      }
-
-      // Only save if content has changed since last save
-      const lastContent = lastSavedContent.get(node.id);
-      if (node.content.trim() && node.content !== lastContent) {
-        // Check if this is a brand new node (never saved before)
-        const isNewNode = lastContent === undefined;
-
-        if (isNewNode) {
-          // Save immediately without debounce - structural updates may need to reference this node
-          // First ensure ancestors are persisted, then save this node
-          const savePromise = (async () => {
-            // Check if component was destroyed before starting save
-            if (isDestroyed) return;
-
-            await ensureAncestorsPersisted(node.id);
-
-            // Check again after async operation
-            if (isDestroyed) return;
-
-            // Create/update node immediately (was saveNodeImmediately)
-            const fullNode: Node = {
-              id: node.id,
-              nodeType: node.nodeType,
-              content: node.content,
-              createdAt: node.createdAt || new Date().toISOString(),
-              modifiedAt: new Date().toISOString(),
-              version: node.version || 1, // Use existing version or default to 1 for new nodes
-              properties: node.properties || {},
-              mentions: node.mentions || []
-            };
-            sharedNodeStore.setNode(fullNode, VIEWER_SOURCE);
-          })();
-
-          // Clean up Map entry when save completes (success or failure)
-          savePromise.finally(() => {
-            pendingContentSavePromises.delete(node.id);
-            lastSavedContent.set(node.id, node.content);
-          });
-
-          pendingContentSavePromises.set(node.id, savePromise);
-        } else {
-          // Existing node - update content (triggers debounced persistence automatically)
-          if (!isDestroyed) {
-            sharedNodeStore.updateNode(
-              node.id,
-              { content: node.content, nodeType: node.nodeType },
-              VIEWER_SOURCE
-            );
-            lastSavedContent.set(node.id, node.content);
-          }
-        }
-      }
-    }
-
-    // Mark content save phase as complete by resolving the promise
-    // Use Promise.resolve().then() to ensure this happens after all synchronous code
-    Promise.resolve().then(() => resolvePhase());
-  });
-
-  // Track node IDs to detect deletions and manage structure tracking
-  // Use a regular variable, not $state, to avoid infinite loops
-  let previousNodeIds = new Set<string>();
-
-  $effect(() => {
-    if (!nodeId) return;
-
-    const visibleNodes = visibleNodesFromStores;
-    const currentNodeIds = new Set(visibleNodes.map((n) => n.id));
-
-    // Track nodes for cleanup purposes (merged from Effect #4)
-    for (const node of visibleNodes) {
-      trackStructureChange(node.id);
-      // Mark as persisted if it exists in database
-      if (!persistedStructure.has(node.id) && sharedNodeStore.isNodePersisted(node.id)) {
-        persistedStructure.add(node.id);
-      }
-    }
-
-    // Skip the first run (when previousNodeIds is empty)
-    if (previousNodeIds.size > 0) {
-      // Detect deleted nodes by comparing with previous state
-      const deletedNodeIds: string[] = [];
-      for (const prevId of previousNodeIds) {
-        if (!currentNodeIds.has(prevId) && !nodeManager.findNode(prevId)) {
-          deletedNodeIds.push(prevId);
-        }
-      }
-
-      // Delete nodes through the global write queue
-      // The queue ensures deletions happen after any pending structural updates
-      if (deletedNodeIds.length > 0) {
-        // Issue #575: Simplified - beforeSiblingId tracking removed
-        // Just clean up previousStructure entries for deleted nodes
-        for (const deletedId of deletedNodeIds) {
-          previousStructure.delete(deletedId);
-          persistedStructure.delete(deletedId);
-        }
-
-        (async () => {
-          // CRITICAL: Await structural updates to complete before deleting
-          // This ensures children are reassigned BEFORE parent deletion triggers CASCADE
-          if (pendingStructuralUpdatesPromise) {
-            try {
-              await Promise.race([
-                pendingStructuralUpdatesPromise,
-                new Promise((_, reject) =>
-                  setTimeout(
-                    () => reject(new Error('Timeout waiting for structural updates')),
-                    CONTENT_SAVE_TIMEOUT_MS
-                  )
-                )
-              ]);
-            } catch (error) {
-              console.warn(
-                '[BaseNodeViewer] Timeout or error waiting for structural updates:',
-                error
-              );
-            }
-          }
-
-          // Now safe to delete nodes - children have been reassigned
-          // Delegate to SharedNodeStore
-          for (const nodeId of deletedNodeIds) {
-            sharedNodeStore.deleteNode(nodeId, VIEWER_SOURCE);
-          }
-        })();
-      }
-    }
-
-    // Clean up tracking for nodes that no longer exist (merged from Effect #4)
-    for (const trackedNodeId of previousStructure) {
-      if (!currentNodeIds.has(trackedNodeId)) {
-        previousStructure.delete(trackedNodeId);
-      }
-    }
-
-    // Update previous state (mutate the Set instead of replacing it)
-    previousNodeIds.clear();
-    for (const id of currentNodeIds) {
-      previousNodeIds.add(id);
-    }
-  });
-
-  // ============================================================================
-  // STRUCTURAL CHANGE WATCHER - Persists structural changes
-  // ============================================================================
-  // This watcher awaits contentSavePhasePromise to ensure new nodes are saved
-  // before structural updates reference them. This prevents FOREIGN KEY errors.
-  //
-  // ISSUE #479: Track PERSISTED structure vs in-memory structure
-  // When Enter+Tab happens rapidly, node is created with wrong parentId, then
-  // immediately indented in SharedNodeStore. The structural watcher must detect
-  // this mismatch and persist the correction.
-  // ============================================================================
-  // previousStructure is updated in three places (all necessary):
-  // 1. Deletion watcher (line ~218): Cleans up deleted nodes
-  // 2. This watcher (line ~388): Tracks nodes on first sight
-  // 3. This watcher (line ~490): Tracks successfully persisted structural changes (source of truth)
-  // Issue #575: Simplified - tracks node presence for cleanup (no beforeSiblingId)
-  let previousStructure = new Set<string>();
-
-  // Track what structure was actually persisted to database (#479)
-  // Issue #575: Simplified - only tracks node presence
-  let persistedStructure = new Set<string>();
-
-  // Issue #575: Sibling index removed - sibling ordering now handled by backend
-
-  /**
-   * Issue #575: Simplified - just tracks node presence for cleanup
-   * Original function tracked beforeSiblingId changes
-   */
-  function trackStructureChange(nodeId: string): void {
-    previousStructure.add(nodeId);
-  }
-
-  // Effect #4 ELIMINATED - merged into Effect #3 above (deletion detection)
-  // This reduces redundant tracking and consolidates structure management
-  // Issue #575: Sibling ordering is now handled by the backend's sibling_order column
+  // Structure tracking eliminated - handled via explicit event handlers (create, indent, outdent, delete)
 
   /**
    * Helper function to promote a viewer-local placeholder to a real node
@@ -641,10 +412,7 @@
 
   async function loadChildrenForParent(nodeId: string, forceRefresh = false) {
     try {
-      // Set loading flag to prevent watchers from triggering during initial load
-      isLoadingInitialNodes = true;
-
-      // Clear content tracking BEFORE loading to prevent watcher from firing on stale data
+      // Clear content tracking before loading
       lastSavedContent.clear();
 
       // CRITICAL FIX: Load the parent node itself first (for header/title display)
@@ -710,26 +478,10 @@
       NodeExpansionCoordinator.registerViewer(tabId, nodeManager);
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children for parent:', nodeId, error);
-    } finally {
-      // Clear loading flag after nodes are initialized
-      isLoadingInitialNodes = false;
     }
   }
 
-  /**
-   * Recursively ensure all placeholder ancestors are persisted before saving a node
-   * This handles the case where a user creates nested placeholder nodes, then fills in
-   * a child before filling in the parent.
-   *
-   * NOTE: Ancestor persistence now handled by PersistenceCoordinator dependencies.
-   * When a node is saved, coordinator automatically waits for parent dependencies.
-   * This function kept for backward compatibility but is now a no-op.
-   */
-  async function ensureAncestorsPersisted(_nodeId: string): Promise<void> {
-    // No-op: PersistenceCoordinator handles dependency ordering automatically
-    // via the dependencies array in persist() calls
-    return Promise.resolve();
-  }
+  // ensureAncestorsPersisted removed - no longer needed without content watcher
 
   // Focus handling function with proper cursor positioning using tree walker
   function requestNodeFocus(nodeId: string, position: number) {
@@ -1334,6 +1086,9 @@
     return Math.min(...nodes.map((n) => n.depth || 0));
   });
 
+  // Track scroll cleanup function
+  let scrollCleanup: (() => void) | undefined;
+
   // Load children and pre-load components when component mounts
   onMount(async () => {
     // Load children for parent node first (makes data available synchronously via sharedNodeStore)
@@ -1345,6 +1100,10 @@
       const node = sharedNodeStore.getNode(nodeId);
       if (node) {
         headerContent = node.content || '';
+        // Update tab title after loading (replaces title update $effect)
+        if (!disableTitleUpdates && headerContent) {
+          updateTabTitle(headerContent);
+        }
       }
     }
 
@@ -1391,72 +1150,60 @@
     }
 
     await preloadComponents();
-  });
 
-  // Scroll position management: Save and restore scroll position
-  // Combined into single $effect to eliminate redundancy
-  $effect(() => {
-    if (!scrollContainer || !viewerId) return;
-
-    // Restore scroll position when scroll container becomes available
-    const savedPosition = getScrollPosition(viewerId);
-    // Capture current container reference to prevent race conditions
-    const currentContainer = scrollContainer;
-    // Use requestAnimationFrame to ensure DOM is ready
-    requestAnimationFrame(() => {
-      // Only restore if container hasn't changed (prevents stale updates)
-      if (scrollContainer === currentContainer) {
-        scrollContainer.scrollTop = savedPosition;
+    // Setup scroll management - wait for scrollContainer to be bound
+    // Poll until scrollContainer is available (bind:this happens after onMount starts)
+    const setupScrollManagement = () => {
+      if (!scrollContainer || !viewerId) {
+        // Not ready yet, check again on next tick
+        requestAnimationFrame(setupScrollManagement);
+        return;
       }
-    });
 
-    // Setup scroll event listener to save position as user scrolls
-    const handleScroll = () => {
-      if (scrollContainer) {
-        saveScrollPosition(viewerId, scrollContainer.scrollTop);
-      }
+      // Restore scroll position when scroll container becomes available
+      const savedPosition = getScrollPosition(viewerId);
+      scrollContainer.scrollTop = savedPosition;
+
+      // Setup scroll event listener to save position as user scrolls
+      const handleScroll = () => {
+        if (scrollContainer) {
+          saveScrollPosition(viewerId, scrollContainer.scrollTop);
+        }
+      };
+
+      scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+
+      // Store cleanup function
+      scrollCleanup = () => {
+        if (scrollContainer) {
+          scrollContainer.removeEventListener('scroll', handleScroll);
+        }
+      };
     };
 
-    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
-
-    // Cleanup: Remove event listener when effect re-runs or component unmounts
-    return () => {
-      if (scrollContainer) {
-        scrollContainer.removeEventListener('scroll', handleScroll);
-      }
-    };
+    // Start polling for scrollContainer
+    setupScrollManagement();
   });
 
-  // Reactively load components when node types change
-  $effect(() => {
-    const visibleNodes = nodesToRender();
+  // Scroll management moved to onMount() - no $effect needed!
 
-    // Collect all unique node types
-    const nodeTypes = new Set(visibleNodes.map((node) => node.nodeType));
+  // Component lazy loading eliminated - all known types pre-loaded in onMount()
+  // Unknown types fall back to BaseNode synchronously via getNodeComponentSync helper below
 
-    // Load components for any new node types
-    for (const nodeType of nodeTypes) {
-      if (!(nodeType in loadedNodes)) {
-        // Load asynchronously
-        (async () => {
-          try {
-            const customNode = await pluginRegistry.getNodeComponent(nodeType);
-            if (customNode) {
-              loadedNodes[nodeType] = customNode;
-            } else {
-              loadedNodes[nodeType] = BaseNode;
-            }
-          } catch (error) {
-            console.error(`💥 Error loading node component for ${nodeType}:`, error);
-            loadedNodes[nodeType] = BaseNode;
-          }
-        })();
-      }
+  // Synchronous component getter with fallback
+  function getNodeComponentSync(nodeType: string) {
+    if (nodeType in loadedNodes) {
+      return loadedNodes[nodeType];
     }
-  });
+    // Unknown type - return BaseNode immediately (no async loading)
+    return BaseNode;
+  }
 
   // Clean up on component unmount and flush pending saves
   onDestroy(() => {
+    // Clean up scroll listener
+    scrollCleanup?.();
+
     // Unregister this viewer from the expansion coordinator
     NodeExpansionCoordinator.unregisterViewer(tabId);
 
@@ -1468,13 +1215,6 @@
 
     // Note: PersistenceCoordinator removed in Issue #558
     // SimplePersistenceCoordinator handles debouncing inline in shared-node-store
-
-    // Set cancellation flag to prevent stale writes
-    isDestroyed = true;
-
-    // Clear pending promise tracking to prevent memory leaks
-    pendingContentSavePromises.clear();
-    pendingStructuralUpdatesPromise = null;
   });
 </script>
 
@@ -1537,9 +1277,8 @@
           {/if}
 
           <!-- Node viewer with stable component references - all nodes use plugin registry -->
-          {#if node.nodeType in loadedNodes}
-            {#key node.id}
-              {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
+          {#key node.id}
+            {@const NodeComponent = getNodeComponentSync(node.nodeType) as typeof BaseNode}
               {@const nodeMetadata = extractNodeMetadata(node)}
               <NodeComponent
                 nodeId={node.id}
@@ -1702,104 +1441,7 @@
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
               />
-            {/key}
-          {:else}
-            <!-- Final fallback to BaseNode with key for re-rendering -->
-            {#key `${node.id}-${node.nodeType}`}
-              <BaseNode
-                nodeId={node.id}
-                nodeType={node.nodeType}
-                autoFocus={node.autoFocus}
-                content={node.content}
-                children={node.children}
-                metadata={node.properties || {}}
-                editableConfig={{ allowMultiline: true }}
-                on:createNewNode={handleCreateNewNode}
-                on:indentNode={handleIndentNode}
-                on:outdentNode={handleOutdentNode}
-                on:navigateArrow={handleArrowNavigation}
-                on:contentChanged={(e: CustomEvent<{ content: string }>) => {
-                  const content = e.detail.content;
-
-                  // Update node content (placeholder flag is handled automatically)
-                  nodeManager.updateNodeContent(node.id, content);
-                }}
-                on:slashCommandSelected={(
-                  e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
-                ) => {
-                  // Use cursor position from event (captured by TextareaController)
-                  const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                  // CRITICAL: Set editing state BEFORE updating node type
-                  // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
-                  console.log('[BaseNodeViewer] slashCommandSelected:', {
-                    nodeId: node.id,
-                    newType: e.detail.nodeType,
-                    isPlaceholder: node.isPlaceholder,
-                    hasViewerPlaceholder: !!viewerPlaceholder
-                  });
-
-                  // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
-                  // They must persist to database, not just update locally
-                  // Use same batching logic as real nodes to ensure atomic persistence
-                  if (
-                    node.isPlaceholder &&
-                    nodeId &&
-                    viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id
-                  ) {
-                    console.log(
-                      '[BaseNodeViewer] Promoting placeholder to real node with type:',
-                      e.detail.nodeType
-                    );
-                    // Promote placeholder to real node with the new type
-                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
-                      content: node.content || '',
-                      nodeType: e.detail.nodeType
-                    });
-
-                    // Add to store and trigger persistence
-                    // Note: LIVE SELECT handles parent-child relationship via edge:created events
-                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                    // Clear placeholder ID (causes $derived.by() to return null for viewerPlaceholder)
-                    placeholderId = null;
-                  } else {
-                    console.log('[BaseNodeViewer] Updating node type for real node');
-                    // For real nodes, update node type with full persistence
-                    nodeManager.updateNodeType(node.id, e.detail.nodeType);
-                  }
-                }}
-                on:iconClick={handleIconClick}
-                on:taskStateChanged={(e) => {
-                  const { nodeId, state } = e.detail;
-
-                  // Map UI state to schema enum value
-                  let schemaStatus: string;
-                  switch (state) {
-                    case 'pending':
-                      schemaStatus = 'OPEN';
-                      break;
-                    case 'inProgress':
-                      schemaStatus = 'IN_PROGRESS';
-                      break;
-                    case 'completed':
-                      schemaStatus = 'DONE';
-                      break;
-                    default:
-                      schemaStatus = 'OPEN';
-                  }
-
-                  // Update using schema-aware helper (handles nested format correctly)
-                  updateSchemaField(nodeId, 'status', schemaStatus);
-                }}
-                on:combineWithPrevious={handleCombineWithPrevious}
-                on:deleteNode={handleDeleteNode}
-              />
-            {/key}
-          {/if}
+          {/key}
         </div>
       </div>
     {/each}
