@@ -22,8 +22,7 @@ import {
   type DeleteResult,
   type EdgeRecord,
   type NodeQuery,
-  type CreateContainerInput,
-  type SaveNodeWithParentInput
+  type CreateContainerInput
 } from './backend-adapter';
 import type { Node, NodeWithChildren } from '$lib/types';
 
@@ -34,8 +33,7 @@ export type {
   DeleteResult,
   EdgeRecord,
   NodeQuery,
-  CreateContainerInput,
-  SaveNodeWithParentInput
+  CreateContainerInput
 };
 
 // ============================================================================
@@ -108,16 +106,6 @@ export async function moveNode(
   insertAfterNodeId?: string | null
 ): Promise<void> {
   return backendAdapter.moveNode(nodeId, newParentId, insertAfterNodeId ?? null);
-}
-
-/**
- * Reorder a node among its siblings
- */
-export async function reorderNode(
-  nodeId: string,
-  beforeSiblingId: string | null
-): Promise<void> {
-  return backendAdapter.reorderNode(nodeId, beforeSiblingId);
 }
 
 /**
@@ -201,9 +189,3 @@ export async function createContainerNode(input: CreateContainerInput): Promise<
   return backendAdapter.createContainerNode(input);
 }
 
-/**
- * Save node with automatic parent creation
- */
-export async function saveNodeWithParent(input: SaveNodeWithParentInput): Promise<void> {
-  return backendAdapter.saveNodeWithParent(input);
-}

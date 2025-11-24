@@ -79,13 +79,6 @@ export interface CreateContainerInput {
   mentionedBy?: string;
 }
 
-export interface SaveNodeWithParentInput {
-  nodeId: string;
-  content: string;
-  nodeType: string;
-  parentId: string;
-  beforeSiblingId?: string | null;
-}
 
 // ============================================================================
 // Backend Adapter Interface
@@ -103,7 +96,6 @@ export interface BackendAdapter {
   getDescendants(rootNodeId: string): Promise<Node[]>;
   getChildrenTree(parentId: string): Promise<NodeWithChildren | null>;
   moveNode(nodeId: string, newParentId: string | null, insertAfterNodeId: string | null): Promise<void>;
-  reorderNode(nodeId: string, beforeSiblingId: string | null): Promise<void>;
   getAllEdges(): Promise<EdgeRecord[]>;
 
   // Mentions
@@ -119,7 +111,6 @@ export interface BackendAdapter {
 
   // Composite operations
   createContainerNode(input: CreateContainerInput): Promise<string>;
-  saveNodeWithParent(input: SaveNodeWithParentInput): Promise<void>;
 
   // Schema operations
   getAllSchemas(): Promise<Array<SchemaDefinition & { id: string }>>;
@@ -217,15 +208,6 @@ class TauriAdapter implements BackendAdapter {
     });
   }
 
-  async reorderNode(nodeId: string, beforeSiblingId: string | null): Promise<void> {
-    const invoke = await this.getInvoke();
-    // Tauri 2.x auto-converts snake_case to camelCase
-    return invoke<void>('reorder_node', {
-      nodeId,
-      beforeSiblingId
-    });
-  }
-
   async getAllEdges(): Promise<EdgeRecord[]> {
     const invoke = await this.getInvoke();
     return invoke<EdgeRecord[]>('get_all_edges', {});
@@ -286,20 +268,6 @@ class TauriAdapter implements BackendAdapter {
         node_type: input.nodeType,
         properties: input.properties ?? {},
         mentioned_by: input.mentionedBy
-      }
-    });
-  }
-
-  async saveNodeWithParent(input: SaveNodeWithParentInput): Promise<void> {
-    const invoke = await this.getInvoke();
-    // Keep snake_case for struct fields to match Rust serde expectations
-    return invoke<void>('save_node_with_parent', {
-      input: {
-        node_id: input.nodeId,
-        content: input.content,
-        node_type: input.nodeType,
-        parent_id: input.parentId,
-        before_sibling_id: input.beforeSiblingId
       }
     });
   }
@@ -453,11 +421,6 @@ class HttpAdapter implements BackendAdapter {
     await this.handleResponse<void>(response);
   }
 
-  async reorderNode(_nodeId: string, _beforeSiblingId: string | null): Promise<void> {
-    // Reordering via HTTP not yet implemented - structure changes use fractional ordering
-    console.warn('[HttpAdapter] reorderNode not implemented for HTTP mode');
-  }
-
   async getAllEdges(): Promise<EdgeRecord[]> {
     // Not directly exposed via dev-proxy - return empty for browser mode
     // Structure is managed via LIVE SELECT in Tauri mode
@@ -524,18 +487,6 @@ class HttpAdapter implements BackendAdapter {
       properties: input.properties,
       mentions: [],
       parentId: null
-    });
-  }
-
-  async saveNodeWithParent(input: SaveNodeWithParentInput): Promise<void> {
-    // Create node first, then set parent
-    await this.createNode({
-      id: input.nodeId,
-      nodeType: input.nodeType,
-      content: input.content,
-      properties: {},
-      mentions: [],
-      parentId: input.parentId
     });
   }
 
@@ -634,7 +585,6 @@ class MockAdapter implements BackendAdapter {
     return [];
   }
   async moveNode(_nodeId: string, _newParentId: string | null, _insertAfterNodeId: string | null): Promise<void> {}
-  async reorderNode(_nodeId: string, _beforeSiblingId: string | null): Promise<void> {}
   async getAllEdges(): Promise<EdgeRecord[]> {
     return [];
   }
@@ -658,7 +608,6 @@ class MockAdapter implements BackendAdapter {
   async createContainerNode(_input: CreateContainerInput): Promise<string> {
     return 'mock-container-id';
   }
-  async saveNodeWithParent(_input: SaveNodeWithParentInput): Promise<void> {}
   async getAllSchemas(): Promise<Array<SchemaDefinition & { id: string }>> {
     return [];
   }
