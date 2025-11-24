@@ -147,6 +147,7 @@ class TauriAdapter implements BackendAdapter {
 
   async createNode(input: CreateNodeInput | Node): Promise<string> {
     const invoke = await this.getInvoke();
+    // Keep snake_case for struct fields to match Rust serde expectations
     const nodeInput = {
       id: input.id,
       node_type: input.nodeType,
@@ -175,7 +176,8 @@ class TauriAdapter implements BackendAdapter {
 
   async getChildren(parentId: string): Promise<Node[]> {
     const invoke = await this.getInvoke();
-    return invoke<Node[]>('get_children', { parent_id: parentId });
+    // Tauri 2.x auto-converts snake_case to camelCase
+    return invoke<Node[]>('get_children', { parentId });
   }
 
   async getDescendants(rootNodeId: string): Promise<Node[]> {
@@ -196,7 +198,8 @@ class TauriAdapter implements BackendAdapter {
 
   async getChildrenTree(parentId: string): Promise<NodeWithChildren | null> {
     const invoke = await this.getInvoke();
-    const result = await invoke<NodeWithChildren | Record<string, never>>('get_children_tree', { parent_id: parentId });
+    // Tauri 2.x auto-converts snake_case to camelCase
+    const result = await invoke<NodeWithChildren | Record<string, never>>('get_children_tree', { parentId });
     // Backend returns {} for non-existent parent, normalize to null
     if (!result || Object.keys(result).length === 0) {
       return null;
@@ -206,18 +209,20 @@ class TauriAdapter implements BackendAdapter {
 
   async moveNode(nodeId: string, newParentId: string | null, insertAfterNodeId: string | null): Promise<void> {
     const invoke = await this.getInvoke();
+    // Tauri 2.x auto-converts snake_case to camelCase
     return invoke<void>('move_node', {
-      node_id: nodeId,
-      new_parent_id: newParentId,
-      insert_after_node_id: insertAfterNodeId
+      nodeId,
+      newParentId,
+      insertAfterNodeId
     });
   }
 
   async reorderNode(nodeId: string, beforeSiblingId: string | null): Promise<void> {
     const invoke = await this.getInvoke();
+    // Tauri 2.x auto-converts snake_case to camelCase
     return invoke<void>('reorder_node', {
-      node_id: nodeId,
-      before_sibling_id: beforeSiblingId
+      nodeId,
+      beforeSiblingId
     });
   }
 
@@ -228,33 +233,38 @@ class TauriAdapter implements BackendAdapter {
 
   async createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
     const invoke = await this.getInvoke();
-    return invoke<void>('create_mention', {
-      mentioning_node_id: mentioningNodeId,
-      mentioned_node_id: mentionedNodeId
+    // Tauri 2.x auto-converts snake_case to camelCase
+    return invoke<void>('create_node_mention', {
+      mentioningNodeId,
+      mentionedNodeId
     });
   }
 
   async deleteMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
     const invoke = await this.getInvoke();
-    return invoke<void>('delete_mention', {
-      mentioning_node_id: mentioningNodeId,
-      mentioned_node_id: mentionedNodeId
+    // Tauri 2.x auto-converts snake_case to camelCase
+    return invoke<void>('delete_node_mention', {
+      mentioningNodeId,
+      mentionedNodeId
     });
   }
 
   async getOutgoingMentions(nodeId: string): Promise<string[]> {
     const invoke = await this.getInvoke();
-    return invoke<string[]>('get_outgoing_mentions', { node_id: nodeId });
+    // Tauri 2.x auto-converts snake_case to camelCase
+    return invoke<string[]>('get_outgoing_mentions', { nodeId });
   }
 
   async getIncomingMentions(nodeId: string): Promise<string[]> {
     const invoke = await this.getInvoke();
-    return invoke<string[]>('get_incoming_mentions', { node_id: nodeId });
+    // Tauri 2.x auto-converts snake_case to camelCase
+    return invoke<string[]>('get_incoming_mentions', { nodeId });
   }
 
   async getMentioningContainers(nodeId: string): Promise<string[]> {
     const invoke = await this.getInvoke();
-    return invoke<string[]>('get_mentioning_containers', { node_id: nodeId });
+    // Tauri 2.x auto-converts snake_case Rust params to camelCase JS params
+    return invoke<string[]>('get_mentioning_roots', { nodeId });
   }
 
   async queryNodes(query: NodeQuery): Promise<Node[]> {
@@ -269,7 +279,8 @@ class TauriAdapter implements BackendAdapter {
 
   async createContainerNode(input: CreateContainerInput): Promise<string> {
     const invoke = await this.getInvoke();
-    return invoke<string>('create_container_node', {
+    // Keep snake_case for struct fields to match Rust serde expectations
+    return invoke<string>('create_root_node', {
       input: {
         content: input.content,
         node_type: input.nodeType,
@@ -281,6 +292,7 @@ class TauriAdapter implements BackendAdapter {
 
   async saveNodeWithParent(input: SaveNodeWithParentInput): Promise<void> {
     const invoke = await this.getInvoke();
+    // Keep snake_case for struct fields to match Rust serde expectations
     return invoke<void>('save_node_with_parent', {
       input: {
         node_id: input.nodeId,
@@ -481,7 +493,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getMentioningContainers(nodeId: string): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentions/containers`);
+    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentions/roots`);
     return await this.handleResponse<string[]>(response);
   }
 

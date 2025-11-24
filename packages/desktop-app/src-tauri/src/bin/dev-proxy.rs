@@ -429,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
             get(get_incoming_mentions),
         )
         .route(
-            "/api/nodes/:id/mentions/containers",
+            "/api/nodes/:id/mentions/roots",
             get(get_mentioning_containers),
         )
         // Schema endpoints

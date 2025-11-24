@@ -166,9 +166,9 @@ export async function getIncomingMentions(nodeId: string): Promise<string[]> {
 }
 
 /**
- * Get containers of nodes that mention the target node
+ * Get root nodes that mention the target node (backlinks at root level)
  */
-export async function getMentioningContainers(nodeId: string): Promise<string[]> {
+export async function getMentioningRoots(nodeId: string): Promise<string[]> {
   return backendAdapter.getMentioningContainers(nodeId);
 }
 

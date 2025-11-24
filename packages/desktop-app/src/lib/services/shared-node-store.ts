@@ -1083,7 +1083,6 @@ export class SharedNodeStore {
     // Check if a load is already in progress for this parent
     const existingLoad = this.pendingTreeLoads.get(parentId);
     if (existingLoad) {
-      console.log(`[SharedNodeStore] Reusing pending load for parent: ${parentId}`);
       return existingLoad;
     }
 
