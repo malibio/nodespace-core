@@ -40,20 +40,23 @@
     }
   }
 
-  // Derive viewer component for active tab - replaces {@const} in template
+  // Derive viewer component for active tab - use non-reactive snapshot to break tracking
   const ViewerComponent = $derived.by(() => {
     const nodeType = activeTab?.content?.nodeType ?? 'text';
-    return (viewerComponents.get(nodeType) ?? BaseNodeViewer) as typeof BaseNodeViewer;
+    const components = $state.snapshot(viewerComponents);
+    return (components.get(nodeType) ?? BaseNodeViewer) as typeof BaseNodeViewer;
   });
 
   const isCustomViewer = $derived.by(() => {
     const nodeType = activeTab?.content?.nodeType ?? 'text';
-    return viewerComponents.has(nodeType);
+    const components = $state.snapshot(viewerComponents);
+    return components.has(nodeType);
   });
 
   const loadError = $derived.by(() => {
     const nodeType = activeTab?.content?.nodeType ?? 'text';
-    return viewerLoadErrors.get(nodeType);
+    const errors = $state.snapshot(viewerLoadErrors);
+    return errors.get(nodeType);
   });
 
   const shouldDisableTitleUpdates = $derived(!isCustomViewer && (activeTab?.content?.nodeType ?? 'text') === 'date');
