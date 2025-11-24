@@ -272,9 +272,32 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // In Tauri mode, LIVE SELECT events will also fire but addChild handles duplicates gracefully
     // In browser mode, this is the only way the tree gets updated (no LIVE SELECT)
     if (newParentId) {
-      // Calculate order: append after all existing children
-      const existingChildren = structureTree.getChildren(newParentId);
-      const order = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+      // Calculate order: insert right after afterNodeId in the sibling list
+      const childrenWithOrder = structureTree.getChildrenWithOrder(newParentId);
+      const afterNodeIndex = childrenWithOrder.findIndex(c => c.nodeId === afterNodeId);
+
+      let order: number;
+      if (insertAtBeginning) {
+        // Insert at the beginning - use order before first child
+        order = childrenWithOrder.length > 0 ? childrenWithOrder[0].order - 1.0 : 1.0;
+      } else if (afterNodeIndex >= 0) {
+        // Insert right after afterNodeId
+        const afterNodeOrder = childrenWithOrder[afterNodeIndex].order;
+        const nextSibling = childrenWithOrder[afterNodeIndex + 1];
+        if (nextSibling) {
+          // Fractional order between afterNode and nextSibling
+          order = (afterNodeOrder + nextSibling.order) / 2;
+        } else {
+          // afterNode is last, append after it
+          order = afterNodeOrder + 1.0;
+        }
+      } else {
+        // afterNodeId not found in children, append at end
+        order = childrenWithOrder.length > 0
+          ? childrenWithOrder[childrenWithOrder.length - 1].order + 1.0
+          : 1.0;
+      }
+
       structureTree.addInMemoryRelationship(newParentId, nodeId, order);
     }
 

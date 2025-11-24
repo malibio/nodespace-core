@@ -945,7 +945,36 @@
       return;
     }
 
-    // Verify the target node exists
+    // CRITICAL FIX: Handle Enter key on viewer-local placeholder
+    // The placeholder is not in nodeManager.nodes until promoted
+    // If afterNodeId matches the placeholder, promote it first
+    const currentPlaceholder = viewerPlaceholder;
+    if (currentPlaceholder && afterNodeId === currentPlaceholder.id && nodeId) {
+      console.log('[handleCreateNewNode] Promoting placeholder before creating new node:', afterNodeId);
+
+      // Set promotion flag to prevent duplicate placeholder creation
+      isPromoting = true;
+
+      // Promote placeholder to real node (blank content is fine)
+      const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
+        content: currentContent ?? ''
+      });
+
+      // Add to shared store
+      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
+
+      // Add to structure tree for immediate visibility
+      reactiveStructureTree.addChild({
+        parentId: nodeId,
+        childId: promotedNode.id,
+        order: Date.now()
+      });
+
+      // Clear promotion flag
+      isPromoting = false;
+    }
+
+    // Verify the target node exists (should now exist after promotion)
     if (!nodeManager.nodes.has(afterNodeId)) {
       console.error('Target node does not exist:', afterNodeId);
       return;
