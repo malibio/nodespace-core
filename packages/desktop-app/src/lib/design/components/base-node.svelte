@@ -123,7 +123,7 @@
   // DOM element - Svelte bind:this assignment
   let textareaElement = $state<HTMLTextAreaElement | undefined>(undefined);
 
-  // Controller will be initialized after controllerEvents is defined
+  // Controller created via factory with reactive prop syncing
   let controller = $state<TextareaControllerState | null>(null);
 
   // View mode element for rendering markdown
@@ -715,7 +715,8 @@
     }
   };
 
-  // Initialize controller on mount (after controllerEvents is defined)
+  // Initialize controller via factory (uses runes for reactive prop syncing)
+  // Factory eliminates need for manual content/config sync effects
   onMount(() => {
     controller = createTextareaController(
       () => textareaElement,
@@ -728,29 +729,22 @@
     );
   });
 
-  // Cleanup controller on destroy
   onDestroy(() => {
     if (controller) {
       controller.destroy();
     }
   });
 
-  // Watch for element changes and initialize controller
-  // Controller lifecycle is now managed by reactive factory function
+  // Watch for element initialization to call controller.initialize()
   $effect(() => {
     const element = textareaElement;
     if (element && controller) {
-      // CRITICAL FIX: Focus if isEditing OR autoFocus is true
-      // This ensures placeholder→real node promotion preserves focus
       const shouldFocus = autoFocus || isEditing;
-
-      // Initialize textarea content
+      // Only initialize if content is empty (first mount)
       if (controller.getMarkdownContent() === '') {
         controller.updateContent(content);
       }
-
-      // Set initialization flag for cursor positioning
-      if (shouldFocus || autoFocus) {
+      if (shouldFocus) {
         setTimeout(() => controller?.focus(), 10);
       }
     }

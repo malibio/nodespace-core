@@ -892,7 +892,149 @@ export function createTextareaController(
     };
   });
 
-  // Return the controller directly (simplified architecture)
-  // The factory wraps the controller with reactive effects for prop syncing
-  return controller as unknown as TextareaControllerState;
+  // Return reactive state interface that delegates to controller
+  // This allows base-node.svelte to work with the controller reactively
+  // while the factory's internal effects handle prop syncing
+  return {
+    get slashCommandDropdownActive(): boolean {
+      return controller?.slashCommandDropdownActive ?? false;
+    },
+    set slashCommandDropdownActive(value: boolean) {
+      if (controller) {
+        controller.slashCommandDropdownActive = value;
+      }
+    },
+
+    get autocompleteDropdownActive(): boolean {
+      return controller?.autocompleteDropdownActive ?? false;
+    },
+    set autocompleteDropdownActive(value: boolean) {
+      if (controller) {
+        controller.autocompleteDropdownActive = value;
+      }
+    },
+
+    get recentEnter(): boolean {
+      return controller?.recentEnter ?? false;
+    },
+    set recentEnter(value: boolean) {
+      if (controller) {
+        controller.recentEnter = value;
+      }
+    },
+
+    get justCreated(): boolean {
+      return controller?.justCreated ?? false;
+    },
+    set justCreated(value: boolean) {
+      if (controller) {
+        controller.justCreated = value;
+      }
+    },
+
+    getMarkdownContent(): string {
+      return controller?.getMarkdownContent() ?? '';
+    },
+
+    getCursorPosition(): number {
+      return controller?.getCursorPosition() ?? 0;
+    },
+
+    isAtFirstLine(): boolean {
+      return controller?.isAtFirstLine() ?? false;
+    },
+
+    isAtLastLine(): boolean {
+      return controller?.isAtLastLine() ?? false;
+    },
+
+    getCurrentColumn(): number {
+      return controller?.getCurrentColumn() ?? 0;
+    },
+
+    getCurrentPixelOffset(): number {
+      return controller?.getCurrentPixelOffset() ?? 0;
+    },
+
+    focus(): void {
+      controller?.focus();
+    },
+
+    setCursorPosition(position: number): void {
+      controller?.setCursorPosition(position);
+    },
+
+    updateContent(content: string): void {
+      controller?.updateContent(content);
+    },
+
+    forceUpdateContent(content: string): void {
+      controller?.forceUpdateContent(content);
+    },
+
+    adjustHeight(): void {
+      controller?.adjustHeight();
+    },
+
+    positionCursorAtLineBeginning(lineNumber?: number, skipSyntax?: boolean): void {
+      controller?.positionCursorAtLineBeginning(lineNumber, skipSyntax);
+    },
+
+    enterFromArrowNavigation(direction: 'up' | 'down', pixelOffset: number): void {
+      controller?.enterFromArrowNavigation(direction, pixelOffset);
+    },
+
+    setSlashCommandDropdownActive(active: boolean): void {
+      if (controller) {
+        controller.setSlashCommandDropdownActive(active);
+      }
+    },
+
+    setAutocompleteDropdownActive(active: boolean): void {
+      if (controller) {
+        controller.setAutocompleteDropdownActive(active);
+      }
+    },
+
+    insertNodeReference(nodeId: string): void {
+      controller?.insertNodeReference(nodeId);
+    },
+
+    insertSlashCommand(content: string, skipDetection: boolean, targetNodeType?: string): number {
+      return controller?.insertSlashCommand(content, skipDetection, targetNodeType) ?? 0;
+    },
+
+    toggleFormatting(marker: string): void {
+      controller?.toggleFormatting(marker);
+    },
+
+    isProcessingInput(): boolean {
+      return controller?.isProcessingInput() ?? false;
+    },
+
+    getCursorPositionInMarkdown(): number {
+      return controller?.getCursorPositionInMarkdown() ?? 0;
+    },
+
+    convertHtmlToTextWithNewlines(html: string): string {
+      return controller?.convertHtmlToTextWithNewlines(html) ?? '';
+    },
+
+    setLiveFormattedContent(content: string): void {
+      controller?.setLiveFormattedContent(content);
+    },
+
+    prepareForArrowNavigation(): void {
+      controller?.prepareForArrowNavigation();
+    },
+
+    updateNodeType(newNodeType: string): void {
+      controller?.updateNodeType(newNodeType);
+    },
+
+    destroy(): void {
+      controller?.destroy();
+      controller = null;
+    }
+  };
 }
