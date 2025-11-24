@@ -963,6 +963,7 @@ export class SharedNodeStore {
 
     // Add all nodes to the store
     for (const node of nodes) {
+      const isNewNode = !this.persistedNodeIds.has(node.id);
       const existingNode = this.nodes.get(node.id);
       const isHierarchyChange = !existingNode;
 
