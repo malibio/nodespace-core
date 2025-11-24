@@ -2085,15 +2085,15 @@ mod tests {
         let b1 = operations.get_node(&node_b).await.unwrap().unwrap();
         let b2 = operations.get_node(&node_b).await.unwrap().unwrap();
 
-        // Client 1 reorders B before A
+        // Client 1 reorders B after A (B was before A, now B will be after A)
         operations
             .reorder_node(&node_b, b1.version, Some(&node_a))
             .await
             .unwrap();
 
-        // Client 2 tries to reorder B with stale version
+        // Client 2 tries to reorder B with stale version (would move to beginning)
         let result = operations
-            .reorder_node(&node_b, b2.version, None) // Move to end
+            .reorder_node(&node_b, b2.version, None)
             .await;
 
         assert!(

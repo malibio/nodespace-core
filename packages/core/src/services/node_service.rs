@@ -4370,14 +4370,14 @@ mod tests {
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
-                .create_parent_edge(&child1_id, &parent_id, None)
+                .create_parent_edge(&child1_id, &parent_id, None) // First child - insert at beginning
                 .await
                 .unwrap();
 
             let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
             let child2_id = service.create_node(child2).await.unwrap();
             service
-                .create_parent_edge(&child2_id, &parent_id, None)
+                .create_parent_edge(&child2_id, &parent_id, Some(&child1_id)) // Insert after Child 1
                 .await
                 .unwrap();
 
@@ -4444,21 +4444,21 @@ mod tests {
             let child_a = Node::new("text".to_string(), "A".to_string(), json!({}));
             let child_a_id = service.create_node(child_a).await.unwrap();
             service
-                .create_parent_edge(&child_a_id, &parent_id, None)
+                .create_parent_edge(&child_a_id, &parent_id, None) // First child - insert at beginning
                 .await
                 .unwrap();
 
             let child_b = Node::new("text".to_string(), "B".to_string(), json!({}));
             let child_b_id = service.create_node(child_b).await.unwrap();
             service
-                .create_parent_edge(&child_b_id, &parent_id, None)
+                .create_parent_edge(&child_b_id, &parent_id, Some(&child_a_id)) // Insert after A
                 .await
                 .unwrap();
 
             let child_c = Node::new("text".to_string(), "C".to_string(), json!({}));
             let child_c_id = service.create_node(child_c).await.unwrap();
             service
-                .create_parent_edge(&child_c_id, &parent_id, None)
+                .create_parent_edge(&child_c_id, &parent_id, Some(&child_b_id)) // Insert after B
                 .await
                 .unwrap();
 
