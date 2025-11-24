@@ -233,14 +233,13 @@ mod event_emission_tests {
             .expect("First event should be NodeCreated")
             .expect("Should receive first event");
 
-        let _node_id = match event1 {
+        match event1 {
             DomainEvent::NodeCreated(node) => {
                 assert_eq!(node.id, child.id);
                 assert_eq!(node.content, "Child content");
-                node.id
             }
             _ => panic!("Expected first event to be NodeCreated, got {:?}", event1),
-        };
+        }
 
         // Event 2: EdgeCreated
         let event2 = timeout(Duration::from_secs(1), rx.recv())

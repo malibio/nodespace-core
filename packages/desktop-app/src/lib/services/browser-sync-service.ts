@@ -148,7 +148,6 @@ class BrowserSyncService {
       };
 
       this.eventSource.onmessage = (event) => {
-        console.log('[BrowserSyncService] Raw SSE message received:', event.data);
         this.handleMessage(event);
       };
 
@@ -185,7 +184,6 @@ class BrowserSyncService {
    * Routes events to appropriate store/tree handlers to update UI.
    */
   private handleEvent(event: SseEvent): void {
-    console.log('[BrowserSyncService] Processing event:', event.type, event);
     switch (event.type) {
       case 'nodeCreated':
         console.log('[BrowserSyncService] Node created:', event.nodeId);

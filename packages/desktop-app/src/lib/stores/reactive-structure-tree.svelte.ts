@@ -328,7 +328,7 @@ class ReactiveStructureTree {
    * Manually register an in-memory parent-child relationship (for placeholder promotion)
    *
    * Use this when creating parent-child relationships for nodes that haven't
-   * been persisted yet and won't trigger LIVE SELECT events.
+   * been persisted yet and won't trigger domain events.
    *
    * @param parentId - Parent node ID
    * @param childId - Child node ID
