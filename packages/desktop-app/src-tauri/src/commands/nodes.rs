@@ -411,12 +411,12 @@ pub async fn delete_node(
 /// ```
 #[tauri::command]
 pub async fn move_node(
-    store: State<'_, SurrealStore>,
+    service: State<'_, NodeService>,
     node_id: String,
     new_parent_id: Option<String>,
     insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
-    store
+    service
         .move_node(
             &node_id,
             new_parent_id.as_deref(),

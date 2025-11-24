@@ -1020,7 +1020,9 @@ where
         // 1. Delete existing parent edge (via: DELETE has_child WHERE out = $child_thing)
         // 2. Create new parent edge if specified (via: RELATE $parent_thing->has_child->$child_thing)
         // Note: Container edge doesn't exist - container is determined by traversing to root
-        self.node_service.move_node(node_id, new_parent_id).await?;
+        self.node_service
+            .move_node(node_id, new_parent_id, None)
+            .await?;
 
         tracing::debug!("Moved node {} to new parent: {:?}", node_id, new_parent_id);
 

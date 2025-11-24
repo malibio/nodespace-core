@@ -723,6 +723,8 @@ async fn delete_node(
 struct SetParentRequest {
     /// New parent ID (null to make node a root)
     pub parent_id: Option<String>,
+    /// Optional sibling to insert after (None = insert at beginning)
+    pub insert_after_node_id: Option<String>,
 }
 
 async fn set_parent(
@@ -741,7 +743,11 @@ async fn set_parent(
 
     state
         .node_service
-        .move_node(&node_id, request.parent_id.as_deref())
+        .move_node(
+            &node_id,
+            request.parent_id.as_deref(),
+            request.insert_after_node_id.as_deref(),
+        )
         .await
         .map_err(map_node_service_error)?;
 
