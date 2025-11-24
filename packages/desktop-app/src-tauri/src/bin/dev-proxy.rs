@@ -332,7 +332,6 @@ struct CreateNodeRequest {
     pub mentions: Vec<String>,
 }
 
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize logging (shows debug output in terminal)
