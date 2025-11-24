@@ -227,65 +227,42 @@
   });
 
   // ============================================================================
-  // LEGITIMATE $EFFECT: Async data loading when nodeId prop changes
+  // Load children on component mount
   // ============================================================================
-  // WHY THIS CAN'T BE ELIMINATED:
-  // - Async operation (loadChildrenForParent) can't be done in $derived
-  // - Needs to respond to prop changes (nodeId) - not a one-time onMount operation
-  // - Svelte 5 docs explicitly allow $effect for async side effects
+  // NOTE: This component is recreated via {#key} when nodeId changes (see pane-content.svelte)
+  // So onMount runs fresh for each nodeId, eliminating the need for a reactive effect
   // ============================================================================
-  // Track last loaded nodeId to prevent re-loading the same node
-  let lastLoadedNodeId: string | null = null;
-  // Flag to prevent effect from firing multiple times while async load is in progress
-  let isLoadingChildren = $state(false);
 
-  $effect(() => {
-    if (nodeId) {
-      // Prevent re-loading if we already loaded this nodeId
-      if (lastLoadedNodeId === nodeId) {
-        return;
-      }
+  onMount(async () => {
+    if (!nodeId) {
+      currentViewedNode = null;
+      return;
+    }
 
-      // Prevent race condition where effect fires multiple times before async load completes
-      if (isLoadingChildren) {
-        return;
-      }
-
-      // Mark this nodeId as loaded
-      lastLoadedNodeId = nodeId;
-      isLoadingChildren = true;
-
-      // Capture disableTitleUpdates at effect creation time (not in async callback)
+    try {
+      // Capture disableTitleUpdates at mount time
       const shouldDisableTitleUpdates = disableTitleUpdates;
 
       // Load children asynchronously
       // Note: loadChildrenForParent has internal cache checking, so this is efficient
-      loadChildrenForParent(nodeId).then(() => {
-        // CRITICAL: Prevent state updates after component destruction
-        if (isDestroyed) {
-          isLoadingChildren = false;
-          return;
-        }
+      await loadChildrenForParent(nodeId);
 
-        // After loading completes, initialize header content and update tab title
-        const node = sharedNodeStore.getNode(nodeId);
-        headerContent = node?.content || '';
-        currentViewedNode = node || null;
+      // CRITICAL: Prevent state updates after component destruction
+      if (isDestroyed) {
+        return;
+      }
 
-        // Update tab title after node is loaded
-        if (!shouldDisableTitleUpdates) {
-          updateTabTitle(headerContent);
-        }
+      // After loading completes, initialize header content and update tab title
+      const node = sharedNodeStore.getNode(nodeId);
+      headerContent = node?.content || '';
+      currentViewedNode = node || null;
 
-        isLoadingChildren = false;
-      }).catch((error) => {
-        isLoadingChildren = false;
-        console.error('[BaseNodeViewer] Failed to load children:', error);
-      });
-    } else {
-      // Clear when no nodeId
-      currentViewedNode = null;
-      lastLoadedNodeId = null;
+      // Update tab title after node is loaded
+      if (!shouldDisableTitleUpdates) {
+        updateTabTitle(headerContent);
+      }
+    } catch (error) {
+      console.error('[BaseNodeViewer] Failed to load children:', error);
     }
   });
 
