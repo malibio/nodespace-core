@@ -714,28 +714,24 @@
     }
   };
 
-  // Initialize controller after all event handlers are defined
-  // Must happen after controllerEvents is created
-  $effect.pre(() => {
-    if (!controller) {
-      controller = createTextareaController(
-        () => textareaElement,
-        () => nodeId,
-        () => nodeType,
-        () => paneId,
-        () => content,
-        () => editableConfig,
-        controllerEvents
-      );
-    }
+  // Initialize controller on mount (after controllerEvents is defined)
+  onMount(() => {
+    controller = createTextareaController(
+      () => textareaElement,
+      () => nodeId,
+      () => nodeType,
+      () => paneId,
+      () => content,
+      () => editableConfig,
+      controllerEvents
+    );
+  });
 
-    return () => {
-      // Cleanup on unmount
-      if (controller) {
-        controller.destroy();
-        controller = null;
-      }
-    };
+  // Cleanup controller on destroy
+  onDestroy(() => {
+    if (controller) {
+      controller.destroy();
+    }
   });
 
   // Watch for element changes and initialize controller
