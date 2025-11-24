@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { setContext } from 'svelte';
+  import { setContext, untrack } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import { tabState, updateTabTitle, updateTabContent } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
@@ -30,15 +30,21 @@
         try {
           const viewer = await pluginRegistry.getViewer(nodeType);
           if (viewer) {
-            viewerComponents.set(nodeType, viewer);
-            viewerComponents = new Map(viewerComponents); // Trigger reactivity
+            // Use untrack to prevent state_unsafe_mutation in async callback
+            untrack(() => {
+              viewerComponents.set(nodeType, viewer);
+              viewerComponents = new Map(viewerComponents); // Trigger reactivity
+            });
           }
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : 'Unknown error loading viewer';
           console.error(`[PaneContent] Failed to load viewer for ${nodeType}:`, error);
-          viewerLoadErrors.set(nodeType, errorMessage);
-          viewerLoadErrors = new Map(viewerLoadErrors); // Trigger reactivity
+          // Use untrack to prevent state_unsafe_mutation in async callback
+          untrack(() => {
+            viewerLoadErrors.set(nodeType, errorMessage);
+            viewerLoadErrors = new Map(viewerLoadErrors); // Trigger reactivity
+          });
         }
       })();
     }
