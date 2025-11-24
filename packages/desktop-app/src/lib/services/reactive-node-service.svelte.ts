@@ -267,7 +267,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.setNode(newNode, viewerSource, skipPersistence);
     _uiState[nodeId] = newUIState;
 
-    // CRITICAL FIX: Register parent-child edge in ReactiveStructureTree for browser mode
+    // CRITICAL FIX: Register parent-child edge in ReactiveStructureTree immediately
+    // This makes the new node visible in visibleNodesFromStores for instant UI feedback
+    // In Tauri mode, LIVE SELECT events will also fire but addChild handles duplicates gracefully
+    // In browser mode, this is the only way the tree gets updated (no LIVE SELECT)
+    if (newParentId) {
+      // Calculate order: append after all existing children
+      const existingChildren = structureTree.getChildren(newParentId);
+      const order = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+      structureTree.addInMemoryRelationship(newParentId, nodeId, order);
+    }
+
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
     if (shouldFocusNewNode) {

@@ -7,7 +7,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy, getContext, tick } from 'svelte';
+  import { onMount, onDestroy, getContext } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
   import BaseNode from '$lib/design/components/base-node.svelte';
@@ -1525,10 +1525,13 @@
                   const content = e.detail.content;
                   const cursorPosition = e.detail.cursorPosition ?? content.length;
 
+                  // CRITICAL: Capture $derived viewerPlaceholder immediately to prevent race condition
+                  const currentPlaceholder = viewerPlaceholder;
+
                   // Check if this is the viewer-local placeholder getting its first content
                   if (
-                    viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id &&
+                    currentPlaceholder &&
+                    node.id === currentPlaceholder.id &&
                     content.trim() !== '' &&
                     nodeId
                   ) {
@@ -1536,7 +1539,7 @@
                     isPromoting = true;
 
                     // Promote placeholder to real node by assigning parent and adding to store
-                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
+                    const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
                       content
                     });
 
@@ -1544,25 +1547,21 @@
                     // Use setEditingNodeFromTypeConversion to prevent blur handler from clearing state
                     focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
 
-                    // Add to shared store (in-memory only, don't persist yet)
-                    // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                    // Add to shared store (in-memory only, persistence is debounced)
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
 
-                    // CRITICAL FIX: Clear viewerPlaceholder SYNCHRONOUSLY to prevent subsequent
-                    // keystrokes from hitting the promotion path again while $effect is pending.
-                    // Without this, rapid typing can cause multiple setNode() calls with stale content.
-
-                    // Clear placeholder ID so fresh one is created if needed later
-                    placeholderId = null;
-
-                    // Clear promotion flag after Svelte's microtask queue flushes.
-                    // tick() ensures our synchronous state changes above (viewerPlaceholder=null,
-                    // placeholderId=null) have propagated through $derived computations before
-                    // we allow new promotions. This is sufficient because the race condition
-                    // was caused by stale state, not async operations.
-                    tick().then(() => {
-                      isPromoting = false;
+                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+                    // This makes the promoted node visible in visibleNodesFromStores, which causes
+                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
+                    // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
+                    reactiveStructureTree.addChild({
+                      parentId: nodeId,
+                      childId: promotedNode.id,
+                      order: Date.now()
                     });
+
+                    // Clear promotion flag immediately - promoted node is now visible in structure tree
+                    isPromoting = false;
 
                     // No need to reload - promoted node is already in shared store
                     // Database query will find it once persisted (CREATE is debounced)

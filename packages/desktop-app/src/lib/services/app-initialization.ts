@@ -5,7 +5,33 @@
  * any components try to use Tauri commands.
  */
 
+// Tauri API types
+interface TauriCore {
+  invoke: (command: string, ...args: unknown[]) => Promise<unknown>;
+}
+
+interface TauriAPI {
+  core?: TauriCore;
+  invoke?: (command: string, ...args: unknown[]) => Promise<unknown>;
+}
+
+interface WindowWithTauri extends Window {
+  __TAURI__?: TauriAPI;
+}
+
+declare const window: WindowWithTauri;
+
 let initialized = false;
+
+/**
+ * Check if running in Tauri desktop environment
+ */
+function isTauriEnvironment(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+  );
+}
 
 /**
  * Wait for Tauri API to be available
@@ -22,8 +48,8 @@ async function waitForTauriReady(): Promise<void> {
     // Tauri 2.x uses __TAURI__.core.invoke
     if (
       typeof window !== 'undefined' &&
-      typeof (window as any).__TAURI__ !== 'undefined' &&
-      typeof (window as any).__TAURI__.core?.invoke === 'function'
+      typeof window.__TAURI__ !== 'undefined' &&
+      typeof window.__TAURI__.core?.invoke === 'function'
     ) {
       console.log('[App Init] Tauri API ready after', attempts * delayMs, 'ms');
       return;
@@ -32,7 +58,7 @@ async function waitForTauriReady(): Promise<void> {
     // Fallback for older Tauri versions that use __TAURI__.invoke
     if (
       typeof window !== 'undefined' &&
-      typeof (window as any).__TAURI__?.invoke === 'function'
+      typeof window.__TAURI__?.invoke === 'function'
     ) {
       console.log('[App Init] Tauri API ready (legacy) after', attempts * delayMs, 'ms');
       return;
@@ -44,16 +70,16 @@ async function waitForTauriReady(): Promise<void> {
 
   // More detailed error message for debugging
   const isWindow = typeof window !== 'undefined';
-  const hasTauri = isWindow && typeof (window as any).__TAURI__ !== 'undefined';
-  const hasInvokeCore = hasTauri && typeof (window as any).__TAURI__.core?.invoke === 'function';
-  const hasInvokeLegacy = hasTauri && typeof (window as any).__TAURI__.invoke === 'function';
+  const hasTauri = isWindow && typeof window.__TAURI__ !== 'undefined';
+  const hasInvokeCore = hasTauri && typeof window.__TAURI__?.core?.invoke === 'function';
+  const hasInvokeLegacy = hasTauri && typeof window.__TAURI__?.invoke === 'function';
 
   console.error('[App Init] Tauri API check results:', {
     isWindow,
     hasTauri,
     hasInvokeCore,
     hasInvokeLegacy,
-    tauriKeys: hasTauri ? Object.keys((window as any).__TAURI__) : 'N/A'
+    tauriKeys: hasTauri && window.__TAURI__ ? Object.keys(window.__TAURI__) : 'N/A'
   });
 
   throw new Error(
@@ -76,6 +102,12 @@ export async function initializeApp(): Promise<void> {
   }
   initialized = true;
 
+  // Skip Tauri initialization in browser mode (using HTTP dev-proxy)
+  if (!isTauriEnvironment()) {
+    console.log('[App Init] Running in browser mode, skipping Tauri initialization');
+    return;
+  }
+
   try {
     // Wait for Tauri API to be available
     await waitForTauriReady();
@@ -84,19 +116,22 @@ export async function initializeApp(): Promise<void> {
     // This ensures SchemaService and other services are available to Tauri commands
     try {
       // Tauri 2.x uses window.__TAURI__.core.invoke
-      const invoke = (window as any).__TAURI__.core?.invoke || (window as any).__TAURI__.invoke;
+      const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke;
+      if (!invoke) {
+        throw new Error('Tauri invoke function not available');
+      }
       await invoke('initialize_database');
       console.log('[App Init] Database initialized');
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Check if already initialized (this is expected on subsequent calls)
-      const errorMsg = error?.toString?.() || String(error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
       if (errorMsg.includes('already initialized')) {
         console.log('[App Init] Database already initialized');
       } else {
         console.warn('[App Init] Database initialization warning:', error);
       }
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[App Init] Critical initialization error:', error);
     throw error;
   }

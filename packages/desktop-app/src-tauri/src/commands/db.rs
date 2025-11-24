@@ -42,15 +42,11 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
     // Initialize SurrealDB store
     eprintln!("🔧 [init_services] Initializing SurrealDB store...");
     tracing::info!("🔧 [init_services] Initializing SurrealDB store...");
-    let store = Arc::new(
-        SurrealStore::new(db_path)
-            .await
-            .map_err(|e| {
-                let msg = format!("Failed to initialize database: {}", e);
-                eprintln!("❌ [init_services] {}", msg);
-                msg
-            })?,
-    );
+    let store = Arc::new(SurrealStore::new(db_path).await.map_err(|e| {
+        let msg = format!("Failed to initialize database: {}", e);
+        eprintln!("❌ [init_services] {}", msg);
+        msg
+    })?);
     eprintln!("✅ [init_services] SurrealDB store initialized");
     tracing::info!("✅ [init_services] SurrealDB store initialized");
 

@@ -147,14 +147,14 @@ class TauriAdapter implements BackendAdapter {
 
   async createNode(input: CreateNodeInput | Node): Promise<string> {
     const invoke = await this.getInvoke();
-    // Keep snake_case for struct fields to match Rust serde expectations
+    // Tauri 2.x with #[serde(rename_all = "camelCase")] expects camelCase field names
     const nodeInput = {
       id: input.id,
-      node_type: input.nodeType,
+      nodeType: input.nodeType,
       content: input.content,
       properties: input.properties ?? {},
       mentions: input.mentions ?? [],
-      parent_id: (input as CreateNodeInput).parentId ?? null
+      parentId: (input as CreateNodeInput).parentId ?? null
     };
     return invoke<string>('create_node', { node: nodeInput });
   }
