@@ -241,9 +241,6 @@
   // ============================================================================
 
   onMount(() => {
-    const mountInstance = globalThis.crypto.randomUUID().substring(0, 8);
-    console.log(`[PERF] BaseNodeViewer.onMount() for nodeId: ${nodeId} (instance: ${mountInstance})`);
-
     // Set up scroll position management
     // Restore scroll position when viewer becomes active
     let scrollCleanup: (() => void) | null = null;
@@ -291,7 +288,6 @@
 
         // CRITICAL: Prevent state updates after component destruction
         if (isDestroyed) {
-          console.log(`[PERF] BaseNodeViewer.onMount() instance ${mountInstance} - component destroyed before load completed`);
           return;
         }
 
@@ -1430,14 +1426,12 @@
 
   // Clean up on component unmount and flush pending saves
   onDestroy(() => {
-    console.log('[BaseNodeViewer] onDestroy');
     // Unregister this viewer from the expansion coordinator
     NodeExpansionCoordinator.unregisterViewer(tabId);
 
     // CRITICAL: Commit ALL active batches globally BEFORE flushing
     // This ensures node type conversions (which use batches) are saved
     // We must commit globally because visible nodes might be empty if viewer already unmounted
-    console.log('[BaseNodeViewer] onDestroy: Committing all active batches globally');
     sharedNodeStore.commitAllBatches();
 
     // Note: PersistenceCoordinator removed in Issue #558
