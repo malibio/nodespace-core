@@ -240,12 +240,20 @@
     }
 
     try {
+      // PERFORMANCE: Track load calls to ensure no duplicates
+      const mountStart = performance.now();
+      const instanceId = Math.random().toString(36).slice(2, 9);
+      console.log(`[PERF] BaseNodeViewer.onMount() for nodeId: ${nodeId} (instance: ${instanceId})`);
+
       // Capture disableTitleUpdates at mount time
       const shouldDisableTitleUpdates = disableTitleUpdates;
 
       // Load children asynchronously
       // Note: loadChildrenForParent has internal cache checking, so this is efficient
+      const loadStart = performance.now();
       await loadChildrenForParent(nodeId);
+      const loadTime = performance.now() - loadStart;
+      console.log(`[PERF] loadChildrenForParent completed in ${loadTime.toFixed(2)}ms for nodeId: ${nodeId}`);
 
       // CRITICAL: Prevent state updates after component destruction
       if (isDestroyed) {
@@ -261,6 +269,9 @@
       if (!shouldDisableTitleUpdates) {
         updateTabTitle(headerContent);
       }
+
+      const totalTime = performance.now() - mountStart;
+      console.log(`[PERF] BaseNodeViewer.onMount() completed in ${totalTime.toFixed(2)}ms for nodeId: ${nodeId}`);
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children:', error);
     }
@@ -682,6 +693,9 @@
 
   async function loadChildrenForParent(nodeId: string, forceRefresh = false) {
     try {
+      const loadStart = performance.now();
+      console.log(`[PERF] loadChildrenForParent called for ${nodeId} (forceRefresh: ${forceRefresh})`);
+
       // Set loading flag to prevent watchers from triggering during initial load
       isLoadingInitialNodes = true;
 
@@ -698,17 +712,24 @@
         const cached = sharedNodeStore.getNodesForParent(nodeId);
         if (cached && cached.length > 0) {
           // Cache hit - use immediately (no database call!)
+          console.log(`[PERF] Children cache hit for ${nodeId}: ${cached.length} nodes`);
           allNodes = cached;
         } else {
           // Cache miss - fetch from database
           // Use loadChildrenTree which returns nested structure AND registers
           // parent-child edges in structureTree (critical for expand control visibility)
           // NOTE: This also loads the parent node internally (single HTTP call)
+          const fetchStart = performance.now();
           allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
+          const fetchTime = performance.now() - fetchStart;
+          console.log(`[PERF] Tree fetch for ${nodeId}: ${fetchTime.toFixed(2)}ms (${allNodes.length} nodes)`);
         }
       } else {
         // Force refresh - bypass cache and fetch from database
+        const fetchStart = performance.now();
         allNodes = await sharedNodeStore.loadChildrenTree(nodeId);
+        const fetchTime = performance.now() - fetchStart;
+        console.log(`[PERF] Force refresh tree fetch for ${nodeId}: ${fetchTime.toFixed(2)}ms (${allNodes.length} nodes)`);
       }
 
       // Check if we have any nodes at all (reuse allNodes - no redundant cache check needed)
@@ -753,6 +774,9 @@
       // Must be inside try block (not finally) to ensure initializeNodes() has completed
       // Only register once per viewer instance (coordinator handles re-registration gracefully)
       NodeExpansionCoordinator.registerViewer(tabId, nodeManager);
+
+      const totalTime = performance.now() - loadStart;
+      console.log(`[PERF] loadChildrenForParent complete for ${nodeId}: ${totalTime.toFixed(2)}ms total`);
     } catch (error) {
       console.error('[BaseNodeViewer] Failed to load children for parent:', nodeId, error);
     } finally {
