@@ -83,7 +83,8 @@
   };
 
   // Editable header state (for default header when no custom snippet provided)
-  // Use local $state so input binding works and we can update tab title immediately
+  // Initialized in onMount() instead of async $effect to prevent component unmount/remount cycle
+  // Uses $state because header is editable (bound to input field)
   let headerContent = $state('');
 
   // Track last saved content to detect actual changes
@@ -105,10 +106,39 @@
 
   // Viewer-local placeholder (not in sharedNodeStore until it gets content)
   // This placeholder is only visible to this viewer instance
-  let viewerPlaceholder = $state<Node | null>(null);
+  // Derived from shouldShowPlaceholder instead of being set in $effect
+  const viewerPlaceholder = $derived.by<Node | null>(() => {
+    // Note: shouldShowPlaceholder is defined later in the file
+    // This forward reference is safe in Svelte 5
+    if (shouldShowPlaceholder) {
+      // Ensure stable ID exists
+      if (!placeholderId) {
+        placeholderId = globalThis.crypto.randomUUID();
+      }
+
+      return {
+        id: placeholderId,
+        nodeType: 'text',
+        content: '',
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {},
+        mentions: []
+      };
+    }
+
+    // Clear placeholder ID when not showing placeholder
+    if (!shouldShowPlaceholder && placeholderId) {
+      placeholderId = null;
+    }
+
+    return null;
+  });
 
   // Track the viewed node reactively for schema form display
-  let currentViewedNode = $state<Node | null>(null);
+  // Derived from sharedNodeStore instead of async loading in $effect
+  const currentViewedNode = $derived(nodeId ? sharedNodeStore.getNode(nodeId) : null);
 
   // Scroll position tracking
   // Reference to the scroll container element
@@ -198,40 +228,12 @@
     return flattenNodes(nodeId, 0);
   });
 
-  // Set view context, load children, and initialize header content when nodeId changes
+  // Update tab title when headerContent changes (derived from sharedNodeStore)
+  // Using $effect for side effect (calling onTitleChange callback)
   $effect(() => {
-    // Removed setViewParentId - now pass nodeId directly to visibleNodes()
-
-    if (nodeId) {
-      // Capture disableTitleUpdates at effect creation time (not in async callback)
-      // This prevents stale closure issues when component is destroyed before callback fires
-      const shouldDisableTitleUpdates = disableTitleUpdates;
-
-      // Load children asynchronously - this will load the parent node first
-      loadChildrenForParent(nodeId).then(() => {
-        // CRITICAL: Prevent state updates after component destruction
-        // This prevents memory leaks and state corruption from stale async callbacks
-        if (isDestroyed) {
-          return;
-        }
-
-        // After loading completes, initialize header content and update tab title
-        // This ensures the node is loaded before we try to read its content
-        const node = sharedNodeStore.getNode(nodeId);
-        headerContent = node?.content || '';
-
-        // Update reactive node reference for schema form
-        currentViewedNode = node || null;
-
-        // Update tab title after node is loaded
-        // Skip if parent component manages the title (e.g., DateNodeViewer)
-        if (!shouldDisableTitleUpdates) {
-          updateTabTitle(headerContent);
-        }
-      });
-    } else {
-      // Clear when no nodeId
-      currentViewedNode = null;
+    // Skip if parent component manages the title (e.g., DateNodeViewer)
+    if (!disableTitleUpdates && headerContent) {
+      updateTabTitle(headerContent);
     }
   });
 
@@ -483,14 +485,24 @@
     Promise.resolve().then(() => resolvePhase());
   });
 
-  // Track node IDs to detect deletions
+  // Track node IDs to detect deletions and manage structure tracking
   // Use a regular variable, not $state, to avoid infinite loops
   let previousNodeIds = new Set<string>();
 
   $effect(() => {
     if (!nodeId) return;
 
-    const currentNodeIds = new Set(visibleNodesFromStores.map((n) => n.id));
+    const visibleNodes = visibleNodesFromStores;
+    const currentNodeIds = new Set(visibleNodes.map((n) => n.id));
+
+    // Track nodes for cleanup purposes (merged from Effect #4)
+    for (const node of visibleNodes) {
+      trackStructureChange(node.id);
+      // Mark as persisted if it exists in database
+      if (!persistedStructure.has(node.id) && sharedNodeStore.isNodePersisted(node.id)) {
+        persistedStructure.add(node.id);
+      }
+    }
 
     // Skip the first run (when previousNodeIds is empty)
     if (previousNodeIds.size > 0) {
@@ -543,6 +555,13 @@
       }
     }
 
+    // Clean up tracking for nodes that no longer exist (merged from Effect #4)
+    for (const trackedNodeId of previousStructure) {
+      if (!currentNodeIds.has(trackedNodeId)) {
+        previousStructure.delete(trackedNodeId);
+      }
+    }
+
     // Update previous state (mutate the Set instead of replacing it)
     previousNodeIds.clear();
     for (const id of currentNodeIds) {
@@ -582,30 +601,9 @@
     previousStructure.add(nodeId);
   }
 
-  // Issue #575: Simplified structural watcher - beforeSiblingId no longer tracked
-  // Sibling ordering is now handled by the backend's sibling_order column
-  $effect.pre(() => {
-    if (!nodeId) return;
-
-    const visibleNodes = visibleNodesFromStores;
-
-    // Track nodes for cleanup purposes only
-    for (const node of visibleNodes) {
-      trackStructureChange(node.id);
-      // Mark as persisted if it exists in database
-      if (!persistedStructure.has(node.id) && sharedNodeStore.isNodePersisted(node.id)) {
-        persistedStructure.add(node.id);
-      }
-    }
-
-    // Clean up tracking for nodes that no longer exist
-    const currentNodeIds = new Set(visibleNodes.map((n) => n.id));
-    for (const trackedNodeId of previousStructure) {
-      if (!currentNodeIds.has(trackedNodeId)) {
-        previousStructure.delete(trackedNodeId);
-      }
-    }
-  });
+  // Effect #4 ELIMINATED - merged into Effect #3 above (deletion detection)
+  // This reduces redundant tracking and consolidates structure management
+  // Issue #575: Sibling ordering is now handled by the backend's sibling_order column
 
   /**
    * Helper function to promote a viewer-local placeholder to a real node
@@ -686,40 +684,12 @@
 
       // Check if we have any nodes at all (reuse allNodes - no redundant cache check needed)
       if (allNodes.length === 0) {
-        // No persisted children - create initial placeholder if needed
-        // Note: We already checked cache/DB above, so if allNodes is empty, no persisted children exist
-
-        // Create initial placeholder only if we don't have a viewer placeholder already
-        if (!viewerPlaceholder) {
-          // No children at all - create initial placeholder
-          // Issue #479 Phase 1: Placeholder is completely viewer-local (NOT added to SharedNodeStore)
-          // It's rendered via nodesToRender derived state and promoted to real node when user adds content
-          const newPlaceholderId = globalThis.crypto.randomUUID();
-
-          // Store ID in state to keep in sync with reactive $effect
-          placeholderId = newPlaceholderId;
-
-          viewerPlaceholder = {
-            id: newPlaceholderId,
-            nodeType: 'text',
-            content: '',
-            createdAt: new Date().toISOString(),
-            modifiedAt: new Date().toISOString(),
-            version: 1,
-            properties: {},
-            mentions: []
-          };
-
-          // Focus is handled by BaseNode's onMount when autoFocus=true
-          // See nodesToRender derived state which sets autoFocus for placeholder
-
-          // DON'T call initializeNodes() - keep placeholder completely viewer-local!
-          // It will be rendered by nodesToRender derived state (line 1475-1487)
-          // and promoted to real node when user adds content (line 1746-1772)
-        }
+        // No persisted children - placeholder will be created automatically via $derived.by()
+        // Issue #479 Phase 1: Placeholder is completely viewer-local (NOT added to SharedNodeStore)
+        // It's rendered via nodesToRender derived state and promoted to real node when user adds content
+        // The viewerPlaceholder $derived.by() watches shouldShowPlaceholder which detects empty children
       } else {
-        // Real children exist - clear any viewer placeholder
-        viewerPlaceholder = null;
+        // Real children exist - placeholder will be hidden automatically via $derived.by()
 
         // Track initial content of ALL loaded nodes BEFORE initializing
         // This prevents the content watcher from thinking these are new nodes
@@ -1352,31 +1322,9 @@
     return realChildren.length === 0;
   });
 
-  // Reactive effect: Create/clear placeholder based on derived state
-  // This is the ONLY effect needed - just for instantiating the placeholder object
-  $effect(() => {
-    if (shouldShowPlaceholder && !viewerPlaceholder) {
-      // Create placeholder with stable ID if available
-      const id = placeholderId ?? globalThis.crypto.randomUUID();
-      if (!placeholderId) placeholderId = id;
-
-      viewerPlaceholder = {
-        id,
-        nodeType: 'text',
-        content: '',
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 1,
-        properties: {},
-        mentions: []
-      };
-
-      // Focus is handled by BaseNode's onMount when autoFocus=true
-      // See nodesToRender derived state which sets autoFocus for placeholder
-    } else if (!shouldShowPlaceholder && viewerPlaceholder) {
-      viewerPlaceholder = null;
-    }
-  });
+  // Placeholder is now computed via $derived.by() (no effect needed!)
+  // Focus is handled by BaseNode's onMount when autoFocus=true
+  // See nodesToRender derived state which sets autoFocus for placeholder
 
   // Calculate minimum depth for relative positioning
   // Children of a container node should start at depth 0 in the viewer
@@ -1386,8 +1334,20 @@
     return Math.min(...nodes.map((n) => n.depth || 0));
   });
 
-  // Pre-load components when component mounts
+  // Load children and pre-load components when component mounts
   onMount(async () => {
+    // Load children for parent node first (makes data available synchronously via sharedNodeStore)
+    // This prevents component unmount/remount cycle from async loading in $effect
+    if (nodeId) {
+      await loadChildrenForParent(nodeId);
+
+      // Initialize headerContent from loaded node (replaces old async $effect pattern)
+      const node = sharedNodeStore.getNode(nodeId);
+      if (node) {
+        headerContent = node.content || '';
+      }
+    }
+
     // NOTE: Viewer registration with NodeExpansionCoordinator moved to loadChildrenForParent()
     // This ensures nodes are loaded BEFORE attempting to restore expansion states
     // Otherwise, all nodes are skipped as "missing" during restoration
@@ -1433,10 +1393,24 @@
     await preloadComponents();
   });
 
-  // Scroll position management: Save scroll position when user scrolls
+  // Scroll position management: Save and restore scroll position
+  // Combined into single $effect to eliminate redundancy
   $effect(() => {
-    if (!scrollContainer) return;
+    if (!scrollContainer || !viewerId) return;
 
+    // Restore scroll position when scroll container becomes available
+    const savedPosition = getScrollPosition(viewerId);
+    // Capture current container reference to prevent race conditions
+    const currentContainer = scrollContainer;
+    // Use requestAnimationFrame to ensure DOM is ready
+    requestAnimationFrame(() => {
+      // Only restore if container hasn't changed (prevents stale updates)
+      if (scrollContainer === currentContainer) {
+        scrollContainer.scrollTop = savedPosition;
+      }
+    });
+
+    // Setup scroll event listener to save position as user scrolls
     const handleScroll = () => {
       if (scrollContainer) {
         saveScrollPosition(viewerId, scrollContainer.scrollTop);
@@ -1445,28 +1419,12 @@
 
     scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
 
+    // Cleanup: Remove event listener when effect re-runs or component unmounts
     return () => {
       if (scrollContainer) {
         scrollContainer.removeEventListener('scroll', handleScroll);
       }
     };
-  });
-
-  // Scroll position restoration: Restore when viewer becomes active or mounts
-  $effect(() => {
-    // Restore scroll position when the scroll container is available
-    if (scrollContainer && viewerId) {
-      const savedPosition = getScrollPosition(viewerId);
-      // Capture current container reference to prevent race conditions
-      const currentContainer = scrollContainer;
-      // Use requestAnimationFrame to ensure DOM is ready
-      requestAnimationFrame(() => {
-        // Only restore if container hasn't changed (prevents stale updates)
-        if (scrollContainer === currentContainer) {
-          scrollContainer.scrollTop = savedPosition;
-        }
-      });
-    }
   });
 
   // Reactively load components when node types change
@@ -1622,12 +1580,10 @@
                     // Note: LIVE SELECT handles parent-child relationship via edge:created events
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
 
-                    // CRITICAL FIX: Clear viewerPlaceholder SYNCHRONOUSLY to prevent subsequent
+                    // CRITICAL FIX: Clear placeholder ID SYNCHRONOUSLY to prevent subsequent
                     // keystrokes from hitting the promotion path again while $effect is pending.
                     // Without this, rapid typing can cause multiple setNode() calls with stale content.
-                    viewerPlaceholder = null;
-
-                    // Clear placeholder ID so fresh one is created if needed later
+                    // Setting placeholderId = null causes $derived.by() to return null for viewerPlaceholder
                     placeholderId = null;
 
                     // Clear promotion flag after Svelte's microtask queue flushes.
@@ -1712,7 +1668,8 @@
                     // Note: LIVE SELECT handles parent-child relationship via edge:created events
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
-                    viewerPlaceholder = null;
+                    // Clear placeholder ID (causes $derived.by() to return null for viewerPlaceholder)
+                    placeholderId = null;
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
                     // For real nodes, update node type with full persistence
@@ -1807,7 +1764,8 @@
                     // Note: LIVE SELECT handles parent-child relationship via edge:created events
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
-                    viewerPlaceholder = null;
+                    // Clear placeholder ID (causes $derived.by() to return null for viewerPlaceholder)
+                    placeholderId = null;
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
                     // For real nodes, update node type with full persistence
