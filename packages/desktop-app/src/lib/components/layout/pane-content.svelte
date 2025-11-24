@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { setContext, untrack } from 'svelte';
+  import { setContext } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import { tabState, updateTabTitle, updateTabContent } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
@@ -23,31 +23,28 @@
   let viewerLoadErrors = $state<Map<string, string>>(new Map());
 
   // Load viewer for active tab's node type
-  $effect(() => {
-    const nodeType = activeTab?.content?.nodeType;
-    if (nodeType && !viewerComponents.has(nodeType) && !viewerLoadErrors.has(nodeType)) {
-      (async () => {
-        try {
-          const viewer = await pluginRegistry.getViewer(nodeType);
-          if (viewer) {
-            // Use untrack to prevent state_unsafe_mutation in async callback
-            untrack(() => {
+  // Use $effect.root to isolate state mutations from derived context
+  $effect.root(() => {
+    $effect(() => {
+      const nodeType = activeTab?.content?.nodeType;
+      if (nodeType && !viewerComponents.has(nodeType) && !viewerLoadErrors.has(nodeType)) {
+        (async () => {
+          try {
+            const viewer = await pluginRegistry.getViewer(nodeType);
+            if (viewer) {
               viewerComponents.set(nodeType, viewer);
               viewerComponents = new Map(viewerComponents); // Trigger reactivity
-            });
-          }
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : 'Unknown error loading viewer';
-          console.error(`[PaneContent] Failed to load viewer for ${nodeType}:`, error);
-          // Use untrack to prevent state_unsafe_mutation in async callback
-          untrack(() => {
+            }
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : 'Unknown error loading viewer';
+            console.error(`[PaneContent] Failed to load viewer for ${nodeType}:`, error);
             viewerLoadErrors.set(nodeType, errorMessage);
             viewerLoadErrors = new Map(viewerLoadErrors); // Trigger reactivity
-          });
-        }
-      })();
-    }
+          }
+        })();
+      }
+    });
   });
 </script>
 
