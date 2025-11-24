@@ -101,10 +101,11 @@
   let isPromoting = $state(false);
 
   // Stable placeholder ID - reused across placeholder recreations to prevent unnecessary component remounts
-  let placeholderId = $state<string | null>(null);
+  // NOT $state because we mutate it during derived evaluation (Svelte 5 restriction)
+  let placeholderId: string | null = null;
 
-  // Lazy ID generator - idempotent after first call (Svelte 5 idiomatic pattern)
-  // This getter pattern is safe in derived because mutation only happens once for initialization
+  // Lazy ID generator - idempotent after first call
+  // Simple mutable variable (not $state) allows mutation during derived evaluation
   function getOrCreatePlaceholderId(): string {
     return placeholderId ??= globalThis.crypto.randomUUID();
   }
