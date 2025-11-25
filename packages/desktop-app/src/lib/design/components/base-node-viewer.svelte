@@ -582,64 +582,6 @@
     }, 10);
   }
 
-  // OLD IMPLEMENTATION - REPLACED BY FOCUSMANAGER
-  // function requestNodeFocus(nodeId: string, position: number) {
-  //   // Find the target node
-  //   const node = nodeManager.findNode(nodeId);
-  //   if (!node) {
-  //     console.error(`Node ${nodeId} not found for focus request`);
-  //     return;
-  //   }
-  //
-  //   // Use DOM API to focus the node directly with cursor positioning
-  //   setTimeout(() => {
-  //     const nodeElement = document.querySelector(
-  //       `[data-node-id="${nodeId}"] [contenteditable]`
-  //     ) as HTMLElement;
-  //     if (nodeElement) {
-  //       nodeElement.focus();
-  //
-  //       // Set cursor position using tree walker (same approach as controller)
-  //       if (position >= 0) {
-  //         const selection = window.getSelection();
-  //         if (!selection) return;
-  //
-  //         // Use tree walker to find the correct text node and offset
-  //         const walker = document.createTreeWalker(nodeElement, NodeFilter.SHOW_TEXT, null);
-  //
-  //         let currentOffset = 0;
-  //         let currentNode;
-  //
-  //         while ((currentNode = walker.nextNode())) {
-  //           const nodeLength = currentNode.textContent?.length || 0;
-  //
-  //           if (currentOffset + nodeLength >= position) {
-  //             const range = document.createRange();
-  //             const offsetInNode = position - currentOffset;
-  //             range.setStart(currentNode, Math.min(offsetInNode, nodeLength));
-  //             range.setEnd(currentNode, Math.min(offsetInNode, nodeLength));
-  //
-  //             selection.removeAllRanges();
-  //             selection.addRange(range);
-  //             return;
-  //           }
-  //
-  //           currentOffset += nodeLength;
-  //         }
-  //
-  //         // If we didn't find the position, position at the end
-  //         const range = document.createRange();
-  //         range.selectNodeContents(nodeElement);
-  //         range.collapse(false);
-  //         selection.removeAllRanges();
-  //         selection.addRange(range);
-  //       }
-  //     } else {
-  //       console.error(`Could not find contenteditable element for node ${nodeId}`);
-  //     }
-  //   }, 10);
-  // }
-
   /**
    * Add appropriate formatting syntax to content based on node type
    * Used when creating new nodes from splits to preserve formatting
