@@ -958,11 +958,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     for (const child of children) {
       // Update parent relationship in shared store
       // Backend handles the has_child edge via parentId update
+      // NOTE: We must NOT use isComputedField here - the parentId change must be persisted
       sharedNodeStore.updateNode(
         child.id,
         { parentId: newParentForChildren },
-        viewerSource,
-        { isComputedField: true }
+        viewerSource
       );
 
       // Update ReactiveStructureTree for immediate UI update
