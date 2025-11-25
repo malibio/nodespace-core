@@ -7,7 +7,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy, getContext } from 'svelte';
+  import { onMount, onDestroy, getContext, tick } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
   import BaseNode from '$lib/design/components/base-node.svelte';
@@ -1591,8 +1591,21 @@
                       order: Date.now()
                     });
 
-                    // Clear promotion flag immediately - promoted node is now visible in structure tree
-                    isPromoting = false;
+                    // CRITICAL FIX: Clear viewerPlaceholder SYNCHRONOUSLY to prevent subsequent
+                    // keystrokes from hitting the promotion path again while $effect is pending.
+                    // Without this, rapid typing can cause multiple setNode() calls with stale content.
+
+                    // Clear placeholder ID so fresh one is created if needed later
+                    placeholderId = null;
+
+                    // Clear promotion flag after Svelte's microtask queue flushes.
+                    // tick() ensures our synchronous state changes above (viewerPlaceholder=null,
+                    // placeholderId=null) have propagated through $derived computations before
+                    // we allow new promotions. This is sufficient because the race condition
+                    // was caused by stale state, not async operations.
+                    tick().then(() => {
+                      isPromoting = false;
+                    });
 
                     // No need to reload - promoted node is already in shared store
                     // Database query will find it once persisted (CREATE is debounced)
