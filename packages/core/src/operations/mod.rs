@@ -2092,9 +2092,7 @@ mod tests {
             .unwrap();
 
         // Client 2 tries to reorder B with stale version (would move to beginning)
-        let result = operations
-            .reorder_node(&node_b, b2.version, None)
-            .await;
+        let result = operations.reorder_node(&node_b, b2.version, None).await;
 
         assert!(
             matches!(result, Err(NodeOperationError::VersionConflict { .. })),

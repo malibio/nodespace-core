@@ -19,6 +19,7 @@
 
 import { sharedNodeStore } from './shared-node-store';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
+import { getClientId } from './client-id';
 import type { SseEvent } from '$lib/types/sse-events';
 
 /**
@@ -136,10 +137,15 @@ class BrowserSyncService {
     }
 
     this.connectionState = 'connecting';
-    console.log('[BrowserSyncService] Connecting to SSE endpoint:', this.sseEndpoint);
+
+    // Include clientId as query parameter (EventSource doesn't support custom headers)
+    const clientId = getClientId();
+    const sseUrl = `${this.sseEndpoint}?clientId=${encodeURIComponent(clientId)}`;
+
+    console.log('[BrowserSyncService] Connecting to SSE endpoint:', sseUrl);
 
     try {
-      this.eventSource = new EventSource(this.sseEndpoint);
+      this.eventSource = new EventSource(sseUrl);
 
       this.eventSource.onopen = () => {
         console.log('[BrowserSyncService] SSE connection established');

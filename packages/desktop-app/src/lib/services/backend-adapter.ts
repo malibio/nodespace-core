@@ -23,6 +23,7 @@
 /* global fetch, crypto */
 
 import type { Node, NodeWithChildren } from '$lib/types';
+import { getClientId } from './client-id';
 import type {
   SchemaDefinition,
   AddFieldConfig,
@@ -309,9 +310,19 @@ class TauriAdapter implements BackendAdapter {
 
 class HttpAdapter implements BackendAdapter {
   private readonly baseUrl: string;
+  private readonly clientId: string;
 
   constructor(baseUrl: string = 'http://localhost:3001') {
     this.baseUrl = baseUrl;
+    // Get or create client ID for this browser session
+    this.clientId = getClientId();
+  }
+
+  private getHeaders(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'X-Client-Id': this.clientId
+    };
   }
 
   private async handleResponse<T>(response: Response): Promise<T> {
@@ -350,7 +361,7 @@ class HttpAdapter implements BackendAdapter {
 
     const response = await fetch(`${this.baseUrl}/api/nodes`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(requestBody)
     });
 
@@ -366,7 +377,7 @@ class HttpAdapter implements BackendAdapter {
   async updateNode(id: string, version: number, update: UpdateNodeInput): Promise<Node> {
     const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ ...update, version })
     });
     return await this.handleResponse<Node>(response);
@@ -375,7 +386,7 @@ class HttpAdapter implements BackendAdapter {
   async deleteNode(id: string, version: number): Promise<DeleteResult> {
     const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ version })
     });
     return await this.handleResponse<DeleteResult>(response);
@@ -415,7 +426,7 @@ class HttpAdapter implements BackendAdapter {
   async moveNode(nodeId: string, newParentId: string | null, insertAfterNodeId: string | null): Promise<void> {
     const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/parent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ parentId: newParentId, insertAfterNodeId })
     });
     await this.handleResponse<void>(response);
@@ -430,7 +441,7 @@ class HttpAdapter implements BackendAdapter {
   async createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
     const response = await fetch(`${this.baseUrl}/api/mentions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ sourceId: mentioningNodeId, targetId: mentionedNodeId })
     });
     await this.handleResponse<void>(response);
@@ -439,7 +450,7 @@ class HttpAdapter implements BackendAdapter {
   async deleteMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
     const response = await fetch(`${this.baseUrl}/api/mentions`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ sourceId: mentioningNodeId, targetId: mentionedNodeId })
     });
     await this.handleResponse<void>(response);
@@ -463,7 +474,7 @@ class HttpAdapter implements BackendAdapter {
   async queryNodes(query: NodeQuery): Promise<Node[]> {
     const response = await fetch(`${this.baseUrl}/api/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(query)
     });
     return await this.handleResponse<Node[]>(response);
@@ -472,7 +483,7 @@ class HttpAdapter implements BackendAdapter {
   async mentionAutocomplete(query: string, limit?: number): Promise<Node[]> {
     const response = await fetch(`${this.baseUrl}/api/mentions/autocomplete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ query, limit })
     });
     return await this.handleResponse<Node[]>(response);
@@ -503,7 +514,7 @@ class HttpAdapter implements BackendAdapter {
   async addSchemaField(schemaId: string, config: AddFieldConfig): Promise<AddFieldResult> {
     const response = await fetch(`${this.baseUrl}/api/schemas/${encodeURIComponent(schemaId)}/fields`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(config)
     });
     return await this.handleResponse<AddFieldResult>(response);
@@ -526,7 +537,7 @@ class HttpAdapter implements BackendAdapter {
         `${this.baseUrl}/api/schemas/${encodeURIComponent(schemaId)}/fields/${encodeURIComponent(fieldName)}/enum`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: this.getHeaders(),
           body: JSON.stringify({ value })
         }
       );
