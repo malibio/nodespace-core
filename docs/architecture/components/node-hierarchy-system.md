@@ -100,7 +100,7 @@ canBeCombinedWith() {
 
 **Child Promotion on Node Deletion** (CRITICAL):
 
-When a node is deleted via Backspace merge, its children **maintain their visual depth** by finding an appropriate new parent. The algorithm walks up from the merged-into node to find an ancestor at the same depth as the deleted node.
+When a node is deleted via Backspace merge, its children **maintain their visual depth** by finding an appropriate new parent. The algorithm processes each child individually, walking up from the merged-into node to find a node at the **child's depth** (not the deleted node's depth). This per-child approach ensures each child finds its correct insertion point based on its own visual position.
 
 **Example 1: Same-branch merge**
 ```
@@ -128,16 +128,17 @@ Starting:                     After deleting F (merges into "So so deep"):
 ```
 
 **Child Promotion Rules**:
-1. **Find matching ancestor**: Walk up from merged-into node to find ancestor at same depth as deleted node
-2. **Children become children of that ancestor**: Maintains their visual depth position
-3. **Subtree structure maintained**: Children's own children stay attached
-4. **Depth calculated from new parent**: `newParent.depth + 1`
-5. **Fallback for no match**: If no ancestor at exact depth, use nearest shallower ancestor
+1. **Per-child processing**: Each child is processed individually based on its own depth
+2. **Find matching depth**: Walk up from merged-into node to find a node at the **child's** depth
+3. **Insertion point**: Child is inserted after the node found at matching depth
+4. **New parent**: The parent of the matching-depth node becomes the child's new parent
+5. **Fallback for no match**: If no node at exact depth, use nearest shallower ancestor as parent
 
 **Why this approach?**:
-- Children "shift up" visually but maintain their indentation level
+- Each child maintains its own visual depth/indentation level
+- Works correctly even when children have different depths
 - The merged-into node may be at a completely different depth (cross-branch merge)
-- Walking up finds the correct structural anchor point for the orphaned children
+- Walking up finds the correct structural anchor point for each orphaned child
 
 #### Enter - New Node Creation
 **Content splitting** with formatting preservation:
@@ -345,20 +346,45 @@ function handleContentMerge(currentNode, prevNode) {
 }
 
 function promoteChildren(deletedNode, mergedIntoNode) {
-  const deletedNodeDepth = deletedNode.depth;
-
-  // Walk up from merged-into node to find ancestor at same depth as deleted node
-  let newParent = mergedIntoNode;
-  while (newParent && newParent.depth > deletedNodeDepth) {
-    newParent = getParent(newParent);
-  }
-
-  // Calculate new depth for children (newParent.depth + 1)
-  const newChildDepth = newParent ? newParent.depth + 1 : 0;
-
+  // Process each child individually - each may find a different parent
+  // based on its own visual depth
   for (const child of deletedNode.children) {
+    const childDepth = child.depth;
+
+    // Walk up from merged-into node to find a node at the CHILD's depth
+    // This maintains the child's visual position in the document
+    let insertAfterNode = null;
+    let newParent = null;
+    let currentNode = mergedIntoNode;
+
+    while (currentNode !== null) {
+      if (currentNode.depth === childDepth) {
+        // Found a node at the same depth as the child
+        // Child will be inserted after this node
+        insertAfterNode = currentNode;
+        // New parent is this node's parent
+        newParent = getParent(currentNode);
+        break;
+      }
+
+      if (currentNode.depth < childDepth) {
+        // We've gone past the target depth (no exact match)
+        // Use this shallower node as the parent
+        newParent = currentNode;
+        break;
+      }
+
+      // Move up to parent
+      currentNode = getParent(currentNode);
+    }
+
+    // Calculate new depth from the new parent
+    const newChildDepth = newParent ? newParent.depth + 1 : 0;
+
+    // Update child's parent and depth
     child.parentId = newParent?.id ?? null;
     child.depth = newChildDepth;
+
     // Update all descendants' depths recursively
     updateDescendantDepths(child);
   }
