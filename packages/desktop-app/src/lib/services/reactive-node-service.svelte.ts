@@ -921,74 +921,69 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   /**
-   * Promotes children of a node to a new parent using depth-aware selection.
-   * Shared logic used by both combineNodes and deleteNode.
+   * Promotes children of a deleted node to the deleted node's parent.
    *
-   * @param nodeId - The node whose children will be promoted
-   * @param previousNodeId - The previous sibling to use for depth-aware parent selection
+   * When a node is deleted (via Backspace merge), its children should be promoted
+   * to become siblings of the deleted node - i.e., children of the deleted node's parent.
+   * This maintains the document's depth structure.
+   *
+   * Example:
+   * ```
+   * Starting:                After deleting E (merges into D):
+   * • A                      • A
+   *   └─ • B                   └─ • B
+   *        └─ • C                  └─ • C
+   *             └─ • D                  └─ • DE (content merged)
+   *        └─ • E ← deleted        └─ • F  (promoted to B's children)
+   *             └─ • F                  └─ • G (maintains relative depth)
+   *                  └─ • G
+   * ```
+   *
+   * @param nodeId - The node being deleted whose children will be promoted
+   * @param _previousNodeId - Unused (kept for API compatibility)
    */
-  function promoteChildren(nodeId: string, previousNodeId: string): void {
+  function promoteChildren(nodeId: string, _previousNodeId: string): void {
     const children = sharedNodeStore.getNodesForParent(nodeId);
     if (children.length === 0) return;
 
-    // Find the nearest ancestor node at the SAME depth as the deleted node
-    const _deletedNode = sharedNodeStore.getNode(nodeId);
+    // Get the deleted node's parent - children will become siblings of the deleted node
+    const deletedNodeParents = sharedNodeStore.getParentsForNode(nodeId);
+    const newParentForChildren =
+      deletedNodeParents.length > 0 ? deletedNodeParents[0].id : null;
+
+    // Calculate the depth the children should have (same as deleted node's depth)
     const deletedNodeDepth = _uiState[nodeId]?.depth ?? 0;
 
-    // CRITICAL: If deleted node is at root level, promote children to root level too
-    // Don't make them children of the previous sibling - maintain the flat root structure
-    // NOTE: Now using backend query instead of deletedNode.parentId
-    const deletedNodeParents = sharedNodeStore.getParentsForNode(nodeId);
-    let newParentForChildren: string | null;
-    if (deletedNodeParents.length === 0) {
-      newParentForChildren = null; // Promote to root level
-    } else {
-      // For nested nodes, find a parent at the same depth
-      newParentForChildren = previousNodeId;
-      let searchNode: string | null = previousNodeId;
-
-      while (searchNode) {
-        const searchDepth = _uiState[searchNode]?.depth ?? 0;
-        if (searchDepth === deletedNodeDepth) {
-          newParentForChildren = searchNode;
-          break;
-        }
-        if (searchDepth < deletedNodeDepth) {
-          newParentForChildren = searchNode;
-          break;
-        }
-        const searchNodeParents = sharedNodeStore.getParentsForNode(searchNode);
-        searchNode = searchNodeParents.length > 0 ? searchNodeParents[0].id : null;
-      }
-    }
-
-    // Process each child individually
-    // NOTE: beforeSiblingId logic removed - backend handles ordering via fractional ordering
-    // Children will be appended in their existing order (already sorted by backend)
+    // Process each child - move them to be siblings of the deleted node
     for (const child of children) {
-      // NOTE: hierarchy managed by backend via has_child edges
-      sharedNodeStore.updateNode(child.id, {}, viewerSource);
+      // Update parent relationship in shared store
+      // Backend handles the has_child edge via parentId update
+      sharedNodeStore.updateNode(
+        child.id,
+        { parentId: newParentForChildren },
+        viewerSource,
+        { isComputedField: true }
+      );
 
-      // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via LIVE SELECT events
+      // Update ReactiveStructureTree for immediate UI update
+      // Note: When promoting to root level (null parent), we skip the tree update
+      // since root-level nodes are managed separately via _rootNodeIds
+      if (newParentForChildren !== null) {
+        structureTree.moveInMemoryRelationship(nodeId, newParentForChildren, child.id);
+      }
 
-      // CRITICAL: If promoting to root level, add to _rootNodeIds
-      // Must reassign (not mutate) for Svelte 5 reactivity
+      // If promoting to root level, add to _rootNodeIds
       if (newParentForChildren === null && !_rootNodeIds.includes(child.id)) {
         _rootNodeIds = [..._rootNodeIds, child.id];
       }
 
-      // Update depth
-      const currentChildDepth = _uiState[child.id]?.depth ?? 0;
-      const targetDepth = newParentForChildren
-        ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
-        : 0;
-      const newDepth = Math.min(currentChildDepth, targetDepth);
-
+      // Update depth - children move to the same level as the deleted node
       _uiState[child.id] = {
         ..._uiState[child.id],
-        depth: newDepth
+        depth: deletedNodeDepth
       };
 
+      // Update all descendants' depths to maintain relative structure
       updateDescendantDepths(child.id);
     }
   }

@@ -66,7 +66,7 @@ Current structure:     After Shift+Tab:
 
 ### Content Operations
 
-#### Backspace - Node Joining
+#### Backspace - Node Joining/Deletion
 **At beginning of node** (cursor position 0):
 
 ```
@@ -80,13 +80,13 @@ Before:                After:
 canBeCombinedWith() {
   // AI-chat nodes cannot be combined
   if (nodeType === 'ai-chat') return false;
-  
-  // Headers cannot be combined  
+
+  // Headers cannot be combined
   if (content.startsWith('#')) {
     const headerMatch = content.match(/^#{1,6}\s/);
     if (headerMatch) return false;
   }
-  
+
   // Regular text nodes can be combined
   return true;
 }
@@ -97,6 +97,33 @@ canBeCombinedWith() {
 - Positions at exact merge point between content
 - Works with bold, italic, underline formatting
 - Example: "text**bold**" + "more" → cursor after "bold", before "more"
+
+**Child Promotion on Node Deletion** (CRITICAL):
+
+When a node is deleted via Backspace merge, its children are **promoted to the deleted node's parent level**, NOT transferred to the merged-into node. This maintains the relative depth structure of the document.
+
+```
+Starting structure:        After Backspace on E (merges into D):
+• A                        • A
+  └─ • B                     └─ • B
+       └─ • C                     └─ • C
+            └─ • D                     └─ • DE (content merged)
+       └─ • |E  ← cursor            └─ • F  (promoted to B's children)
+            └─ • F                        └─ • G (maintains relative depth)
+                 └─ • G
+```
+
+**Child Promotion Rules**:
+1. **Children move to deleted node's parent**: E's children (F) become siblings of E under B
+2. **Sibling ordering preserved**: F is positioned after C (maintains visual order)
+3. **Subtree structure maintained**: F's children (G) stay as F's children
+4. **Depth adjustment**: Children's depth decreases by 1 (promoted one level up)
+5. **Root-level deletion**: If deleted node is at root, children become root-level nodes
+
+**Why NOT transfer to merged-into node?**:
+- Merging E into D is a **content operation** (joining text)
+- D is at a deeper level than E - making F a child of D would increase depth incorrectly
+- The delete operation should "lift" children up, not push them deeper
 
 #### Enter - New Node Creation
 **Content splitting** with formatting preservation:
@@ -287,10 +314,29 @@ const targetPosition = walkTextNodes(element, textLength);
 ```typescript
 function handleContentMerge(currentNode, prevNode) {
   const junctionPosition = prevNode.content.length;
-  prevNode.content = prevNode.content + currentNode.content;
-  transferChildren(currentNode, prevNode);
+
+  // 1. Merge content into previous node
+  prevNode.content = prevNode.content + stripFormattingSyntax(currentNode.content);
+
+  // 2. Promote children to DELETED NODE'S PARENT (not prevNode!)
+  // This maintains the depth structure - children move up one level
+  const deletedNodeParent = getParent(currentNode);
+  promoteChildrenToParent(currentNode.children, deletedNodeParent);
+
+  // 3. Remove the merged node
   removeNode(currentNode);
+
+  // 4. Position cursor at the merge junction
   positionCursor(prevNode, junctionPosition);
+}
+
+function promoteChildrenToParent(children, newParent) {
+  for (const child of children) {
+    // Move child to be a sibling of the deleted node (under deleted node's parent)
+    child.parentId = newParent?.id ?? null; // null = root level
+    // Child's own children maintain their relative structure
+    // Depth decreases by 1 (promoted one level up)
+  }
 }
 ```
 
