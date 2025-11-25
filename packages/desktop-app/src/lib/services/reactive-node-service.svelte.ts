@@ -986,28 +986,31 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
       : 0;
 
-    // Find the last existing child of the new parent to maintain visual order
-    // Children of deleted node should be inserted after existing children
+    // Find where to insert the promoted children by finding the deleted node's position
+    // among its siblings. Children should be inserted after the node that was before
+    // the deleted node in the visual order.
     let insertAfterNodeId: string | null = null;
-    if (newParentForChildren !== null) {
-      const existingChildren = structureTree.getChildren(newParentForChildren);
-      if (existingChildren.length > 0) {
-        // Get the last child that isn't one of the children being promoted
-        const childIds = new Set(children.map(c => c.id));
-        for (let i = existingChildren.length - 1; i >= 0; i--) {
-          if (!childIds.has(existingChildren[i])) {
-            insertAfterNodeId = existingChildren[i];
-            break;
-          }
-        }
+
+    // Get the deleted node's parent to find its siblings
+    const deletedNodeParents = sharedNodeStore.getParentsForNode(nodeId);
+    const deletedNodeParent = deletedNodeParents.length > 0 ? deletedNodeParents[0].id : null;
+
+    if (deletedNodeParent !== null) {
+      const siblings = structureTree.getChildren(deletedNodeParent);
+      const deletedNodeIndex = siblings.indexOf(nodeId);
+
+      if (deletedNodeIndex > 0) {
+        // There's a sibling before the deleted node - insert after it
+        insertAfterNodeId = siblings[deletedNodeIndex - 1];
       }
+      // If deletedNodeIndex === 0, insertAfterNodeId stays null (insert at beginning)
     }
 
     // Process each child - call moveNodeCommand to properly update has_child edges
     // These operations will be coordinated by the PersistenceCoordinator via deletionDependencies
     for (const child of children) {
       // Use moveNodeCommand to properly update the has_child edge in the backend
-      // Insert after the last existing child to maintain visual order
+      // Insert after the deleted node's previous sibling to maintain visual order
       // Don't await - let PersistenceCoordinator handle sequencing via deletionDependencies
       moveNodeCommand(child.id, newParentForChildren, insertAfterNodeId).catch((error) => {
         console.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChildren}:`, error);
