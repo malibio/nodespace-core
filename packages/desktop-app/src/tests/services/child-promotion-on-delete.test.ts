@@ -146,6 +146,11 @@ describe('Child Promotion on Node Deletion', () => {
       // G should maintain its relative depth to F
       const gDepthAfter = nodeManager.getUIState('node-g')?.depth;
       expect(gDepthAfter).toBe(4); // Maintains visual depth
+
+      // Verify sibling ordering: C should have children [D, F]
+      // F should be positioned after C's existing child D
+      const cChildren = structureTree.getChildren('node-c');
+      expect(cChildren).toEqual(['node-d', 'node-f']);
     });
 
     test('children become children of merged-into node ancestor when cross-branch merge occurs', () => {
@@ -224,6 +229,27 @@ describe('Child Promotion on Node Deletion', () => {
 
       // H maintains its visual depth of 2
       expect(nodeManager.getUIState('node-h')?.depth).toBe(2);
+
+      // Verify sibling ordering: A should have children [B, D, G]
+      // (C was deleted, its child D remains, and F's child G is inserted after B)
+      // Wait - this scenario has A -> B -> C, not A -> [B, C]
+      // So the ordering check would be: B's children should be [C, G]
+      const aChildren = structureTree.getChildren(ROOT_MARKER);
+      expect(aChildren).toContain('node-a');
+
+      const bChildren = structureTree.getChildren('node-b');
+      // B originally had [C, E as siblings]. After E deleted, should have [C, G]
+      // where G is inserted after C (E's previous sibling)
+      // Actually wait - let me re-examine the structure...
+      // B has children: C and (was E). After E deleted, F moves to C's parent (B)
+      // So B's children should be [C, F] with F after C
+      expect(bChildren).toContain('node-c');
+      expect(bChildren).toContain('node-f');
+
+      // F should be after C in B's children list
+      const fIndex = bChildren.indexOf('node-f');
+      const cIndex = bChildren.indexOf('node-c');
+      expect(fIndex).toBeGreaterThan(cIndex);
     });
 
     test('children become root when no ancestor at target depth exists', () => {
@@ -330,6 +356,72 @@ describe('Child Promotion on Node Deletion', () => {
       expect(nodeManager.getUIState('node-c')?.depth).toBe(1);
       expect(nodeManager.getUIState('node-d')?.depth).toBe(1);
       expect(nodeManager.getUIState('node-e')?.depth).toBe(1);
+
+      // Verify sibling ordering: A's children should be [B's previous siblings, C, D, E]
+      // Since B was the only child of A, after deletion the children should be [C, D, E]
+      // But wait - B had no siblings, so the children should be inserted at B's position
+      // which means they should come first: [C, D, E]
+      const aChildren = structureTree.getChildren('node-a');
+      expect(aChildren).toEqual(['node-c', 'node-d', 'node-e']);
+    });
+
+    test('promoted children maintain correct sibling order relative to existing siblings', () => {
+      // Structure:
+      // A (root, depth 0)
+      //   ├── B (depth 1)
+      //   ├── E (depth 1) <- will be deleted
+      //   │     ├── F (depth 2)
+      //   │     └── G (depth 2)
+      //   └── H (depth 1)
+      //
+      // When E is deleted (merged into B):
+      // - F and G should be inserted after B (E's previous sibling)
+      // - Final order should be: A -> [B, F, G, H]
+
+      const parentMapping = setupHierarchy({
+        'node-a': null,
+        'node-b': 'node-a',
+        'node-e': 'node-a',
+        'node-f': 'node-e',
+        'node-g': 'node-e',
+        'node-h': 'node-a'
+      });
+
+      const nodeA = createTestNode('node-a', 'A', 'text', null);
+      const nodeB = createTestNode('node-b', 'B', 'text', 'node-a');
+      const nodeE = createTestNode('node-e', 'E', 'text', 'node-a');
+      const nodeF = createTestNode('node-f', 'F', 'text', 'node-e');
+      const nodeG = createTestNode('node-g', 'G', 'text', 'node-e');
+      const nodeH = createTestNode('node-h', 'H', 'text', 'node-a');
+
+      nodeManager.initializeNodes([nodeA, nodeB, nodeE, nodeF, nodeG, nodeH], {
+        expanded: true,
+        autoFocus: false,
+        inheritHeaderLevel: 0,
+        parentMapping
+      });
+
+      // Verify initial state: A has children [B, E, H]
+      const initialAChildren = structureTree.getChildren('node-a');
+      expect(initialAChildren).toContain('node-b');
+      expect(initialAChildren).toContain('node-e');
+      expect(initialAChildren).toContain('node-h');
+
+      // Delete E by combining with B
+      nodeManager.combineNodes('node-e', 'node-b');
+
+      // Verify E is deleted
+      expect(sharedNodeStore.getNode('node-e')).toBeUndefined();
+
+      // CRITICAL: A's children should now be [B, F, G, H]
+      // F and G are inserted after B (E's previous sibling)
+      const finalAChildren = structureTree.getChildren('node-a');
+      expect(finalAChildren).toEqual(['node-b', 'node-f', 'node-g', 'node-h']);
+
+      // Verify F and G maintain depth 2 (was E's children at depth 2, now A's children)
+      // Actually they should be depth 1 now (A.depth + 1)
+      expect(nodeManager.getUIState('node-f')?.depth).toBe(1);
+      expect(nodeManager.getUIState('node-g')?.depth).toBe(1);
     });
   });
 });

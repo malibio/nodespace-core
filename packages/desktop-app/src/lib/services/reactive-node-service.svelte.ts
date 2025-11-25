@@ -986,38 +986,49 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
       : 0;
 
-    // Find where to insert the promoted children by finding the deleted node's position
-    // among its siblings. Children should be inserted after the node that was before
-    // the deleted node in the visual order.
-    let insertAfterNodeId: string | null = null;
-
-    // Get the deleted node's parent to find its siblings
-    const deletedNodeParents = sharedNodeStore.getParentsForNode(nodeId);
-    const deletedNodeParent = deletedNodeParents.length > 0 ? deletedNodeParents[0].id : null;
-
-    if (deletedNodeParent !== null) {
-      const siblings = structureTree.getChildren(deletedNodeParent);
-      const deletedNodeIndex = siblings.indexOf(nodeId);
-
-      if (deletedNodeIndex > 0) {
-        // There's a sibling before the deleted node - insert after it
-        insertAfterNodeId = siblings[deletedNodeIndex - 1];
-      }
-      // If deletedNodeIndex === 0, insertAfterNodeId stays null (insert at beginning)
-    }
-
     // Process each child - call moveNodeCommand to properly update has_child edges
     // These operations will be coordinated by the PersistenceCoordinator via deletionDependencies
     for (const child of children) {
+      const childDepth = _uiState[child.id]?.depth ?? 0;
+
+      // Find where to insert this child by traversing the new parent's subtree
+      // and finding the last node at the same depth as this child
+      let insertAfterNodeId: string | null = null;
+
+      if (newParentForChildren !== null) {
+        // Walk through new parent's descendants to find last node at child's depth
+        const findLastAtDepth = (parentId: string, targetDepth: number): string | null => {
+          const childrenOfParent = structureTree.getChildren(parentId);
+          let lastMatch: string | null = null;
+
+          for (const descendantId of childrenOfParent) {
+            const depth = _uiState[descendantId]?.depth ?? 0;
+
+            if (depth === targetDepth) {
+              lastMatch = descendantId;
+            }
+
+            // Recurse into deeper nodes
+            if (depth < targetDepth) {
+              const deeperMatch = findLastAtDepth(descendantId, targetDepth);
+              if (deeperMatch) {
+                lastMatch = deeperMatch;
+              }
+            }
+          }
+
+          return lastMatch;
+        };
+
+        insertAfterNodeId = findLastAtDepth(newParentForChildren, childDepth);
+      }
+
       // Use moveNodeCommand to properly update the has_child edge in the backend
-      // Insert after the deleted node's previous sibling to maintain visual order
+      // Insert after the last node at the same depth to maintain visual order
       // Don't await - let PersistenceCoordinator handle sequencing via deletionDependencies
       moveNodeCommand(child.id, newParentForChildren, insertAfterNodeId).catch((error) => {
         console.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChildren}:`, error);
       });
-
-      // Update insertAfterNodeId for next iteration so children maintain their relative order
-      insertAfterNodeId = child.id;
 
       // Update local state for immediate UI feedback
       sharedNodeStore.updateNode(
