@@ -921,40 +921,72 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   }
 
   /**
-   * Promotes children of a deleted node to the deleted node's parent.
+   * Promotes children of a deleted node so they maintain their visual depth.
    *
-   * When a node is deleted (via Backspace merge), its children should be promoted
-   * to become siblings of the deleted node - i.e., children of the deleted node's parent.
-   * This maintains the document's depth structure.
+   * When a node is deleted (via Backspace merge), its children should "shift up"
+   * visually while maintaining their depth level. This means finding an appropriate
+   * parent at (deletedNode.depth) by walking up from the merged-into node.
    *
    * Example:
    * ```
-   * Starting:                After deleting E (merges into D):
-   * • A                      • A
-   *   └─ • B                   └─ • B
-   *        └─ • C                  └─ • C
-   *             └─ • D                  └─ • DE (content merged)
-   *        └─ • E ← deleted        └─ • F  (promoted to B's children)
-   *             └─ • F                  └─ • G (maintains relative depth)
-   *                  └─ • G
+   * Starting:                     After deleting F (merges into "So so so deep"):
+   * • A (depth 0)                 • A (depth 0)
+   * • C (depth 0)                 • C (depth 0)
+   *   └─ • D (depth 1)              └─ • D (depth 1)
+   *        └─ • Even deeper (2)          └─ • Even deeper (2)
+   *             └─ • So so deep (3)           └─ • So so deepF (merged)
+   * • F (depth 0) ← deleted           └─ • G (depth 1, now child of C)
+   *   └─ • G (depth 1)                     └─ • H (depth 2)
+   *        └─ • H (depth 2)
    * ```
    *
+   * The rule: Find the ancestor of the merged-into node that is at the same depth
+   * as the deleted node. Children become children of that ancestor, maintaining
+   * their visual depth.
+   *
    * @param nodeId - The node being deleted whose children will be promoted
-   * @param _previousNodeId - Unused (kept for API compatibility)
+   * @param previousNodeId - The node that content is being merged into
    */
-  function promoteChildren(nodeId: string, _previousNodeId: string): void {
+  function promoteChildren(nodeId: string, previousNodeId: string): void {
     const children = sharedNodeStore.getNodesForParent(nodeId);
     if (children.length === 0) return;
 
-    // Get the deleted node's parent - children will become siblings of the deleted node
-    const deletedNodeParents = sharedNodeStore.getParentsForNode(nodeId);
-    const newParentForChildren =
-      deletedNodeParents.length > 0 ? deletedNodeParents[0].id : null;
-
-    // Calculate the depth the children should have (same as deleted node's depth)
     const deletedNodeDepth = _uiState[nodeId]?.depth ?? 0;
 
-    // Process each child - move them to be siblings of the deleted node
+    // Find the appropriate parent for children by walking up from the merged-into node
+    // We need to find a node at the same depth as the deleted node
+    let newParentForChildren: string | null = null;
+    let currentNode: string | null = previousNodeId;
+
+    while (currentNode !== null) {
+      const currentDepth = _uiState[currentNode]?.depth ?? 0;
+
+      if (currentDepth === deletedNodeDepth) {
+        // Found a node at the same depth as the deleted node
+        // Children should become children of this node
+        newParentForChildren = currentNode;
+        break;
+      }
+
+      if (currentDepth < deletedNodeDepth) {
+        // We've gone past the target depth without finding a match
+        // This shouldn't happen in a well-formed tree, but handle it gracefully
+        // by using this node (children will be at a higher depth than expected)
+        newParentForChildren = currentNode;
+        break;
+      }
+
+      // Move up to parent
+      const parents = sharedNodeStore.getParentsForNode(currentNode);
+      currentNode = parents.length > 0 ? parents[0].id : null;
+    }
+
+    // Calculate the depth children should have (one more than their new parent)
+    const newChildDepth = newParentForChildren !== null
+      ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
+      : 0;
+
+    // Process each child
     for (const child of children) {
       // Update parent relationship in shared store
       // Backend handles the has_child edge via parentId update
@@ -966,8 +998,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       );
 
       // Update ReactiveStructureTree for immediate UI update
-      // Note: When promoting to root level (null parent), we skip the tree update
-      // since root-level nodes are managed separately via _rootNodeIds
       if (newParentForChildren !== null) {
         structureTree.moveInMemoryRelationship(nodeId, newParentForChildren, child.id);
       }
@@ -977,10 +1007,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         _rootNodeIds = [..._rootNodeIds, child.id];
       }
 
-      // Update depth - children move to the same level as the deleted node
+      // Update depth - children maintain their visual position
       _uiState[child.id] = {
         ..._uiState[child.id],
-        depth: deletedNodeDepth
+        depth: newChildDepth
       };
 
       // Update all descendants' depths to maintain relative structure

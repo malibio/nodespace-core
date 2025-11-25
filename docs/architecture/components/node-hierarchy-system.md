@@ -100,30 +100,44 @@ canBeCombinedWith() {
 
 **Child Promotion on Node Deletion** (CRITICAL):
 
-When a node is deleted via Backspace merge, its children are **promoted to the deleted node's parent level**, NOT transferred to the merged-into node. This maintains the relative depth structure of the document.
+When a node is deleted via Backspace merge, its children **maintain their visual depth** by finding an appropriate new parent. The algorithm walks up from the merged-into node to find an ancestor at the same depth as the deleted node.
 
+**Example 1: Same-branch merge**
 ```
 Starting structure:        After Backspace on E (merges into D):
 • A                        • A
   └─ • B                     └─ • B
        └─ • C                     └─ • C
             └─ • D                     └─ • DE (content merged)
-       └─ • |E  ← cursor            └─ • F  (promoted to B's children)
-            └─ • F                        └─ • G (maintains relative depth)
+       └─ • |E  ← cursor            └─ • F  (now child of C, depth 3)
+            └─ • F                        └─ • G (depth 4 maintained)
                  └─ • G
 ```
 
-**Child Promotion Rules**:
-1. **Children move to deleted node's parent**: E's children (F) become siblings of E under B
-2. **Sibling ordering preserved**: F is positioned after C (maintains visual order)
-3. **Subtree structure maintained**: F's children (G) stay as F's children
-4. **Depth adjustment**: Children's depth decreases by 1 (promoted one level up)
-5. **Root-level deletion**: If deleted node is at root, children become root-level nodes
+**Example 2: Cross-branch merge (root-level node deleted)**
+```
+Starting:                     After deleting F (merges into "So so deep"):
+• A (depth 0)                 • A (depth 0)
+• C (depth 0)                 • C (depth 0)
+  └─ • D (depth 1)              └─ • D (depth 1)
+       └─ • Even deeper (2)          └─ • Even deeper (2)
+            └─ • So so deep (3)           └─ • So so deepF (merged)
+• |F (depth 0) ← cursor         └─ • G (depth 1, now child of C)
+  └─ • G (depth 1)                   └─ • H (depth 2)
+       └─ • H (depth 2)
+```
 
-**Why NOT transfer to merged-into node?**:
-- Merging E into D is a **content operation** (joining text)
-- D is at a deeper level than E - making F a child of D would increase depth incorrectly
-- The delete operation should "lift" children up, not push them deeper
+**Child Promotion Rules**:
+1. **Find matching ancestor**: Walk up from merged-into node to find ancestor at same depth as deleted node
+2. **Children become children of that ancestor**: Maintains their visual depth position
+3. **Subtree structure maintained**: Children's own children stay attached
+4. **Depth calculated from new parent**: `newParent.depth + 1`
+5. **Fallback for no match**: If no ancestor at exact depth, use nearest shallower ancestor
+
+**Why this approach?**:
+- Children "shift up" visually but maintain their indentation level
+- The merged-into node may be at a completely different depth (cross-branch merge)
+- Walking up finds the correct structural anchor point for the orphaned children
 
 #### Enter - New Node Creation
 **Content splitting** with formatting preservation:
@@ -318,10 +332,10 @@ function handleContentMerge(currentNode, prevNode) {
   // 1. Merge content into previous node
   prevNode.content = prevNode.content + stripFormattingSyntax(currentNode.content);
 
-  // 2. Promote children to DELETED NODE'S PARENT (not prevNode!)
-  // This maintains the depth structure - children move up one level
-  const deletedNodeParent = getParent(currentNode);
-  promoteChildrenToParent(currentNode.children, deletedNodeParent);
+  // 2. Promote children by finding appropriate parent via depth matching
+  // Children maintain their visual depth by becoming children of an ancestor
+  // at the same depth as the deleted node
+  promoteChildren(currentNode, prevNode);
 
   // 3. Remove the merged node
   removeNode(currentNode);
@@ -330,12 +344,23 @@ function handleContentMerge(currentNode, prevNode) {
   positionCursor(prevNode, junctionPosition);
 }
 
-function promoteChildrenToParent(children, newParent) {
-  for (const child of children) {
-    // Move child to be a sibling of the deleted node (under deleted node's parent)
-    child.parentId = newParent?.id ?? null; // null = root level
-    // Child's own children maintain their relative structure
-    // Depth decreases by 1 (promoted one level up)
+function promoteChildren(deletedNode, mergedIntoNode) {
+  const deletedNodeDepth = deletedNode.depth;
+
+  // Walk up from merged-into node to find ancestor at same depth as deleted node
+  let newParent = mergedIntoNode;
+  while (newParent && newParent.depth > deletedNodeDepth) {
+    newParent = getParent(newParent);
+  }
+
+  // Calculate new depth for children (newParent.depth + 1)
+  const newChildDepth = newParent ? newParent.depth + 1 : 0;
+
+  for (const child of deletedNode.children) {
+    child.parentId = newParent?.id ?? null;
+    child.depth = newChildDepth;
+    // Update all descendants' depths recursively
+    updateDescendantDepths(child);
   }
 }
 ```

@@ -2,19 +2,21 @@
  * Tests for child promotion behavior when nodes are deleted via Backspace merge
  *
  * When a node is deleted (merged into previous node via Backspace), its children
- * should be promoted to the deleted node's parent level, NOT transferred to the
- * merged-into node. This maintains the document's depth structure.
+ * should "shift up" visually while maintaining their depth level. The new parent
+ * is found by walking up from the merged-into node to find an ancestor at the
+ * same depth as the deleted node.
  *
  * Example scenario tested:
  * ```
- * Starting:                After deleting E (merges into D):
- * - A                      - A
- *   - B                      - B
- *     - C                      - C
- *       - D                      - DE (content merged)
- *     - E <- delete            - F  (promoted to B's children)
- *       - F                      - G (maintains relative depth)
- *         - G
+ * Starting:                     After deleting F (merges into "So so so deep"):
+ * - A (depth 0)                 - A (depth 0)
+ * - C (depth 0)                 - C (depth 0)
+ *   - D (depth 1)                 - D (depth 1)
+ *     - Even deeper (2)             - Even deeper (2)
+ *       - So so deep (3)              - So so deepF (merged)
+ * - F (depth 0) <- deleted        - G (depth 1, now child of C)
+ *   - G (depth 1)                   - H (depth 2)
+ *     - H (depth 2)
  * ```
  */
 
@@ -74,20 +76,19 @@ describe('Child Promotion on Node Deletion', () => {
   });
 
   describe('promoteChildren via combineNodes', () => {
-    test('children should be promoted to deleted node parent level, not merged-into node', () => {
+    test('children maintain visual depth when same-branch sibling is deleted', () => {
       // Create the hierarchy:
-      // A (root)
+      // A (root, depth 0)
       //   └── B (depth 1)
       //         ├── C (depth 2)
       //         │     └── D (depth 3)
-      //         └── E (depth 2, sibling of C)
+      //         └── E (depth 2, sibling of C) <- will be deleted
       //               └── F (depth 3)
       //                     └── G (depth 4)
       //
-      // When E is deleted (merged into D), F should become a child of B (E's parent)
-      // NOT a child of D (the merged-into node)
+      // When E is deleted (merged into D), F should become a child of C
+      // (the node at depth 2 in D's ancestry), maintaining F's depth of 3
 
-      // Set up hierarchy in structureTree (simulates backend LIVE SELECT events)
       const parentMapping = setupHierarchy({
         'node-a': null,
         'node-b': 'node-a',
@@ -106,7 +107,6 @@ describe('Child Promotion on Node Deletion', () => {
       const nodeF = createTestNode('node-f', 'F', 'text', 'node-e');
       const nodeG = createTestNode('node-g', 'G', 'text', 'node-f');
 
-      // Initialize with parentMapping for test scenario
       nodeManager.initializeNodes([nodeA, nodeB, nodeC, nodeD, nodeE, nodeF, nodeG], {
         expanded: true,
         autoFocus: false,
@@ -138,23 +138,102 @@ describe('Child Promotion on Node Deletion', () => {
       const mergedD = sharedNodeStore.getNode('node-d');
       expect(mergedD?.content).toBe('DE');
 
-      // CRITICAL: F should now be a child of B (E's parent), NOT D
-      // F's depth should be 2 (same as E was - promoted to E's level)
+      // CRITICAL: F should maintain its visual depth of 3
+      // New parent is C (depth 2 ancestor of D)
       const fDepthAfter = nodeManager.getUIState('node-f')?.depth;
-      expect(fDepthAfter).toBe(2); // Same as E was before deletion
+      expect(fDepthAfter).toBe(3); // Maintains visual depth
 
       // G should maintain its relative depth to F
       const gDepthAfter = nodeManager.getUIState('node-g')?.depth;
-      expect(gDepthAfter).toBe(3); // Was 4, now 3 (one level up)
+      expect(gDepthAfter).toBe(4); // Maintains visual depth
     });
 
-    test('children should become root nodes when parent node at root is deleted', () => {
-      // Structure:
-      // C (root)
-      // A (root) <- will be deleted
-      //   └── B (child of A)
+    test('children become children of merged-into node ancestor when cross-branch merge occurs', () => {
+      // Structure (the user's exact scenario):
+      // A (depth 0)
+      //   └── B (depth 1)
+      // C (depth 0)
+      //   └── D (depth 1)
+      //         └── Even deeper (depth 2)
+      //               └── So so so deep (depth 3)
+      // F (depth 0) <- will be deleted (merged into "So so so deep")
+      //   └── G (depth 1)
+      //         └── H (depth 2)
       //
-      // When A is deleted (merged into C), B should become a root node
+      // When F is deleted (merged into "So so so deep"):
+      // - Find ancestor of "So so so deep" at depth 0 -> C
+      // - G becomes child of C (maintaining G's depth of 1)
+      // - H maintains depth of 2
+
+      const parentMapping = setupHierarchy({
+        'node-a': null,
+        'node-b': 'node-a',
+        'node-c': null,
+        'node-d': 'node-c',
+        'even-deeper': 'node-d',
+        'so-deep': 'even-deeper',
+        'node-f': null,
+        'node-g': 'node-f',
+        'node-h': 'node-g'
+      });
+
+      const nodeA = createTestNode('node-a', 'A', 'text', null);
+      const nodeB = createTestNode('node-b', 'B', 'text', 'node-a');
+      const nodeC = createTestNode('node-c', 'C', 'text', null);
+      const nodeD = createTestNode('node-d', 'D', 'text', 'node-c');
+      const evenDeeper = createTestNode('even-deeper', 'Even deeper', 'text', 'node-d');
+      const soDeep = createTestNode('so-deep', 'So so so deep', 'text', 'even-deeper');
+      const nodeF = createTestNode('node-f', 'F', 'text', null);
+      const nodeG = createTestNode('node-g', 'G', 'text', 'node-f');
+      const nodeH = createTestNode('node-h', 'H', 'text', 'node-g');
+
+      nodeManager.initializeNodes(
+        [nodeA, nodeB, nodeC, nodeD, evenDeeper, soDeep, nodeF, nodeG, nodeH],
+        {
+          expanded: true,
+          autoFocus: false,
+          inheritHeaderLevel: 0,
+          parentMapping
+        }
+      );
+
+      // Verify initial depths
+      expect(nodeManager.getUIState('node-c')?.depth).toBe(0);
+      expect(nodeManager.getUIState('node-d')?.depth).toBe(1);
+      expect(nodeManager.getUIState('even-deeper')?.depth).toBe(2);
+      expect(nodeManager.getUIState('so-deep')?.depth).toBe(3);
+      expect(nodeManager.getUIState('node-f')?.depth).toBe(0);
+      expect(nodeManager.getUIState('node-g')?.depth).toBe(1);
+      expect(nodeManager.getUIState('node-h')?.depth).toBe(2);
+
+      // Delete F by combining with "So so so deep"
+      nodeManager.combineNodes('node-f', 'so-deep');
+
+      // Verify F is deleted
+      expect(sharedNodeStore.getNode('node-f')).toBeUndefined();
+
+      // Verify content was merged
+      const merged = sharedNodeStore.getNode('so-deep');
+      expect(merged?.content).toBe('So so so deepF');
+
+      // CRITICAL: G should now be a child of C (ancestor of so-deep at depth 0)
+      // G maintains its visual depth of 1
+      const gNode = sharedNodeStore.getNode('node-g');
+      expect(gNode?.parentId).toBe('node-c');
+      expect(nodeManager.getUIState('node-g')?.depth).toBe(1);
+
+      // H maintains its visual depth of 2
+      expect(nodeManager.getUIState('node-h')?.depth).toBe(2);
+    });
+
+    test('children become root when no ancestor at target depth exists', () => {
+      // Structure:
+      // C (root, depth 0)
+      // A (root, depth 0) <- will be deleted
+      //   └── B (depth 1)
+      //
+      // When A is deleted (merged into C), there's no ancestor of C at depth 0
+      // (C itself is at depth 0), so B becomes child of C
 
       const parentMapping = setupHierarchy({
         'node-c': null,
@@ -188,73 +267,27 @@ describe('Child Promotion on Node Deletion', () => {
       const mergedC = sharedNodeStore.getNode('node-c');
       expect(mergedC?.content).toBe('CA');
 
-      // B should now be at root level (depth 0)
-      const bDepthAfter = nodeManager.getUIState('node-b')?.depth;
-      expect(bDepthAfter).toBe(0);
+      // B should become child of C (C is at depth 0, which matches A's depth)
+      // B maintains depth of 1
+      const bNode = sharedNodeStore.getNode('node-b');
+      expect(bNode?.parentId).toBe('node-c');
+      expect(nodeManager.getUIState('node-b')?.depth).toBe(1);
     });
 
-    test('depth should be adjusted correctly when children are promoted', () => {
+    test('multiple children all become children of nearest matching ancestor', () => {
       // Structure:
-      // A (depth 0)
-      //   └── B (depth 1)
-      //         ├── C (depth 2)
-      //         │     └── D (depth 3)
-      //         └── E (depth 2)
-      //               └── F (depth 3)
-      //
-      // When E is deleted (merged into D), F should go to depth 2 (E's level)
-
-      const parentMapping = setupHierarchy({
-        'node-a': null,
-        'node-b': 'node-a',
-        'node-c': 'node-b',
-        'node-d': 'node-c',
-        'node-e': 'node-b',
-        'node-f': 'node-e'
-      });
-
-      const nodeA = createTestNode('node-a', 'A', 'text', null);
-      const nodeB = createTestNode('node-b', 'B', 'text', 'node-a');
-      const nodeC = createTestNode('node-c', 'C', 'text', 'node-b');
-      const nodeD = createTestNode('node-d', 'D', 'text', 'node-c');
-      const nodeE = createTestNode('node-e', 'E', 'text', 'node-b');
-      const nodeF = createTestNode('node-f', 'F', 'text', 'node-e');
-
-      nodeManager.initializeNodes([nodeA, nodeB, nodeC, nodeD, nodeE, nodeF], {
-        expanded: true,
-        autoFocus: false,
-        inheritHeaderLevel: 0,
-        parentMapping
-      });
-
-      // Get initial depths
-      const initialEDepth = nodeManager.getUIState('node-e')?.depth;
-      const initialFDepth = nodeManager.getUIState('node-f')?.depth;
-
-      expect(initialEDepth).toBe(2);
-      expect(initialFDepth).toBe(3);
-
-      // Delete E by combining with D
-      nodeManager.combineNodes('node-e', 'node-d');
-
-      // F should now be at depth 2 (same as E was - promoted to E's parent level)
-      const finalFDepth = nodeManager.getUIState('node-f')?.depth;
-      expect(finalFDepth).toBe(2);
-    });
-
-    test('multiple children should all be promoted correctly', () => {
-      // Structure:
-      // A (root)
+      // A (root, depth 0)
       //   └── B (depth 1) <- will be deleted
-      //         ├── C (depth 2, child 1 of B)
-      //         ├── D (depth 2, child 2 of B)
-      //         └── E (depth 2, child 3 of B)
-      // P (root, merge target)
+      //         ├── C (depth 2)
+      //         ├── D (depth 2)
+      //         └── E (depth 2)
       //
-      // When B is deleted (merged into A), C, D, E should become children of A
+      // When B is deleted (merged into A):
+      // - We look for ancestor of A at depth 1 (B's depth)
+      // - A is at depth 0 with no parent, so A becomes the new parent
+      // - C, D, E become children of A with depth = 1 (A.depth + 1)
 
       const parentMapping = setupHierarchy({
-        'node-p': null,
         'node-a': null,
         'node-b': 'node-a',
         'node-c': 'node-b',
@@ -262,14 +295,13 @@ describe('Child Promotion on Node Deletion', () => {
         'node-e': 'node-b'
       });
 
-      const nodeP = createTestNode('node-p', 'Previous', 'text', null);
       const nodeA = createTestNode('node-a', 'A', 'text', null);
       const nodeB = createTestNode('node-b', 'B', 'text', 'node-a');
       const nodeC = createTestNode('node-c', 'C', 'text', 'node-b');
       const nodeD = createTestNode('node-d', 'D', 'text', 'node-b');
       const nodeE = createTestNode('node-e', 'E', 'text', 'node-b');
 
-      nodeManager.initializeNodes([nodeP, nodeA, nodeB, nodeC, nodeD, nodeE], {
+      nodeManager.initializeNodes([nodeA, nodeB, nodeC, nodeD, nodeE], {
         expanded: true,
         autoFocus: false,
         inheritHeaderLevel: 0,
@@ -284,7 +316,17 @@ describe('Child Promotion on Node Deletion', () => {
       // Delete B by combining with A
       nodeManager.combineNodes('node-b', 'node-a');
 
-      // All children of B should now be at depth 1 (B's level under A)
+      // All children of B should now be children of A
+      const cNode = sharedNodeStore.getNode('node-c');
+      const dNode = sharedNodeStore.getNode('node-d');
+      const eNode = sharedNodeStore.getNode('node-e');
+
+      expect(cNode?.parentId).toBe('node-a');
+      expect(dNode?.parentId).toBe('node-a');
+      expect(eNode?.parentId).toBe('node-a');
+
+      // Depth is now 1 (A.depth + 1) since A is the nearest ancestor
+      // Children shift up visually when their parent is merged into grandparent
       expect(nodeManager.getUIState('node-c')?.depth).toBe(1);
       expect(nodeManager.getUIState('node-d')?.depth).toBe(1);
       expect(nodeManager.getUIState('node-e')?.depth).toBe(1);
