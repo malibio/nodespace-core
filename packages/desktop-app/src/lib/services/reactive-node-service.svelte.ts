@@ -716,12 +716,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    // Fire-and-forget backend persistence (don't await - keep UI responsive!)
-    moveNodeCommand(nodeId, targetParentId, null)
-      .then(() => {
-        // Success - backend persisted successfully
-      })
-      .catch((error) => {
+    // Fire-and-forget backend persistence (but wait for node to be persisted first!)
+    (async () => {
+      try {
+        // CRITICAL: Wait for the node to be persisted before moving it
+        // This prevents race conditions when user presses Enter then Tab rapidly
+        await sharedNodeStore.waitForNodeSaves([nodeId]);
+
+        // Now safe to move the node
+        await moveNodeCommand(nodeId, targetParentId, null);
+      } catch (error) {
         // Check if error is ignorable (unit test environment or unpersisted nodes)
         const isIgnorableError =
           error instanceof Error &&
@@ -746,7 +750,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           console.error('[indentNode] Failed to move node, rolled back:', error);
         }
         // Ignorable error: keep UI updates (for unit tests without server)
-      });
+      }
+    })();
 
     return true;
   }
@@ -851,20 +856,24 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    // Fire-and-forget backend persistence (main node + siblings - don't await!)
-    // When outdenting, insert after the old parent (so it appears right below it)
-    const backendPromises = [moveNodeCommand(nodeId, newParentId, oldParentId)];
+    // Fire-and-forget backend persistence (but wait for node to be persisted first!)
+    (async () => {
+      try {
+        // CRITICAL: Wait for the node to be persisted before moving it
+        // This prevents race conditions when user rapidly presses Shift+Tab after creating a node
+        await sharedNodeStore.waitForNodeSaves([nodeId]);
 
-    // Add sibling transfer backend calls
-    for (const siblingId of siblingsBelow) {
-      backendPromises.push(moveNodeCommand(siblingId, nodeId, null));
-    }
+        // Now safe to move the node and its siblings
+        // When outdenting, insert after the old parent (so it appears right below it)
+        const backendPromises = [moveNodeCommand(nodeId, newParentId, oldParentId)];
 
-    Promise.all(backendPromises)
-      .then(() => {
-        // Success - all backend operations persisted successfully
-      })
-      .catch((error) => {
+        // Add sibling transfer backend calls
+        for (const siblingId of siblingsBelow) {
+          backendPromises.push(moveNodeCommand(siblingId, nodeId, null));
+        }
+
+        await Promise.all(backendPromises);
+      } catch (error) {
         // Check if error is ignorable
         const isIgnorableError =
           error instanceof Error &&
@@ -898,7 +907,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           console.error('[outdentNode] Failed to move node, rolled back:', error);
         }
         // Ignorable error: keep UI updates (for unit tests without server)
-      });
+      }
+    })();
 
     return true;
   }
