@@ -986,15 +986,22 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
       : 0;
 
-    // Process each child
+    // Process each child - call moveNodeCommand to properly update has_child edges
+    // These operations will be coordinated by the PersistenceCoordinator via deletionDependencies
     for (const child of children) {
-      // Update parent relationship in shared store
-      // Backend handles the has_child edge via parentId update
-      // NOTE: We must NOT use isComputedField here - the parentId change must be persisted
+      // Use moveNodeCommand to properly update the has_child edge in the backend
+      // This handles both removing the old edge and creating the new one
+      // Don't await - let PersistenceCoordinator handle sequencing via deletionDependencies
+      moveNodeCommand(child.id, newParentForChildren, null).catch((error) => {
+        console.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChildren}:`, error);
+      });
+
+      // Update local state for immediate UI feedback
       sharedNodeStore.updateNode(
         child.id,
         { parentId: newParentForChildren },
-        viewerSource
+        viewerSource,
+        { isComputedField: true } // Skip persistence since moveNodeCommand handles it
       );
 
       // Update ReactiveStructureTree for immediate UI update
