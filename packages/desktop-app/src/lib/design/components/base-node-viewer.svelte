@@ -960,8 +960,9 @@
         content: currentContent ?? ''
       });
 
-      // Add to shared store
-      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
+      // Add to shared store and persist immediately (not in-memory only)
+      // Persist now so it exists in DB when creating the next node with insertAfterNodeId
+      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
       // Add to structure tree for immediate visibility
       reactiveStructureTree.addChild({
@@ -1576,8 +1577,9 @@
                     // Use setEditingNodeFromTypeConversion to prevent blur handler from clearing state
                     focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
 
-                    // Add to shared store (in-memory only, persistence is debounced)
-                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, true);
+                    // Add to shared store with persistence enabled
+                    // Setting false allows debounced content updates to persist to database
+                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                     // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
                     // This makes the promoted node visible in visibleNodesFromStores, which causes

@@ -802,16 +802,26 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     );
 
     // CRITICAL FIX: Update ReactiveStructureTree for browser mode
-    // In Tauri mode, LIVE SELECT events update the tree, but in browser mode we must do it manually
     if (newParentId) {
-      structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId);
+      // Calculate correct order: insert right after oldParentId among newParentId's children
+      // This matches backend behavior which uses insertAfterNodeId = oldParentId
+      const newParentChildren = structureTree.getChildrenWithOrder(newParentId);
+      const oldParentIndex = newParentChildren.findIndex(c => c.nodeId === oldParentId);
+      let insertOrder: number;
+      if (oldParentIndex >= 0) {
+        const oldParentOrder = newParentChildren[oldParentIndex].order;
+        const nextSibling = newParentChildren[oldParentIndex + 1];
+        insertOrder = nextSibling ? (oldParentOrder + nextSibling.order) / 2 : oldParentOrder + 1.0;
+      } else {
+        // Fallback: append to end
+        insertOrder = newParentChildren.length > 0 ? newParentChildren[newParentChildren.length - 1].order + 1.0 : 1.0;
+      }
+      structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
     }
 
     // Transfer siblings below as children (optimistic UI first)
     if (siblingsBelow.length > 0) {
-      // NOTE: Sibling positioning removed (Issue #557) - Backend handles ordering via fractional IDs
-
-      // Transfer each sibling - UI updates first
+      // Transfer each sibling - UI updates first, maintaining their original order
       for (let i = 0; i < siblingsBelow.length; i++) {
         const siblingId = siblingsBelow[i];
         const sibling = sharedNodeStore.getNode(siblingId);
@@ -821,8 +831,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           _uiState[siblingId] = { ..._uiState[siblingId], depth: siblingDepth };
           updateDescendantDepths(siblingId);
 
-          // Update parentId to move sibling to new parent
-          // NOTE: beforeSiblingId removed from node - backend handles ordering via fractional ordering
+          // Update parentId to move sibling to new parent (nodeId = the outdented node)
           sharedNodeStore.updateNode(
             siblingId,
             { parentId: nodeId },
@@ -830,7 +839,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             { isComputedField: true }
           );
 
-          // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
+          // Update structure tree: move sibling from oldParent to nodeId (the outdented node)
+          // Order: sequential integers to maintain original sibling order (AC=1, AD=2, AE=3, etc.)
+          structureTree.moveInMemoryRelationship(oldParentId, nodeId, siblingId, i + 1);
         }
       }
 
@@ -841,7 +852,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _updateTrigger++;
 
     // Fire-and-forget backend persistence (main node + siblings - don't await!)
-    const backendPromises = [moveNodeCommand(nodeId, newParentId, null)];
+    // When outdenting, insert after the old parent (so it appears right below it)
+    const backendPromises = [moveNodeCommand(nodeId, newParentId, oldParentId)];
 
     // Add sibling transfer backend calls
     for (const siblingId of siblingsBelow) {
