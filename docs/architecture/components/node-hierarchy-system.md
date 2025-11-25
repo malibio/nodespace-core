@@ -66,7 +66,7 @@ Current structure:     After Shift+Tab:
 
 ### Content Operations
 
-#### Backspace - Node Joining
+#### Backspace - Node Joining/Deletion
 **At beginning of node** (cursor position 0):
 
 ```
@@ -80,13 +80,13 @@ Before:                After:
 canBeCombinedWith() {
   // AI-chat nodes cannot be combined
   if (nodeType === 'ai-chat') return false;
-  
-  // Headers cannot be combined  
+
+  // Headers cannot be combined
   if (content.startsWith('#')) {
     const headerMatch = content.match(/^#{1,6}\s/);
     if (headerMatch) return false;
   }
-  
+
   // Regular text nodes can be combined
   return true;
 }
@@ -97,6 +97,48 @@ canBeCombinedWith() {
 - Positions at exact merge point between content
 - Works with bold, italic, underline formatting
 - Example: "text**bold**" + "more" → cursor after "bold", before "more"
+
+**Child Promotion on Node Deletion** (CRITICAL):
+
+When a node is deleted via Backspace merge, its children **maintain their visual depth** by finding an appropriate new parent. The algorithm processes each child individually, walking up from the merged-into node to find a node at the **child's depth** (not the deleted node's depth). This per-child approach ensures each child finds its correct insertion point based on its own visual position.
+
+**Example 1: Same-branch merge**
+```
+Starting structure:        After Backspace on E (merges into D):
+• A                        • A
+  └─ • B                     └─ • B
+       └─ • C                     └─ • C
+            └─ • D                     └─ • DE (content merged)
+       └─ • |E  ← cursor            └─ • F  (now child of C, depth 3)
+            └─ • F                        └─ • G (depth 4 maintained)
+                 └─ • G
+```
+
+**Example 2: Cross-branch merge (root-level node deleted)**
+```
+Starting:                     After deleting F (merges into "So so deep"):
+• A (depth 0)                 • A (depth 0)
+• C (depth 0)                 • C (depth 0)
+  └─ • D (depth 1)              └─ • D (depth 1)
+       └─ • Even deeper (2)          └─ • Even deeper (2)
+            └─ • So so deep (3)           └─ • So so deepF (merged)
+• |F (depth 0) ← cursor         └─ • G (depth 1, now child of C)
+  └─ • G (depth 1)                   └─ • H (depth 2)
+       └─ • H (depth 2)
+```
+
+**Child Promotion Rules**:
+1. **Per-child processing**: Each child is processed individually based on its own depth
+2. **Find matching depth**: Walk up from merged-into node to find a node at the **child's** depth
+3. **Insertion point**: Child is inserted after the node found at matching depth
+4. **New parent**: The parent of the matching-depth node becomes the child's new parent
+5. **Fallback for no match**: If no node at exact depth, use nearest shallower ancestor as parent
+
+**Why this approach?**:
+- Each child maintains its own visual depth/indentation level
+- Works correctly even when children have different depths
+- The merged-into node may be at a completely different depth (cross-branch merge)
+- Walking up finds the correct structural anchor point for each orphaned child
 
 #### Enter - New Node Creation
 **Content splitting** with formatting preservation:
@@ -287,10 +329,65 @@ const targetPosition = walkTextNodes(element, textLength);
 ```typescript
 function handleContentMerge(currentNode, prevNode) {
   const junctionPosition = prevNode.content.length;
-  prevNode.content = prevNode.content + currentNode.content;
-  transferChildren(currentNode, prevNode);
+
+  // 1. Merge content into previous node
+  prevNode.content = prevNode.content + stripFormattingSyntax(currentNode.content);
+
+  // 2. Promote children by finding appropriate parent via depth matching
+  // Children maintain their visual depth by becoming children of an ancestor
+  // at the same depth as the deleted node
+  promoteChildren(currentNode, prevNode);
+
+  // 3. Remove the merged node
   removeNode(currentNode);
+
+  // 4. Position cursor at the merge junction
   positionCursor(prevNode, junctionPosition);
+}
+
+function promoteChildren(deletedNode, mergedIntoNode) {
+  // Process each child individually - each may find a different parent
+  // based on its own visual depth
+  for (const child of deletedNode.children) {
+    const childDepth = child.depth;
+
+    // Walk up from merged-into node to find a node at the CHILD's depth
+    // This maintains the child's visual position in the document
+    let insertAfterNode = null;
+    let newParent = null;
+    let currentNode = mergedIntoNode;
+
+    while (currentNode !== null) {
+      if (currentNode.depth === childDepth) {
+        // Found a node at the same depth as the child
+        // Child will be inserted after this node
+        insertAfterNode = currentNode;
+        // New parent is this node's parent
+        newParent = getParent(currentNode);
+        break;
+      }
+
+      if (currentNode.depth < childDepth) {
+        // We've gone past the target depth (no exact match)
+        // Use this shallower node as the parent
+        newParent = currentNode;
+        break;
+      }
+
+      // Move up to parent
+      currentNode = getParent(currentNode);
+    }
+
+    // Calculate new depth from the new parent
+    const newChildDepth = newParent ? newParent.depth + 1 : 0;
+
+    // Update child's parent and depth
+    child.parentId = newParent?.id ?? null;
+    child.depth = newChildDepth;
+
+    // Update all descendants' depths recursively
+    updateDescendantDepths(child);
+  }
 }
 ```
 
