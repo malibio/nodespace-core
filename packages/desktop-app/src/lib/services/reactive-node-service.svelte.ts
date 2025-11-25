@@ -951,100 +951,70 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const children = sharedNodeStore.getNodesForParent(nodeId);
     if (children.length === 0) return;
 
-    const deletedNodeDepth = _uiState[nodeId]?.depth ?? 0;
-
-    // Find the appropriate parent for children by walking up from the merged-into node
-    // We need to find a node at the same depth as the deleted node
-    let newParentForChildren: string | null = null;
-    let currentNode: string | null = previousNodeId;
-
-    while (currentNode !== null) {
-      const currentDepth = _uiState[currentNode]?.depth ?? 0;
-
-      if (currentDepth === deletedNodeDepth) {
-        // Found a node at the same depth as the deleted node
-        // Children should become children of this node
-        newParentForChildren = currentNode;
-        break;
-      }
-
-      if (currentDepth < deletedNodeDepth) {
-        // We've gone past the target depth without finding a match
-        // This shouldn't happen in a well-formed tree, but handle it gracefully
-        // by using this node (children will be at a higher depth than expected)
-        newParentForChildren = currentNode;
-        break;
-      }
-
-      // Move up to parent
-      const parents = sharedNodeStore.getParentsForNode(currentNode);
-      currentNode = parents.length > 0 ? parents[0].id : null;
-    }
-
-    // Calculate the depth children should have (one more than their new parent)
-    const newChildDepth = newParentForChildren !== null
-      ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
-      : 0;
-
-    // Process each child - call moveNodeCommand to properly update has_child edges
-    // These operations will be coordinated by the PersistenceCoordinator via deletionDependencies
+    // Process each child - find parent and insertion point by walking up from merged-into node
     for (const child of children) {
       const childDepth = _uiState[child.id]?.depth ?? 0;
 
-      // Find where to insert this child by traversing the new parent's subtree
-      // and finding the last node at the same depth as this child
+      // Walk up from merged-into node to find a node at the child's depth
+      // That node becomes the insertAfterNodeId
+      // The parent of that node becomes the new parent for the child
       let insertAfterNodeId: string | null = null;
+      let newParentForChild: string | null = null;
+      let currentNode: string | null = previousNodeId;
 
-      if (newParentForChildren !== null) {
-        // Walk through new parent's descendants to find last node at child's depth
-        const findLastAtDepth = (parentId: string, targetDepth: number): string | null => {
-          const childrenOfParent = structureTree.getChildren(parentId);
-          let lastMatch: string | null = null;
+      while (currentNode !== null) {
+        const currentDepth = _uiState[currentNode]?.depth ?? 0;
 
-          for (const descendantId of childrenOfParent) {
-            const depth = _uiState[descendantId]?.depth ?? 0;
+        if (currentDepth === childDepth) {
+          // Found a node at the same depth as the child
+          // Child will be inserted after this node
+          insertAfterNodeId = currentNode;
 
-            if (depth === targetDepth) {
-              lastMatch = descendantId;
-            }
+          // New parent is this node's parent
+          const parents = sharedNodeStore.getParentsForNode(currentNode);
+          newParentForChild = parents.length > 0 ? parents[0].id : null;
+          break;
+        }
 
-            // Recurse into deeper nodes
-            if (depth < targetDepth) {
-              const deeperMatch = findLastAtDepth(descendantId, targetDepth);
-              if (deeperMatch) {
-                lastMatch = deeperMatch;
-              }
-            }
-          }
+        if (currentDepth < childDepth) {
+          // We've gone past the target depth
+          // This happens when child should be at root or there's no match
+          newParentForChild = currentNode;
+          break;
+        }
 
-          return lastMatch;
-        };
-
-        insertAfterNodeId = findLastAtDepth(newParentForChildren, childDepth);
+        // Move up to parent
+        const parents = sharedNodeStore.getParentsForNode(currentNode);
+        currentNode = parents.length > 0 ? parents[0].id : null;
       }
 
+      // Calculate the depth this child should have
+      const newChildDepth = newParentForChild !== null
+        ? (_uiState[newParentForChild]?.depth ?? 0) + 1
+        : 0;
+
       // Use moveNodeCommand to properly update the has_child edge in the backend
-      // Insert after the last node at the same depth to maintain visual order
+      // Insert after the node at the same depth to maintain visual order
       // Don't await - let PersistenceCoordinator handle sequencing via deletionDependencies
-      moveNodeCommand(child.id, newParentForChildren, insertAfterNodeId).catch((error) => {
-        console.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChildren}:`, error);
+      moveNodeCommand(child.id, newParentForChild, insertAfterNodeId).catch((error) => {
+        console.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChild}:`, error);
       });
 
       // Update local state for immediate UI feedback
       sharedNodeStore.updateNode(
         child.id,
-        { parentId: newParentForChildren },
+        { parentId: newParentForChild },
         viewerSource,
         { isComputedField: true } // Skip persistence since moveNodeCommand handles it
       );
 
       // Update ReactiveStructureTree for immediate UI update
-      if (newParentForChildren !== null) {
-        structureTree.moveInMemoryRelationship(nodeId, newParentForChildren, child.id);
+      if (newParentForChild !== null) {
+        structureTree.moveInMemoryRelationship(nodeId, newParentForChild, child.id);
       }
 
       // If promoting to root level, add to _rootNodeIds
-      if (newParentForChildren === null && !_rootNodeIds.includes(child.id)) {
+      if (newParentForChild === null && !_rootNodeIds.includes(child.id)) {
         _rootNodeIds = [..._rootNodeIds, child.id];
       }
 
