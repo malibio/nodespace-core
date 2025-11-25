@@ -358,8 +358,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
               // Move children back to original parent in structure tree
               structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
             }
-            // TODO: Emit error event for UI notification (toast/banner)
-            // events.operationFailed?.('transfer_children', error);
+            // TODO(#656): Emit error event for UI notification (toast/banner)
+            // https://github.com/malibio/nodespace-core/issues/656
           }
         });
     }
