@@ -986,15 +986,35 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ? (_uiState[newParentForChildren]?.depth ?? 0) + 1
       : 0;
 
+    // Find the last existing child of the new parent to maintain visual order
+    // Children of deleted node should be inserted after existing children
+    let insertAfterNodeId: string | null = null;
+    if (newParentForChildren !== null) {
+      const existingChildren = structureTree.getChildren(newParentForChildren);
+      if (existingChildren.length > 0) {
+        // Get the last child that isn't one of the children being promoted
+        const childIds = new Set(children.map(c => c.id));
+        for (let i = existingChildren.length - 1; i >= 0; i--) {
+          if (!childIds.has(existingChildren[i])) {
+            insertAfterNodeId = existingChildren[i];
+            break;
+          }
+        }
+      }
+    }
+
     // Process each child - call moveNodeCommand to properly update has_child edges
     // These operations will be coordinated by the PersistenceCoordinator via deletionDependencies
     for (const child of children) {
       // Use moveNodeCommand to properly update the has_child edge in the backend
-      // This handles both removing the old edge and creating the new one
+      // Insert after the last existing child to maintain visual order
       // Don't await - let PersistenceCoordinator handle sequencing via deletionDependencies
-      moveNodeCommand(child.id, newParentForChildren, null).catch((error) => {
+      moveNodeCommand(child.id, newParentForChildren, insertAfterNodeId).catch((error) => {
         console.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChildren}:`, error);
       });
+
+      // Update insertAfterNodeId for next iteration so children maintain their relative order
+      insertAfterNodeId = child.id;
 
       // Update local state for immediate UI feedback
       sharedNodeStore.updateNode(
