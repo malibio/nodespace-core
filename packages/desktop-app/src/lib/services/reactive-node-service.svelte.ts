@@ -866,19 +866,21 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Fire-and-forget backend persistence (but wait for nodes to be persisted first!)
     (async () => {
       try {
-        // CRITICAL: Flush AND wait for BOTH the node AND oldParentId to be fully persisted before moving.
+        // CRITICAL: Flush ALL pending saves before moveNode.
         // The backend's moveNode needs oldParentId to exist as a child of newParentId in the has_child edge table.
         //
         // Race condition scenario:
-        // 1. User rapidly creates nested nodes via Tab: A → B → C → D (each takes ~500ms debounce)
-        // 2. User immediately outdents D (Shift+Tab)
-        // 3. moveNode(D, B, C) is called - backend looks for C in B's has_child edges
-        // 4. If C's creation (and its edge to B) is still in the debounce queue, backend fails with "Sibling not found"
+        // 1. User rapidly creates nodes via Enter: Date → A → B → C (each takes ~500ms debounce)
+        // 2. User immediately outdents C (Shift+Tab)
+        // 3. moveNode(C, A, B) is called - backend looks for B in A's has_child edges
+        // 4. If B's creation (and its edge to A) is still in the debounce queue, backend fails with "Sibling not found"
         //
-        // Solution: Use flushAndWaitForNodeSaves which:
-        // - Triggers any debounced operations immediately (bypasses the 500ms debounce timer)
-        // - Waits for completion (ensures node AND edge are persisted before continuing)
-        await sharedNodeStore.flushAndWaitForNodeSaves([nodeId, oldParentId]);
+        // The tricky part is that B was created as a sibling of A, so B's edge is Date → B.
+        // We need to ensure ALL pending saves are flushed to guarantee all edges exist.
+        //
+        // Solution: Use flushAllPendingSaves to clear the entire pending queue.
+        // This is more aggressive but guarantees no edge is missing.
+        await sharedNodeStore.flushAllPendingSaves();
 
         // Now safe to move the node and its siblings
         // When outdenting, insert after the old parent (so it appears right below it)

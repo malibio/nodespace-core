@@ -248,6 +248,24 @@ class SimplePersistenceCoordinator {
   getMetrics(): { pendingOperations: number } {
     return { pendingOperations: this.pendingOperations.size };
   }
+
+  /**
+   * Flush ALL pending operations immediately and wait for completion.
+   *
+   * This is more aggressive than flushAndWaitForNodes - it ensures the entire
+   * pending operation queue is cleared before proceeding. Use this for structural
+   * operations like moveNode that may depend on edges created by any pending save.
+   *
+   * @param timeoutMs - Timeout in milliseconds (default 5000)
+   * @returns Set of node IDs that failed to persist
+   */
+  async flushAll(timeoutMs = 5000): Promise<Set<string>> {
+    const allNodeIds = Array.from(this.pendingOperations.keys());
+    if (allNodeIds.length === 0) {
+      return new Set();
+    }
+    return this.flushAndWaitForNodes(allNodeIds, timeoutMs);
+  }
 }
 
 // Use simple coordinator
@@ -1357,6 +1375,20 @@ export class SharedNodeStore {
    */
   async flushAndWaitForNodeSaves(nodeIds: string[], timeoutMs = 5000): Promise<Set<string>> {
     return PersistenceCoordinator.getInstance().flushAndWaitForNodes(nodeIds, timeoutMs);
+  }
+
+  /**
+   * Flush ALL pending saves and wait for completion.
+   *
+   * This is more aggressive than flushAndWaitForNodeSaves - it ensures the entire
+   * pending operation queue is cleared before proceeding. Use this for structural
+   * operations like moveNode that may depend on edges created by any pending save.
+   *
+   * @param timeoutMs - Timeout in milliseconds (default 5000)
+   * @returns Set of node IDs that failed to save
+   */
+  async flushAllPendingSaves(timeoutMs = 5000): Promise<Set<string>> {
+    return PersistenceCoordinator.getInstance().flushAll(timeoutMs);
   }
 
   /**
