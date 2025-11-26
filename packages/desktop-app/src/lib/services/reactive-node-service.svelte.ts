@@ -908,8 +908,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    // Fire-and-forget backend persistence (but wait for nodes to be persisted first!)
-    (async () => {
+    // Track move operation to prevent race conditions with subsequent indent/outdent
+    // CRITICAL: Other hierarchy operations must wait for this move to complete
+    const moveOperation = (async () => {
       try {
         // CRITICAL: Wait for any pending move operations (from indent) to complete.
         // This prevents "Sibling not found" errors when:
@@ -968,6 +969,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // Ignorable error: keep UI updates (for unit tests without server)
       }
     })();
+
+    // Track this move so subsequent indent/outdent operations wait for it
+    trackMoveOperation(nodeId, moveOperation);
 
     return true;
   }

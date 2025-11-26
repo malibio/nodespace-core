@@ -1360,29 +1360,11 @@ export class SharedNodeStore {
   }
 
   /**
-   * Flush pending saves for specific nodes and wait for completion.
-   *
-   * Unlike waitForNodeSaves which only waits for in-flight operations,
-   * this method also triggers debounced operations that haven't started yet.
-   * This ensures nodes are fully persisted including their parent-child edges.
-   *
-   * Use this when you need to ensure specific nodes are fully persisted
-   * before performing dependent operations (e.g., moveNode that references them).
-   *
-   * @param nodeIds - Array of node IDs to flush and wait for
-   * @param timeoutMs - Timeout in milliseconds (default 5000)
-   * @returns Set of node IDs that failed to save
-   */
-  async flushAndWaitForNodeSaves(nodeIds: string[], timeoutMs = 5000): Promise<Set<string>> {
-    return PersistenceCoordinator.getInstance().flushAndWaitForNodes(nodeIds, timeoutMs);
-  }
-
-  /**
    * Flush ALL pending saves and wait for completion.
    *
-   * This is more aggressive than flushAndWaitForNodeSaves - it ensures the entire
-   * pending operation queue is cleared before proceeding. Use this for structural
-   * operations like moveNode that may depend on edges created by any pending save.
+   * This ensures the entire pending operation queue is cleared before proceeding.
+   * Use this for structural operations like moveNode that may depend on edges
+   * created by any pending save.
    *
    * @param timeoutMs - Timeout in milliseconds (default 5000)
    * @returns Set of node IDs that failed to save
