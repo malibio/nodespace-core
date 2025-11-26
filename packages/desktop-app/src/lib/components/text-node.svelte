@@ -46,6 +46,8 @@
   };
 
   // Handle nodeTypeChanged event and forward to parent
+  // Explicit dispatch is needed (vs automatic on: forwarding) because nodeTypeChanged
+  // carries detail data that must be preserved when bubbling up through TextNode
   function handleNodeTypeChanged(e: CustomEvent) {
     dispatch('nodeTypeChanged', e.detail);
   }
