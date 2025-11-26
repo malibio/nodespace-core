@@ -40,6 +40,36 @@ export interface NodeManagerEvents {
   nodeDeleted: (nodeId: string) => void;
 }
 
+// Track pending move operations to prevent race conditions
+// When indent/outdent fires a moveNodeCommand, subsequent operations must wait for it
+const pendingMoveOperations: Map<string, Promise<void>> = new Map();
+
+/**
+ * Wait for all pending move operations to complete before starting a new hierarchy change.
+ * This prevents "Sibling not found" errors during rapid Enter+Tab+Shift+Tab sequences.
+ *
+ * Race condition scenario:
+ * 1. User indents B under A (fires moveNodeCommand async)
+ * 2. User immediately outdents C (which references B as insertAfterNodeId)
+ * 3. If step 1's moveNodeCommand hasn't completed, edge A→B doesn't exist yet
+ * 4. Backend fails with "Sibling not found: B" because B isn't in A's has_child edges
+ */
+async function waitForPendingMoveOperations(): Promise<void> {
+  if (pendingMoveOperations.size === 0) return;
+  await Promise.all(pendingMoveOperations.values());
+}
+
+/**
+ * Track a move operation and automatically clean up when done
+ */
+function trackMoveOperation(nodeId: string, operation: Promise<void>): Promise<void> {
+  const trackedPromise = operation.finally(() => {
+    pendingMoveOperations.delete(nodeId);
+  });
+  pendingMoveOperations.set(nodeId, trackedPromise);
+  return trackedPromise;
+}
+
 export function createReactiveNodeService(events: NodeManagerEvents) {
   // ADAPTER PATTERN: Delegate data storage to SharedNodeStore
   // This service now focuses on per-viewer UI state and Svelte reactivity
@@ -723,9 +753,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    // Fire-and-forget backend persistence (but wait for node to be persisted first!)
-    (async () => {
+    // Track move operation to prevent race conditions with subsequent indent/outdent
+    // CRITICAL: Other hierarchy operations must wait for this move to complete
+    // before they can reference this node's edges in the database
+    const moveOperation = (async () => {
       try {
+        // CRITICAL: Wait for any pending move operations to complete first.
+        // This ensures move operations are processed in order, preventing edge conflicts.
+        await waitForPendingMoveOperations();
+
         // CRITICAL: Wait for the node to be persisted before moving it
         // This prevents race conditions when user presses Enter then Tab rapidly
         await sharedNodeStore.waitForNodeSaves([nodeId]);
@@ -760,6 +796,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
     })();
 
+    // Track this move so subsequent indent/outdent operations wait for it
+    trackMoveOperation(nodeId, moveOperation);
+
     return true;
   }
 
@@ -773,8 +812,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     const parent = parents[0];
     const oldParentId = parent.id;
-    const parentParentsQuery = sharedNodeStore.getParentsForNode(parent.id);
-    const newParentId = parent.parentId ?? (parentParentsQuery.length > 0 ? parentParentsQuery[0].id : null);
+
+    // CRITICAL FIX: Use structureTree as authoritative source for parent hierarchy
+    // The Node.parentId field can be stale during rapid operations because:
+    // 1. indentNode updates structureTree synchronously via moveInMemoryRelationship
+    // 2. But Node.parentId in SharedNodeStore may not reflect the latest hierarchy
+    // ReactiveStructureTree is the single source of truth for hierarchy during rapid edits
+    const structureTreeParentId = structureTree.getParent(oldParentId);
+    const newParentId = structureTreeParentId ?? parent.parentId ?? null;
 
     // Find siblings that come after this node (they will become children)
     // Backend returns children already sorted via fractional ordering
@@ -866,20 +911,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Fire-and-forget backend persistence (but wait for nodes to be persisted first!)
     (async () => {
       try {
+        // CRITICAL: Wait for any pending move operations (from indent) to complete.
+        // This prevents "Sibling not found" errors when:
+        // 1. User indents B under A (moveNodeCommand in progress, creating edge A→B)
+        // 2. User immediately outdents C (needs to insert after B under A)
+        // 3. If A→B edge doesn't exist yet, backend fails with "Sibling not found: B"
+        await waitForPendingMoveOperations();
+
         // CRITICAL: Flush ALL pending saves before moveNode.
-        // The backend's moveNode needs oldParentId to exist as a child of newParentId in the has_child edge table.
-        //
-        // Race condition scenario:
-        // 1. User rapidly creates nodes via Enter: Date → A → B → C (each takes ~500ms debounce)
-        // 2. User immediately outdents C (Shift+Tab)
-        // 3. moveNode(C, A, B) is called - backend looks for B in A's has_child edges
-        // 4. If B's creation (and its edge to A) is still in the debounce queue, backend fails with "Sibling not found"
-        //
-        // The tricky part is that B was created as a sibling of A, so B's edge is Date → B.
-        // We need to ensure ALL pending saves are flushed to guarantee all edges exist.
-        //
-        // Solution: Use flushAllPendingSaves to clear the entire pending queue.
-        // This is more aggressive but guarantees no edge is missing.
+        // Ensures all node creations (and their edges) are persisted.
         await sharedNodeStore.flushAllPendingSaves();
 
         // Now safe to move the node and its siblings

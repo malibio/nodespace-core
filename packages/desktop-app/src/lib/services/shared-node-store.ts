@@ -1392,6 +1392,14 @@ export class SharedNodeStore {
   }
 
   /**
+   * Get the current count of pending persistence operations.
+   * Useful for debugging race conditions.
+   */
+  getPendingOperationsCount(): number {
+    return PersistenceCoordinator.getInstance().getMetrics().pendingOperations;
+  }
+
+  /**
    * DEPRECATED: Ensure entire ancestor chain is persisted before persisting a child node
    *
    * This method is now a no-op. Parent/child relationships are managed via graph edges
