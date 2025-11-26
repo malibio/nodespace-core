@@ -249,6 +249,7 @@ export class TextareaController {
       } else {
         effectiveSource = 'user';
       }
+
       this.patternState = new PatternState(effectiveSource);
 
       (this.element as unknown as { _textareaController: TextareaController })._textareaController =
@@ -353,8 +354,18 @@ export class TextareaController {
         return;
       }
 
+      // Preserve cursor position when updating content from external source
+      // Setting element.value resets cursor to position 0
+      const cursorPosition = this.element.selectionStart;
+      const cursorEnd = this.element.selectionEnd;
+
       this.element.value = content;
       this.adjustHeight();
+
+      // Restore cursor position, clamping to new content length
+      const newPosition = Math.min(cursorPosition, content.length);
+      const newEnd = Math.min(cursorEnd, content.length);
+      this.element.setSelectionRange(newPosition, newEnd);
     }
 
     public forceUpdateContent(content: string): void {
@@ -717,11 +728,8 @@ export class TextareaController {
     }
 
     private detectNodeTypeConversion(content: string): void {
-      // Type-locked nodes (inherited) never detect patterns or revert
-      if (this.patternState.isTypeLocked) {
-        return;
-      }
-
+      // All nodes should detect pattern changes - inherited nodes behave the same
+      // as pattern-detected nodes for reversion (user clarification)
       const detection = pluginRegistry.detectPatternInContent(content);
 
       if (detection) {
@@ -788,8 +796,10 @@ export class TextareaController {
             nodeType: config.targetNodeType
           }, content);
         });
-      } else if (this.nodeType !== 'text' && this.patternState.canRevert) {
-        // Pattern was deleted - check if we should revert to text
+      } else if (this.nodeType !== 'text') {
+        // No pattern detected and node is not text - revert to text
+        // This handles both pattern-detected and inherited nodes when syntax is deleted
+        // e.g., "# Hello" -> "#Hello" (space deleted, no longer matches header pattern)
         const cursorPosition = this.getCursorPosition();
 
         untrack(() => {

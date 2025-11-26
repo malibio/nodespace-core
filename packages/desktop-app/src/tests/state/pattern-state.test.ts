@@ -77,14 +77,16 @@ describe('PatternState', () => {
 
       expect(state.creationSource).toBe('inherited');
       expect(state.detectedPattern).toBeNull();
-      expect(state.canRevert).toBe(false);
+      // Inherited nodes CAN revert (user clarification: all nodes detect pattern changes)
+      expect(state.canRevert).toBe(true);
       expect(state.shouldDetectPatterns).toBe(false);
-      expect(state.isTypeLocked).toBe(true);
+      // isTypeLocked is deprecated and always returns false
+      expect(state.isTypeLocked).toBe(false);
     });
   });
 
   describe('canRevert', () => {
-    it('should return true only for pattern source with detected pattern', () => {
+    it('should return true for pattern source with detected pattern and inherited source', () => {
       const patternMatch = createPatternMatch(mockHeaderPattern, '# Hello')!;
 
       // Pattern source with pattern - can revert
@@ -95,9 +97,9 @@ describe('PatternState', () => {
       const userState = new PatternState('user');
       expect(userState.canRevert).toBe(false);
 
-      // Inherited source - cannot revert (type locked)
+      // Inherited source - CAN revert (all nodes detect pattern changes)
       const inheritedState = new PatternState('inherited');
-      expect(inheritedState.canRevert).toBe(false);
+      expect(inheritedState.canRevert).toBe(true);
 
       // Pattern source without pattern - cannot revert
       const patternNoMatch = new PatternState('pattern');
@@ -114,7 +116,7 @@ describe('PatternState', () => {
   });
 
   describe('shouldWatchForReversion', () => {
-    it('should return true only for pattern source with detected pattern', () => {
+    it('should return true for pattern source with detected pattern and inherited source', () => {
       const patternMatch = createPatternMatch(mockHeaderPattern, '# Hello')!;
 
       const patternState = new PatternState('pattern', patternMatch);
@@ -123,16 +125,18 @@ describe('PatternState', () => {
       const userState = new PatternState('user');
       expect(userState.shouldWatchForReversion).toBe(false);
 
+      // Inherited source also watches for reversion (all nodes detect pattern changes)
       const inheritedState = new PatternState('inherited');
-      expect(inheritedState.shouldWatchForReversion).toBe(false);
+      expect(inheritedState.shouldWatchForReversion).toBe(true);
     });
   });
 
   describe('isTypeLocked', () => {
-    it('should return true only for inherited source', () => {
+    it('should always return false (deprecated)', () => {
+      // isTypeLocked is deprecated - all nodes can now revert
       expect(new PatternState('user').isTypeLocked).toBe(false);
       expect(new PatternState('pattern').isTypeLocked).toBe(false);
-      expect(new PatternState('inherited').isTypeLocked).toBe(true);
+      expect(new PatternState('inherited').isTypeLocked).toBe(false);
     });
   });
 
@@ -222,13 +226,15 @@ describe('PatternState', () => {
       expect(state.creationSource).toBe('user');
     });
 
-    it('should not revert for inherited source', () => {
+    it('should revert for inherited source (all nodes can revert)', () => {
       const state = new PatternState('inherited');
 
+      // Inherited nodes CAN revert when syntax is deleted
+      // Since no pattern is stored, it always reverts
       const shouldRevert = state.attemptRevert('any content');
 
-      expect(shouldRevert).toBe(false);
-      expect(state.creationSource).toBe('inherited');
+      expect(shouldRevert).toBe(true);
+      expect(state.creationSource).toBe('user');
     });
   });
 
@@ -258,15 +264,17 @@ describe('PatternState', () => {
       expect(state.canRevert).toBe(true);
     });
 
-    it('should not downgrade inherited to pattern', () => {
+    it('should store pattern for inherited source (for reversion capability)', () => {
       const state = new PatternState('inherited');
       const patternMatch = createPatternMatch(mockHeaderPattern, '# Hello')!;
 
       state.setPatternExists(patternMatch);
 
+      // Source stays 'inherited' but pattern is stored for reversion detection
       expect(state.creationSource).toBe('inherited');
-      expect(state.detectedPattern).toBeNull();
-      expect(state.isTypeLocked).toBe(true);
+      expect(state.detectedPattern).toStrictEqual(patternMatch);
+      // isTypeLocked is deprecated, always false
+      expect(state.isTypeLocked).toBe(false);
     });
   });
 
@@ -342,8 +350,10 @@ describe('createPatternState Factory', () => {
     it('should return inherited source for Enter on typed node', () => {
       const state = createPatternState(false, true, 'header');
       expect(state.creationSource).toBe('inherited');
-      expect(state.isTypeLocked).toBe(true);
-      expect(state.canRevert).toBe(false);
+      // isTypeLocked is deprecated, always false
+      expect(state.isTypeLocked).toBe(false);
+      // Inherited nodes CAN revert (all nodes detect pattern changes)
+      expect(state.canRevert).toBe(true);
     });
 
     it('should return user source for inherited text nodes', () => {
@@ -400,16 +410,18 @@ describe('Pattern Lifecycle Scenarios', () => {
   });
 
   describe('Inherited header workflow', () => {
-    it('should not revert when Enter creates new header', () => {
+    it('should revert when Enter creates new header and syntax is deleted', () => {
       // User presses Enter on a header - new node inherits header type
       const state = new PatternState('inherited');
-      expect(state.isTypeLocked).toBe(true);
-      expect(state.canRevert).toBe(false);
+      // isTypeLocked is deprecated, always false
+      expect(state.isTypeLocked).toBe(false);
+      // Inherited nodes CAN revert (all nodes detect pattern changes)
+      expect(state.canRevert).toBe(true);
 
-      // Even if user deletes the "# " prefix, node stays as header type
+      // When user deletes the "# " prefix, node reverts to text
       const shouldRevert = state.attemptRevert('No prefix');
-      expect(shouldRevert).toBe(false);
-      expect(state.creationSource).toBe('inherited');
+      expect(shouldRevert).toBe(true);
+      expect(state.creationSource).toBe('user');
     });
   });
 

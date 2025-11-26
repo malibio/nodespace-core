@@ -7,7 +7,11 @@
  * The key insight is that pattern detection behavior depends on HOW a node was created:
  * - 'user': Created by user (Enter key on blank node) - pattern detection enabled
  * - 'pattern': Created by pattern detection (# → header) - reversion enabled
- * - 'inherited': Created by inheriting parent's type (Enter on header → header) - reversion disabled
+ * - 'inherited': Created by inheriting parent's type (Enter on header → header) - also can revert
+ *
+ * IMPORTANT: All non-text nodes can revert to text when their syntax is deleted.
+ * For example, "# Hello" → delete space → "#Hello" becomes text.
+ * This applies to both pattern-detected AND inherited nodes.
  *
  * Architecture:
  * - Single source of truth for pattern lifecycle state
@@ -24,7 +28,7 @@ import type { PatternTemplate } from '$lib/patterns/types';
 export type NodeCreationSource =
   | 'user' // User created (blank node, Enter key) - patterns can be detected
   | 'pattern' // Created via pattern detection (# → header) - can revert to text
-  | 'inherited'; // Inherited from parent (Enter on header → header) - cannot revert
+  | 'inherited'; // Inherited from parent (Enter on header → header) - can also revert
 
 /**
  * Information about a detected pattern match
@@ -50,14 +54,14 @@ export interface PatternMatch {
  * 2. During editing:
  *    - If source is 'user': Watch for patterns, convert on match
  *    - If source is 'pattern': Watch for pattern deletion, revert on mismatch
- *    - If source is 'inherited': No pattern watching (type is fixed)
+ *    - If source is 'inherited': Also watch for pattern deletion, can revert
  *
  * 3. On pattern match:
  *    - Record pattern info
  *    - Change source to 'pattern'
  *    - Enable reversion capability
  *
- * 4. On pattern deletion (source is 'pattern'):
+ * 4. On pattern deletion (source is 'pattern' or 'inherited'):
  *    - Revert node type to 'text'
  *    - Reset source to 'user'
  *    - Continue watching for new patterns
@@ -115,12 +119,21 @@ export class PatternState {
   /**
    * Whether this node can revert to text type
    *
-   * Only nodes created via pattern detection can revert.
-   * Inherited nodes (Enter on header → header) cannot revert because
-   * the user explicitly created them as that type.
+   * Both 'pattern' and 'inherited' source nodes can revert when their
+   * syntax is deleted (e.g., "# Hello" → "#Hello" reverts to text).
+   * Only 'user' source nodes without a detected pattern cannot revert.
    */
   get canRevert(): boolean {
-    return this._creationSource === 'pattern' && this._detectedPattern !== null;
+    // Pattern source with detected pattern - standard reversion
+    if (this._creationSource === 'pattern' && this._detectedPattern !== null) {
+      return true;
+    }
+    // Inherited source - can also revert (syntax deletion triggers type change)
+    // The pattern detection in detectNodeTypeConversion handles this
+    if (this._creationSource === 'inherited') {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -137,20 +150,27 @@ export class PatternState {
   /**
    * Whether this node should watch for pattern deletion (to revert)
    *
-   * Only 'pattern' source nodes can revert when their pattern is deleted.
+   * Both 'pattern' and 'inherited' source nodes watch for reversion.
    */
   get shouldWatchForReversion(): boolean {
-    return this._creationSource === 'pattern' && this._detectedPattern !== null;
+    if (this._creationSource === 'pattern' && this._detectedPattern !== null) {
+      return true;
+    }
+    // Inherited nodes also watch - handled by detectNodeTypeConversion
+    if (this._creationSource === 'inherited') {
+      return true;
+    }
+    return false;
   }
 
   /**
    * Whether the node type is locked (cannot change via patterns)
    *
-   * Inherited nodes have locked types - they were explicitly created
-   * as that type by the user pressing Enter on a typed node.
+   * @deprecated All nodes can now revert when their syntax is deleted.
+   * This property always returns false and will be removed in a future version.
    */
   get isTypeLocked(): boolean {
-    return this._creationSource === 'inherited';
+    return false; // No nodes are type-locked anymore
   }
 
   // ============================================================================
@@ -236,10 +256,14 @@ export class PatternState {
    * @param pattern - The pattern that matches the current content
    */
   setPatternExists(pattern: PatternMatch): void {
-    // Only upgrade to 'pattern' if currently 'user'
-    // Don't downgrade 'inherited' to 'pattern'
+    // For 'user' source, upgrade to 'pattern' for reversion capability
     if (this._creationSource === 'user') {
       this._creationSource = 'pattern';
+      this._detectedPattern = pattern;
+    }
+    // For 'inherited' source, just store the pattern for reversion detection
+    // (inherited nodes can now also revert)
+    else if (this._creationSource === 'inherited') {
       this._detectedPattern = pattern;
     }
   }
