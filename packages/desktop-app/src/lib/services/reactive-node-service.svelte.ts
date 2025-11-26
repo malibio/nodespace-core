@@ -866,10 +866,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Fire-and-forget backend persistence (but wait for nodes to be persisted first!)
     (async () => {
       try {
-        // CRITICAL: Wait for BOTH the node AND oldParentId to be persisted before moving
-        // The backend needs oldParentId to exist as a child of newParentId to find it as the "insert after" sibling.
-        // If user rapidly creates nested nodes and outdents, oldParentId's edge might not be persisted yet.
-        await sharedNodeStore.waitForNodeSaves([nodeId, oldParentId]);
+        // CRITICAL: Flush AND wait for BOTH the node AND oldParentId to be fully persisted before moving.
+        // The backend's moveNode needs oldParentId to exist as a child of newParentId in the has_child edge table.
+        //
+        // Race condition scenario:
+        // 1. User rapidly creates nested nodes via Tab: A → B → C → D (each takes ~500ms debounce)
+        // 2. User immediately outdents D (Shift+Tab)
+        // 3. moveNode(D, B, C) is called - backend looks for C in B's has_child edges
+        // 4. If C's creation (and its edge to B) is still in the debounce queue, backend fails with "Sibling not found"
+        //
+        // Solution: Use flushAndWaitForNodeSaves which:
+        // - Triggers any debounced operations immediately (bypasses the 500ms debounce timer)
+        // - Waits for completion (ensures node AND edge are persisted before continuing)
+        await sharedNodeStore.flushAndWaitForNodeSaves([nodeId, oldParentId]);
 
         // Now safe to move the node and its siblings
         // When outdenting, insert after the old parent (so it appears right below it)
