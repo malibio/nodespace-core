@@ -863,12 +863,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.hierarchyChanged();
     _updateTrigger++;
 
-    // Fire-and-forget backend persistence (but wait for node to be persisted first!)
+    // Fire-and-forget backend persistence (but wait for nodes to be persisted first!)
     (async () => {
       try {
-        // CRITICAL: Wait for the node to be persisted before moving it
-        // This prevents race conditions when user rapidly presses Shift+Tab after creating a node
-        await sharedNodeStore.waitForNodeSaves([nodeId]);
+        // CRITICAL: Wait for BOTH the node AND oldParentId to be persisted before moving
+        // The backend needs oldParentId to exist as a child of newParentId to find it as the "insert after" sibling.
+        // If user rapidly creates nested nodes and outdents, oldParentId's edge might not be persisted yet.
+        await sharedNodeStore.waitForNodeSaves([nodeId, oldParentId]);
 
         // Now safe to move the node and its siblings
         // When outdenting, insert after the old parent (so it appears right below it)
