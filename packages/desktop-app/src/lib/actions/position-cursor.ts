@@ -32,7 +32,8 @@ export type CursorPositionType =
   | 'absolute'
   | 'arrow-navigation'
   | 'line-column'
-  | 'node-type-conversion';
+  | 'node-type-conversion'
+  | 'inherited-type'; // Issue #664: For nodes created via Enter key that inherit parent type
 
 export interface CursorPositionDefault {
   type: 'default';
@@ -61,12 +62,22 @@ export interface CursorPositionNodeTypeConversion {
   position: number;
 }
 
+/**
+ * Issue #664: For nodes created via Enter key that inherit parent type
+ * These nodes have a type-locked pattern state (cannot revert to text)
+ */
+export interface CursorPositionInheritedType {
+  type: 'inherited-type';
+  position: number;
+}
+
 export type CursorPosition =
   | CursorPositionDefault
   | CursorPositionAbsolute
   | CursorPositionArrowNavigation
   | CursorPositionLineColumn
-  | CursorPositionNodeTypeConversion;
+  | CursorPositionNodeTypeConversion
+  | CursorPositionInheritedType;
 
 export interface PositionCursorParams {
   data: CursorPosition | null;
@@ -125,6 +136,26 @@ export function positionCursor(
         case 'node-type-conversion':
           // Position cursor after node type conversion (similar to arrow navigation)
           // Focus first, then set position with retry logic for component switches
+          controller.focus();
+          controller.setCursorPosition(data.position);
+
+          // Verify and retry if needed (component switches may reset cursor)
+          setTimeout(() => {
+            const textarea = document.activeElement as HTMLTextAreaElement;
+            if (
+              controller &&
+              textarea &&
+              textarea.tagName === 'TEXTAREA' &&
+              textarea.selectionStart !== data.position
+            ) {
+              controller.setCursorPosition(data.position);
+            }
+          }, 10);
+          break;
+
+        case 'inherited-type':
+          // Issue #664: Position cursor for inherited type nodes (Enter key on typed node)
+          // Same positioning as node-type-conversion, but controller will use 'inherited' source
           controller.focus();
           controller.setCursorPosition(data.position);
 
