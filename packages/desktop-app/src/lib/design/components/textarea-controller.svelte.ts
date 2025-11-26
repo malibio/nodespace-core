@@ -295,6 +295,14 @@ export class TextareaController {
       // Node type conversions are signaled via focusManager.cursorPosition.type
       const isTypeConversion = focusManager.cursorPosition?.type === 'node-type-conversion';
 
+      // Clear cursor position AFTER checking type
+      // The positionCursor action will handle cursor positioning
+      // This must happen here (not in the action) to avoid a race condition where
+      // RAF runs before initialize() and clears the position before we can check it
+      if (isTypeConversion) {
+        focusManager.clearCursorPosition();
+      }
+
       // Initialize pattern state for non-text types (Issue #664)
       // This enables reversion to text type when the pattern is deleted
       if (this.nodeType !== 'text' && !this.patternState.isTypeLocked) {

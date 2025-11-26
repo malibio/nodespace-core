@@ -104,32 +104,44 @@ export function positionCursor(
     }
 
     // Skip if this is the same data we just processed (prevent duplicate positioning)
-    if (lastProcessedData === data) {
+    // Use JSON comparison since $derived may return same object reference but we need
+    // to handle re-renders that pass the same position data
+    if (lastProcessedData !== null && JSON.stringify(lastProcessedData) === JSON.stringify(data)) {
       return;
     }
 
     lastProcessedData = data;
 
     // Use requestAnimationFrame for smooth, non-blocking positioning
+    // CRITICAL: Do NOT clear focusManager.cursorPosition from the action
+    // The initialize() method in textarea-controller will check and clear it
+    // This avoids a race condition where the RAF runs before initialize()
     requestAnimationFrame(() => {
       switch (data.type) {
         case 'default':
           // Position at beginning of first line, optionally skipping syntax
+          // CRITICAL: Focus first, then set position
+          controller.focus();
           controller.positionCursorAtLineBeginning(0, data.skipSyntax ?? true);
           break;
 
         case 'absolute':
           // Position at specific character offset
+          // CRITICAL: Focus first, then set position
+          controller.focus();
           controller.setCursorPosition(data.position);
           break;
 
         case 'arrow-navigation':
           // Position from arrow navigation with pixel-accurate horizontal alignment
+          // enterFromArrowNavigation handles focus internally
           controller.enterFromArrowNavigation(data.direction, data.pixelOffset);
           break;
 
         case 'line-column':
           // Position at beginning of specific line, optionally skipping syntax
+          // CRITICAL: Focus first, then set position
+          controller.focus();
           controller.positionCursorAtLineBeginning(data.line, data.skipSyntax ?? true);
           break;
 
