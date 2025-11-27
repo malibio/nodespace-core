@@ -162,7 +162,7 @@ pub trait NodeBehavior: Send + Sync {
     /// let node = Node::new(
     ///     "task".to_string(),
     ///     "Do something".to_string(),
-    ///     json!({"status": "OPEN"}),
+    ///     json!({"status": "open"}),
     /// );
     /// assert!(behavior.validate(&node).is_ok());
     /// ```
@@ -231,7 +231,8 @@ pub trait NodeBehavior: Send + Sync {
     /// let behavior = TaskNodeBehavior;
     /// let defaults = behavior.default_metadata();
     /// // Task defaults use nested format: properties.task.status
-    /// assert_eq!(defaults["task"]["status"], "OPEN");
+    /// // Status values use lowercase format (Issue #670)
+    /// assert_eq!(defaults["task"]["status"], "open");
     /// ```
     fn default_metadata(&self) -> serde_json::Value {
         serde_json::json!({})
@@ -435,14 +436,15 @@ impl NodeBehavior for HeaderNodeBehavior {
 /// # Valid Status Values (Schema-Defined)
 ///
 /// Status values are defined in the task schema and validated dynamically.
-/// Core values (protected, cannot be removed):
-/// - "OPEN" - Not started (default)
-/// - "IN_PROGRESS" - Currently being worked on
-/// - "DONE" - Finished
+/// All values use lowercase format for consistency across layers (Issue #670).
 ///
-/// User-extensible values (can be added via schema):
-/// - "BLOCKED" - Waiting on dependencies (included by default)
-/// - Custom values can be added by users
+/// Core values (protected, cannot be removed):
+/// - "open" - Not started (default)
+/// - "in_progress" - Currently being worked on
+/// - "done" - Finished
+/// - "cancelled" - Cancelled/abandoned
+///
+/// User-extensible values can be added via schema.
 ///
 /// # Examples
 ///
@@ -455,7 +457,7 @@ impl NodeBehavior for HeaderNodeBehavior {
 /// let node = Node::new(
 ///     "task".to_string(),
 ///     "Implement NodeBehavior trait".to_string(),
-///     json!({"status": "IN_PROGRESS"}),
+///     json!({"status": "in_progress"}),
 /// );
 /// assert!(behavior.validate(&node).is_ok());
 /// ```
@@ -517,10 +519,11 @@ impl NodeBehavior for TaskNodeBehavior {
     }
 
     fn default_metadata(&self) -> serde_json::Value {
+        // Uses lowercase canonical values for consistency across all layers (Issue #670)
         serde_json::json!({
             "task": {
-                "status": "OPEN",
-                "priority": "MEDIUM",
+                "status": "open",
+                "priority": "medium",
                 "due_date": null,
                 "assignee_id": null
             }
@@ -1300,10 +1303,11 @@ mod tests {
         let behavior = TaskNodeBehavior;
 
         // Valid task with status (old flat format - backward compatibility)
+        // Status values use lowercase format (Issue #670)
         let valid_node_old_format = Node::new(
             "task".to_string(),
             "Implement feature".to_string(),
-            json!({"status": "IN_PROGRESS"}),
+            json!({"status": "in_progress"}),
         );
         assert!(behavior.validate(&valid_node_old_format).is_ok());
 
@@ -1311,7 +1315,7 @@ mod tests {
         let valid_node_new_format = Node::new(
             "task".to_string(),
             "Implement feature".to_string(),
-            json!({"task": {"status": "IN_PROGRESS"}}),
+            json!({"task": {"status": "in_progress"}}),
         );
         assert!(behavior.validate(&valid_node_new_format).is_ok());
 
@@ -1321,8 +1325,8 @@ mod tests {
             "Complete task".to_string(),
             json!({
                 "task": {
-                    "status": "DONE",
-                    "priority": "HIGH",
+                    "status": "done",
+                    "priority": "high",
                     "due_date": "2025-01-10"
                 }
             }),
@@ -1370,8 +1374,9 @@ mod tests {
         let metadata = behavior.default_metadata();
 
         // Properties are now nested under "task" namespace (Issue #397)
-        assert_eq!(metadata["task"]["status"], "OPEN");
-        assert_eq!(metadata["task"]["priority"], "MEDIUM");
+        // Status/priority values use lowercase format (Issue #670)
+        assert_eq!(metadata["task"]["status"], "open");
+        assert_eq!(metadata["task"]["priority"], "medium");
         assert!(metadata["task"]["due_date"].is_null());
         assert!(metadata["task"]["assignee_id"].is_null());
     }
@@ -1384,13 +1389,14 @@ mod tests {
         let behavior = TaskNodeBehavior;
 
         // Create a task node with properties in the new nested format
+        // Status/priority values use lowercase format (Issue #670)
         let mut task_node = Node::new(
             "task".to_string(),
             "Important task".to_string(),
             json!({
                 "task": {
-                    "status": "IN_PROGRESS",
-                    "priority": "HIGH",
+                    "status": "in_progress",
+                    "priority": "high",
                     "due_date": "2025-01-15"
                 }
             }),
@@ -1398,8 +1404,8 @@ mod tests {
 
         // Verify initial validation passes
         assert!(behavior.validate(&task_node).is_ok());
-        assert_eq!(task_node.properties["task"]["status"], "IN_PROGRESS");
-        assert_eq!(task_node.properties["task"]["priority"], "HIGH");
+        assert_eq!(task_node.properties["task"]["status"], "in_progress");
+        assert_eq!(task_node.properties["task"]["priority"], "high");
 
         // Convert to text node (simulate type conversion)
         task_node.node_type = "text".to_string();
@@ -1407,8 +1413,8 @@ mod tests {
         // Task properties should still exist in the properties JSON
         // (even though it's no longer a task node)
         assert!(task_node.properties["task"].is_object());
-        assert_eq!(task_node.properties["task"]["status"], "IN_PROGRESS");
-        assert_eq!(task_node.properties["task"]["priority"], "HIGH");
+        assert_eq!(task_node.properties["task"]["status"], "in_progress");
+        assert_eq!(task_node.properties["task"]["priority"], "high");
         assert_eq!(task_node.properties["task"]["due_date"], "2025-01-15");
 
         // Convert back to task node
@@ -1416,8 +1422,8 @@ mod tests {
 
         // Properties should still be there and validate correctly
         assert!(behavior.validate(&task_node).is_ok());
-        assert_eq!(task_node.properties["task"]["status"], "IN_PROGRESS");
-        assert_eq!(task_node.properties["task"]["priority"], "HIGH");
+        assert_eq!(task_node.properties["task"]["status"], "in_progress");
+        assert_eq!(task_node.properties["task"]["priority"], "high");
         assert_eq!(task_node.properties["task"]["due_date"], "2025-01-15");
 
         // This demonstrates the key benefit: properties survive type conversions
@@ -1521,11 +1527,11 @@ mod tests {
         let text_node = Node::new("text".to_string(), "Hello".to_string(), json!({}));
         assert!(registry.validate_node(&text_node).is_ok());
 
-        // Valid task node
+        // Valid task node (status uses lowercase format per Issue #670)
         let task_node = Node::new(
             "task".to_string(),
             "Do something".to_string(),
-            json!({"status": "OPEN"}),
+            json!({"status": "open"}),
         );
         assert!(registry.validate_node(&task_node).is_ok());
 
@@ -1658,10 +1664,11 @@ mod tests {
         let behavior = TaskNodeBehavior;
 
         // Task node should NOT be embeddable as root
+        // Status uses lowercase format (Issue #670)
         let node = Node::new(
             "task".to_string(),
             "Buy groceries".to_string(),
-            json!({"status": "OPEN"}),
+            json!({"status": "open"}),
         );
         assert!(
             behavior.get_embeddable_content(&node).is_none(),
@@ -1775,11 +1782,11 @@ mod tests {
         let text_behavior = registry.get("text").unwrap();
         assert!(text_behavior.get_embeddable_content(&text_node).is_some());
 
-        // Task node - not embeddable
+        // Task node - not embeddable (status uses lowercase format per Issue #670)
         let task_node = Node::new(
             "task".to_string(),
             "Task content".to_string(),
-            json!({"status": "OPEN"}),
+            json!({"status": "open"}),
         );
         let task_behavior = registry.get("task").unwrap();
         assert!(task_behavior.get_embeddable_content(&task_node).is_none());

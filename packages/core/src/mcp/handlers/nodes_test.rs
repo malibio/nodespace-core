@@ -1114,7 +1114,7 @@ mod integration_tests {
                 content: "- [ ] Task 1".to_string(),
                 parent_id: Some(root.clone()),
                 insert_after_node_id: None,
-                properties: json!({"task": {"status": "OPEN"}}),
+                properties: json!({"task": {"status": "open"}}),
             })
             .await
             .unwrap();
@@ -1126,7 +1126,7 @@ mod integration_tests {
                 content: "- [ ] Task 2".to_string(),
                 parent_id: Some(root.clone()),
                 insert_after_node_id: Some(node1.clone()),
-                properties: json!({"task": {"status": "OPEN"}}),
+                properties: json!({"task": {"status": "open"}}),
             })
             .await
             .unwrap();

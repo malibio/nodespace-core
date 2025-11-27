@@ -2710,15 +2710,15 @@ mod tests {
         let node = Node::new(
             "task".to_string(),
             "Implement NodeService".to_string(),
-            json!({"status": "IN_PROGRESS", "priority": "HIGH"}),
+            json!({"status": "in_progress", "priority": "high"}),
         );
 
         let id = service.create_node(node).await.unwrap();
         let retrieved = service.get_node(&id).await.unwrap().unwrap();
 
         assert_eq!(retrieved.node_type, "task");
-        assert_eq!(retrieved.properties["status"], "IN_PROGRESS");
-        assert_eq!(retrieved.properties["priority"], "HIGH");
+        assert_eq!(retrieved.properties["status"], "in_progress");
+        assert_eq!(retrieved.properties["priority"], "high");
     }
 
     #[tokio::test]
@@ -2888,7 +2888,7 @@ mod tests {
             .create_node(Node::new(
                 "task".to_string(),
                 "Task 1".to_string(),
-                json!({"status": "OPEN"}),
+                json!({"status": "open"}),
             ))
             .await
             .unwrap();
@@ -2918,7 +2918,7 @@ mod tests {
             Node::new(
                 "task".to_string(),
                 "Bulk Task".to_string(),
-                json!({"status": "OPEN"}),
+                json!({"status": "open"}),
             ),
         ];
 
@@ -3325,7 +3325,7 @@ mod tests {
                 "task-1".to_string(),
                 "task".to_string(),
                 "UniqueBasicFilter Task".to_string(),
-                json!({"status": "OPEN"}),
+                json!({"status": "open"}),
             );
             let task_id = service.create_node(task).await.unwrap();
 
@@ -3384,7 +3384,7 @@ mod tests {
                 "task-meeting".to_string(),
                 "task".to_string(),
                 "Schedule meeting".to_string(),
-                json!({"task": {"status": "OPEN"}}),
+                json!({"task": {"status": "open"}}),
             );
             let task_id = service.create_node(task).await.unwrap();
 
@@ -3445,7 +3445,7 @@ mod tests {
                 "task-mentions".to_string(),
                 "task".to_string(),
                 "Task with @target-node reference".to_string(),
-                json!({"task": {"status": "OPEN"}}),
+                json!({"task": {"status": "open"}}),
             );
             let task_id = service.create_node(task).await.unwrap();
             service.create_mention(&task_id, &target_id).await.unwrap();
@@ -3492,7 +3492,7 @@ mod tests {
                 "task-root".to_string(),
                 "task".to_string(),
                 "Root task".to_string(),
-                json!({"task": {"status": "OPEN"}}),
+                json!({"task": {"status": "open"}}),
             );
             let _root_task_id = service.create_node(root_task).await.unwrap();
 
@@ -3500,7 +3500,7 @@ mod tests {
                 "task-child".to_string(),
                 "task".to_string(),
                 "Child task".to_string(),
-                json!({"task": {"status": "OPEN"}}),
+                json!({"task": {"status": "open"}}),
             );
             service.create_node(child_task).await.unwrap();
 
@@ -3536,7 +3536,7 @@ mod tests {
             let task = Node::new(
                 "task".to_string(),
                 "UniqueDefaultTest Task".to_string(),
-                json!({"task": {"status": "OPEN"}}),
+                json!({"task": {"status": "open"}}),
             );
             service.create_node(task).await.unwrap();
 
@@ -3699,7 +3699,7 @@ mod tests {
                 "task-1".to_string(),
                 "task".to_string(),
                 "Review @target".to_string(),
-                json!({"status": "OPEN"}),
+                json!({"status": "open"}),
             );
             let task_id = service.create_node(task).await.unwrap();
 
@@ -3855,7 +3855,7 @@ mod tests {
                 "task-c3".to_string(),
                 "task".to_string(),
                 "From container 3".to_string(),
-                json!({"task": {"status": "OPEN"}}),
+                json!({"task": {"status": "open"}}),
             );
             let task_id = service.create_node(task).await.unwrap();
 
