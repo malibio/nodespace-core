@@ -35,8 +35,10 @@ import { get } from 'svelte/store';
 import { untrack } from 'svelte';
 import {
   PatternState,
-  type NodeCreationSource
+  type NodeCreationSource,
+  type PatternMatch
 } from '$lib/state/pattern-state.svelte';
+import type { PatternDetectionConfig } from '$lib/plugins/types';
 
 // Module-level command singletons - created once and reused
 const KEYBOARD_COMMANDS = {
@@ -169,6 +171,28 @@ let keyboardCommandsRegistered = false;
 const cursorService = CursorPositioningService.getInstance();
 const MAX_QUERY_LENGTH = 100;
 
+/**
+ * Create a PatternMatch object from a pattern detection config and match
+ * Extracted to eliminate duplicate code (DRY principle)
+ */
+function createPatternMatch(config: PatternDetectionConfig, match: RegExpMatchArray): PatternMatch {
+  const regex = typeof config.pattern === 'string'
+    ? new RegExp(config.pattern)
+    : config.pattern;
+
+  return {
+    pattern: {
+      regex,
+      nodeType: config.targetNodeType,
+      priority: config.priority ?? 10,
+      splittingStrategy: 'prefix-inheritance',
+      cursorPlacement: 'after-prefix'
+    },
+    match: match,
+    nodeType: config.targetNodeType
+  };
+}
+
 // TextareaController - Core implementation class
 // Can be used directly in tests with 'new TextareaController(...)'
 // Or used reactively via createTextareaController() factory in components
@@ -222,13 +246,6 @@ export class TextareaController {
        */
       creationSource?: NodeCreationSource
     ) {
-      console.log('[TextareaController] CONSTRUCTOR called', {
-        nodeId,
-        nodeType,
-        cursorPosition: JSON.stringify(focusManager.cursorPosition),
-        timestamp: Date.now()
-      });
-
       this.element = element;
       this.nodeId = nodeId;
       this.nodeType = nodeType;
@@ -294,17 +311,7 @@ export class TextareaController {
     }
 
     public initialize(content: string, autoFocus: boolean = false): void {
-      console.log('[TextareaController] initialize() called', {
-        nodeId: this.nodeId,
-        nodeType: this.nodeType,
-        autoFocus,
-        isInitialized: this.isInitialized,
-        cursorPosition: JSON.stringify(focusManager.cursorPosition),
-        timestamp: Date.now()
-      });
-
       if (this.isInitialized) {
-        console.log('[TextareaController] initialize() SKIPPED - already initialized');
         return;
       }
 
@@ -313,20 +320,18 @@ export class TextareaController {
       // Check if this is a node type conversion in progress
       // Node type conversions are signaled via focusManager.cursorPosition.type
       const isTypeConversion = focusManager.cursorPosition?.type === 'node-type-conversion';
-      console.log('[TextareaController] initialize() isTypeConversion:', isTypeConversion);
 
       // Clear cursor position AFTER checking type
       // The positionCursor action will handle cursor positioning
       // This must happen here (not in the action) to avoid a race condition where
       // RAF runs before initialize() and clears the position before we can check it
       if (isTypeConversion) {
-        console.log('[TextareaController] Clearing cursor position for type conversion');
         focusManager.clearCursorPosition();
       }
 
       // Initialize pattern state for non-text types (Issue #664)
       // This enables reversion to text type when the pattern is deleted
-      if (this.nodeType !== 'text' && !this.patternState.isTypeLocked) {
+      if (this.nodeType !== 'text') {
         // If this component is being created due to a type conversion (via pattern detection),
         // the patternState was already set to 'pattern' in constructor
         if (!isTypeConversion) {
@@ -334,21 +339,7 @@ export class TextareaController {
           const detection = pluginRegistry.detectPatternInContent(content);
           if (detection && detection.config.targetNodeType === this.nodeType) {
             // Content matches pattern - enable reversion capability
-            // Convert string pattern to RegExp if needed
-            const regex = typeof detection.config.pattern === 'string'
-              ? new RegExp(detection.config.pattern)
-              : detection.config.pattern;
-            this.patternState.setPatternExists({
-              pattern: {
-                regex,
-                nodeType: detection.config.targetNodeType,
-                priority: detection.config.priority ?? 10,
-                splittingStrategy: 'prefix-inheritance',
-                cursorPlacement: 'after-prefix'
-              },
-              match: detection.match,
-              nodeType: detection.config.targetNodeType
-            });
+            this.patternState.setPatternExists(createPatternMatch(detection.config, detection.match));
           }
         }
       }
@@ -362,19 +353,15 @@ export class TextareaController {
         // If this is a type conversion, skip cursor positioning - let positionCursor action handle it
         // This prevents the cursor from jumping to the beginning during type conversions
         if (!isTypeConversion) {
-          console.log('[TextareaController] initialize() calling setCursorAtBeginningOfLine(0)');
           cursorService.setCursorAtBeginningOfLine(this.element, 0, {
             focus: true,
             delay: 0,
             skipSyntax: true
           });
-        } else {
-          console.log('[TextareaController] initialize() SKIPPING setCursorAtBeginningOfLine - type conversion');
         }
       }
 
       this.isInitialized = true;
-      console.log('[TextareaController] initialize() COMPLETE - isInitialized set to true');
       this.adjustHeight();
     }
 
@@ -771,21 +758,7 @@ export class TextareaController {
         if (this.nodeType === config.targetNodeType) {
           // Node type already matches - record pattern for reversion capability
           // This enables reversion when the pattern is later deleted
-          // Convert string pattern to RegExp if needed
-          const regex = typeof config.pattern === 'string'
-            ? new RegExp(config.pattern)
-            : config.pattern;
-          this.patternState.setPatternExists({
-            pattern: {
-              regex,
-              nodeType: config.targetNodeType,
-              priority: config.priority ?? 10,
-              splittingStrategy: 'prefix-inheritance',
-              cursorPlacement: 'after-prefix'
-            },
-            match: match,
-            nodeType: config.targetNodeType
-          });
+          this.patternState.setPatternExists(createPatternMatch(config, match));
           return;
         }
 
@@ -813,21 +786,7 @@ export class TextareaController {
 
           this.nodeType = config.targetNodeType;
           // Record pattern match for reversion capability
-          // Convert string pattern to RegExp if needed
-          const patternRegex = typeof config.pattern === 'string'
-            ? new RegExp(config.pattern)
-            : config.pattern;
-          this.patternState.recordPatternMatch({
-            pattern: {
-              regex: patternRegex,
-              nodeType: config.targetNodeType,
-              priority: config.priority ?? 10,
-              splittingStrategy: 'prefix-inheritance',
-              cursorPlacement: 'after-prefix'
-            },
-            match: match,
-            nodeType: config.targetNodeType
-          }, content);
+          this.patternState.recordPatternMatch(createPatternMatch(config, match), content);
         });
       } else if (this.nodeType !== 'text') {
         // No pattern detected and node is not text - revert to text

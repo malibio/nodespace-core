@@ -80,12 +80,6 @@ export class PatternState {
   private _detectedPattern = $state<PatternMatch | null>(null);
 
   /**
-   * The original content before pattern was applied
-   * Used for intelligent reversion detection
-   */
-  private _patternContent = $state<string | null>(null);
-
-  /**
    * Create a new PatternState with explicit creation source
    *
    * @param source - How the node was created
@@ -163,16 +157,6 @@ export class PatternState {
     return false;
   }
 
-  /**
-   * Whether the node type is locked (cannot change via patterns)
-   *
-   * @deprecated All nodes can now revert when their syntax is deleted.
-   * This property always returns false and will be removed in a future version.
-   */
-  get isTypeLocked(): boolean {
-    return false; // No nodes are type-locked anymore
-  }
-
   // ============================================================================
   // State Mutation Methods
   // ============================================================================
@@ -184,12 +168,11 @@ export class PatternState {
    * Changes source to 'pattern' and stores the pattern info for reversion.
    *
    * @param pattern - The pattern that matched
-   * @param content - The content at the time of match
+   * @param _content - The content at the time of match (unused, kept for API compatibility)
    */
-  recordPatternMatch(pattern: PatternMatch, content: string): void {
+  recordPatternMatch(pattern: PatternMatch, _content: string): void {
     this._creationSource = 'pattern';
     this._detectedPattern = pattern;
-    this._patternContent = content;
   }
 
   /**
@@ -243,7 +226,6 @@ export class PatternState {
   resetToUser(): void {
     this._creationSource = 'user';
     this._detectedPattern = null;
-    this._patternContent = null;
   }
 
   /**
@@ -279,7 +261,6 @@ export class PatternState {
     this._creationSource = source;
     if (source !== 'pattern') {
       this._detectedPattern = null;
-      this._patternContent = null;
     }
   }
 

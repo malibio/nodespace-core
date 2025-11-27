@@ -80,8 +80,6 @@ describe('PatternState', () => {
       // Inherited nodes CAN revert (user clarification: all nodes detect pattern changes)
       expect(state.canRevert).toBe(true);
       expect(state.shouldDetectPatterns).toBe(false);
-      // isTypeLocked is deprecated and always returns false
-      expect(state.isTypeLocked).toBe(false);
     });
   });
 
@@ -128,15 +126,6 @@ describe('PatternState', () => {
       // Inherited source also watches for reversion (all nodes detect pattern changes)
       const inheritedState = new PatternState('inherited');
       expect(inheritedState.shouldWatchForReversion).toBe(true);
-    });
-  });
-
-  describe('isTypeLocked', () => {
-    it('should always return false (deprecated)', () => {
-      // isTypeLocked is deprecated - all nodes can now revert
-      expect(new PatternState('user').isTypeLocked).toBe(false);
-      expect(new PatternState('pattern').isTypeLocked).toBe(false);
-      expect(new PatternState('inherited').isTypeLocked).toBe(false);
     });
   });
 
@@ -273,8 +262,6 @@ describe('PatternState', () => {
       // Source stays 'inherited' but pattern is stored for reversion detection
       expect(state.creationSource).toBe('inherited');
       expect(state.detectedPattern).toStrictEqual(patternMatch);
-      // isTypeLocked is deprecated, always false
-      expect(state.isTypeLocked).toBe(false);
     });
   });
 
@@ -350,8 +337,6 @@ describe('createPatternState Factory', () => {
     it('should return inherited source for Enter on typed node', () => {
       const state = createPatternState(false, true, 'header');
       expect(state.creationSource).toBe('inherited');
-      // isTypeLocked is deprecated, always false
-      expect(state.isTypeLocked).toBe(false);
       // Inherited nodes CAN revert (all nodes detect pattern changes)
       expect(state.canRevert).toBe(true);
     });
@@ -413,8 +398,6 @@ describe('Pattern Lifecycle Scenarios', () => {
     it('should revert when Enter creates new header and syntax is deleted', () => {
       // User presses Enter on a header - new node inherits header type
       const state = new PatternState('inherited');
-      // isTypeLocked is deprecated, always false
-      expect(state.isTypeLocked).toBe(false);
       // Inherited nodes CAN revert (all nodes detect pattern changes)
       expect(state.canRevert).toBe(true);
 
