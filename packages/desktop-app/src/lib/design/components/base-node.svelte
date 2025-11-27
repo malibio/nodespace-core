@@ -590,20 +590,8 @@
       untrack(() => {
         const cursorType = focusManager.cursorPosition?.type;
         const isNodeTypeConversion = cursorType === 'node-type-conversion' || cursorType === 'inherited-type';
-        console.log('[BaseNode] blur handler', {
-          nodeId,
-          nodeType,
-          editingNodeId: focusManager.editingNodeId,
-          cursorType,
-          isNodeTypeConversion,
-          willClearEditing: focusManager.editingNodeId === nodeId && !isNodeTypeConversion,
-          timestamp: Date.now()
-        });
         if (focusManager.editingNodeId === nodeId && !isNodeTypeConversion) {
-          console.log('[BaseNode] blur: CLEARING editing state');
           focusManager.clearEditing();
-        } else {
-          console.log('[BaseNode] blur: NOT clearing (type conversion or different node)');
         }
       });
 
