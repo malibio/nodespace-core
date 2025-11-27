@@ -222,6 +222,13 @@ export class TextareaController {
        */
       creationSource?: NodeCreationSource
     ) {
+      console.log('[TextareaController] CONSTRUCTOR called', {
+        nodeId,
+        nodeType,
+        cursorPosition: JSON.stringify(focusManager.cursorPosition),
+        timestamp: Date.now()
+      });
+
       this.element = element;
       this.nodeId = nodeId;
       this.nodeType = nodeType;
@@ -287,19 +294,33 @@ export class TextareaController {
     }
 
     public initialize(content: string, autoFocus: boolean = false): void {
-      if (this.isInitialized) return;
+      console.log('[TextareaController] initialize() called', {
+        nodeId: this.nodeId,
+        nodeType: this.nodeType,
+        autoFocus,
+        isInitialized: this.isInitialized,
+        cursorPosition: JSON.stringify(focusManager.cursorPosition),
+        timestamp: Date.now()
+      });
+
+      if (this.isInitialized) {
+        console.log('[TextareaController] initialize() SKIPPED - already initialized');
+        return;
+      }
 
       this.element.value = content;
 
       // Check if this is a node type conversion in progress
       // Node type conversions are signaled via focusManager.cursorPosition.type
       const isTypeConversion = focusManager.cursorPosition?.type === 'node-type-conversion';
+      console.log('[TextareaController] initialize() isTypeConversion:', isTypeConversion);
 
       // Clear cursor position AFTER checking type
       // The positionCursor action will handle cursor positioning
       // This must happen here (not in the action) to avoid a race condition where
       // RAF runs before initialize() and clears the position before we can check it
       if (isTypeConversion) {
+        console.log('[TextareaController] Clearing cursor position for type conversion');
         focusManager.clearCursorPosition();
       }
 
@@ -341,15 +362,19 @@ export class TextareaController {
         // If this is a type conversion, skip cursor positioning - let positionCursor action handle it
         // This prevents the cursor from jumping to the beginning during type conversions
         if (!isTypeConversion) {
+          console.log('[TextareaController] initialize() calling setCursorAtBeginningOfLine(0)');
           cursorService.setCursorAtBeginningOfLine(this.element, 0, {
             focus: true,
             delay: 0,
             skipSyntax: true
           });
+        } else {
+          console.log('[TextareaController] initialize() SKIPPING setCursorAtBeginningOfLine - type conversion');
         }
       }
 
       this.isInitialized = true;
+      console.log('[TextareaController] initialize() COMPLETE - isInitialized set to true');
       this.adjustHeight();
     }
 

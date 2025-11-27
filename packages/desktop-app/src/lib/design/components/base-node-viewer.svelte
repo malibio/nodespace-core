@@ -1343,6 +1343,14 @@
                   // Use cursor position from event (captured by TextareaController)
                   const cursorPosition = e.detail.cursorPosition ?? 0;
 
+                  console.log('[BaseNodeViewer] nodeTypeChanged event', {
+                    nodeId: node.id,
+                    oldType: node.nodeType,
+                    newType: newNodeType,
+                    cursorPosition,
+                    timestamp: Date.now()
+                  });
+
                   // CRITICAL: Load component BEFORE updating node type
                   // This ensures the correct component is available when the template re-renders
                   if (!(newNodeType in loadedNodes)) {
@@ -1351,6 +1359,11 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
+                  console.log('[BaseNodeViewer] Calling setEditingNodeFromTypeConversion', {
+                    nodeId: node.id,
+                    cursorPosition,
+                    timestamp: Date.now()
+                  });
                   focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   // Update content if cleanedContent is provided (e.g., from contentTemplate)
@@ -1360,6 +1373,11 @@
 
                   // Update node type through proper API (triggers component re-render)
                   // Uses immediate persistence to ensure type change is saved right away
+                  console.log('[BaseNodeViewer] Calling updateNodeType', {
+                    nodeId: node.id,
+                    newNodeType,
+                    timestamp: Date.now()
+                  });
                   nodeManager.updateNodeType(node.id, newNodeType);
                 }}
                 on:slashCommandSelected={async (

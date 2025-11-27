@@ -98,8 +98,15 @@ export function positionCursor(
   let lastProcessedData: CursorPosition | null = null;
 
   function applyPosition(data: CursorPosition | null, controller: TextareaControllerState | null): void {
+    console.log('[positionCursor] applyPosition called', {
+      data: JSON.stringify(data),
+      hasController: !!controller,
+      timestamp: Date.now()
+    });
+
     // Skip if no data or no controller
     if (!data || !controller) {
+      console.log('[positionCursor] SKIP - no data or controller');
       return;
     }
 
@@ -107,16 +114,19 @@ export function positionCursor(
     // Use JSON comparison since $derived may return same object reference but we need
     // to handle re-renders that pass the same position data
     if (lastProcessedData !== null && JSON.stringify(lastProcessedData) === JSON.stringify(data)) {
+      console.log('[positionCursor] SKIP - same data already processed');
       return;
     }
 
     lastProcessedData = data;
+    console.log('[positionCursor] Scheduling RAF for type:', data.type);
 
     // Use requestAnimationFrame for smooth, non-blocking positioning
     // CRITICAL: Do NOT clear focusManager.cursorPosition from the action
     // The initialize() method in textarea-controller will check and clear it
     // This avoids a race condition where the RAF runs before initialize()
     requestAnimationFrame(() => {
+      console.log('[positionCursor] RAF executing', { type: data.type, timestamp: Date.now() });
       switch (data.type) {
         case 'default':
           // Position at beginning of first line, optionally skipping syntax
