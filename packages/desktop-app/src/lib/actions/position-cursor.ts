@@ -114,9 +114,8 @@ export function positionCursor(
 
     // Use requestAnimationFrame for smooth, non-blocking positioning
     // CRITICAL: Do NOT clear focusManager.cursorPosition from the action
-    // The initialize() method in textarea-controller will clear it after a RAF delay
-    // This ensures the action can read the position before it's cleared
-    // Issue #669: Clearing now happens for ALL position types (not just node-type-conversion)
+    // The initialize() method in textarea-controller will check and clear it
+    // This avoids a race condition where the RAF runs before initialize()
     requestAnimationFrame(() => {
       switch (data.type) {
         case 'default':

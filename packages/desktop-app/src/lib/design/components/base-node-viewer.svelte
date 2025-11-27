@@ -723,28 +723,31 @@
       return;
     }
 
-    // Issue #669: Set focus using FocusManager (single source of truth)
-    // createNode() no longer sets focus internally - this handler is responsible for all focus.
+    // Set cursor position using FocusManager (single source of truth)
     // Issue #664: For inherited type nodes (Enter key on typed node), use setEditingNodeFromInheritedType
     // which sets pattern state to 'inherited' (cannot revert to text).
-    if (focusOriginalNode) {
-      // Focus the original node (bottom one), cursor at beginning of content
-      // This happens when Enter is pressed at the beginning/syntax area of a node
-      focusManager.focusNode(afterNodeId, paneId);
-    } else if (newNodeCursorPosition !== undefined) {
-      // Focus new node at specific cursor position
+    // This is different from pattern-detected type conversions which CAN revert.
+    if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
       if (nodeType !== 'text') {
         // Non-text inherited nodes: Use inherited-type signal (pattern state = 'inherited', cannot revert)
         focusManager.setEditingNodeFromInheritedType(newNodeId, newNodeCursorPosition, paneId);
       } else {
-        // Text nodes: Use regular editing node with cursor position
+        // Text nodes: Use regular editing node
         focusManager.setEditingNode(newNodeId, paneId, newNodeCursorPosition);
       }
-    } else {
-      // Fallback: Focus new node with default cursor positioning
-      // This case shouldn't normally happen (Enter key always provides cursor position),
-      // but handle it gracefully for edge cases
-      focusManager.focusNode(newNodeId, paneId);
+    }
+
+    // Handle focus direction based on focusOriginalNode parameter
+    if (focusOriginalNode) {
+      // The hierarchy is correct (new node above, original below)
+      // Use the nodeManager's update methods to properly trigger reactivity
+
+      // Use updateNodeContent on original node to trigger focus
+      const originalNode = nodeManager.nodes.get(afterNodeId);
+      if (originalNode) {
+        // Update the original node's content to itself, which should trigger focus
+        nodeManager.updateNodeContent(afterNodeId, originalNode.content);
+      }
     }
 
     // Handle HTML formatting conversion if needed

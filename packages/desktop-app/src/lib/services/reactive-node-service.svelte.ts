@@ -216,8 +216,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     headerLevel?: number,
     insertAtBeginning?: boolean,
     originalNodeContent?: string,
-    _focusNewNode?: boolean, // Issue #669: Unused - focus is now handled by caller
-    _paneId: string = DEFAULT_PANE_ID, // Issue #669: Unused - focus is now handled by caller
+    focusNewNode?: boolean,
+    paneId: string = DEFAULT_PANE_ID,
     isInitialPlaceholder: boolean = false,
     parentId?: string | null // Accept parent ID as parameter (not stored in node)
   ): string {
@@ -264,7 +264,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
     }
 
-    // Issue #669: Removed shouldFocusNewNode - focus is now handled by caller
+    const shouldFocusNewNode = focusNewNode !== undefined ? focusNewNode : !insertAtBeginning;
     const isPlaceholder = initialContent.trim() === '' || /^#{1,6}\s*$/.test(initialContent.trim());
 
     // Calculate insertAfterNodeId for backend ordering (Issue #657)
@@ -338,12 +338,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       structureTree.addInMemoryRelationship(newParentId, nodeId, order);
     }
 
-    // Issue #669: DO NOT set focus here - let caller handle it with proper cursor position
-    // Previously, calling setEditingNode(nodeId, paneId) here set type: 'default' which
-    // conflicted with the caller's more specific cursor position (type: 'absolute').
-    // Due to Svelte's batched reactivity, this caused cursor position races during
-    // placeholder promotion + Enter key flows.
-    // The caller (base-node-viewer.svelte) now handles all focus management.
+    // Set focus using FocusManager (single source of truth)
+    // This replaces manual autoFocus flag manipulation
+    if (shouldFocusNewNode) {
+      focusManager.setEditingNode(nodeId, paneId);
+    }
 
     // NOTE: Sibling linked list updates removed - backend handles ordering via fractional ordering
 
@@ -437,8 +436,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     events.nodeCreated(nodeId);
     events.hierarchyChanged();
 
-    // Issue #669: DO NOT set focus here - let caller handle it
-    // The caller (base-node-viewer.svelte) handles focusOriginalNode case explicitly.
+    // If we're not focusing the new node, keep focus on the original node
+    if (!shouldFocusNewNode && afterNode) {
+      focusManager.setEditingNode(afterNodeId, paneId);
+    }
 
     return nodeId;
   }
