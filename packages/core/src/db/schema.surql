@@ -24,11 +24,6 @@ DEFINE TABLE IF NOT EXISTS node SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS content ON TABLE node TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS node_type ON TABLE node TYPE string ASSERT $value != NONE;
 DEFINE FIELD IF NOT EXISTS data ON TABLE node TYPE option<record>;  -- Record Link to spoke (task, schema, or NULL)
--- NOTE: Despite the hub-spoke architecture, properties field is currently used for ALL node types.
--- The update_node_with_version_check function writes properties here, not to spoke tables.
--- Removing this field would break property updates. A future refactoring can migrate spoke type
--- properties to their respective spoke tables and then remove this field.
-DEFINE FIELD IF NOT EXISTS properties ON TABLE node FLEXIBLE TYPE option<object>;
 DEFINE FIELD IF NOT EXISTS version ON TABLE node TYPE int DEFAULT 1 ASSERT $value >= 1;
 DEFINE FIELD IF NOT EXISTS created_at ON TABLE node TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS modified_at ON TABLE node TYPE datetime DEFAULT time::now();

@@ -725,7 +725,9 @@ impl NodeBehavior for OrderedListNodeBehavior {
 /// # ID Format
 ///
 /// Date nodes must have IDs matching `YYYY-MM-DD` (e.g., "2025-01-03").
-/// The content field must also match the date ID.
+/// Per Issue #670, the content field can be any custom content (no longer
+/// required to match the date ID). Date nodes have no spoke table - all
+/// data is stored in the hub's content field.
 ///
 /// # Examples
 ///
@@ -738,7 +740,7 @@ impl NodeBehavior for OrderedListNodeBehavior {
 /// let node = Node::new_with_id(
 ///     "2025-01-03".to_string(),
 ///     "date".to_string(),
-///     "2025-01-03".to_string(),
+///     "Custom Daily Notes".to_string(), // Content can be anything
 ///     json!({}),
 /// );
 /// assert!(behavior.validate(&node).is_ok());
@@ -764,12 +766,9 @@ impl NodeBehavior for DateNodeBehavior {
             NodeValidationError::InvalidId(format!("Invalid date format: {}", node.id))
         })?;
 
-        // Content should match the date ID
-        if node.content != node.id {
-            return Err(NodeValidationError::InvalidProperties(
-                "Date node content should match the date ID".to_string(),
-            ));
-        }
+        // NOTE: Per Issue #670, date nodes can have custom content (not required to match ID).
+        // The ID is always in YYYY-MM-DD format, but content can be anything (e.g., "Custom Date Content").
+        // Date nodes no longer have a spoke table - all data is stored in the hub's content field.
 
         Ok(())
     }
@@ -1453,10 +1452,10 @@ mod tests {
         invalid_date.id = "2025-13-45".to_string();
         assert!(behavior.validate(&invalid_date).is_err());
 
-        // Invalid: content doesn't match ID
-        let mut invalid_content = valid_node.clone();
-        invalid_content.content = "2025-01-04".to_string();
-        assert!(behavior.validate(&invalid_content).is_err());
+        // Valid: Per Issue #670, content can be different from ID
+        let mut custom_content = valid_node.clone();
+        custom_content.content = "Custom Daily Notes".to_string();
+        assert!(behavior.validate(&custom_content).is_ok());
     }
 
     #[test]

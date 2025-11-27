@@ -644,12 +644,13 @@ where
     }
 
     pub async fn create_node(&self, mut node: Node) -> Result<String, NodeServiceError> {
-        // INVARIANT: Date nodes MUST have node_type="date" AND content=id (enforced by validation).
-        // Auto-detect date nodes by ID format (YYYY-MM-DD) to prevent validation failures
-        // from incorrect client input. This maintains data integrity regardless of caller mistakes.
+        // Auto-detect date nodes by ID format (YYYY-MM-DD) to ensure correct node_type.
+        // This maintains data integrity regardless of caller mistakes.
+        // NOTE: Per Issue #670, date nodes can have custom content (not required to match ID).
+        // We only enforce the node_type, not the content.
         if is_date_node_id(&node.id) {
             node.node_type = "date".to_string();
-            node.content = node.id.clone(); // Content MUST match ID for validation
+            // Content is preserved - date nodes can have custom content like "Custom Date Content"
         }
 
         // Step 1: Core behavior validation (PROTECTED)
@@ -2772,7 +2773,7 @@ mod tests {
         let date_node = node.unwrap();
         assert_eq!(date_node.id, "2025-10-13");
         assert_eq!(date_node.node_type, "date");
-        assert_eq!(date_node.content, "2025-10-13"); // Content MUST match ID for validation
+        assert_eq!(date_node.content, "2025-10-13"); // Virtual date nodes default content to the date ID
                                                      // Note: Sibling ordering is now on has_child edge order field, not node.before_sibling_id
     }
 
@@ -2829,19 +2830,22 @@ mod tests {
     async fn test_persisted_date_takes_precedence_over_virtual() {
         let (service, _temp) = create_test_service().await;
 
-        // Create and persist a date node
+        // Create and persist a date node with custom content
+        // Note: Date nodes don't have a spoke table (Issue #670), so no custom properties
+        // They store everything in the content field
         let date_node = Node::new_with_id(
             "2025-10-13".to_string(),
             "date".to_string(),
-            "2025-10-13".to_string(),
-            json!({"custom": "property"}),
+            "Custom Date Content".to_string(),
+            json!({}), // No properties - date nodes use content only
         );
 
         service.create_node(date_node).await.unwrap();
 
-        // Get the node - should return persisted version with custom property
+        // Get the node - should return persisted version with custom content
         let retrieved = service.get_node("2025-10-13").await.unwrap().unwrap();
-        assert_eq!(retrieved.properties["custom"], "property");
+        assert_eq!(retrieved.content, "Custom Date Content");
+        assert_eq!(retrieved.node_type, "date");
     }
 
     #[tokio::test]

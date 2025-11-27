@@ -852,12 +852,8 @@ where
         // Create hub node using simpler table:id syntax
         // Note: IDs with special characters (hyphens, spaces, etc.) need to be backtick-quoted
         // For types without spoke tables, store properties directly on the hub
-        let properties_for_hub = if !should_create_spoke && has_properties {
-            Some(node.properties.clone())
-        } else {
-            None
-        };
-
+        // Hub-spoke architecture: properties are NOT stored on hub node
+        // They go to spoke tables (task, schema) for types that have them
         let hub_query = format!(
             r#"
             CREATE node:`{}` CONTENT {{
@@ -870,8 +866,7 @@ where
                 embedding_stale: false,
                 mentions: [],
                 mentioned_by: [],
-                data: $data,
-                properties: $properties
+                data: $data
             }};
         "#,
             node.id
@@ -884,7 +879,6 @@ where
             .bind(("content", node.content.clone()))
             .bind(("version", node.version))
             .bind(("data", None::<String>))
-            .bind(("properties", properties_for_hub))
             .await
             .context("Failed to create node in universal table")?;
 
@@ -1676,12 +1670,12 @@ where
         let new_version = expected_version + 1;
 
         // Atomic update with version check using record ID
-        // SurrealDB's UPDATE returns the updated records
+        // NOTE: Properties are NOT stored on hub node - they go to spoke tables
+        // (hub-spoke architecture: hub has metadata, spokes have type-specific data)
         let query = "
             UPDATE type::thing('node', $id) SET
                 content = $content,
                 node_type = $node_type,
-                properties = $properties,
                 modified_at = time::now(),
                 version = $new_version,
                 embedding_vector = $embedding_vector
@@ -1691,7 +1685,7 @@ where
 
         let updated_content = update.content.unwrap_or(current.content);
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
-        let updated_properties = update.properties.unwrap_or(current.properties);
+        let updated_properties = update.properties.clone();
 
         // embedding_vector is already Vec<f32>, no conversion needed
         let embedding_f32 = update.embedding_vector.flatten();
@@ -1703,8 +1697,7 @@ where
             .bind(("expected_version", expected_version))
             .bind(("new_version", new_version))
             .bind(("content", updated_content))
-            .bind(("node_type", updated_node_type))
-            .bind(("properties", updated_properties))
+            .bind(("node_type", updated_node_type.clone()))
             .bind(("embedding_vector", embedding_f32))
             .await
             .context("Failed to update node with version check")?;
@@ -1719,8 +1712,35 @@ where
             return Ok(None);
         }
 
-        // Convert and return the updated node
-        let node: Node = updated_nodes.into_iter().next().unwrap().into();
+        // Update spoke table if properties were provided and node type has spoke table
+        if let Some(props) = updated_properties {
+            if TYPES_WITH_SPOKE_TABLES.contains(&updated_node_type.as_str()) {
+                // UPSERT with MERGE to preserve existing spoke data
+                self.db
+                    .query("UPSERT type::thing($table, $id) MERGE $properties;")
+                    .bind(("table", updated_node_type.clone()))
+                    .bind(("id", id.to_string()))
+                    .bind(("properties", props))
+                    .await
+                    .context("Failed to upsert properties in spoke table")?;
+
+                // Ensure data link exists
+                self.db
+                    .query(
+                        "UPDATE type::thing('node', $id) SET data = type::thing($type_table, $id);",
+                    )
+                    .bind(("id", id.to_string()))
+                    .bind(("type_table", updated_node_type))
+                    .await
+                    .context("Failed to set data link")?;
+            }
+        }
+
+        // Fetch fresh node with hydrated properties from spoke table
+        let node = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
 
         // Emit domain event for observers
         self.emit_event(DomainEvent::NodeUpdated(node.clone()));
