@@ -319,14 +319,26 @@ export class TextareaController {
 
       // Check if this is a node type conversion in progress
       // Node type conversions are signaled via focusManager.cursorPosition.type
-      const isTypeConversion = focusManager.cursorPosition?.type === 'node-type-conversion';
+      const cursorType = focusManager.cursorPosition?.type;
+      const isTypeConversion = cursorType === 'node-type-conversion';
+      const isInheritedType = cursorType === 'inherited-type';
 
-      // Clear cursor position AFTER checking type
-      // The positionCursor action will handle cursor positioning
+      // Issue #669: Clear cursor position for ALL position types after initialization
+      // Previously, only 'node-type-conversion' was cleared, leaving 'absolute' and other
+      // types to persist. This caused the cursor to jump back to position 0 when:
+      // 1. Placeholder → promoted → Enter → new node → type first character
+      // The persisted cursor position would be re-applied on reactive updates.
+      //
+      // The positionCursor action will handle initial cursor positioning via RAF.
+      // After that, we must clear the position to prevent re-application.
       // This must happen here (not in the action) to avoid a race condition where
-      // RAF runs before initialize() and clears the position before we can check it
-      if (isTypeConversion) {
-        focusManager.clearCursorPosition();
+      // RAF runs before initialize() and clears the position before we can check it.
+      if (focusManager.cursorPosition) {
+        // Schedule clear after RAF has had a chance to run
+        // This ensures the positionCursor action can read the position first
+        requestAnimationFrame(() => {
+          focusManager.clearCursorPosition();
+        });
       }
 
       // Initialize pattern state for non-text types (Issue #664)
@@ -350,9 +362,10 @@ export class TextareaController {
           this.justCreated = false;
         }, 50);
 
-        // If this is a type conversion, skip cursor positioning - let positionCursor action handle it
+        // If this is a type conversion or inherited type, skip cursor positioning - let positionCursor action handle it
         // This prevents the cursor from jumping to the beginning during type conversions
-        if (!isTypeConversion) {
+        // Issue #669: Also check for inherited-type (Enter key on typed node creates inherited type nodes)
+        if (!isTypeConversion && !isInheritedType) {
           cursorService.setCursorAtBeginningOfLine(this.element, 0, {
             focus: true,
             delay: 0,
