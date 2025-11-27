@@ -4,8 +4,10 @@
 
 NodeSpace uses a **hub-and-spoke architecture** in SurrealDB that combines:
 1. **Hub `node` table** - Universal metadata for all nodes
-2. **Spoke tables** (`task`, `date`, `schema`) - Type-specific queryable data with bidirectional Record Links
+2. **Spoke tables** (`task`, `schema`) - Type-specific queryable data with bidirectional Record Links
 3. **Graph relation tables** - `has_child` edges for hierarchy, `mentions` for references
+
+**Note**: Per Issue #670, `date` nodes no longer have a spoke table - all date data is stored in the hub's `content` field.
 
 **Key Pattern**: Record Links (not RELATE) for hub-spoke composition, RELATE edges for node-to-node relationships.
 
@@ -83,7 +85,8 @@ DEFINE FIELD id ON TABLE task TYPE record ASSERT $value != NONE;
 DEFINE FIELD node ON TABLE task TYPE record(node) ASSERT $value != NONE;  -- Reverse link to hub
 
 -- Core task fields
-DEFINE FIELD status ON TABLE task TYPE string DEFAULT 'todo';
+-- Status uses lowercase canonical values: open, in_progress, done, cancelled (Issue #670)
+DEFINE FIELD status ON TABLE task TYPE string DEFAULT 'open';
 DEFINE FIELD priority ON TABLE task TYPE option<string>;
 DEFINE FIELD due_date ON TABLE task TYPE option<datetime>;
 DEFINE FIELD assignee ON TABLE task TYPE option<record>;
@@ -97,15 +100,8 @@ DEFINE INDEX idx_task_due_date ON TABLE task COLUMNS due_date;
 DEFINE FIELD * ON TABLE task FLEXIBLE;
 
 -- ============================================================================
-
--- Date spoke: Timezone, holiday tracking
-DEFINE TABLE date SCHEMAFULL;
-DEFINE FIELD id ON TABLE date TYPE record ASSERT $value != NONE;
-DEFINE FIELD node ON TABLE date TYPE record(node) ASSERT $value != NONE;
-DEFINE FIELD timezone ON TABLE date TYPE string DEFAULT 'UTC';
-DEFINE FIELD is_holiday ON TABLE date TYPE bool DEFAULT false;
-DEFINE FIELD * ON TABLE date FLEXIBLE;
-
+-- NOTE: Date spoke table removed per Issue #670
+-- Date nodes store all data in the hub's content field (no spoke table needed).
 -- ============================================================================
 
 -- Schema spoke: Type definitions
@@ -125,8 +121,10 @@ DEFINE FIELD * ON TABLE schema FLEXIBLE;
 - ✅ **No subqueries**: Join hub context via reverse link
 
 **Which Node Types Need Spokes?**
-- ✅ `task`, `date`, `schema` - Have queryable structured data
-- ❌ `text`, `header`, `code-block` - Just content (`data = null`)
+- ✅ `task`, `schema` - Have queryable structured data
+- ❌ `text`, `header`, `code-block`, `date` - Just content (`data = null`)
+
+**Note**: Per Issue #670, `date` nodes no longer have a spoke table - they store all data in the hub's `content` field.
 
 ### Graph Relations (Node-to-Node Relationships)
 
@@ -204,12 +202,9 @@ DEFINE TABLE text SCHEMAFULL;
 DEFINE FIELD id ON text TYPE record;
 DEFINE FIELD * ON text FLEXIBLE;  -- Users can add any metadata
 
--- Date nodes: Core date behavior + user metadata
-DEFINE TABLE date SCHEMAFULL;
-DEFINE FIELD id ON date TYPE record;  -- date:2025-01-03 (deterministic)
-DEFINE FIELD timezone ON date TYPE string DEFAULT 'UTC';
-DEFINE FIELD is_holiday ON date TYPE bool DEFAULT false;
-DEFINE FIELD * ON date FLEXIBLE;  -- Notes, tags, custom fields
+-- NOTE: Date nodes do NOT have a spoke table (Issue #670)
+-- Date nodes store all data in the hub's content field.
+-- ID format is YYYY-MM-DD (deterministic), content can be custom.
 
 -- Header nodes: Core structure + user styling
 DEFINE TABLE header SCHEMAFULL;
@@ -250,11 +245,11 @@ CREATE schema:task CONTENT {
         name: 'status',
         type: 'enum',
         protection: 'core',  -- Field cannot be deleted
-        core_values: ['todo', 'in_progress', 'done'],  -- App behavior
+        core_values: ['open', 'in_progress', 'done', 'cancelled'],  -- App behavior (Issue #670)
         user_values: [],  -- User can extend via UI
         extensible: true,
         required: true,
-        default: 'todo'
+        default: 'open'
       },
       {
         name: 'priority',
@@ -501,7 +496,7 @@ CREATE nodes CONTENT {
 -- Insert into type-specific table (same ID!)
 CREATE task CONTENT {
     id: $id,
-    status: 'todo',
+    status: 'open',
     priority: 'high',
     due_date: <datetime>'2025-12-31'
 };
@@ -610,13 +605,13 @@ WHERE parent_id INSIDE (
 ### 3. Type-Specific Queries
 
 ```sql
--- Get all TODO tasks
+-- Get all open tasks
 SELECT
     nodes.*,
     task.*
 FROM nodes
 INNER JOIN task ON nodes.id = task.id
-WHERE task.status = 'todo'
+WHERE task.status = 'open'
 ORDER BY task.due_date ASC;
 
 -- Get all high-priority tasks in a root
