@@ -2191,6 +2191,105 @@ where
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
+    /// Move a node to a new parent with OCC (Optimistic Concurrency Control)
+    ///
+    /// This method validates version before moving, preventing concurrent modifications
+    /// from silently overwriting each other. The node's version is bumped after a
+    /// successful move.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The node to move
+    /// * `expected_version` - The version the caller expects (for OCC)
+    /// * `new_parent` - The new parent ID (None to make it a root node)
+    /// * `insert_after_node_id` - Optional sibling to insert after (None = append at end)
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Node doesn't exist
+    /// - Version doesn't match (concurrent modification detected)
+    /// - New parent doesn't exist
+    /// - Move would create circular reference
+    /// - Node is a date container (cannot be moved)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(db)?;
+    /// // Move node under new parent with version check
+    /// service.move_node_with_occ("node-id", 5, Some("new-parent-id"), None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn move_node_with_occ(
+        &self,
+        node_id: &str,
+        expected_version: i64,
+        new_parent: Option<&str>,
+        insert_after_node_id: Option<&str>,
+    ) -> Result<(), NodeServiceError> {
+        // Get current node and verify version
+        let node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
+
+        // Check version before proceeding
+        if node.version != expected_version {
+            return Err(NodeServiceError::version_conflict(
+                node_id,
+                expected_version,
+                node.version,
+            ));
+        }
+
+        // Date nodes are top-level containers and cannot be moved
+        if node.node_type == "date" {
+            return Err(NodeServiceError::hierarchy_violation(format!(
+                "Date node '{}' cannot be moved (it's a top-level container)",
+                node_id
+            )));
+        }
+
+        // Verify new parent exists if provided
+        if let Some(parent_id) = new_parent {
+            let parent_exists = self.node_exists(parent_id).await?;
+            if !parent_exists {
+                return Err(NodeServiceError::invalid_parent(parent_id));
+            }
+
+            // Check for circular reference - parent_id cannot be a descendant of node_id
+            if self.is_descendant(node_id, parent_id).await? {
+                return Err(NodeServiceError::circular_reference(format!(
+                    "Cannot move node {} under its descendant {}",
+                    node_id, parent_id
+                )));
+            }
+        }
+
+        // Perform the move
+        self.store
+            .move_node(node_id, new_parent, insert_after_node_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Bump the node's version to support OCC
+        // Even though we're only modifying edge relationships, we bump the node version
+        // so that concurrent move operations will fail with version conflict
+        self.update_node_with_version_bump(node_id, expected_version)
+            .await?;
+
+        Ok(())
+    }
+
     /// Reorder a node within its siblings with OCC
     ///
     /// This method validates version, prevents root reordering, and bumps

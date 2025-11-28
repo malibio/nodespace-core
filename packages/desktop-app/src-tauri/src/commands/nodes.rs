@@ -384,43 +384,49 @@ pub async fn delete_node(
         .map_err(Into::into)
 }
 
-/// Atomically move a node to a new parent with new sibling position
+/// Atomically move a node to a new parent with new sibling position (with OCC)
 ///
 /// Performs a single database transaction that:
+/// - Validates version for optimistic concurrency control
 /// - Deletes the old parent-child edge
 /// - Updates the node's before_sibling_id field
 /// - Creates the new parent-child edge (if new parent specified)
+/// - Bumps the node version after successful move
 ///
 /// This ensures database consistency without race conditions.
 ///
 /// # Arguments
 /// * `service` - NodeService instance from Tauri state
 /// * `node_id` - ID of the node to move
+/// * `version` - Expected version for OCC (prevents concurrent modification conflicts)
 /// * `new_parent_id` - New parent (None = root node)
-/// * `new_before_sibling_id` - New position in sibling chain
+/// * `insert_after_node_id` - New position in sibling chain
 ///
 /// # Returns
 /// * `Ok(())` - Move completed successfully
-/// * `Err(CommandError)` - Error if move validation fails
+/// * `Err(CommandError)` - Error if move validation fails or version conflict
 ///
 /// # Example Frontend Usage
 /// ```typescript
 /// await invoke('move_node', {
 ///   nodeId: 'node-123',
+///   version: 5,
 ///   newParentId: 'parent-456',
-///   newBeforeSiblingId: 'node-789'
+///   insertAfterNodeId: 'node-789'
 /// });
 /// ```
 #[tauri::command]
 pub async fn move_node(
     service: State<'_, NodeService>,
     node_id: String,
+    version: i64,
     new_parent_id: Option<String>,
     insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
     service
-        .move_node(
+        .move_node_with_occ(
             &node_id,
+            version,
             new_parent_id.as_deref(),
             insert_after_node_id.as_deref(),
         )
