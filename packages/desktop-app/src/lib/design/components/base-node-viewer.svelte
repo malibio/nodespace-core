@@ -1407,6 +1407,19 @@
                     // Add to store and trigger persistence
                     // Note: LIVE SELECT handles parent-child relationship via edge:created events
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+                    // This makes the promoted node visible in visibleNodesFromStores, which causes
+                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
+                    // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
+                    reactiveStructureTree.addChild({
+                      parentId: nodeId,
+                      childId: promotedNode.id,
+                      order: Date.now()
+                    });
+
+                    // Clear placeholder ID so fresh one is created if needed later
+                    resetPlaceholderId();
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
                     // For real nodes, update node type with full persistence
@@ -1415,7 +1428,7 @@
                 }}
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
-                  const { nodeId, state } = e.detail;
+                  const { nodeId: eventNodeId, state } = e.detail;
 
                   // Map UI state to schema enum value
                   let schemaStatus: string;
@@ -1434,7 +1447,7 @@
                   }
 
                   // Update using schema-aware helper (handles nested format correctly)
-                  updateSchemaField(nodeId, 'status', schemaStatus);
+                  updateSchemaField(eventNodeId, 'status', schemaStatus);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
@@ -1566,6 +1579,19 @@
                     // Add to store and trigger persistence
                     // Note: LIVE SELECT handles parent-child relationship via edge:created events
                     sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+                    // This makes the promoted node visible in visibleNodesFromStores, which causes
+                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
+                    // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
+                    reactiveStructureTree.addChild({
+                      parentId: nodeId,
+                      childId: promotedNode.id,
+                      order: Date.now()
+                    });
+
+                    // Clear placeholder ID so fresh one is created if needed later
+                    resetPlaceholderId();
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
                     // For real nodes, update node type with full persistence
@@ -1574,7 +1600,7 @@
                 }}
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
-                  const { nodeId, state } = e.detail;
+                  const { nodeId: eventNodeId, state } = e.detail;
 
                   // Map UI state to schema enum value
                   let schemaStatus: string;
@@ -1593,7 +1619,7 @@
                   }
 
                   // Update using schema-aware helper (handles nested format correctly)
-                  updateSchemaField(nodeId, 'status', schemaStatus);
+                  updateSchemaField(eventNodeId, 'status', schemaStatus);
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
