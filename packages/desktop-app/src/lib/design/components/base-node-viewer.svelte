@@ -394,6 +394,24 @@
   }
 
   /**
+   * Maps UI task state to schema status value.
+   * UI uses: 'pending', 'inProgress', 'completed'
+   * Schema uses: 'open', 'in_progress', 'done', 'cancelled'
+   */
+  function mapNodeStateToSchemaStatus(state: string): string {
+    switch (state) {
+      case 'pending':
+        return 'open';
+      case 'inProgress':
+        return 'in_progress';
+      case 'completed':
+        return 'done';
+      default:
+        return 'open';
+    }
+  }
+
+  /**
    * Update a schema field value for a node (schema-aware property update)
    *
    * Follows the same nested format pattern as schema-property-form.svelte:
@@ -1432,25 +1450,7 @@
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
                   const { nodeId: eventNodeId, state } = e.detail;
-
-                  // Map UI state to schema enum value
-                  let schemaStatus: string;
-                  switch (state) {
-                    case 'pending':
-                      schemaStatus = 'OPEN';
-                      break;
-                    case 'inProgress':
-                      schemaStatus = 'IN_PROGRESS';
-                      break;
-                    case 'completed':
-                      schemaStatus = 'DONE';
-                      break;
-                    default:
-                      schemaStatus = 'OPEN';
-                  }
-
-                  // Update using schema-aware helper (handles nested format correctly)
-                  updateSchemaField(eventNodeId, 'status', schemaStatus);
+                  updateSchemaField(eventNodeId, 'status', mapNodeStateToSchemaStatus(state));
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
@@ -1604,25 +1604,7 @@
                 on:iconClick={handleIconClick}
                 on:taskStateChanged={(e) => {
                   const { nodeId: eventNodeId, state } = e.detail;
-
-                  // Map UI state to schema enum value
-                  let schemaStatus: string;
-                  switch (state) {
-                    case 'pending':
-                      schemaStatus = 'OPEN';
-                      break;
-                    case 'inProgress':
-                      schemaStatus = 'IN_PROGRESS';
-                      break;
-                    case 'completed':
-                      schemaStatus = 'DONE';
-                      break;
-                    default:
-                      schemaStatus = 'OPEN';
-                  }
-
-                  // Update using schema-aware helper (handles nested format correctly)
-                  updateSchemaField(eventNodeId, 'status', schemaStatus);
+                  updateSchemaField(eventNodeId, 'status', mapNodeStateToSchemaStatus(state));
                 }}
                 on:combineWithPrevious={handleCombineWithPrevious}
                 on:deleteNode={handleDeleteNode}
