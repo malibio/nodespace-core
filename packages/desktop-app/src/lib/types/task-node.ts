@@ -23,14 +23,26 @@
 import type { Node } from './node';
 
 /**
- * Task status values (matches schema in init-schemas-via-proxy.ts)
+ * Core task status values (protected, cannot be removed)
+ * Users can extend with additional values via schema userValues
  */
-export type TaskStatus = 'open' | 'in_progress' | 'done' | 'cancelled';
+export type CoreTaskStatus = 'open' | 'in_progress' | 'done' | 'cancelled';
 
 /**
- * Task priority values
+ * Task status - core values plus any user-defined extensions
+ * Use CoreTaskStatus when you need to check against known values
  */
-export type TaskPriority = 'low' | 'medium' | 'high';
+export type TaskStatus = CoreTaskStatus | string;
+
+/**
+ * Core task priority values (user-extensible)
+ */
+export type CoreTaskPriority = 'low' | 'medium' | 'high';
+
+/**
+ * Task priority - core values plus any user-defined extensions
+ */
+export type TaskPriority = CoreTaskPriority | string;
 
 /**
  * Task-specific properties stored under properties.task
@@ -215,27 +227,61 @@ export const TaskNodeHelpers = {
   },
 
   /**
+   * Check if status is a core (protected) status
+   */
+  isCoreStatus(status: TaskStatus): status is CoreTaskStatus {
+    return ['open', 'in_progress', 'done', 'cancelled'].includes(status);
+  },
+
+  /**
+   * Check if priority is a core (protected) priority
+   */
+  isCorePriority(priority: TaskPriority): priority is CoreTaskPriority {
+    return ['low', 'medium', 'high'].includes(priority);
+  },
+
+  /**
    * Get display-friendly status name
+   * For user-defined statuses, capitalizes and replaces underscores with spaces
    */
   getStatusDisplayName(status: TaskStatus): string {
-    const displayNames: Record<TaskStatus, string> = {
+    const coreDisplayNames: Record<CoreTaskStatus, string> = {
       open: 'Open',
       in_progress: 'In Progress',
       done: 'Done',
       cancelled: 'Cancelled'
     };
-    return displayNames[status];
+
+    if (this.isCoreStatus(status)) {
+      return coreDisplayNames[status];
+    }
+
+    // Format user-defined status: replace underscores, capitalize words
+    return status
+      .split('_')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
   },
 
   /**
    * Get display-friendly priority name
+   * For user-defined priorities, capitalizes and replaces underscores with spaces
    */
   getPriorityDisplayName(priority: TaskPriority): string {
-    const displayNames: Record<TaskPriority, string> = {
+    const coreDisplayNames: Record<CoreTaskPriority, string> = {
       low: 'Low',
       medium: 'Medium',
       high: 'High'
     };
-    return displayNames[priority];
+
+    if (this.isCorePriority(priority)) {
+      return coreDisplayNames[priority];
+    }
+
+    // Format user-defined priority: replace underscores, capitalize words
+    return priority
+      .split('_')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
   }
 };
