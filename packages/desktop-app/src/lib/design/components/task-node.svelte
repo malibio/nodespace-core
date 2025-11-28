@@ -21,6 +21,7 @@
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
   import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store';
+  import { isTaskNode, getTaskStatus, type TaskStatus } from '$lib/types/task-node';
 
   // Get paneId from context (set by PaneContent) - identifies which pane this node is in
   const sourcePaneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
@@ -79,27 +80,29 @@
   // REFACTOR (Issue #316): Removed $effect for prop sync, will use bind:content instead
   // Replaced $effect with $derived.by() for task state detection
 
+  /**
+   * Map TaskStatus to NodeState for icon rendering
+   */
+  function taskStatusToNodeState(status: TaskStatus): NodeState {
+    switch (status) {
+      case 'in_progress':
+        return 'inProgress';
+      case 'done':
+      case 'cancelled':
+        return 'completed';
+      case 'open':
+      default:
+        return 'pending';
+    }
+  }
+
   // Task-specific state management using $derived.by() for reactive computation
   // Priority: 1) Schema status property, 2) Content task syntax, 3) Metadata, 4) Default
   let taskState = $derived.by(() => {
-    // First check schema properties (cross-pane reactive via sharedNodeStore)
-    // Schema uses lowercase: 'open', 'in_progress', 'done', 'cancelled'
-    // Access nested properties safely: properties['task']?.status
-    const taskProps = sharedNode?.properties?.['task'] as Record<string, unknown> | undefined;
-    const schemaStatus = taskProps?.['status'] as string | undefined;
-    if (schemaStatus) {
-      // Map schema status to NodeState
-      switch (schemaStatus.toLowerCase()) {
-        case 'in_progress':
-          return 'inProgress' as NodeState;
-        case 'done':
-          return 'completed' as NodeState;
-        case 'cancelled':
-          return 'completed' as NodeState; // Show as completed (strikethrough)
-        case 'open':
-        default:
-          return 'pending' as NodeState;
-      }
+    // First check schema properties using type-safe helpers (cross-pane reactive via sharedNodeStore)
+    if (sharedNode && isTaskNode(sharedNode)) {
+      const status = getTaskStatus(sharedNode);
+      return taskStatusToNodeState(status);
     }
 
     // Fall back to content-based task syntax
