@@ -1296,62 +1296,52 @@
                   const currentPlaceholder = viewerPlaceholder;
 
                   // Check if this is the viewer-local placeholder getting its first content
+                  // Also check if node doesn't already exist in store (prevents duplicate promotion)
+                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
                   if (
                     currentPlaceholder &&
                     node.id === currentPlaceholder.id &&
                     content.trim() !== '' &&
-                    nodeId
+                    nodeId &&
+                    !nodeExistsInStore &&
+                    !isPromoting
                   ) {
                     // ATOMIC PROMOTION: Set flag to block new placeholder creation
                     isPromoting = true;
 
-                    // Promote placeholder to real node by assigning parent and adding to store
+                    // Prepare promoted node data synchronously
                     const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
                       content
                     });
 
-                    // Set editing state BEFORE store update
-                    // Use setEditingNodeFromTypeConversion to prevent blur handler from clearing state
-                    focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
-
-                    // Add to shared store with persistence enabled
-                    // Setting false allows debounced content updates to persist to database
-                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
-                    // This makes the promoted node visible in visibleNodesFromStores, which causes
-                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
-                    // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
-                    reactiveStructureTree.addChild({
-                      parentId: nodeId,
-                      childId: promotedNode.id,
-                      order: Date.now()
-                    });
-
-                    // CRITICAL FIX: Clear viewerPlaceholder SYNCHRONOUSLY to prevent subsequent
-                    // keystrokes from hitting the promotion path again while $effect is pending.
-                    // Without this, rapid typing can cause multiple setNode() calls with stale content.
-
-                    // Clear placeholder ID so fresh one is created if needed later
-                    // Issue #653: Now using function instead of $state
+                    // Clear placeholder ID synchronously to prevent re-entry
                     resetPlaceholderId();
 
-                    // Clear promotion flag after Svelte's microtask queue flushes.
-                    // tick() ensures our synchronous state changes above have propagated
-                    // through $derived computations before
-                    // we allow new promotions. This is sufficient because the race condition
-                    // was caused by stale state, not async operations.
+                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
+                    // subscription callbacks that mutate $state. If called during template render,
+                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
+                      // Set editing state BEFORE store update
+                      focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+
+                      // Add to shared store with persistence enabled
+                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                      // Add parent-child edge to reactiveStructureTree
+                      reactiveStructureTree.addChild({
+                        parentId: nodeId,
+                        childId: promotedNode.id,
+                        order: Date.now()
+                      });
+
+                      // Clear promotion flag after state updates complete
                       isPromoting = false;
                     });
-
-                    // No need to reload - promoted node is already in shared store
-                    // Database query will find it once persisted (CREATE is debounced)
                   } else {
                     // Regular node content update (placeholder flag is handled automatically)
                     nodeManager.updateNodeContent(node.id, content);
                   }
-                  // Focus management handled by FocusManager (single source of truth)
                 }}
                 on:nodeTypeChanged={async (
                   e: CustomEvent<{
@@ -1472,11 +1462,61 @@
                 on:indentNode={handleIndentNode}
                 on:outdentNode={handleOutdentNode}
                 on:navigateArrow={handleArrowNavigation}
-                on:contentChanged={(e: CustomEvent<{ content: string }>) => {
+                on:contentChanged={(e: CustomEvent<{ content: string; cursorPosition?: number }>) => {
                   const content = e.detail.content;
+                  const cursorPosition = e.detail.cursorPosition ?? content.length;
 
-                  // Update node content (placeholder flag is handled automatically)
-                  nodeManager.updateNodeContent(node.id, content);
+                  // CRITICAL FIX (Issue #681): Fallback handler must also support placeholder promotion
+                  // This branch is used when node plugins haven't loaded yet (e.g., on initial render)
+
+                  // Capture $derived values immediately to prevent race condition
+                  const currentPlaceholder = viewerPlaceholder;
+                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
+
+                  if (
+                    currentPlaceholder &&
+                    node.id === currentPlaceholder.id &&
+                    content.trim() !== '' &&
+                    nodeId &&
+                    !nodeExistsInStore &&
+                    !isPromoting
+                  ) {
+                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
+                    isPromoting = true;
+
+                    // Prepare promoted node data synchronously
+                    const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
+                      content
+                    });
+
+                    // Clear placeholder ID synchronously to prevent re-entry
+                    resetPlaceholderId();
+
+                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
+                    // subscription callbacks that mutate $state. If called during template render,
+                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
+                    tick().then(() => {
+                      // Set editing state BEFORE store update
+                      focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+
+                      // Add to shared store with persistence enabled
+                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                      // Add parent-child edge to reactiveStructureTree
+                      reactiveStructureTree.addChild({
+                        parentId: nodeId,
+                        childId: promotedNode.id,
+                        order: Date.now()
+                      });
+
+                      // Clear promotion flag after state updates complete
+                      isPromoting = false;
+                    });
+                  } else {
+                    // Regular node content update (placeholder flag is handled automatically)
+                    nodeManager.updateNodeContent(node.id, content);
+                  }
                 }}
                 on:nodeTypeChanged={async (
                   e: CustomEvent<{
