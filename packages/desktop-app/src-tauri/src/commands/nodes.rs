@@ -394,7 +394,7 @@ pub async fn delete_node(
 /// This ensures database consistency without race conditions.
 ///
 /// # Arguments
-/// * `store` - SurrealStore instance from Tauri state
+/// * `service` - NodeService instance from Tauri state
 /// * `node_id` - ID of the node to move
 /// * `new_parent_id` - New parent (None = root node)
 /// * `new_before_sibling_id` - New position in sibling chain
@@ -425,11 +425,7 @@ pub async fn move_node(
             insert_after_node_id.as_deref(),
         )
         .await
-        .map_err(|e| CommandError {
-            message: format!("Move failed: {}", e),
-            code: "MOVE_ERROR".to_string(),
-            details: Some(format!("{:?}", e)),
-        })
+        .map_err(Into::into)
 }
 
 /// Reorder a node by changing its sibling position
