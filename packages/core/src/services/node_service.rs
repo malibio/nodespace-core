@@ -25,6 +25,7 @@
 //! - Child node: `root_id = Some("parent-id")` (e.g., notes within a topic)
 
 use crate::behaviors::NodeBehaviorRegistry;
+use crate::db::events::DomainEvent;
 use crate::db::SurrealStore;
 use crate::models::{Node, NodeFilter, NodeUpdate};
 use crate::services::error::NodeServiceError;
@@ -33,6 +34,14 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
+use tokio::sync::broadcast;
+
+/// Broadcast channel capacity for domain events.
+///
+/// 128 provides sufficient headroom for burst operations (bulk node creation)
+/// while limiting memory overhead. Observer lag is acceptable - we only track
+/// the current state, not historical events.
+const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Check if a string matches date node format: YYYY-MM-DD
 ///
@@ -283,6 +292,9 @@ where
 
     /// Migration registry for lazy schema upgrades
     migration_registry: Arc<MigrationRegistry>,
+
+    /// Broadcast channel for domain events (128 subscriber capacity)
+    event_tx: broadcast::Sender<DomainEvent>,
 }
 
 impl<C> NodeService<C>
@@ -316,10 +328,14 @@ where
         // Infrastructure exists for future schema evolution post-deployment
         let migration_registry = MigrationRegistry::new();
 
+        // Initialize broadcast channel for domain events
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+
         Ok(Self {
             store,
             behaviors: Arc::new(NodeBehaviorRegistry::new()),
             migration_registry: Arc::new(migration_registry),
+            event_tx,
         })
     }
 
@@ -328,6 +344,42 @@ where
     /// Useful for advanced operations that need direct database access
     pub fn store(&self) -> &Arc<SurrealStore<C>> {
         &self.store
+    }
+
+    /// Subscribe to domain events
+    ///
+    /// Returns a broadcast receiver that receives all domain events (node created,
+    /// updated, deleted, hierarchy changed, mentions added/removed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// # let service = NodeService::new(store)?;
+    /// let mut rx = service.subscribe_to_events();
+    /// tokio::spawn(async move {
+    ///     while let Ok(event) = rx.recv().await {
+    ///         println!("Event: {:?}", event);
+    ///     }
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn subscribe_to_events(&self) -> broadcast::Receiver<DomainEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Emit a domain event to all subscribers
+    ///
+    /// Internal helper for emitting events after successful operations.
+    /// Ignores errors if no subscribers (expected in some tests).
+    fn emit_event(&self, event: DomainEvent) {
+        let _ = self.event_tx.send(event);
     }
 
     /// Create a new node
@@ -718,6 +770,13 @@ where
             .await
             .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
 
+        // Emit NodeCreated event (Phase 2 of Issue #665)
+        // source_client_id will be added in Phase 3
+        self.emit_event(DomainEvent::NodeCreated {
+            node: node.clone(),
+            source_client_id: None,
+        });
+
         Ok(node.id)
     }
 
@@ -1006,6 +1065,17 @@ where
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
+        // Emit EdgeCreated event (Phase 2 of Issue #665)
+        self.emit_event(DomainEvent::EdgeCreated {
+            relationship: crate::db::events::EdgeRelationship::Mention(
+                crate::db::events::MentionRelationship {
+                    source_id: mentioning_node_id.to_string(),
+                    target_id: mentioned_node_id.to_string(),
+                },
+            ),
+            source_client_id: None,
+        });
+
         Ok(())
     }
 
@@ -1046,6 +1116,14 @@ where
             .delete_mention(mentioning_node_id, mentioned_node_id)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Emit EdgeDeleted event (Phase 2 of Issue #665)
+        // Use composite ID for mention edge: "source->target"
+        let edge_id = format!("{}->{}", mentioning_node_id, mentioned_node_id);
+        self.emit_event(DomainEvent::EdgeDeleted {
+            id: edge_id,
+            source_client_id: None,
+        });
 
         Ok(())
     }
@@ -1242,6 +1320,12 @@ where
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
+        // Emit NodeUpdated event (Phase 2 of Issue #665)
+        self.emit_event(DomainEvent::NodeUpdated {
+            node: updated.clone(),
+            source_client_id: None,
+        });
+
         // Sync mentions if content changed
         if content_changed {
             if let Err(e) = self
@@ -1391,6 +1475,12 @@ where
         if rows_affected == 0 {
             return Ok(0);
         }
+
+        // Emit NodeUpdated event (Phase 2 of Issue #665)
+        self.emit_event(DomainEvent::NodeUpdated {
+            node: updated.clone(),
+            source_client_id: None,
+        });
 
         // Mark embedding as stale if content changed
         if content_changed {
@@ -1621,6 +1711,14 @@ where
             })
         })?;
 
+        // Emit NodeDeleted event if node was actually deleted (Phase 2 of Issue #665)
+        if result.existed {
+            self.emit_event(DomainEvent::NodeDeleted {
+                id: id.to_string(),
+                source_client_id: None,
+            });
+        }
+
         // Idempotent delete: return success even if node doesn't exist
         // This follows RESTful best practices and prevents race conditions
         // in distributed scenarios. DELETE is idempotent - deleting a
@@ -1671,7 +1769,7 @@ where
         id: &str,
         expected_version: i64,
     ) -> Result<usize, NodeServiceError> {
-        self.store
+        let rows_affected = self.store
             .delete_with_version_check(id, expected_version)
             .await
             .map_err(|e| {
@@ -1679,7 +1777,17 @@ where
                     "Failed to delete node with version check: {}",
                     e
                 ))
-            })
+            })?;
+
+        // Emit NodeDeleted event if node was actually deleted (Phase 2 of Issue #665)
+        if rows_affected > 0 {
+            self.emit_event(DomainEvent::NodeDeleted {
+                id: id.to_string(),
+                source_client_id: None,
+            });
+        }
+
+        Ok(rows_affected)
     }
 
     /// Delete a node with cascade and optimistic concurrency control
@@ -2188,7 +2296,26 @@ where
         self.store
             .move_node(node_id, new_parent, insert_after_node_id)
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Emit EdgeUpdated event (Phase 2 of Issue #665)
+        if let Some(parent_id) = new_parent {
+            let children = self.get_children(parent_id).await?;
+            if let Some(child_pos) = children.iter().position(|c| c.id == node_id) {
+                self.emit_event(DomainEvent::EdgeUpdated {
+                    relationship: crate::db::events::EdgeRelationship::Hierarchy(
+                        crate::db::events::HierarchyRelationship {
+                            parent_id: parent_id.to_string(),
+                            child_id: node_id.to_string(),
+                            order: child_pos as f64,
+                        },
+                    ),
+                    source_client_id: None,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Move a node to a new parent with OCC (Optimistic Concurrency Control)
@@ -2280,6 +2407,23 @@ where
             .move_node(node_id, new_parent, insert_after_node_id)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Emit EdgeUpdated event (Phase 2 of Issue #665)
+        if let Some(parent_id) = new_parent {
+            let children = self.get_children(parent_id).await?;
+            if let Some(child_pos) = children.iter().position(|c| c.id == node_id) {
+                self.emit_event(DomainEvent::EdgeUpdated {
+                    relationship: crate::db::events::EdgeRelationship::Hierarchy(
+                        crate::db::events::HierarchyRelationship {
+                            parent_id: parent_id.to_string(),
+                            child_id: node_id.to_string(),
+                            order: child_pos as f64,
+                        },
+                    ),
+                    source_client_id: None,
+                });
+            }
+        }
 
         // Bump the node's version to support OCC
         // Even though we're only modifying edge relationships, we bump the node version
@@ -2404,7 +2548,24 @@ where
         self.store
             .move_node(child_id, Some(parent_id), final_insert_after_id.as_deref())
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Emit EdgeCreated event (Phase 2 of Issue #665)
+        let children = self.get_children(parent_id).await?;
+        if let Some(child_pos) = children.iter().position(|c| c.id == child_id) {
+            self.emit_event(DomainEvent::EdgeCreated {
+                relationship: crate::db::events::EdgeRelationship::Hierarchy(
+                    crate::db::events::HierarchyRelationship {
+                        parent_id: parent_id.to_string(),
+                        child_id: child_id.to_string(),
+                        order: child_pos as f64,
+                    },
+                ),
+                source_client_id: None,
+            });
+        }
+
+        Ok(())
     }
 
     /// Reorder a child within its parent's children list.
@@ -2468,6 +2629,25 @@ where
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
+        // Emit EdgeUpdated event (Phase 2 of Issue #665)
+        // Reordering updates the hierarchy edge's order field
+        if let Some(parent_id) = parent_id {
+            // Get the updated edge information
+            let children = self.get_children(&parent_id).await?;
+            if let Some(child_pos) = children.iter().position(|c| c.id == node_id) {
+                self.emit_event(DomainEvent::EdgeUpdated {
+                    relationship: crate::db::events::EdgeRelationship::Hierarchy(
+                        crate::db::events::HierarchyRelationship {
+                            parent_id,
+                            child_id: node_id.to_string(),
+                            order: child_pos as f64,
+                        },
+                    ),
+                    source_client_id: None,
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -2521,6 +2701,17 @@ where
                 expected_version, node_id
             )));
         }
+
+        // Emit NodeUpdated event (Phase 2 of Issue #665)
+        // Fetch updated node with new version number
+        let updated_node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
+        self.emit_event(DomainEvent::NodeUpdated {
+            node: updated_node,
+            source_client_id: None,
+        });
 
         Ok(())
     }
@@ -2808,6 +2999,14 @@ where
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
+        // Emit NodeCreated event for each created node (Phase 2 of Issue #665)
+        for node in &created_nodes {
+            self.emit_event(DomainEvent::NodeCreated {
+                node: node.clone(),
+                source_client_id: None,
+            });
+        }
+
         // Extract IDs for return (maintaining backward compatibility)
         Ok(created_nodes.into_iter().map(|n| n.id).collect())
     }
@@ -2905,12 +3104,23 @@ where
         }
 
         // Step 2: All validations passed - perform atomic bulk update
-        self.store.bulk_update(updates).await.map_err(|e| {
+        self.store.bulk_update(updates.clone()).await.map_err(|e| {
             NodeServiceError::bulk_operation_failed(format!(
                 "Failed to execute bulk update transaction: {}",
                 e
             ))
         })?;
+
+        // Emit NodeUpdated event for each updated node (Phase 2 of Issue #665)
+        for (id, _update) in updates {
+            // Fetch the updated node to get current state
+            if let Ok(Some(updated_node)) = self.get_node(&id).await {
+                self.emit_event(DomainEvent::NodeUpdated {
+                    node: updated_node,
+                    source_client_id: None,
+                });
+            }
+        }
 
         Ok(())
     }
@@ -2952,12 +3162,20 @@ where
         // Delete nodes one by one using SurrealStore
         // SurrealDB handles atomicity within each delete operation
         for id in &ids {
-            self.store.delete_node(id).await.map_err(|e| {
+            let result = self.store.delete_node(id).await.map_err(|e| {
                 NodeServiceError::bulk_operation_failed(format!(
                     "Failed to delete node {}: {}",
                     id, e
                 ))
             })?;
+
+            // Emit NodeDeleted event if node was actually deleted (Phase 2 of Issue #665)
+            if result.existed {
+                self.emit_event(DomainEvent::NodeDeleted {
+                    id: id.clone(),
+                    source_client_id: None,
+                });
+            }
         }
 
         Ok(())
@@ -3002,9 +3220,15 @@ where
                 parent_id.to_string(),
                 serde_json::json!({}),
             );
-            self.store.create_node(parent_node).await.map_err(|e| {
+            self.store.create_node(parent_node.clone()).await.map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to create parent node: {}", e))
             })?;
+
+            // Emit NodeCreated event for parent (Phase 2 of Issue #665)
+            self.emit_event(DomainEvent::NodeCreated {
+                node: parent_node,
+                source_client_id: None,
+            });
         }
 
         // Upsert the node (update if exists, create if not)
@@ -3023,6 +3247,16 @@ where
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to update node: {}", e))
                 })?;
+
+            // Emit NodeUpdated event (Phase 2 of Issue #665)
+            // Fetch updated node to get current state
+            if let Ok(Some(updated_node)) = self.get_node(node_id).await {
+                self.emit_event(DomainEvent::NodeUpdated {
+                    node: updated_node,
+                    source_client_id: None,
+                });
+            }
+
             // Update parent relationship via edge (handles sibling ordering)
             self.store
                 .move_node(node_id, Some(parent_id), before_sibling_id)
@@ -3030,6 +3264,21 @@ where
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to update parent: {}", e))
                 })?;
+
+            // Emit EdgeUpdated event (Phase 2 of Issue #665)
+            let children = self.get_children(parent_id).await?;
+            if let Some(child_pos) = children.iter().position(|c| c.id == node_id) {
+                self.emit_event(DomainEvent::EdgeUpdated {
+                    relationship: crate::db::events::EdgeRelationship::Hierarchy(
+                        crate::db::events::HierarchyRelationship {
+                            parent_id: parent_id.to_string(),
+                            child_id: node_id.to_string(),
+                            order: child_pos as f64,
+                        },
+                    ),
+                    source_client_id: None,
+                });
+            }
         } else {
             // Create new node
             let node = Node {
@@ -3044,9 +3293,16 @@ where
                 modified_at: chrono::Utc::now(),
                 embedding_vector: None,
             };
-            self.store.create_node(node).await.map_err(|e| {
+            self.store.create_node(node.clone()).await.map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to create node: {}", e))
             })?;
+
+            // Emit NodeCreated event (Phase 2 of Issue #665)
+            self.emit_event(DomainEvent::NodeCreated {
+                node: node.clone(),
+                source_client_id: None,
+            });
+
             // Create parent relationship via edge (handles sibling ordering)
             self.store
                 .move_node(node_id, Some(parent_id), before_sibling_id)
@@ -3054,6 +3310,21 @@ where
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to set parent: {}", e))
                 })?;
+
+            // Emit EdgeCreated event (Phase 2 of Issue #665)
+            let children = self.get_children(parent_id).await?;
+            if let Some(child_pos) = children.iter().position(|c| c.id == node_id) {
+                self.emit_event(DomainEvent::EdgeCreated {
+                    relationship: crate::db::events::EdgeRelationship::Hierarchy(
+                        crate::db::events::HierarchyRelationship {
+                            parent_id: parent_id.to_string(),
+                            child_id: node_id.to_string(),
+                            order: child_pos as f64,
+                        },
+                    ),
+                    source_client_id: None,
+                });
+            }
         }
 
         Ok(())
