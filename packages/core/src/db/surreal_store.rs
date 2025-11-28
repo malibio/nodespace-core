@@ -980,7 +980,10 @@ where
         // This allows cleaner separation of node creation from hierarchy management
 
         // Emit domain event
-        self.emit_event(DomainEvent::NodeCreated(node.clone()));
+        self.emit_event(DomainEvent::NodeCreated {
+            node: node.clone(),
+            source_client_id: None,
+        });
 
         // Return the created node directly
         Ok(node)
@@ -1211,14 +1214,18 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))?;
 
         // Emit domain events for observers
-        self.emit_event(DomainEvent::NodeCreated(node.clone()));
-        self.emit_event(DomainEvent::EdgeCreated(EdgeRelationship::Hierarchy(
-            HierarchyRelationship {
+        self.emit_event(DomainEvent::NodeCreated {
+            node: node.clone(),
+            source_client_id: None,
+        });
+        self.emit_event(DomainEvent::EdgeCreated {
+            relationship: EdgeRelationship::Hierarchy(HierarchyRelationship {
                 parent_id,
                 child_id: node_id,
                 order,
-            },
-        )));
+            }),
+            source_client_id: None,
+        });
 
         Ok(node)
     }
@@ -1447,7 +1454,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
 
         // Emit domain event
-        self.emit_event(DomainEvent::NodeUpdated(updated_node.clone()));
+        self.emit_event(DomainEvent::NodeUpdated {
+            node: updated_node.clone(),
+            source_client_id: None,
+        });
 
         Ok(updated_node)
     }
@@ -1619,7 +1629,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))?;
 
         // Emit domain event for observers
-        self.emit_event(DomainEvent::NodeUpdated(node.clone()));
+        self.emit_event(DomainEvent::NodeUpdated {
+            node: node.clone(),
+            source_client_id: None,
+        });
 
         Ok(node)
     }
@@ -1752,7 +1765,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
 
         // Emit domain event for observers
-        self.emit_event(DomainEvent::NodeUpdated(node.clone()));
+        self.emit_event(DomainEvent::NodeUpdated {
+            node: node.clone(),
+            source_client_id: None,
+        });
 
         Ok(Some(node))
     }
@@ -1785,6 +1801,7 @@ where
         // Emit domain event
         self.emit_event(DomainEvent::NodeDeleted {
             id: node.id.clone(),
+            source_client_id: None,
         });
 
         Ok(DeleteResult { existed: true })
@@ -1870,7 +1887,10 @@ where
             ))?;
 
         // Emit domain event for observers
-        self.emit_event(DomainEvent::NodeDeleted { id: node.id });
+        self.emit_event(DomainEvent::NodeDeleted {
+            id: node.id,
+            source_client_id: None,
+        });
 
         Ok(DeleteResult { existed: true })
     }
@@ -2957,13 +2977,15 @@ where
                 child_id: node_id.clone(),
                 order: new_order,
             };
-            self.emit_event(DomainEvent::EdgeUpdated(EdgeRelationship::Hierarchy(
-                relationship,
-            )));
+            self.emit_event(DomainEvent::EdgeUpdated {
+                relationship: EdgeRelationship::Hierarchy(relationship),
+                source_client_id: None,
+            });
         } else {
             // Moving to root (deleting parent edge)
             self.emit_event(DomainEvent::EdgeDeleted {
                 id: format!("has_child:{}:*", node_id),
+                source_client_id: None,
             });
         }
 
@@ -3024,9 +3046,10 @@ where
                 source_id: source_id.to_string(),
                 target_id: target_id.to_string(),
             };
-            self.emit_event(DomainEvent::EdgeCreated(EdgeRelationship::Mention(
-                relationship,
-            )));
+            self.emit_event(DomainEvent::EdgeCreated {
+                relationship: EdgeRelationship::Mention(relationship),
+                source_client_id: None,
+            });
         }
 
         Ok(())
@@ -3047,6 +3070,7 @@ where
         // Emit edge deleted event
         self.emit_event(DomainEvent::EdgeDeleted {
             id: format!("mentions:{}:{}", source_id, target_id),
+            source_client_id: None,
         });
 
         Ok(())

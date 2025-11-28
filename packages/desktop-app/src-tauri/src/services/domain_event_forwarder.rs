@@ -72,33 +72,51 @@ impl DomainEventForwarder {
     /// Converts domain events from SurrealStore to Tauri events with proper naming and payload.
     fn forward_event(&self, event: &DomainEvent) {
         match event {
-            DomainEvent::NodeCreated(node) => {
+            DomainEvent::NodeCreated {
+                node,
+                source_client_id: _,
+            } => {
                 if let Err(e) = self.app.emit("node:created", node) {
                     error!("Failed to emit node:created: {}", e);
                 }
             }
-            DomainEvent::NodeUpdated(node) => {
+            DomainEvent::NodeUpdated {
+                node,
+                source_client_id: _,
+            } => {
                 if let Err(e) = self.app.emit("node:updated", node) {
                     error!("Failed to emit node:updated: {}", e);
                 }
             }
-            DomainEvent::NodeDeleted { id } => {
+            DomainEvent::NodeDeleted {
+                id,
+                source_client_id: _,
+            } => {
                 let payload = DeletedPayload { id: id.clone() };
                 if let Err(e) = self.app.emit("node:deleted", &payload) {
                     error!("Failed to emit node:deleted: {}", e);
                 }
             }
-            DomainEvent::EdgeCreated(relationship) => {
+            DomainEvent::EdgeCreated {
+                relationship,
+                source_client_id: _,
+            } => {
                 if let Err(e) = self.app.emit("edge:created", relationship) {
                     error!("Failed to emit edge:created: {}", e);
                 }
             }
-            DomainEvent::EdgeUpdated(relationship) => {
+            DomainEvent::EdgeUpdated {
+                relationship,
+                source_client_id: _,
+            } => {
                 if let Err(e) = self.app.emit("edge:updated", relationship) {
                     error!("Failed to emit edge:updated: {}", e);
                 }
             }
-            DomainEvent::EdgeDeleted { id } => {
+            DomainEvent::EdgeDeleted {
+                id,
+                source_client_id: _,
+            } => {
                 let payload = DeletedPayload { id: id.clone() };
                 if let Err(e) = self.app.emit("edge:deleted", &payload) {
                     error!("Failed to emit edge:deleted: {}", e);

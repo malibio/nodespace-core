@@ -54,7 +54,10 @@ mod event_emission_tests {
 
         // Verify it's a NodeCreated event
         match event {
-            DomainEvent::NodeCreated(created_node) => {
+            DomainEvent::NodeCreated {
+                node: created_node,
+                source_client_id: _,
+            } => {
                 assert_eq!(created_node.id, expected_id);
                 assert_eq!(created_node.node_type, "text");
                 assert_eq!(created_node.content, "Test content");
@@ -95,7 +98,10 @@ mod event_emission_tests {
 
         // Verify it's a NodeUpdated event
         match event {
-            DomainEvent::NodeUpdated(updated) => {
+            DomainEvent::NodeUpdated {
+                node: updated,
+                source_client_id: _,
+            } => {
                 assert_eq!(updated.id, node_id);
                 assert_eq!(updated.content, "Updated content");
             }
@@ -128,7 +134,10 @@ mod event_emission_tests {
 
         // Verify it's a NodeDeleted event
         match event {
-            DomainEvent::NodeDeleted { id } => {
+            DomainEvent::NodeDeleted {
+                id,
+                source_client_id: _,
+            } => {
                 assert_eq!(id, node_id);
             }
             _ => panic!("Expected NodeDeleted event, got {:?}", event),
@@ -163,7 +172,10 @@ mod event_emission_tests {
 
         // Verify it's an EdgeUpdated event for hierarchy
         match event {
-            DomainEvent::EdgeUpdated(edge) => match edge {
+            DomainEvent::EdgeUpdated {
+                relationship: edge,
+                source_client_id: _,
+            } => match edge {
                 nodespace_core::db::EdgeRelationship::Hierarchy(rel) => {
                     assert_eq!(rel.parent_id, parent2.id);
                     assert_eq!(rel.child_id, child.id);
@@ -201,7 +213,10 @@ mod event_emission_tests {
 
         // Verify it's an EdgeDeleted event
         match event {
-            DomainEvent::EdgeDeleted { id } => {
+            DomainEvent::EdgeDeleted {
+                id,
+                source_client_id: _,
+            } => {
                 // Event ID should indicate has_child edge for this node
                 assert!(id.contains(&child.id));
             }
@@ -234,7 +249,10 @@ mod event_emission_tests {
             .expect("Should receive first event");
 
         match event1 {
-            DomainEvent::NodeCreated(node) => {
+            DomainEvent::NodeCreated {
+                node,
+                source_client_id: _,
+            } => {
                 assert_eq!(node.id, child.id);
                 assert_eq!(node.content, "Child content");
             }
@@ -248,7 +266,10 @@ mod event_emission_tests {
             .expect("Should receive second event");
 
         match event2 {
-            DomainEvent::EdgeCreated(edge) => match edge {
+            DomainEvent::EdgeCreated {
+                relationship: edge,
+                source_client_id: _,
+            } => match edge {
                 nodespace_core::db::EdgeRelationship::Hierarchy(rel) => {
                     assert_eq!(rel.parent_id, parent.id);
                     assert_eq!(rel.child_id, child.id);
@@ -285,7 +306,10 @@ mod event_emission_tests {
             .expect("Should receive event");
 
         match event {
-            DomainEvent::NodeDeleted { id } => {
+            DomainEvent::NodeDeleted {
+                id,
+                source_client_id: _,
+            } => {
                 assert_eq!(id, child.id);
             }
             _ => panic!("Expected NodeDeleted event, got {:?}", event),
@@ -322,7 +346,7 @@ mod event_emission_tests {
             .expect("Should receive event")
             .expect("Should receive event");
 
-        assert!(matches!(event1, DomainEvent::NodeUpdated(_)));
+        assert!(matches!(event1, DomainEvent::NodeUpdated { .. }));
 
         // Attempting to receive another event should timeout
         let result = timeout(Duration::from_millis(100), rx.recv()).await;
