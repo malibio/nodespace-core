@@ -1769,7 +1769,8 @@ where
         id: &str,
         expected_version: i64,
     ) -> Result<usize, NodeServiceError> {
-        let rows_affected = self.store
+        let rows_affected = self
+            .store
             .delete_with_version_check(id, expected_version)
             .await
             .map_err(|e| {
@@ -3220,9 +3221,12 @@ where
                 parent_id.to_string(),
                 serde_json::json!({}),
             );
-            self.store.create_node(parent_node.clone()).await.map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to create parent node: {}", e))
-            })?;
+            self.store
+                .create_node(parent_node.clone())
+                .await
+                .map_err(|e| {
+                    NodeServiceError::query_failed(format!("Failed to create parent node: {}", e))
+                })?;
 
             // Emit NodeCreated event for parent (Phase 2 of Issue #665)
             self.emit_event(DomainEvent::NodeCreated {
