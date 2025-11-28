@@ -22,6 +22,7 @@
   import { nodeData as reactiveNodeData } from '$lib/stores/reactive-node-data.svelte';
   import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
   import type { Node } from '$lib/types';
+  import type { CoreTaskStatus } from '$lib/types/task-node';
   import type { Snippet } from 'svelte';
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
   import { getViewerId, saveScrollPosition, getScrollPosition } from '$lib/stores/scroll-state';
@@ -398,7 +399,7 @@
    * UI uses: 'pending', 'inProgress', 'completed'
    * Schema uses: 'open', 'in_progress', 'done', 'cancelled'
    */
-  function mapNodeStateToSchemaStatus(state: string): string {
+  function mapNodeStateToSchemaStatus(state: string): CoreTaskStatus {
     switch (state) {
       case 'pending':
         return 'open';
