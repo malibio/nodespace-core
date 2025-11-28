@@ -279,7 +279,6 @@ fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
 ///     Ok(())
 /// }
 /// ```
-#[derive(Clone)]
 pub struct NodeService<C = surrealdb::engine::local::Db>
 where
     C: surrealdb::Connection,
@@ -295,6 +294,31 @@ where
 
     /// Broadcast channel for domain events (128 subscriber capacity)
     event_tx: broadcast::Sender<DomainEvent>,
+
+    /// Optional client identifier for event source tracking (Issue #665)
+    ///
+    /// When set, all emitted events will include this client_id as source_client_id.
+    /// This enables clients to filter out their own events (prevent feedback loops).
+    ///
+    /// Use `with_client()` to create a new NodeService instance with client_id set.
+    client_id: Option<String>,
+}
+
+// Manual Clone implementation because C doesn't need to be Clone
+// (all fields are Arc or inherently cloneable)
+impl<C> Clone for NodeService<C>
+where
+    C: surrealdb::Connection,
+{
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            behaviors: self.behaviors.clone(),
+            migration_registry: self.migration_registry.clone(),
+            event_tx: self.event_tx.clone(),
+            client_id: self.client_id.clone(),
+        }
+    }
 }
 
 impl<C> NodeService<C>
@@ -336,6 +360,7 @@ where
             behaviors: Arc::new(NodeBehaviorRegistry::new()),
             migration_registry: Arc::new(migration_registry),
             event_tx,
+            client_id: None,
         })
     }
 
@@ -344,6 +369,40 @@ where
     /// Useful for advanced operations that need direct database access
     pub fn store(&self) -> &Arc<SurrealStore<C>> {
         &self.store
+    }
+
+    /// Create a new NodeService with a client identifier
+    ///
+    /// Returns a clone of this service with the client_id set. All operations
+    /// performed through the returned service will emit events with this client_id
+    /// as the source_client_id.
+    ///
+    /// # Arguments
+    ///
+    /// * `client_id` - Unique identifier for the client (e.g., "tauri-window-1", "mcp-client-123")
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// let service = NodeService::new(store)?;
+    ///
+    /// // Create a scoped service for a specific client
+    /// let tauri_service = service.with_client("tauri-window-1");
+    ///
+    /// // All operations through tauri_service will include "tauri-window-1" in events
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_client(&self, client_id: impl Into<String>) -> Self {
+        let mut cloned = self.clone();
+        cloned.client_id = Some(client_id.into());
+        cloned
     }
 
     /// Subscribe to domain events
@@ -774,7 +833,7 @@ where
         // source_client_id will be added in Phase 3
         self.emit_event(DomainEvent::NodeCreated {
             node: node.clone(),
-            source_client_id: None,
+            source_client_id: self.client_id.clone(),
         });
 
         Ok(node.id)
@@ -1073,7 +1132,7 @@ where
                     target_id: mentioned_node_id.to_string(),
                 },
             ),
-            source_client_id: None,
+            source_client_id: self.client_id.clone(),
         });
 
         Ok(())
@@ -1122,7 +1181,7 @@ where
         let edge_id = format!("{}->{}", mentioning_node_id, mentioned_node_id);
         self.emit_event(DomainEvent::EdgeDeleted {
             id: edge_id,
-            source_client_id: None,
+            source_client_id: self.client_id.clone(),
         });
 
         Ok(())
@@ -1323,7 +1382,7 @@ where
         // Emit NodeUpdated event (Phase 2 of Issue #665)
         self.emit_event(DomainEvent::NodeUpdated {
             node: updated.clone(),
-            source_client_id: None,
+            source_client_id: self.client_id.clone(),
         });
 
         // Sync mentions if content changed
@@ -1479,7 +1538,7 @@ where
         // Emit NodeUpdated event (Phase 2 of Issue #665)
         self.emit_event(DomainEvent::NodeUpdated {
             node: updated.clone(),
-            source_client_id: None,
+            source_client_id: self.client_id.clone(),
         });
 
         // Mark embedding as stale if content changed
@@ -2711,7 +2770,7 @@ where
             .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
         self.emit_event(DomainEvent::NodeUpdated {
             node: updated_node,
-            source_client_id: None,
+            source_client_id: self.client_id.clone(),
         });
 
         Ok(())
