@@ -132,8 +132,10 @@
   });
 
   // Track the viewed node reactively for schema form display
-  // Derived from sharedNodeStore - always up-to-date with the store
-  const currentViewedNode = $derived(nodeId ? sharedNodeStore.getNode(nodeId) : null);
+  // Use $state for reactivity since sharedNodeStore is not a Svelte 5 $state store
+  // This gets updated after loadChildrenForParent completes
+  let viewedNodeCache = $state<Node | null>(null);
+  const currentViewedNode = $derived(viewedNodeCache ?? (nodeId ? sharedNodeStore.getNode(nodeId) : null));
 
   // Scroll position tracking
   // Reference to the scroll container element
@@ -284,7 +286,8 @@
         // After loading completes, initialize header content and update tab title
         const node = sharedNodeStore.getNode(nodeId);
         headerContent = node?.content || '';
-        // currentViewedNode is now $derived - no manual assignment needed
+        // Update viewedNodeCache to trigger reactivity for SchemaPropertyForm
+        viewedNodeCache = node ?? null;
 
         // Update tab title after node is loaded
         if (!shouldDisableTitleUpdates) {
