@@ -19,8 +19,8 @@
   import type { NodeState } from '$lib/design/icons/registry';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
-  import { nodeData } from '$lib/stores/reactive-node-data.svelte';
   import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
+  import { sharedNodeStore } from '$lib/services/shared-node-store';
 
   // Get paneId from context (set by PaneContent) - identifies which pane this node is in
   const sourcePaneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
@@ -44,14 +44,14 @@
 
   const dispatch = createEventDispatcher();
 
-  // Use reactive stores directly instead of relying on props
-  // Components query the stores for current data and re-render automatically when data changes
-  let node = $derived(nodeData.getNode(nodeId));
+  // Use sharedNodeStore as single source of truth for cross-pane reactivity
+  // This ensures property changes (like status) from other panes are immediately reflected
+  let sharedNode = $derived(sharedNodeStore.getNode(nodeId));
   let childIds = $derived(structureTree.getChildren(nodeId));
 
-  // Derive props from stores with fallback to passed props for backward compatibility
-  let content = $derived(node?.content ?? propsContent);
-  let nodeType = $derived(node?.nodeType ?? propsNodeType);
+  // Derive props from sharedNodeStore with fallback to passed props for backward compatibility
+  let content = $derived(sharedNode?.content ?? propsContent);
+  let nodeType = $derived(sharedNode?.nodeType ?? propsNodeType);
   let children = $derived(childIds ?? propsChildren);
 
   // Track if user is actively typing (hide button during typing)
@@ -80,8 +80,29 @@
   // Replaced $effect with $derived.by() for task state detection
 
   // Task-specific state management using $derived.by() for reactive computation
-  // When content has task syntax, derive from content; otherwise use metadata
+  // Priority: 1) Schema status property, 2) Content task syntax, 3) Metadata, 4) Default
   let taskState = $derived.by(() => {
+    // First check schema properties (cross-pane reactive via sharedNodeStore)
+    // Schema uses lowercase: 'open', 'in_progress', 'done', 'cancelled'
+    // Access nested properties safely: properties['task']?.status
+    const taskProps = sharedNode?.properties?.['task'] as Record<string, unknown> | undefined;
+    const schemaStatus = taskProps?.['status'] as string | undefined;
+    if (schemaStatus) {
+      // Map schema status to NodeState
+      switch (schemaStatus.toLowerCase()) {
+        case 'in_progress':
+          return 'inProgress' as NodeState;
+        case 'done':
+          return 'completed' as NodeState;
+        case 'cancelled':
+          return 'completed' as NodeState; // Show as completed (strikethrough)
+        case 'open':
+        default:
+          return 'pending' as NodeState;
+      }
+    }
+
+    // Fall back to content-based task syntax
     const hasTaskSyntax = /^\s*-?\s*\[(x|X|~|o|\s)\]/i.test(content.trim());
     return hasTaskSyntax ? parseTaskState(content) : (metadata.taskState as NodeState) || 'pending';
   });
