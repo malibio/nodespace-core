@@ -1808,6 +1808,40 @@ where
         Ok(children)
     }
 
+    /// Get all descendants of a node (recursive children)
+    ///
+    /// Fetches all nodes in the subtree rooted at the specified node,
+    /// excluding the root node itself. Uses iterative breadth-first traversal.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - The root node ID to fetch descendants for
+    ///
+    /// # Returns
+    ///
+    /// `Vec<Node>` containing all descendant nodes (not including the root)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # async fn example(service: NodeService) -> Result<(), Box<dyn std::error::Error>> {
+    /// let descendants = service.get_descendants("parent-123").await?;
+    /// println!("Found {} descendants", descendants.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_descendants(&self, root_id: &str) -> Result<Vec<Node>, NodeServiceError> {
+        // Use store's breadth-first traversal implementation
+        let descendants = self
+            .store
+            .get_nodes_in_subtree(root_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        Ok(descendants)
+    }
+
     /// Get a complete nested tree structure using efficient adjacency list strategy
     ///
     /// Fetches the entire subtree in 3 optimized queries:

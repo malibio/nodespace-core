@@ -218,7 +218,7 @@ pub async fn create_root_node(
             id: None, // Let NodeService generate ID for root nodes
             node_type: input.node_type,
             content: input.content,
-            parent_id: None, // parent_id = None for root nodes
+            parent_id: None,            // parent_id = None for root nodes
             insert_after_node_id: None, // No sibling positioning for root nodes
             properties: input.properties,
         })
