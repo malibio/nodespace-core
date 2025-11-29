@@ -134,8 +134,10 @@ export class PatternState {
    */
   get canRevert(): boolean {
     // NEW (Issue #667): Use plugin-owned pattern behavior
+    // Both 'pattern' and 'inherited' source nodes respect the plugin's canRevert setting
     if (this._plugin?.pattern) {
-      return this._creationSource === 'pattern' && this._plugin.pattern.canRevert === true;
+      const source = this._creationSource;
+      return (source === 'pattern' || source === 'inherited') && this._plugin.pattern.canRevert === true;
     }
 
     // LEGACY: Fall back to old PatternTemplate behavior for backward compatibility
@@ -147,7 +149,7 @@ export class PatternState {
       return true;
     }
 
-    // Inherited source - can also revert (syntax deletion triggers type change)
+    // Inherited source (legacy path) - can also revert (syntax deletion triggers type change)
     // The pattern detection in detectNodeTypeConversion handles this
     if (this._creationSource === 'inherited') {
       return true;

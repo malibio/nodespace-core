@@ -179,6 +179,21 @@ export interface RegistryStats {
   plugins: string[];
 }
 
+/**
+ * Result from pattern detection in content
+ * Returned by PluginRegistry.detectPatternInContent()
+ */
+export interface PatternDetectionResult {
+  /** Plugin that owns the matched pattern */
+  plugin: PluginDefinition;
+  /** Backward-compatible pattern config derived from plugin.pattern */
+  config: PatternDetectionConfig;
+  /** RegExp match result */
+  match: RegExpMatchArray;
+  /** Extracted metadata from pattern (e.g., header level) */
+  metadata: Record<string, unknown>;
+}
+
 // Plugin lifecycle events
 export interface PluginLifecycleEvents {
   onRegister?: (plugin: PluginDefinition) => void;

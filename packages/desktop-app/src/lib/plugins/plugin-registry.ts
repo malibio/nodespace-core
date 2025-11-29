@@ -16,6 +16,7 @@ import type {
   NodeReferenceComponent,
   SlashCommandDefinition,
   PatternDetectionConfig,
+  PatternDetectionResult,
   RegistryStats,
   PluginLifecycleEvents
 } from './types';
@@ -347,20 +348,22 @@ export class PluginRegistry {
    * Issue #667: Uses plugin.pattern instead of legacy patternDetection arrays
    *
    * @param content - The content to check for patterns
-   * @returns Object with plugin, pattern config (for backward compat), match result, and extracted metadata, or null if no pattern matches
+   * @returns PatternDetectionResult with plugin, pattern config, match result, and metadata, or null if no pattern matches
    */
-  detectPatternInContent(content: string): {
-    plugin: PluginDefinition;
-    config: PatternDetectionConfig; // For backward compat - derived from plugin.pattern
-    match: RegExpMatchArray;
-    metadata: Record<string, unknown>;
-  } | null {
-    // Get all plugins with patterns, sorted by priority
+  detectPatternInContent(content: string): PatternDetectionResult | null {
+    // Default priority for pattern detection (consistent with getAllPatternDetectionConfigs)
+    const DEFAULT_PATTERN_PRIORITY = 10;
+
+    // Get all plugins with patterns, sorted by explicit priority (higher = checked first)
+    // Uses the same priority system as getAllPatternDetectionConfigs for consistency
     const pluginsWithPatterns = Array.from(this.plugins.values())
       .filter(p => this.enabledPlugins.has(p.id) && p.pattern)
       .sort((a, b) => {
-        const aPriority = a.pattern?.detect.source.length || 0; // Longer patterns first for specificity
-        const bPriority = b.pattern?.detect.source.length || 0;
+        // Use explicit priority from slash command config, fallback to default
+        const aSlashCmd = a.config.slashCommands.find(cmd => cmd.nodeType === a.id);
+        const bSlashCmd = b.config.slashCommands.find(cmd => cmd.nodeType === b.id);
+        const aPriority = aSlashCmd?.priority ?? DEFAULT_PATTERN_PRIORITY;
+        const bPriority = bSlashCmd?.priority ?? DEFAULT_PATTERN_PRIORITY;
         return bPriority - aPriority;
       });
 

@@ -169,12 +169,6 @@ let keyboardCommandsRegistered = false;
 const cursorService = CursorPositioningService.getInstance();
 const MAX_QUERY_LENGTH = 100;
 
-/**
- * DELETED (Issue #667): createPatternMatch helper function removed
- * Pattern matching now uses plugin-owned patterns via PluginDefinition.pattern
- * See recordPluginPatternMatch() and setPluginPatternExists() in PatternState
- */
-
 // TextareaController - Core implementation class
 // Can be used directly in tests with 'new TextareaController(...)'
 // Or used reactively via createTextareaController() factory in components
