@@ -297,13 +297,42 @@ export class PluginRegistry {
   /**
    * Get all pattern detection configs from enabled plugins
    * Used by TextareaController to detect node type conversions
+   *
+   * Issue #667: Now derives configs from plugin.pattern (new architecture)
+   * for backward compatibility with existing code that uses PatternDetectionConfig
    */
   getAllPatternDetectionConfigs(): PatternDetectionConfig[] {
     const patterns: PatternDetectionConfig[] = [];
 
     for (const [pluginId, plugin] of this.plugins.entries()) {
-      if (this.enabledPlugins.has(pluginId) && plugin.config.patternDetection) {
+      if (!this.enabledPlugins.has(pluginId)) continue;
+
+      // Legacy: check config.patternDetection
+      if (plugin.config.patternDetection) {
         patterns.push(...plugin.config.patternDetection);
+      }
+
+      // New: derive PatternDetectionConfig from plugin.pattern (Issue #667)
+      if (plugin.pattern) {
+        // Get slash command for additional config (desiredCursorPosition)
+        const slashCommand = plugin.config.slashCommands.find(
+          cmd => cmd.nodeType === pluginId
+        );
+
+        const derivedConfig: PatternDetectionConfig = {
+          pattern: plugin.pattern.detect,
+          targetNodeType: pluginId,
+          cleanContent: !plugin.pattern.canRevert, // canRevert=true means cleanContent=false
+          extractMetadata: plugin.pattern.extractMetadata,
+          priority: 10, // Default priority
+          desiredCursorPosition: slashCommand?.desiredCursorPosition,
+          // Only include contentTemplate if desiredCursorPosition is set
+          // This indicates auto-completion behavior (e.g., code-block's closing fence)
+          contentTemplate: slashCommand?.desiredCursorPosition !== undefined
+            ? slashCommand.contentTemplate
+            : undefined
+        };
+        patterns.push(derivedConfig);
       }
     }
 
@@ -343,13 +372,30 @@ export class PluginRegistry {
         // Extract metadata if extractor function is provided
         const metadata = pattern.extractMetadata ? pattern.extractMetadata(match) : {};
 
+        // Get slash command for additional config (desiredCursorPosition)
+        // NOTE: contentTemplate is NOT used for pattern detection when canRevert is true
+        // because we want to preserve the user's typed content for bidirectional conversion
+        const slashCommand = plugin.config.slashCommands.find(
+          cmd => cmd.nodeType === plugin.id
+        );
+
         // Create backward-compatible PatternDetectionConfig
+        // NOTE: contentTemplate is only included if desiredCursorPosition is set,
+        // indicating auto-completion behavior (e.g., code-block's closing fence).
+        // Headers don't have desiredCursorPosition in slash commands, so their
+        // content is preserved during pattern detection.
         const config: PatternDetectionConfig = {
           pattern: pattern.detect,
           targetNodeType: plugin.id,
-          cleanContent: false, // Not used anymore - kept for compat
+          cleanContent: !pattern.canRevert, // canRevert=true means cleanContent=false
           extractMetadata: pattern.extractMetadata,
-          priority: 10
+          priority: 10,
+          desiredCursorPosition: slashCommand?.desiredCursorPosition,
+          // Only include contentTemplate if desiredCursorPosition is set
+          // This indicates auto-completion behavior (e.g., code-block's closing fence)
+          contentTemplate: slashCommand?.desiredCursorPosition !== undefined
+            ? slashCommand.contentTemplate
+            : undefined
         };
 
         return { plugin, config, match, metadata };
