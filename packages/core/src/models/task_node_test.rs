@@ -381,12 +381,13 @@ mod tests {
 
     #[test]
     fn test_serde_deserialization() {
+        // Uses camelCase for JSON (matching Node struct convention)
         let json = json!({
             "id": "test-123",
             "content": "Deserialize me",
             "version": 1,
-            "created_at": "2025-01-01T00:00:00Z",
-            "modified_at": "2025-01-01T00:00:00Z",
+            "createdAt": "2025-01-01T00:00:00Z",
+            "modifiedAt": "2025-01-01T00:00:00Z",
             "status": "in_progress",
             "priority": 2
         });

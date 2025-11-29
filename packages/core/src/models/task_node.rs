@@ -128,7 +128,7 @@ impl TaskStatus {
 /// assert_eq!(task.content, "Fix bug");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct TaskNode {
     // ========================================================================
     // Hub fields (from task.node.* via record link)

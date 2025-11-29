@@ -60,7 +60,7 @@ use serde_json::json;
 /// FROM schema:`task`;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SchemaNode {
     // ========================================================================
     // Hub fields (from schema.node.* via record link)
@@ -331,23 +331,25 @@ mod tests {
         let node = create_test_schema_node();
         let schema = SchemaNode::from_node(node).unwrap();
 
+        // Uses camelCase for JSON (matching Node struct convention)
         let json = serde_json::to_value(&schema).unwrap();
         assert_eq!(json["id"], "task");
         assert_eq!(json["content"], "Task");
-        assert_eq!(json["is_core"], true);
-        assert_eq!(json["schema_version"], 2);
+        assert_eq!(json["isCore"], true);
+        assert_eq!(json["schemaVersion"], 2);
     }
 
     #[test]
     fn test_serde_deserialization() {
+        // Uses camelCase for JSON (matching Node struct convention)
         let json = json!({
             "id": "test-schema",
             "content": "Test Schema",
             "version": 1,
-            "created_at": "2025-01-01T00:00:00Z",
-            "modified_at": "2025-01-01T00:00:00Z",
-            "is_core": false,
-            "schema_version": 1,
+            "createdAt": "2025-01-01T00:00:00Z",
+            "modifiedAt": "2025-01-01T00:00:00Z",
+            "isCore": false,
+            "schemaVersion": 1,
             "description": "A test schema",
             "fields": []
         });
