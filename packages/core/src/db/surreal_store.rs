@@ -48,7 +48,6 @@
 
 use crate::db::events::DomainEvent;
 use crate::db::fractional_ordering::FractionalOrderCalculator;
-use crate::models::schema::SchemaDefinition;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -289,6 +288,15 @@ impl From<SurrealNode> for Node {
             mentioned_by: sn.mentioned_by,
         }
     }
+}
+
+/// Result struct for get_node() single-query pattern
+///
+/// Captures the hub node and optional spoke data from the RETURN statement.
+#[derive(Debug, Clone, Deserialize)]
+struct HubSpokeResult {
+    hub: Option<SurrealNode>,
+    spoke: Option<Value>,
 }
 
 /// Batch fetch properties for multiple nodes of the same type
@@ -1209,19 +1217,29 @@ where
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
-        // Single round-trip query using multi-statement transaction
+        // Single round-trip query: hub + conditional spoke query
         //
-        // Executes hub and spoke queries together, with spoke query handling both
-        // task and schema types conditionally. Uses OMIT to exclude Thing-typed fields.
+        // Uses the hub's `data` field to determine if a spoke exists. The `data` field
+        // is a record link (e.g., task:uuid) that points to the spoke table. If set,
+        // we query the spoke; if NONE, there's no spoke data.
+        //
+        // This approach:
+        // - Works for all node types (core and user-defined)
+        // - No hardcoded type list needed
+        // - Automatically supports new spoke table types
         //
         // For compile-time type safety with specific types, use:
         // - get_task_node(id) - Returns TaskNode with direct field access
         // - get_schema_node(id) - Returns SchemaNode with direct field access
         let query = format!(
             r#"
-            SELECT * FROM node:`{id}`;
-            SELECT * OMIT id, node FROM task:`{id}`;
-            SELECT * OMIT id, node FROM schema:`{id}`;
+            LET $hub = (SELECT * FROM node:`{id}`)[0];
+            LET $spoke = IF $hub.data != NONE THEN
+                (SELECT * OMIT id, node FROM $hub.data)[0]
+            ELSE
+                NONE
+            END;
+            RETURN {{ hub: $hub, spoke: $spoke }};
             "#,
             id = id
         );
@@ -1232,32 +1250,21 @@ where
             .await
             .context("Failed to query node by record ID")?;
 
-        // Extract results from the three statements
-        let surreal_nodes: Vec<SurrealNode> = response
-            .take(0)
-            .context("Failed to extract hub query results")?;
+        // The RETURN statement is index 2 (after two LET statements)
+        let result: Option<HubSpokeResult> = response.take(2).unwrap_or(None);
 
-        let task_props: Vec<std::collections::HashMap<String, serde_json::Value>> =
-            response.take(1).unwrap_or_default();
-
-        let schema_props: Vec<SchemaDefinition> = response.take(2).unwrap_or_default();
-
-        let mut node_opt: Option<Node> = surreal_nodes.into_iter().map(Into::into).next();
-
-        // Merge spoke properties based on node type
-        if let Some(ref mut node) = node_opt {
-            if node.node_type == "task" {
-                if let Some(props) = task_props.into_iter().next() {
-                    node.properties = serde_json::Value::Object(props.into_iter().collect());
-                }
-            } else if node.node_type == "schema" {
-                if let Some(schema_def) = schema_props.into_iter().next() {
-                    if let Ok(props) = serde_json::to_value(&schema_def) {
-                        node.properties = props;
+        let node_opt = result.and_then(|r| {
+            r.hub.map(|hub| {
+                let mut node: Node = hub.into();
+                // Merge spoke properties if present
+                if let Some(Value::Object(props)) = r.spoke {
+                    if !props.is_empty() {
+                        node.properties = Value::Object(props);
                     }
                 }
-            }
-        }
+                node
+            })
+        });
 
         Ok(node_opt)
     }
