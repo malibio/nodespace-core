@@ -35,10 +35,8 @@ import { get } from 'svelte/store';
 import { untrack } from 'svelte';
 import {
   PatternState,
-  type NodeCreationSource,
-  type PatternMatch
+  type NodeCreationSource
 } from '$lib/state/pattern-state.svelte';
-import type { PatternDetectionConfig } from '$lib/plugins/types';
 
 // Module-level command singletons - created once and reused
 const KEYBOARD_COMMANDS = {
@@ -172,26 +170,10 @@ const cursorService = CursorPositioningService.getInstance();
 const MAX_QUERY_LENGTH = 100;
 
 /**
- * Create a PatternMatch object from a pattern detection config and match
- * Extracted to eliminate duplicate code (DRY principle)
+ * DELETED (Issue #667): createPatternMatch helper function removed
+ * Pattern matching now uses plugin-owned patterns via PluginDefinition.pattern
+ * See recordPluginPatternMatch() and setPluginPatternExists() in PatternState
  */
-function createPatternMatch(config: PatternDetectionConfig, match: RegExpMatchArray): PatternMatch {
-  const regex = typeof config.pattern === 'string'
-    ? new RegExp(config.pattern)
-    : config.pattern;
-
-  return {
-    pattern: {
-      regex,
-      nodeType: config.targetNodeType,
-      priority: config.priority ?? 10,
-      splittingStrategy: 'prefix-inheritance',
-      cursorPlacement: 'after-prefix'
-    },
-    match: match,
-    nodeType: config.targetNodeType
-  };
-}
 
 // TextareaController - Core implementation class
 // Can be used directly in tests with 'new TextareaController(...)'
@@ -346,8 +328,8 @@ export class TextareaController {
           // For non-conversion cases (e.g., page load), check if content matches pattern
           const detection = pluginRegistry.detectPatternInContent(content);
           if (detection && detection.config.targetNodeType === this.nodeType) {
-            // Content matches pattern - enable reversion capability
-            this.patternState.setPatternExists(createPatternMatch(detection.config, detection.match));
+            // Content matches pattern - enable reversion capability (Issue #667)
+            this.patternState.setPluginPatternExists(detection.plugin);
           }
         }
       }
@@ -763,12 +745,11 @@ export class TextareaController {
       const detection = pluginRegistry.detectPatternInContent(content);
 
       if (detection) {
-        const { config, match } = detection;
+        const { plugin, config, match } = detection;
 
         if (this.nodeType === config.targetNodeType) {
-          // Node type already matches - record pattern for reversion capability
-          // This enables reversion when the pattern is later deleted
-          this.patternState.setPatternExists(createPatternMatch(config, match));
+          // Node type already matches - record pattern for reversion capability (Issue #667)
+          this.patternState.setPluginPatternExists(plugin);
           return;
         }
 
@@ -795,8 +776,8 @@ export class TextareaController {
           });
 
           this.nodeType = config.targetNodeType;
-          // Record pattern match for reversion capability
-          this.patternState.recordPatternMatch(createPatternMatch(config, match), content);
+          // Record pattern match for reversion capability (Issue #667)
+          this.patternState.recordPluginPatternMatch(plugin);
         });
       } else if (this.nodeType !== 'text' && this.patternState.canRevert) {
         // No pattern detected and node is not text - revert to text

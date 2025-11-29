@@ -313,12 +313,15 @@ export class PluginRegistry {
 
   /**
    * Detect node type from content using registered patterns
-   * Returns the pattern config and match result if a pattern is detected
+   * Returns the plugin, pattern config, and match result if a pattern is detected
+   *
+   * Issue #667: Now returns the plugin for direct access to plugin.pattern behavior
    *
    * @param content - The content to check for patterns
-   * @returns Object with pattern config, match result, and extracted metadata, or null if no pattern matches
+   * @returns Object with plugin, pattern config, match result, and extracted metadata, or null if no pattern matches
    */
   detectPatternInContent(content: string): {
+    plugin: PluginDefinition;
     config: PatternDetectionConfig;
     match: RegExpMatchArray;
     metadata: Record<string, unknown>;
@@ -335,7 +338,14 @@ export class PluginRegistry {
         // Extract metadata if extractor function is provided
         const metadata = config.extractMetadata ? config.extractMetadata(match) : {};
 
-        return { config, match, metadata };
+        // Get the plugin for this node type (Issue #667)
+        const plugin = this.plugins.get(config.targetNodeType);
+        if (!plugin) {
+          console.warn(`Pattern detected for ${config.targetNodeType} but plugin not found`);
+          continue; // Skip this pattern if plugin missing
+        }
+
+        return { plugin, config, match, metadata };
       }
     }
 
