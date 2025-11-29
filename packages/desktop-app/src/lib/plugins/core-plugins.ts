@@ -51,6 +51,19 @@ export const headerNodePlugin: PluginDefinition = {
   name: 'Header Node',
   description: 'Create a header with customizable level (1-6)',
   version: '1.0.0',
+  // Plugin-owned pattern behavior (Issue #667)
+  pattern: {
+    detect: /^(#{1,6})\s/,
+    canRevert: true,
+    revert: /^#{1,6}$/,  // "# " → "#" should revert to text
+    onEnter: 'inherit',
+    prefixToInherit: (content: string) => content.match(/^(#{1,6})\s/)?.[0],
+    splittingStrategy: 'prefix-inheritance',
+    cursorPlacement: 'after-prefix',
+    extractMetadata: (match: RegExpMatchArray) => ({
+      headerLevel: match[1].length
+    })
+  },
   config: {
     slashCommands: [
       {
@@ -120,6 +133,21 @@ export const taskNodePlugin: PluginDefinition = {
   name: 'Task Node',
   description: 'Create a task with checkbox and state management',
   version: '1.0.0',
+  // Plugin-owned pattern behavior (Issue #667)
+  pattern: {
+    detect: /^[-*+]?\s*\[\s*[xX\s]\s*\]\s/,
+    canRevert: false,  // cleanContent: true - checkbox syntax removed, cannot revert
+    onEnter: 'inherit',
+    prefixToInherit: '',  // No prefix inheritance for tasks
+    splittingStrategy: 'simple-split',
+    cursorPlacement: 'start',
+    extractMetadata: (match: RegExpMatchArray) => {
+      const isCompleted = /[xX]/.test(match[0]);
+      return {
+        taskState: isCompleted ? 'completed' : 'pending'
+      };
+    }
+  },
   config: {
     slashCommands: [
       {
@@ -233,6 +261,18 @@ export const codeBlockNodePlugin: PluginDefinition = {
   name: 'Code Block Node',
   description: 'Code snippet with language selection and syntax',
   version: '1.0.0',
+  // Plugin-owned pattern behavior (Issue #667)
+  pattern: {
+    detect: /^```$/,
+    canRevert: true,
+    revert: /^```$/,  // "```" alone should revert to text
+    onEnter: 'none',  // Code blocks don't inherit on Enter
+    splittingStrategy: 'simple-split',
+    cursorPlacement: 'start',
+    extractMetadata: (match: RegExpMatchArray) => ({
+      language: match[1]?.toLowerCase() || 'plaintext'
+    })
+  },
   config: {
     slashCommands: [
       {
@@ -290,6 +330,17 @@ export const quoteBlockNodePlugin: PluginDefinition = {
   name: 'Quote Block Node',
   description: 'Block quote with markdown styling conventions',
   version: '1.0.0',
+  // Plugin-owned pattern behavior (Issue #667)
+  pattern: {
+    detect: /^>\s/,
+    canRevert: true,
+    revert: /^>$/,  // "> " → ">" should revert to text
+    onEnter: 'inherit',
+    prefixToInherit: '> ',
+    splittingStrategy: 'prefix-inheritance',
+    cursorPlacement: 'after-prefix',
+    extractMetadata: () => ({})
+  },
   config: {
     slashCommands: [
       {
@@ -354,6 +405,17 @@ export const orderedListNodePlugin: PluginDefinition = {
   name: 'Ordered List Node',
   description: 'Auto-numbered ordered list items',
   version: '1.0.0',
+  // Plugin-owned pattern behavior (Issue #667)
+  pattern: {
+    detect: /^1\.\s/,
+    canRevert: true,
+    revert: /^1\.$/,  // "1. " → "1." should revert to text
+    onEnter: 'inherit',
+    prefixToInherit: '1. ',
+    splittingStrategy: 'prefix-inheritance',
+    cursorPlacement: 'after-prefix',
+    extractMetadata: () => ({})
+  },
   config: {
     slashCommands: [
       {

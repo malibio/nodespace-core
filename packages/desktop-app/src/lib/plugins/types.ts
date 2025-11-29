@@ -32,6 +32,41 @@ export interface ReferenceRegistration {
   priority?: number;
 }
 
+/**
+ * Plugin-owned pattern behavior definition
+ *
+ * Consolidates all pattern-related behavior into the plugin system,
+ * making it trivial to add new node types with pattern detection.
+ * Each plugin fully owns its pattern detection, reversion, and inheritance behavior.
+ *
+ * Issue #667: Plugin-Owned Pattern Definitions for Extensibility
+ */
+export interface PluginPattern {
+  /** Regular expression to detect in content */
+  detect: RegExp;
+
+  /** Whether this pattern can revert to text when deleted */
+  canRevert: boolean;
+
+  /** Pattern to test for reversion (e.g., "# " → "#" should revert to text) */
+  revert?: RegExp;
+
+  /** Behavior when Enter key is pressed */
+  onEnter: 'inherit' | 'text' | 'none';
+
+  /** Prefix to inherit on new line (for 'inherit' mode) */
+  prefixToInherit?: string | ((content: string) => string | undefined);
+
+  /** Strategy for splitting content when Enter is pressed */
+  splittingStrategy: 'prefix-inheritance' | 'simple-split';
+
+  /** Where to place cursor in new node after split */
+  cursorPlacement: 'start' | 'after-prefix' | 'end';
+
+  /** Optional function to extract metadata from pattern matches */
+  extractMetadata?: (match: RegExpMatchArray) => Record<string, unknown>;
+}
+
 // Pattern detection configuration for auto-converting node types
 export interface PatternDetectionConfig {
   /**
@@ -128,6 +163,8 @@ export interface PluginDefinition {
   description: string;
   version: string;
   config: NodeTypeConfig;
+  /** Plugin-owned pattern behavior (Issue #667) */
+  pattern?: PluginPattern;
   node?: NodeRegistration; // Individual node component (TaskNode, TextNode, etc.)
   viewer?: ViewerRegistration; // Rich viewer component (TaskNodeViewer, DateNodeViewer, etc.)
   reference?: ReferenceRegistration;
