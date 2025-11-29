@@ -528,7 +528,11 @@ pub async fn batch_generate_embeddings(
 
     for root_id in root_ids {
         // Get the node from the database
-        match node_service.with_client(TAURI_CLIENT_ID).get_node(&root_id).await {
+        match node_service
+            .with_client(TAURI_CLIENT_ID)
+            .get_node(&root_id)
+            .await
+        {
             Ok(Some(node)) => {
                 // Generate and store embedding
                 // Note: NodeEmbeddingService method still uses legacy name, will be updated in Phase 6

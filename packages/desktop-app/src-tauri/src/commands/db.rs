@@ -111,11 +111,9 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
     // Initialize domain event forwarding with client filtering (#665)
     // Events that originated from this Tauri client are filtered out to prevent feedback loops
     let client_id = "tauri-main".to_string();
-    if let Err(e) = crate::initialize_domain_event_forwarder(
-        app.clone(),
-        node_service_arc.clone(),
-        client_id,
-    ) {
+    if let Err(e) =
+        crate::initialize_domain_event_forwarder(app.clone(), node_service_arc.clone(), client_id)
+    {
         tracing::error!("❌ Failed to initialize domain event forwarder: {}", e);
         // Don't fail database init if event forwarding fails - it's not critical
     }
