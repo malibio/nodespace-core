@@ -218,6 +218,7 @@ pub async fn create_root_node(
 
     // Create root node with NodeService (parent_id = None means root)
     let node_id = service
+        .with_client(TAURI_CLIENT_ID)
         .create_node_with_parent(CreateNodeParams {
             id: None, // Let NodeService generate ID for root nodes
             node_type: input.node_type,
@@ -231,6 +232,7 @@ pub async fn create_root_node(
     // If mentioned_by is provided, create mention relationship
     if let Some(mentioning_node_id) = input.mentioned_by {
         service
+            .with_client(TAURI_CLIENT_ID)
             .create_mention(&mentioning_node_id, &node_id)
             .await?;
     }
@@ -266,6 +268,7 @@ pub async fn create_node_mention(
     mentioned_node_id: String,
 ) -> Result<(), CommandError> {
     service
+        .with_client(TAURI_CLIENT_ID)
         .create_mention(&mentioning_node_id, &mentioned_node_id)
         .await
         .map_err(Into::into)
@@ -347,6 +350,7 @@ pub async fn update_node(
     // Use update_node_with_occ for OCC-protected updates
     // Returns the updated Node so frontend can refresh its local version
     service
+        .with_client(TAURI_CLIENT_ID)
         .update_node_with_occ(&id, version, update)
         .await
         .map_err(Into::into)
@@ -387,6 +391,7 @@ pub async fn delete_node(
     version: i64,
 ) -> Result<nodespace_core::models::DeleteResult, CommandError> {
     service
+        .with_client(TAURI_CLIENT_ID)
         .delete_node_with_occ(&id, version)
         .await
         .map_err(Into::into)
@@ -432,6 +437,7 @@ pub async fn move_node(
     insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
     service
+        .with_client(TAURI_CLIENT_ID)
         .move_node_with_occ(
             &node_id,
             version,
@@ -475,6 +481,7 @@ pub async fn reorder_node(
     insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
     service
+        .with_client(TAURI_CLIENT_ID)
         .reorder_node_with_occ(&node_id, version, insert_after_node_id.as_deref())
         .await
         .map_err(Into::into)
@@ -764,6 +771,7 @@ pub async fn save_node_with_parent(
 
     // Use single-transaction upsert method (bypasses NodeOperations for transactional reasons)
     service
+        .with_client(TAURI_CLIENT_ID)
         .upsert_node_with_parent(
             &input.node_id,
             &input.content,
@@ -906,6 +914,7 @@ pub async fn delete_node_mention(
     mentioned_node_id: String,
 ) -> Result<(), CommandError> {
     service
+        .with_client(TAURI_CLIENT_ID)
         .remove_mention(&mentioning_node_id, &mentioned_node_id)
         .await
         .map_err(Into::into)

@@ -1774,7 +1774,7 @@ where
         if result.existed {
             self.emit_event(DomainEvent::NodeDeleted {
                 id: id.to_string(),
-                source_client_id: None,
+                source_client_id: self.client_id.clone(),
             });
         }
 
@@ -1843,7 +1843,7 @@ where
         if rows_affected > 0 {
             self.emit_event(DomainEvent::NodeDeleted {
                 id: id.to_string(),
-                source_client_id: None,
+                source_client_id: self.client_id.clone(),
             });
         }
 
@@ -2370,7 +2370,7 @@ where
                             order: child_pos as f64,
                         },
                     ),
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         }
@@ -2480,7 +2480,7 @@ where
                             order: child_pos as f64,
                         },
                     ),
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         }
@@ -2621,7 +2621,7 @@ where
                         order: child_pos as f64,
                     },
                 ),
-                source_client_id: None,
+                source_client_id: self.client_id.clone(),
             });
         }
 
@@ -2703,7 +2703,7 @@ where
                             order: child_pos as f64,
                         },
                     ),
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         }
@@ -3063,7 +3063,7 @@ where
         for node in &created_nodes {
             self.emit_event(DomainEvent::NodeCreated {
                 node: node.clone(),
-                source_client_id: None,
+                source_client_id: self.client_id.clone(),
             });
         }
 
@@ -3177,7 +3177,7 @@ where
             if let Ok(Some(updated_node)) = self.get_node(&id).await {
                 self.emit_event(DomainEvent::NodeUpdated {
                     node: updated_node,
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         }
@@ -3233,7 +3233,7 @@ where
             if result.existed {
                 self.emit_event(DomainEvent::NodeDeleted {
                     id: id.clone(),
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         }
@@ -3290,7 +3290,7 @@ where
             // Emit NodeCreated event for parent (Phase 2 of Issue #665)
             self.emit_event(DomainEvent::NodeCreated {
                 node: parent_node,
-                source_client_id: None,
+                source_client_id: self.client_id.clone(),
             });
         }
 
@@ -3316,7 +3316,7 @@ where
             if let Ok(Some(updated_node)) = self.get_node(node_id).await {
                 self.emit_event(DomainEvent::NodeUpdated {
                     node: updated_node,
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
 
@@ -3339,7 +3339,7 @@ where
                             order: child_pos as f64,
                         },
                     ),
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         } else {
@@ -3363,7 +3363,7 @@ where
             // Emit NodeCreated event (Phase 2 of Issue #665)
             self.emit_event(DomainEvent::NodeCreated {
                 node: node.clone(),
-                source_client_id: None,
+                source_client_id: self.client_id.clone(),
             });
 
             // Create parent relationship via edge (handles sibling ordering)
@@ -3385,7 +3385,7 @@ where
                             order: child_pos as f64,
                         },
                     ),
-                    source_client_id: None,
+                    source_client_id: self.client_id.clone(),
                 });
             }
         }
@@ -3529,6 +3529,12 @@ where
             .map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to delete mention: {}", e))
             })?;
+
+        // Emit EdgeDeleted event (Phase 2 of Issue #665)
+        self.emit_event(DomainEvent::EdgeDeleted {
+            id: format!("mentions:{}:{}", source_id, target_id),
+            source_client_id: self.client_id.clone(),
+        });
 
         Ok(())
     }
