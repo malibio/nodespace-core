@@ -182,6 +182,12 @@ impl TaskNode {
     /// This converts the JSON properties pattern to strongly-typed fields.
     /// Prefer using `get_task_node()` from NodeService for direct deserialization.
     ///
+    /// # Property Formats
+    ///
+    /// Supports both property formats (Issue #397):
+    /// - New nested format: `properties.task.status`
+    /// - Old flat format: `properties.status` (deprecated, for backward compat)
+    ///
     /// # Errors
     ///
     /// Returns `ValidationError::InvalidNodeType` if the node type is not "task".
@@ -193,34 +199,50 @@ impl TaskNode {
             )));
         }
 
-        // Extract status from properties
-        let status = node
+        // Try new nested format first, fall back to old flat format (Issue #397)
+        let task_props = node
             .properties
+            .get("task")
+            .and_then(|v| v.as_object())
+            .map(|obj| serde_json::Value::Object(obj.clone()));
+        let props = task_props.as_ref().unwrap_or(&node.properties);
+
+        // Extract status from properties
+        let status = props
             .get("status")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
 
-        // Extract priority from properties
-        let priority = node
-            .properties
-            .get("priority")
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32);
+        // Extract priority from properties (supports both integer and string "high"/"medium"/"low")
+        let priority = props.get("priority").and_then(|v| {
+            if let Some(n) = v.as_i64() {
+                Some(n as i32)
+            } else if let Some(s) = v.as_str() {
+                // Convert string priority to integer (for backward compat with schema format)
+                match s {
+                    "urgent" | "highest" => Some(1),
+                    "high" => Some(2),
+                    "medium" | "normal" => Some(3),
+                    "low" | "lowest" => Some(4),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
 
         // Extract due_date from properties (try parsing as DateTime)
-        let due_date = node
-            .properties
+        let due_date = props
             .get("due_date")
             .and_then(|v| v.as_str())
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
         // Extract assignee from properties
-        let assignee = node
-            .properties
+        let assignee = props
             .get("assignee_id")
-            .or_else(|| node.properties.get("assignee"))
+            .or_else(|| props.get("assignee"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 

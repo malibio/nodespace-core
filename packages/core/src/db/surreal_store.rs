@@ -1210,8 +1210,24 @@ where
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         // Direct record ID lookup (O(1) primary key access)
-        // Note: We don't use FETCH data because it causes deserialization issues
-        // with the polymorphic data field (Thing vs Object)
+        //
+        // NOTE (Issue #673 Phase 6 - Deferred):
+        // This method uses 2 queries for types with spoke tables (task, schema):
+        // 1. Query hub: SELECT * FROM node:`id`
+        // 2. Query spoke: SELECT * OMIT id, node FROM <type>:`id`
+        //
+        // The single-query `FETCH data` approach is blocked by Issue #511:
+        // SurrealDB's Thing type cannot deserialize to serde_json::Value when
+        // the fetched object contains an 'id' field (which is always a Thing).
+        //
+        // For single-query efficiency with spoke table types, use the strongly-typed
+        // methods instead:
+        // - get_task_node(id) - Returns TaskNode with direct field access
+        // - get_schema_node(id) - Returns SchemaNode with direct field access
+        //
+        // These methods query the spoke table directly with hub fields via record link,
+        // avoiding the 2-query overhead.
+        //
         // IDs with special characters need backtick-quoting
         let query = format!("SELECT * FROM node:`{}`;", id);
         let mut response = self
