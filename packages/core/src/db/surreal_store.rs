@@ -3597,6 +3597,172 @@ where
         // SurrealDB handles cleanup automatically on drop
         Ok(())
     }
+
+    // ========================================================================
+    // Strongly-Typed Node Retrieval (Issue #673)
+    // ========================================================================
+    //
+    // These methods provide direct deserialization from spoke tables with hub
+    // data via record link, eliminating the intermediate JSON `properties` step.
+
+    /// Get a task node with strong typing using single-query pattern
+    ///
+    /// Fetches spoke fields (status, priority, due_date, assignee) and hub fields
+    /// (id, content, version, timestamps) in a single query via record link.
+    ///
+    /// # Query Pattern
+    ///
+    /// ```sql
+    /// SELECT
+    ///     record::id(id) AS id,
+    ///     status,
+    ///     priority,
+    ///     due_date,
+    ///     assignee,
+    ///     node.content AS content,
+    ///     node.version AS version,
+    ///     node.created_at AS created_at,
+    ///     node.modified_at AS modified_at
+    /// FROM task:`some-id`;
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The task node ID (without table prefix)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(TaskNode))` - Task found with strongly-typed fields
+    /// * `Ok(None)` - Task not found
+    /// * `Err(_)` - Database or deserialization error
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
+    /// if let Some(task) = store.get_task_node("my-task-id").await? {
+    ///     // Direct field access - no JSON parsing
+    ///     println!("Status: {:?}", task.status);
+    ///     println!("Priority: {:?}", task.priority);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_task_node(&self, id: &str) -> Result<Option<crate::models::TaskNode>> {
+        // Single query: spoke fields + hub fields via record link
+        // Use record::id() to extract the string ID from the Thing type
+        let query = format!(
+            r#"
+            SELECT
+                record::id(id) AS id,
+                status,
+                priority,
+                due_date,
+                assignee,
+                node.content AS content,
+                node.version AS version,
+                node.created_at AS created_at,
+                node.modified_at AS modified_at
+            FROM task:`{}`;
+            "#,
+            id
+        );
+
+        let mut response = self
+            .db
+            .query(&query)
+            .await
+            .context(format!("Failed to query task node '{}'", id))?;
+
+        let tasks: Vec<crate::models::TaskNode> =
+            response.take(0).context("Failed to deserialize TaskNode")?;
+
+        Ok(tasks.into_iter().next())
+    }
+
+    /// Get a schema node with strong typing using single-query pattern
+    ///
+    /// Fetches spoke fields (is_core, schema_version, description, fields) and hub
+    /// fields (id, content, version, timestamps) in a single query via record link.
+    ///
+    /// # Query Pattern
+    ///
+    /// ```sql
+    /// SELECT
+    ///     record::id(id) AS id,
+    ///     is_core,
+    ///     version AS schema_version,
+    ///     description,
+    ///     fields,
+    ///     node.content AS content,
+    ///     node.version AS version,
+    ///     node.created_at AS created_at,
+    ///     node.modified_at AS modified_at
+    /// FROM schema:`task`;
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The schema node ID (e.g., "task", "date")
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(SchemaNode))` - Schema found with strongly-typed fields
+    /// * `Ok(None)` - Schema not found
+    /// * `Err(_)` - Database or deserialization error
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
+    /// if let Some(schema) = store.get_schema_node("task").await? {
+    ///     // Direct field access - no JSON parsing
+    ///     println!("Is core: {}", schema.is_core);
+    ///     println!("Fields: {:?}", schema.fields.len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
+        // Single query: spoke fields + hub fields via record link
+        // Note: spoke `version` is aliased to `schema_version` to avoid collision with hub version
+        let query = format!(
+            r#"
+            SELECT
+                record::id(id) AS id,
+                is_core,
+                version AS schema_version,
+                description,
+                fields,
+                node.content AS content,
+                node.version AS version,
+                node.created_at AS created_at,
+                node.modified_at AS modified_at
+            FROM schema:`{}`;
+            "#,
+            id
+        );
+
+        let mut response = self
+            .db
+            .query(&query)
+            .await
+            .context(format!("Failed to query schema node '{}'", id))?;
+
+        let schemas: Vec<crate::models::SchemaNode> = response
+            .take(0)
+            .context("Failed to deserialize SchemaNode")?;
+
+        Ok(schemas.into_iter().next())
+    }
 }
 
 #[cfg(test)]
