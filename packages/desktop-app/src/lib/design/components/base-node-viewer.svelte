@@ -1400,12 +1400,19 @@
                   // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
                   // They must persist to database, not just update locally
                   // Use same batching logic as real nodes to ensure atomic persistence
+                  // Also check if node doesn't already exist in store (prevents duplicate promotion)
+                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
                   if (
                     node.isPlaceholder &&
                     nodeId &&
                     viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id
+                    node.id === viewerPlaceholder.id &&
+                    !nodeExistsInStore &&
+                    !isPromoting
                   ) {
+                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
+                    isPromoting = true;
+
                     console.log(
                       '[BaseNodeViewer] Promoting placeholder to real node with type:',
                       e.detail.nodeType
@@ -1416,22 +1423,31 @@
                       nodeType: e.detail.nodeType
                     });
 
-                    // Add to store and trigger persistence
-                    // Note: LIVE SELECT handles parent-child relationship via edge:created events
-                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
-                    // This makes the promoted node visible in visibleNodesFromStores, which causes
-                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
-                    // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
-                    reactiveStructureTree.addChild({
-                      parentId: nodeId,
-                      childId: promotedNode.id,
-                      order: Date.now()
-                    });
-
-                    // Clear placeholder ID so fresh one is created if needed later
+                    // Clear placeholder ID synchronously to prevent re-entry
                     resetPlaceholderId();
+
+                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
+                    // subscription callbacks that mutate $state. If called during template render,
+                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
+                    tick().then(() => {
+                      // Add to store and trigger persistence
+                      // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                      // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+                      // This makes the promoted node visible in visibleNodesFromStores, which causes
+                      // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
+                      // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
+                      reactiveStructureTree.addChild({
+                        parentId: nodeId,
+                        childId: promotedNode.id,
+                        order: Date.now()
+                      });
+
+                      // Clear promotion flag after state updates complete
+                      isPromoting = false;
+                    });
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
                     // For real nodes, update node type with full persistence
@@ -1604,12 +1620,19 @@
                   // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
                   // They must persist to database, not just update locally
                   // Use same batching logic as real nodes to ensure atomic persistence
+                  // Also check if node doesn't already exist in store (prevents duplicate promotion)
+                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
                   if (
                     node.isPlaceholder &&
                     nodeId &&
                     viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id
+                    node.id === viewerPlaceholder.id &&
+                    !nodeExistsInStore &&
+                    !isPromoting
                   ) {
+                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
+                    isPromoting = true;
+
                     console.log(
                       '[BaseNodeViewer] Promoting placeholder to real node with type:',
                       e.detail.nodeType
@@ -1620,22 +1643,31 @@
                       nodeType: e.detail.nodeType
                     });
 
-                    // Add to store and trigger persistence
-                    // Note: LIVE SELECT handles parent-child relationship via edge:created events
-                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
-                    // This makes the promoted node visible in visibleNodesFromStores, which causes
-                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
-                    // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
-                    reactiveStructureTree.addChild({
-                      parentId: nodeId,
-                      childId: promotedNode.id,
-                      order: Date.now()
-                    });
-
-                    // Clear placeholder ID so fresh one is created if needed later
+                    // Clear placeholder ID synchronously to prevent re-entry
                     resetPlaceholderId();
+
+                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
+                    // subscription callbacks that mutate $state. If called during template render,
+                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
+                    tick().then(() => {
+                      // Add to store and trigger persistence
+                      // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+                      // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+                      // This makes the promoted node visible in visibleNodesFromStores, which causes
+                      // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
+                      // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
+                      reactiveStructureTree.addChild({
+                        parentId: nodeId,
+                        childId: promotedNode.id,
+                        order: Date.now()
+                      });
+
+                      // Clear promotion flag after state updates complete
+                      isPromoting = false;
+                    });
                   } else {
                     console.log('[BaseNodeViewer] Updating node type for real node');
                     // For real nodes, update node type with full persistence
