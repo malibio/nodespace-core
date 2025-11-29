@@ -188,36 +188,16 @@ struct SurrealNode {
     mentions: Vec<String>,
     #[serde(default)]
     mentioned_by: Vec<String>,
-    // Graph-native architecture fields (Issue #511)
-    /// FETCH data Limitation (Issue #511):
-    ///
-    /// **Problem**: SurrealDB's Thing type cannot be deserialized to `serde_json::Value`.
-    ///
-    /// **Root Cause**: When using `SELECT * FROM node FETCH data`, the `data` field can be:
-    /// - A String (record link): `"task:uuid"`  when not fetched
-    /// - An Object (fetched record): `{id: Thing, priority: "HIGH", ...}` when FETCH succeeds
-    ///
-    /// The `id` field in the fetched object is a SurrealDB `Thing` type, which serde_json
-    /// cannot deserialize to `Value`, causing:
-    /// ```text
-    /// Error: invalid type: enum, expected any valid JSON value
-    /// ```
-    ///
-    /// **Attempted Solutions**:
-    /// 1. ❌ Option<Value> - Fails with Thing deserialization error
-    /// 2. ❌ Custom deserializer - Complex, error-prone
-    /// 3. ✅ Skip + manual fetch with OMIT id - Current workaround
-    ///
-    /// **Workaround**: Use `#[serde(skip_deserializing)]` and manually fetch properties
-    /// with `SELECT * OMIT id` to exclude the Thing-typed id field.
-    ///
-    /// **Performance Impact**: Creates N+1 query pattern (see get_children implementation).
-    /// Batch fetching added to mitigate this issue.
-    ///
-    /// **Future**: Investigate SurrealDB support for FETCH with field exclusion:
-    /// `SELECT * FROM node FETCH data.* OMIT data.id;`
+    // Hub-spoke architecture: `data` field links to spoke table records
+    //
+    // This field is skipped during deserialization because the generic get_node()
+    // fetches spoke properties separately with `SELECT * OMIT id, node FROM <type>`.
+    //
+    // For single-query efficiency with spoke table types, use strongly-typed methods:
+    // - get_task_node() - Queries spoke directly with hub fields via record link
+    // - get_schema_node() - Same pattern, returns SchemaNode with direct field access
     #[serde(skip_deserializing)]
-    data: Option<Value>, // Placeholder - properties fetched separately
+    data: Option<Value>, // Populated by manual fetch or strongly-typed methods
     #[serde(skip_deserializing, default)]
     variants: Value, // Type history map {task: "task:uuid", text: null}
     /// Properties field stores user-defined properties for types without dedicated tables
@@ -1211,22 +1191,14 @@ where
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         // Direct record ID lookup (O(1) primary key access)
         //
-        // NOTE (Issue #673 Phase 6 - Deferred):
-        // This method uses 2 queries for types with spoke tables (task, schema):
+        // This generic method uses 2 queries for types with spoke tables (task, schema):
         // 1. Query hub: SELECT * FROM node:`id`
         // 2. Query spoke: SELECT * OMIT id, node FROM <type>:`id`
         //
-        // The single-query `FETCH data` approach is blocked by Issue #511:
-        // SurrealDB's Thing type cannot deserialize to serde_json::Value when
-        // the fetched object contains an 'id' field (which is always a Thing).
-        //
         // For single-query efficiency with spoke table types, use the strongly-typed
-        // methods instead:
-        // - get_task_node(id) - Returns TaskNode with direct field access
-        // - get_schema_node(id) - Returns SchemaNode with direct field access
-        //
-        // These methods query the spoke table directly with hub fields via record link,
-        // avoiding the 2-query overhead.
+        // methods which query the spoke directly with hub fields via record link:
+        // - get_task_node(id) - Returns TaskNode with compile-time type safety
+        // - get_schema_node(id) - Returns SchemaNode with compile-time type safety
         //
         // IDs with special characters need backtick-quoting
         let query = format!("SELECT * FROM node:`{}`;", id);
