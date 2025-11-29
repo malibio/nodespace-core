@@ -91,30 +91,6 @@ export const headerNodePlugin: PluginDefinition = {
         nodeType: 'header'
       }
     ],
-    // New unified pattern template for h1-h6 auto-conversion
-    patternTemplate: {
-      regex: /^(#{1,6})\s/,
-      nodeType: 'header',
-      priority: 10,
-      splittingStrategy: 'prefix-inheritance',
-      prefixToInherit: undefined, // Will be extracted from regex
-      cursorPlacement: 'after-prefix',
-      extractMetadata: (match: RegExpMatchArray) => ({
-        headerLevel: match[1].length // Capture group 1 is the hashtags
-      })
-    } as PatternTemplate,
-    // Keep legacy pattern detection for backward compatibility
-    patternDetection: [
-      {
-        pattern: /^(#{1,6})\s/,
-        targetNodeType: 'header',
-        cleanContent: false, // Keep "# " syntax in content for editing
-        extractMetadata: (match: RegExpMatchArray) => ({
-          headerLevel: match[1].length // Capture group 1 is the hashtags
-        }),
-        priority: 10
-      }
-    ],
     canHaveChildren: true,
     canBeChild: true
   },
@@ -157,38 +133,6 @@ export const taskNodePlugin: PluginDefinition = {
         shortcut: '[ ]',
         contentTemplate: '', // Empty content - task icon shows the state instead
         nodeType: 'task' // Set node type to 'task' when selected
-      }
-    ],
-    // New unified pattern template for task checkbox auto-conversion
-    // Supports: [ ], [x], [X], - [ ], - [x], * [ ], * [x], + [ ], + [x]
-    patternTemplate: {
-      regex: /^[-*+]?\s*\[\s*[xX\s]\s*\]\s/,
-      nodeType: 'task',
-      priority: 10,
-      splittingStrategy: 'simple-split',
-      cursorPlacement: 'start',
-      extractMetadata: (match: RegExpMatchArray) => {
-        // Check if checkbox is marked (contains 'x' or 'X')
-        const isCompleted = /[xX]/.test(match[0]);
-        return {
-          taskState: isCompleted ? 'completed' : 'pending'
-        };
-      }
-    } as PatternTemplate,
-    // Keep legacy pattern detection for backward compatibility
-    patternDetection: [
-      {
-        pattern: /^[-*+]?\s*\[\s*[xX\s]\s*\]\s/,
-        targetNodeType: 'task',
-        cleanContent: true, // Remove "[ ]" from content, task state shown in icon
-        extractMetadata: (match: RegExpMatchArray) => {
-          // Check if checkbox is marked (contains 'x' or 'X')
-          const isCompleted = /[xX]/.test(match[0]);
-          return {
-            taskState: isCompleted ? 'completed' : 'pending'
-          };
-        },
-        priority: 10
       }
     ],
     canHaveChildren: true,
@@ -263,7 +207,7 @@ export const codeBlockNodePlugin: PluginDefinition = {
   version: '1.0.0',
   // Plugin-owned pattern behavior (Issue #667)
   pattern: {
-    detect: /^```$/,
+    detect: /^```(\w+)?\n/,  // Matches ``` or ```language followed by newline
     canRevert: true,
     revert: /^```$/,  // "```" alone should revert to text
     onEnter: 'none',  // Code blocks don't inherit on Enter
@@ -282,33 +226,6 @@ export const codeBlockNodePlugin: PluginDefinition = {
         shortcut: '```',
         contentTemplate: '```\n\n```',
         nodeType: 'code-block',
-        desiredCursorPosition: 4 // Position cursor after "```\n" (on the empty line)
-      }
-    ],
-    // New unified pattern template for ``` auto-conversion
-    // Requires newline: user types ```, then presses Shift+Enter to trigger
-    patternTemplate: {
-      regex: /^```(\w+)?\n/,
-      nodeType: 'code-block',
-      priority: 10,
-      splittingStrategy: 'simple-split',
-      cursorPlacement: 'start',
-      contentTemplate: '```\n\n```', // Auto-complete with closing fence
-      extractMetadata: (match: RegExpMatchArray) => ({
-        language: match[1]?.toLowerCase() || 'plaintext'
-      })
-    } as PatternTemplate,
-    // Keep legacy pattern detection for backward compatibility
-    patternDetection: [
-      {
-        pattern: /^```(\w+)?\n/,
-        targetNodeType: 'code-block',
-        cleanContent: false, // Keep ``` in content for language parsing
-        contentTemplate: '```\n\n```', // Auto-complete with closing fence
-        extractMetadata: (match: RegExpMatchArray) => ({
-          language: match[1]?.toLowerCase() || 'plaintext'
-        }),
-        priority: 10,
         desiredCursorPosition: 4 // Position cursor after "```\n" (on the empty line)
       }
     ],
@@ -353,40 +270,6 @@ export const quoteBlockNodePlugin: PluginDefinition = {
         desiredCursorPosition: 2 // Position cursor after "> " prefix
       }
     ],
-    // New unified pattern template for > auto-conversion
-    patternTemplate: {
-      regex: /^>\s/,
-      nodeType: 'quote-block',
-      priority: 10,
-      splittingStrategy: 'prefix-inheritance',
-      prefixToInherit: '> ',
-      cursorPlacement: 'after-prefix',
-      extractMetadata: () => ({})
-    } as PatternTemplate,
-    // Keep legacy pattern detection for backward compatibility
-    patternDetection: [
-      {
-        pattern: /^>\s/,
-        targetNodeType: 'quote-block',
-        /**
-         * cleanContent: false - CRITICAL: Quote block content MUST retain "> " prefix
-         *
-         * Unlike headers (which strip "# "), quote blocks store the prefix in database.
-         * This allows multiline quotes where each line has "> " prefix.
-         *
-         * Why this matters:
-         * - Backend validation requires "> " prefix to identify quote blocks
-         * - Multiline quotes need per-line prefix tracking ("> Line1\n> Line2")
-         * - Conversion back to text requires knowing which lines were quoted
-         *
-         * Removing this flag would break quote-block persistence entirely.
-         */
-        cleanContent: false,
-        extractMetadata: () => ({}),
-        priority: 10,
-        desiredCursorPosition: 2 // Place cursor after "> "
-      }
-    ],
     canHaveChildren: true, // Quote blocks can have children
     canBeChild: true
   },
@@ -426,38 +309,6 @@ export const orderedListNodePlugin: PluginDefinition = {
         contentTemplate: '1. ',
         nodeType: 'ordered-list',
         desiredCursorPosition: 3 // Position cursor after "1. " prefix
-      }
-    ],
-    // New unified pattern template for "1. " auto-conversion
-    patternTemplate: {
-      regex: /^1\.\s/,
-      nodeType: 'ordered-list',
-      priority: 10,
-      splittingStrategy: 'prefix-inheritance',
-      prefixToInherit: '1. ',
-      cursorPlacement: 'after-prefix',
-      extractMetadata: () => ({})
-    } as PatternTemplate,
-    // Keep legacy pattern detection for backward compatibility
-    patternDetection: [
-      {
-        pattern: /^1\.\s/,
-        targetNodeType: 'ordered-list',
-        /**
-         * cleanContent: false - CRITICAL: Content MUST retain "1. " prefix
-         *
-         * Similar to quote-block ("> "), ordered lists store prefix in database.
-         * The "1. " prefix is:
-         * - Stored in database for round-trip consistency
-         * - Stripped in view mode for auto-numbering display
-         * - Shown in edit mode for user visibility
-         *
-         * Auto-numbering (1, 2, 3...) happens via CSS counters during rendering.
-         */
-        cleanContent: false,
-        extractMetadata: () => ({}),
-        priority: 10,
-        desiredCursorPosition: 3 // Place cursor after "1. "
       }
     ],
     canHaveChildren: false, // Simple flat lists only (no nesting)
@@ -538,9 +389,23 @@ export function registerCorePlugins(registry: import('./plugin-registry').Plugin
   for (const plugin of corePlugins) {
     registry.register(plugin);
 
-    // Register pattern template with PatternRegistry if present
-    if (plugin.config.patternTemplate) {
-      patternRegistry.register(plugin.config.patternTemplate);
+    // Register pattern with PatternRegistry if present (Issue #667)
+    // Convert PluginPattern to PatternTemplate for PatternRegistry compatibility
+    if (plugin.pattern) {
+      const patternTemplate: PatternTemplate = {
+        regex: plugin.pattern.detect,
+        nodeType: plugin.id,
+        priority: 10, // Default priority
+        splittingStrategy: plugin.pattern.splittingStrategy,
+        // For headers with function-based prefix, PatternRegistry will extract from regex
+        prefixToInherit: typeof plugin.pattern.prefixToInherit === 'string'
+          ? plugin.pattern.prefixToInherit
+          : undefined,
+        cursorPlacement: plugin.pattern.cursorPlacement,
+        cleanContent: false, // Not used anymore
+        extractMetadata: plugin.pattern.extractMetadata
+      };
+      patternRegistry.register(patternTemplate);
     }
   }
 

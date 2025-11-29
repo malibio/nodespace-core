@@ -312,38 +312,45 @@ export class PluginRegistry {
   }
 
   /**
-   * Detect node type from content using registered patterns
-   * Returns the plugin, pattern config, and match result if a pattern is detected
+   * Detect node type from content using plugin-owned patterns
+   * Returns the plugin and match result if a pattern is detected
    *
-   * Issue #667: Now returns the plugin for direct access to plugin.pattern behavior
+   * Issue #667: Uses plugin.pattern instead of legacy patternDetection arrays
    *
    * @param content - The content to check for patterns
-   * @returns Object with plugin, pattern config, match result, and extracted metadata, or null if no pattern matches
+   * @returns Object with plugin, pattern config (for backward compat), match result, and extracted metadata, or null if no pattern matches
    */
   detectPatternInContent(content: string): {
     plugin: PluginDefinition;
-    config: PatternDetectionConfig;
+    config: PatternDetectionConfig; // For backward compat - derived from plugin.pattern
     match: RegExpMatchArray;
     metadata: Record<string, unknown>;
   } | null {
-    const patterns = this.getAllPatternDetectionConfigs();
+    // Get all plugins with patterns, sorted by priority
+    const pluginsWithPatterns = Array.from(this.plugins.values())
+      .filter(p => this.enabledPlugins.has(p.id) && p.pattern)
+      .sort((a, b) => {
+        const aPriority = a.pattern?.detect.source.length || 0; // Longer patterns first for specificity
+        const bPriority = b.pattern?.detect.source.length || 0;
+        return bPriority - aPriority;
+      });
 
-    for (const config of patterns) {
-      // Convert string pattern to RegExp if needed
-      const pattern =
-        typeof config.pattern === 'string' ? new RegExp(config.pattern) : config.pattern;
+    for (const plugin of pluginsWithPatterns) {
+      const pattern = plugin.pattern!;
+      const match = content.match(pattern.detect);
 
-      const match = content.match(pattern);
       if (match) {
         // Extract metadata if extractor function is provided
-        const metadata = config.extractMetadata ? config.extractMetadata(match) : {};
+        const metadata = pattern.extractMetadata ? pattern.extractMetadata(match) : {};
 
-        // Get the plugin for this node type (Issue #667)
-        const plugin = this.plugins.get(config.targetNodeType);
-        if (!plugin) {
-          console.warn(`Pattern detected for ${config.targetNodeType} but plugin not found`);
-          continue; // Skip this pattern if plugin missing
-        }
+        // Create backward-compatible PatternDetectionConfig
+        const config: PatternDetectionConfig = {
+          pattern: pattern.detect,
+          targetNodeType: plugin.id,
+          cleanContent: false, // Not used anymore - kept for compat
+          extractMetadata: pattern.extractMetadata,
+          priority: 10
+        };
 
         return { plugin, config, match, metadata };
       }
