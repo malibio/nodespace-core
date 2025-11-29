@@ -188,16 +188,36 @@ struct SurrealNode {
     mentions: Vec<String>,
     #[serde(default)]
     mentioned_by: Vec<String>,
-    // Hub-spoke architecture: `data` field links to spoke table records
-    //
-    // This field is skipped during deserialization because the generic get_node()
-    // fetches spoke properties separately with `SELECT * OMIT id, node FROM <type>`.
-    //
-    // For single-query efficiency with spoke table types, use strongly-typed methods:
-    // - get_task_node() - Queries spoke directly with hub fields via record link
-    // - get_schema_node() - Same pattern, returns SchemaNode with direct field access
+    // Graph-native architecture fields (Issue #511)
+    /// FETCH data Limitation (Issue #511):
+    ///
+    /// **Problem**: SurrealDB's Thing type cannot be deserialized to `serde_json::Value`.
+    ///
+    /// **Root Cause**: When using `SELECT * FROM node FETCH data`, the `data` field can be:
+    /// - A String (record link): `"task:uuid"`  when not fetched
+    /// - An Object (fetched record): `{id: Thing, priority: "HIGH", ...}` when FETCH succeeds
+    ///
+    /// The `id` field in the fetched object is a SurrealDB `Thing` type, which serde_json
+    /// cannot deserialize to `Value`, causing:
+    /// ```text
+    /// Error: invalid type: enum, expected any valid JSON value
+    /// ```
+    ///
+    /// **Attempted Solutions**:
+    /// 1. ❌ Option<Value> - Fails with Thing deserialization error
+    /// 2. ❌ Custom deserializer - Complex, error-prone
+    /// 3. ✅ Skip + manual fetch with OMIT id - Current workaround
+    ///
+    /// **Workaround**: Use `#[serde(skip_deserializing)]` and manually fetch properties
+    /// with `SELECT * OMIT id` to exclude the Thing-typed id field.
+    ///
+    /// **Performance Impact**: Creates N+1 query pattern (see get_children implementation).
+    /// Batch fetching added to mitigate this issue.
+    ///
+    /// **Future**: Investigate SurrealDB support for FETCH with field exclusion:
+    /// `SELECT * FROM node FETCH data.* OMIT data.id;`
     #[serde(skip_deserializing)]
-    data: Option<Value>, // Populated by manual fetch or strongly-typed methods
+    data: Option<Value>, // Placeholder - properties fetched separately
     #[serde(skip_deserializing, default)]
     variants: Value, // Type history map {task: "task:uuid", text: null}
     /// Properties field stores user-defined properties for types without dedicated tables
@@ -1189,120 +1209,52 @@ where
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
-        // Direct record ID lookup (O(1) primary key access)
+        // Single round-trip query using multi-statement transaction
         //
-        // This generic method uses 2 queries for types with spoke tables (task, schema):
-        // 1. Query hub: SELECT * FROM node:`id`
-        // 2. Query spoke: SELECT * OMIT id, node FROM <type>:`id`
+        // Executes hub and spoke queries together, with spoke query handling both
+        // task and schema types conditionally. Uses OMIT to exclude Thing-typed fields.
         //
-        // For single-query efficiency with spoke table types, use the strongly-typed
-        // methods which query the spoke directly with hub fields via record link:
-        // - get_task_node(id) - Returns TaskNode with compile-time type safety
-        // - get_schema_node(id) - Returns SchemaNode with compile-time type safety
-        //
-        // IDs with special characters need backtick-quoting
-        let query = format!("SELECT * FROM node:`{}`;", id);
+        // For compile-time type safety with specific types, use:
+        // - get_task_node(id) - Returns TaskNode with direct field access
+        // - get_schema_node(id) - Returns SchemaNode with direct field access
+        let query = format!(
+            r#"
+            SELECT * FROM node:`{id}`;
+            SELECT * OMIT id, node FROM task:`{id}`;
+            SELECT * OMIT id, node FROM schema:`{id}`;
+            "#,
+            id = id
+        );
+
         let mut response = self
             .db
             .query(&query)
             .await
             .context("Failed to query node by record ID")?;
 
+        // Extract results from the three statements
         let surreal_nodes: Vec<SurrealNode> = response
             .take(0)
-            .context("Failed to extract query results")?;
+            .context("Failed to extract hub query results")?;
+
+        let task_props: Vec<std::collections::HashMap<String, serde_json::Value>> =
+            response.take(1).unwrap_or_default();
+
+        let schema_props: Vec<SchemaDefinition> = response.take(2).unwrap_or_default();
 
         let mut node_opt: Option<Node> = surreal_nodes.into_iter().map(Into::into).next();
 
-        // If node exists and has spoke table (types: task, schema), fetch properties from spoke
+        // Merge spoke properties based on node type
         if let Some(ref mut node) = node_opt {
-            if TYPES_WITH_SPOKE_TABLES.contains(&node.node_type.as_str()) {
-                // Fetch properties from spoke table using direct record ID lookup
-                // Omit 'id' and 'node' fields - both are Thing types that can't deserialize to JSON
-                let props_query =
-                    format!("SELECT * OMIT id, node FROM {}:`{}`;", node.node_type, id);
-
-                let mut props_response = self.db.query(&props_query).await;
-
-                // For schema nodes, use strong typing (SchemaDefinition) which properly handles
-                // ProtectionLevel enums. SurrealDB SDK correctly serializes/deserializes when
-                // targeting a concrete Rust struct rather than generic serde_json::Value.
-                let result: Option<serde_json::Value> = if node.node_type == "schema" {
-                    match props_response {
-                        Ok(ref mut response) => {
-                            // Deserialize directly to SchemaDefinition - handles enums properly
-                            let raw: Result<Vec<SchemaDefinition>, _> = response.take(0);
-                            match raw {
-                                Ok(records) => {
-                                    records.into_iter().next().and_then(|schema_def| {
-                                        tracing::debug!(
-                                            "get_node({}) - deserialized SchemaDefinition with {} fields",
-                                            id,
-                                            schema_def.fields.len()
-                                        );
-                                        // Convert back to serde_json::Value for Node.properties
-                                        serde_json::to_value(&schema_def).ok()
-                                    })
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "get_node({}) - SchemaDefinition deserialization failed: {:?}",
-                                        id,
-                                        e
-                                    );
-                                    None
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("get_node({}) - query failed: {:?}", id, e);
-                            None
-                        }
+            if node.node_type == "task" {
+                if let Some(props) = task_props.into_iter().next() {
+                    node.properties = serde_json::Value::Object(props.into_iter().collect());
+                }
+            } else if node.node_type == "schema" {
+                if let Some(schema_def) = schema_props.into_iter().next() {
+                    if let Ok(props) = serde_json::to_value(&schema_def) {
+                        node.properties = props;
                     }
-                } else {
-                    // For non-schema types (task), use generic HashMap deserialization
-                    match props_response {
-                        Ok(ref mut response) => {
-                            let raw: Result<
-                                Vec<std::collections::HashMap<String, serde_json::Value>>,
-                                _,
-                            > = response.take(0);
-                            match raw {
-                                Ok(records) => {
-                                    let props_opt = records.into_iter().next().map(|map| {
-                                        tracing::debug!(
-                                            "Raw properties from {} - keys: {:?}",
-                                            node.node_type,
-                                            map.keys().collect::<Vec<_>>()
-                                        );
-                                        serde_json::Value::Object(map.into_iter().collect())
-                                    });
-                                    tracing::debug!(
-                                        "get_node({}) - properties after conversion: {:?}",
-                                        id,
-                                        props_opt
-                                    );
-                                    props_opt
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "get_node({}) - failed to deserialize: {:?}",
-                                        id,
-                                        e
-                                    );
-                                    None
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("get_node({}) - query failed: {:?}", id, e);
-                            None
-                        }
-                    }
-                };
-
-                if let Some(props) = result {
-                    node.properties = props;
                 }
             }
         }
