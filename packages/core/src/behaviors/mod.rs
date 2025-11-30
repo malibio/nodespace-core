@@ -819,77 +819,14 @@ impl NodeBehavior for DateNodeBehavior {
 /// - Enum fields must have at least one value defined (in core_values or user_values)
 pub struct SchemaNodeBehavior;
 
-/// Valid namespace prefixes for user-defined properties (Issue #400)
-///
-/// These prefixes prevent collisions between user properties and future core properties:
-/// - `custom:` - Personal custom properties
-/// - `org:` - Organization-specific properties
-/// - `plugin:` - Plugin-provided properties
-const VALID_USER_PREFIXES: [&str; 3] = ["custom:", "org:", "plugin:"];
-
 /// Validate a single schema field (standalone function for recursive validation)
-///
-/// # Arguments
-/// * `field` - The field to validate
-/// * `is_core_schema` - Whether this field belongs to a core schema.
-///   Core schemas (like 'task') can have user-protection fields without namespace prefix.
-///   User-defined schemas require namespace prefixes for user-protection fields.
-fn validate_schema_field(
-    field: &SchemaField,
-    is_core_schema: bool,
-) -> Result<(), NodeValidationError> {
-    use crate::models::schema::SchemaProtectionLevel;
-
-    // Validate field name characters
-    // Allow alphanumeric, underscores, and colons (for namespace prefixes)
-    if !field
-        .name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
-    {
+fn validate_schema_field(field: &SchemaField) -> Result<(), NodeValidationError> {
+    // Validate field name characters (alphanumeric and underscores only)
+    if !field.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(NodeValidationError::InvalidProperties(format!(
-            "Invalid field name '{}': must contain only alphanumeric characters, underscores, and colons",
+            "Invalid field name '{}': must contain only alphanumeric characters and underscores",
             field.name
         )));
-    }
-
-    // Namespace prefix enforcement (Issue #400, #690)
-    // Prevents collisions between user properties and future core properties
-    //
-    // Rules:
-    // 1. Core/System protection fields NEVER use namespace prefix
-    // 2. User protection fields in CORE SCHEMAS don't need prefix (they're standard fields)
-    // 3. User protection fields in USER-DEFINED SCHEMAS MUST have prefix
-    match field.protection {
-        SchemaProtectionLevel::Core | SchemaProtectionLevel::System => {
-            // Core/System fields cannot have namespace prefix
-            if field.name.contains(':') {
-                return Err(NodeValidationError::InvalidProperties(format!(
-                    "Core/System field '{}' cannot use namespace prefix. \
-                     Simple names (without ':') are reserved for core properties.",
-                    field.name
-                )));
-            }
-        }
-        SchemaProtectionLevel::User => {
-            // Only enforce namespace prefix for user-defined schemas
-            // Core schemas (like 'task') have standard user-extensible fields without prefix
-            if !is_core_schema {
-                let has_valid_prefix = VALID_USER_PREFIXES
-                    .iter()
-                    .any(|prefix| field.name.starts_with(prefix));
-
-                if !has_valid_prefix {
-                    return Err(NodeValidationError::InvalidProperties(format!(
-                        "User field '{}' must use namespace prefix.\n\
-                         Valid prefixes: 'custom:', 'org:', 'plugin:'\n\
-                         Examples: 'custom:{}', 'org:{}'\n\
-                         This prevents conflicts with future core properties.",
-                        field.name, field.name, field.name
-                    )));
-                }
-            }
-        }
     }
 
     // Enum fields must have at least one value defined
@@ -905,17 +842,17 @@ fn validate_schema_field(
         }
     }
 
-    // Recursively validate nested fields (inherit is_core_schema flag)
+    // Recursively validate nested fields
     if let Some(ref nested_fields) = field.fields {
         for nested_field in nested_fields {
-            validate_schema_field(nested_field, is_core_schema)?;
+            validate_schema_field(nested_field)?;
         }
     }
 
     // Recursively validate item fields (for array of objects)
     if let Some(ref item_fields) = field.item_fields {
         for item_field in item_fields {
-            validate_schema_field(item_field, is_core_schema)?;
+            validate_schema_field(item_field)?;
         }
     }
 
@@ -953,14 +890,6 @@ impl NodeBehavior for SchemaNodeBehavior {
             ));
         }
 
-        // Check if this is a core schema (affects namespace validation)
-        // Core schemas can have user-protection fields without namespace prefix
-        let is_core_schema = props
-            .get("isCore")
-            .or_else(|| props.get("is_core"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
         // Parse fields array - each field is validated as SchemaField
         let fields_value = props.get("fields").unwrap();
         let fields: Vec<SchemaField> = match serde_json::from_value(fields_value.clone()) {
@@ -981,9 +910,9 @@ impl NodeBehavior for SchemaNodeBehavior {
             ));
         }
 
-        // Validate each field (pass is_core_schema for namespace enforcement)
+        // Validate each field
         for field in &fields {
-            validate_schema_field(field, is_core_schema)?;
+            validate_schema_field(field)?;
         }
 
         Ok(())
@@ -1962,7 +1891,6 @@ mod tests {
         let behavior = SchemaNodeBehavior;
 
         // Schema with duplicate field names should fail
-        // Note: User fields require namespace prefix (Issue #400)
         let duplicate_fields_node = Node::new(
             "schema".to_string(),
             "custom_type".to_string(),
@@ -1971,13 +1899,13 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:field1",
+                        "name": "field1",
                         "type": "text",
                         "protection": "user",
                         "indexed": false
                     },
                     {
-                        "name": "custom:field1",
+                        "name": "field1",
                         "type": "number",
                         "protection": "user",
                         "indexed": false
@@ -2000,7 +1928,6 @@ mod tests {
         let behavior = SchemaNodeBehavior;
 
         // Enum field without any values should fail
-        // Note: User fields require namespace prefix (Issue #400)
         let enum_no_values_node = Node::new(
             "schema".to_string(),
             "custom_type".to_string(),
@@ -2009,7 +1936,7 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:status",
+                        "name": "status",
                         "type": "enum",
                         "protection": "user",
                         "indexed": false
@@ -2026,7 +1953,7 @@ mod tests {
                 if msg.contains("Enum field") && msg.contains("must have at least one value")
         ));
 
-        // Enum with core_values should pass (core fields don't need prefix)
+        // Enum with core_values should pass
         let enum_core_values_node = Node::new(
             "schema".to_string(),
             "task".to_string(),
@@ -2046,7 +1973,7 @@ mod tests {
         );
         assert!(behavior.validate(&enum_core_values_node).is_ok());
 
-        // Enum with user_values should pass (user fields need prefix)
+        // Enum with user_values should pass
         let enum_user_values_node = Node::new(
             "schema".to_string(),
             "custom_type".to_string(),
@@ -2055,7 +1982,7 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:priority",
+                        "name": "priority",
                         "type": "enum",
                         "protection": "user",
                         "userValues": ["low", "medium", "high"],
@@ -2075,7 +2002,7 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:status",
+                        "name": "status",
                         "type": "enum",
                         "protection": "user",
                         "coreValues": [],
@@ -2094,7 +2021,6 @@ mod tests {
         let behavior = SchemaNodeBehavior;
 
         // Comprehensive valid schema with multiple field types
-        // Note: User fields require namespace prefix, core/system fields do not (Issue #400)
         let valid_schema_node = Node::new(
             "schema".to_string(),
             "project".to_string(),
@@ -2104,14 +2030,14 @@ mod tests {
                 "description": "Project management schema",
                 "fields": [
                     {
-                        "name": "custom:name",
+                        "name": "name",
                         "type": "text",
                         "protection": "user",
                         "required": true,
                         "indexed": false
                     },
                     {
-                        "name": "custom:status",
+                        "name": "status",
                         "type": "enum",
                         "protection": "user",
                         "coreValues": ["active", "archived"],
@@ -2119,13 +2045,13 @@ mod tests {
                         "indexed": false
                     },
                     {
-                        "name": "custom:budget",
+                        "name": "budget",
                         "type": "number",
                         "protection": "user",
                         "indexed": false
                     },
                     {
-                        "name": "org:department",
+                        "name": "department",
                         "type": "text",
                         "protection": "user",
                         "indexed": false
@@ -2152,7 +2078,7 @@ mod tests {
     fn test_schema_node_nested_field_validation() {
         let behavior = SchemaNodeBehavior;
 
-        // Valid nested fields - user fields require namespace prefix (Issue #400)
+        // Valid nested fields
         let valid_nested_node = Node::new(
             "schema".to_string(),
             "custom_type".to_string(),
@@ -2161,19 +2087,19 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:metadata",
+                        "name": "metadata",
                         "type": "object",
                         "protection": "user",
                         "indexed": false,
                         "fields": [
                             {
-                                "name": "custom:author",
+                                "name": "author",
                                 "type": "text",
                                 "protection": "user",
                                 "indexed": false
                             },
                             {
-                                "name": "custom:created_at",
+                                "name": "created_at",
                                 "type": "date",
                                 "protection": "user",
                                 "indexed": false
@@ -2194,20 +2120,20 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:tags",
+                        "name": "tags",
                         "type": "array",
                         "protection": "user",
                         "indexed": false,
                         "itemType": "object",
                         "itemFields": [
                             {
-                                "name": "custom:label",
+                                "name": "label",
                                 "type": "text",
                                 "protection": "user",
                                 "indexed": false
                             },
                             {
-                                "name": "custom:color",
+                                "name": "color",
                                 "type": "text",
                                 "protection": "user",
                                 "indexed": false
@@ -2228,13 +2154,13 @@ mod tests {
                 "version": 1,
                 "fields": [
                     {
-                        "name": "custom:config",
+                        "name": "config",
                         "type": "object",
                         "protection": "user",
                         "indexed": false,
                         "fields": [
                             {
-                                "name": "custom:mode",
+                                "name": "mode",
                                 "type": "enum",
                                 "protection": "user",
                                 "indexed": false
@@ -2252,289 +2178,5 @@ mod tests {
             Err(NodeValidationError::InvalidProperties(ref msg))
                 if msg.contains("Enum field") && msg.contains("must have at least one value")
         ));
-    }
-
-    // =========================================================================
-    // Namespace Prefix Enforcement Tests (Issue #400, #690)
-    // =========================================================================
-
-    #[test]
-    fn test_user_field_requires_namespace_prefix() {
-        let behavior = SchemaNodeBehavior;
-
-        // User field WITHOUT namespace prefix should fail
-        let invalid_user_field_node = Node::new(
-            "schema".to_string(),
-            "custom_type".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "estimatedHours",
-                        "type": "number",
-                        "protection": "user",
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-
-        let result = behavior.validate(&invalid_user_field_node);
-        assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(NodeValidationError::InvalidProperties(ref msg))
-                if msg.contains("must use namespace prefix")
-        ));
-
-        // User field WITH 'custom:' prefix should pass
-        let valid_custom_field_node = Node::new(
-            "schema".to_string(),
-            "custom_type".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "custom:estimatedHours",
-                        "type": "number",
-                        "protection": "user",
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-        assert!(behavior.validate(&valid_custom_field_node).is_ok());
-
-        // User field WITH 'org:' prefix should pass
-        let valid_org_field_node = Node::new(
-            "schema".to_string(),
-            "custom_type".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "org:departmentCode",
-                        "type": "text",
-                        "protection": "user",
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-        assert!(behavior.validate(&valid_org_field_node).is_ok());
-
-        // User field WITH 'plugin:' prefix should pass
-        let valid_plugin_field_node = Node::new(
-            "schema".to_string(),
-            "custom_type".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "plugin:jira:issueId",
-                        "type": "text",
-                        "protection": "user",
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-        assert!(behavior.validate(&valid_plugin_field_node).is_ok());
-    }
-
-    #[test]
-    fn test_core_field_cannot_have_namespace_prefix() {
-        let behavior = SchemaNodeBehavior;
-
-        // Core field WITH namespace prefix should fail
-        let invalid_core_field_node = Node::new(
-            "schema".to_string(),
-            "task".to_string(),
-            json!({
-                "isCore": true,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "custom:status",
-                        "type": "enum",
-                        "protection": "core",
-                        "coreValues": ["open", "done"],
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-
-        let result = behavior.validate(&invalid_core_field_node);
-        assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(NodeValidationError::InvalidProperties(ref msg))
-                if msg.contains("cannot use namespace prefix")
-        ));
-
-        // Core field WITHOUT namespace prefix should pass
-        let valid_core_field_node = Node::new(
-            "schema".to_string(),
-            "task".to_string(),
-            json!({
-                "isCore": true,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "status",
-                        "type": "enum",
-                        "protection": "core",
-                        "coreValues": ["open", "done"],
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-        assert!(behavior.validate(&valid_core_field_node).is_ok());
-    }
-
-    #[test]
-    fn test_system_field_cannot_have_namespace_prefix() {
-        let behavior = SchemaNodeBehavior;
-
-        // System field WITH namespace prefix should fail
-        let invalid_system_field_node = Node::new(
-            "schema".to_string(),
-            "entity".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "custom:_internal_id",
-                        "type": "text",
-                        "protection": "system",
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-
-        let result = behavior.validate(&invalid_system_field_node);
-        assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(NodeValidationError::InvalidProperties(ref msg))
-                if msg.contains("cannot use namespace prefix")
-        ));
-
-        // System field WITHOUT namespace prefix should pass
-        let valid_system_field_node = Node::new(
-            "schema".to_string(),
-            "entity".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "_internal_id",
-                        "type": "text",
-                        "protection": "system",
-                        "indexed": false
-                    }
-                ]
-            }),
-        );
-        assert!(behavior.validate(&valid_system_field_node).is_ok());
-    }
-
-    #[test]
-    fn test_nested_user_field_requires_namespace_prefix() {
-        let behavior = SchemaNodeBehavior;
-
-        // Nested user field WITHOUT namespace prefix should fail
-        let invalid_nested_node = Node::new(
-            "schema".to_string(),
-            "custom_type".to_string(),
-            json!({
-                "isCore": false,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "custom:config",
-                        "type": "object",
-                        "protection": "user",
-                        "indexed": false,
-                        "fields": [
-                            {
-                                "name": "setting",
-                                "type": "text",
-                                "protection": "user",
-                                "indexed": false
-                            }
-                        ]
-                    }
-                ]
-            }),
-        );
-
-        let result = behavior.validate(&invalid_nested_node);
-        assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(NodeValidationError::InvalidProperties(ref msg))
-                if msg.contains("must use namespace prefix")
-        ));
-    }
-
-    #[test]
-    fn test_core_schema_user_field_no_prefix_needed() {
-        let behavior = SchemaNodeBehavior;
-
-        // Core schema with user-protection field WITHOUT namespace prefix should pass
-        // This is the pattern used by built-in schemas like 'task' with 'priority', 'due_date', etc.
-        let core_schema_with_user_fields = Node::new(
-            "schema".to_string(),
-            "task".to_string(),
-            json!({
-                "isCore": true,
-                "version": 1,
-                "fields": [
-                    {
-                        "name": "status",
-                        "type": "enum",
-                        "protection": "core",
-                        "coreValues": ["open", "done"],
-                        "indexed": true
-                    },
-                    {
-                        "name": "priority",
-                        "type": "enum",
-                        "protection": "user",
-                        "coreValues": ["low", "medium", "high"],
-                        "indexed": true
-                    },
-                    {
-                        "name": "due_date",
-                        "type": "date",
-                        "protection": "user",
-                        "indexed": true
-                    },
-                    {
-                        "name": "assignee",
-                        "type": "text",
-                        "protection": "user",
-                        "indexed": true
-                    }
-                ]
-            }),
-        );
-
-        let result = behavior.validate(&core_schema_with_user_fields);
-        assert!(
-            result.is_ok(),
-            "Core schema with user-protection fields should NOT require namespace prefix: {:?}",
-            result.err()
-        );
     }
 }
