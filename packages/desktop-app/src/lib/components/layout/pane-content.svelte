@@ -4,7 +4,7 @@
   import { tabState, updateTabTitle, updateTabContent } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import type { Pane } from '$lib/stores/navigation.js';
-  
+
   // ✅ Receive the PANE as a prop - each pane instance gets its own pane object
   let { pane }: { pane: Pane } = $props();
 
