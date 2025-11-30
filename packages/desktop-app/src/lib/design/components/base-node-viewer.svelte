@@ -133,7 +133,13 @@
 
   // Track the viewed node reactively for schema form display
   // Issue #679: Now uses $derived directly since sharedNodeStore.nodes is $state
-  const currentViewedNode = $derived(nodeId ? sharedNodeStore.getNode(nodeId) : null);
+  // IMPORTANT: Reference nodeManager._updateTrigger to establish reactivity on Map changes
+  // (Svelte 5 $state(Map) doesn't track Map.get() calls automatically)
+  const currentViewedNode = $derived.by(() => {
+    // Establish reactive dependency on node changes
+    void nodeManager._updateTrigger;
+    return nodeId ? sharedNodeStore.getNode(nodeId) : null;
+  });
 
   // Scroll position tracking
   // Reference to the scroll container element
@@ -1426,7 +1432,7 @@
                     // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
                       // Add to store and trigger persistence
-                      // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                      // Note: domain events handles parent-child relationship via edge:created events
                       sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                       // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
@@ -1646,7 +1652,7 @@
                     // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
                       // Add to store and trigger persistence
-                      // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                      // Note: domain events handles parent-child relationship via edge:created events
                       sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                       // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
