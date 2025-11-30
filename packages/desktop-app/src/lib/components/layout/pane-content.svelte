@@ -4,8 +4,7 @@
   import { tabState, updateTabTitle, updateTabContent } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import type { Pane } from '$lib/stores/navigation.js';
-  import { formatDateTitle, parseDateString } from '$lib/utils/date-formatting';
-
+  
   // ✅ Receive the PANE as a prop - each pane instance gets its own pane object
   let { pane }: { pane: Pane } = $props();
 
@@ -48,19 +47,11 @@
     return (components.get(nodeType) ?? BaseNodeViewer) as typeof BaseNodeViewer;
   });
 
-  const isCustomViewer = $derived.by(() => {
-    const nodeType = activeTab?.content?.nodeType ?? 'text';
-    const components = $state.snapshot(viewerComponents);
-    return components.has(nodeType);
-  });
-
   const loadError = $derived.by(() => {
     const nodeType = activeTab?.content?.nodeType ?? 'text';
     const errors = $state.snapshot(viewerLoadErrors);
     return errors.get(nodeType);
   });
-
-  const shouldDisableTitleUpdates = $derived(!isCustomViewer && (activeTab?.content?.nodeType ?? 'text') === 'date');
 
   // Load viewer when active tab changes - use $effect but call async function
   $effect(() => {
@@ -70,17 +61,6 @@
     }
   });
 
-  // Derive and update tab title for date nodes directly from nodeId
-  // This replaces the callback-based approach (anti-pattern) with parent-derived title
-  $effect(() => {
-    if (activeTab?.content?.nodeType === 'date' && activeTab.content.nodeId) {
-      const parsed = parseDateString(activeTab.content.nodeId);
-      if (parsed) {
-        const title = formatDateTitle(parsed);
-        updateTabTitle(activeTab.id, title);
-      }
-    }
-  });
 </script>
 
 {#if activeTab?.content}
@@ -98,7 +78,6 @@
   {:else}
     <!-- Dynamic viewer routing via plugin registry -->
     <!-- Falls back to BaseNodeViewer if no custom viewer registered -->
-    <!-- ViewerComponent, isCustomViewer, shouldDisableTitleUpdates now derived at script level -->
 
     <!-- KEY FIX: Use {#key} to force separate component instances per pane+nodeId -->
     <!-- This ensures each pane gets its own BaseNodeViewer instance with isolated state -->
@@ -106,10 +85,10 @@
       <ViewerComponent
         nodeId={content.nodeId}
         tabId={activeTabId}
-        disableTitleUpdates={shouldDisableTitleUpdates}
         onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
-        onNodeIdChange={(newNodeId: string) =>
-          updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType })}
+        onNodeIdChange={(newNodeId: string) => {
+          updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType });
+        }}
       />
     {/key}
   {/if}
