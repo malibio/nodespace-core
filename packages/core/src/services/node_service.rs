@@ -625,8 +625,7 @@ where
             // Check required fields
             // Allow missing required fields if they have a default value defined
             // (defaults should have been applied before validation, but this provides safety)
-            if field.required.unwrap_or(false) && field_value.is_none() && field.default.is_none()
-            {
+            if field.required.unwrap_or(false) && field_value.is_none() && field.default.is_none() {
                 return Err(NodeServiceError::invalid_update(format!(
                     "Required field '{}' is missing from {} node",
                     field.name, node.node_type
