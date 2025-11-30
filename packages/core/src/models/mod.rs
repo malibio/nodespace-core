@@ -53,7 +53,7 @@ pub use node::{
 };
 pub use ordered_list_node::{OrderedListNode, OrderedListValidationError};
 pub use quote_block_node::{QuoteBlockNode, QuoteBlockValidationError};
-pub use schema::{ProtectionLevel, SchemaDefinition, SchemaField};
+pub use schema::{SchemaField, SchemaProtectionLevel};
 pub use time::{SystemTimeProvider, TimeProvider};
 
 // Export type-safe wrappers

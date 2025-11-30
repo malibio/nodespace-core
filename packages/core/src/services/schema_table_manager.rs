@@ -6,7 +6,7 @@
 //!
 //! ## Responsibilities
 //!
-//! - Creating and defining tables based on schema definitions
+//! - Creating and defining tables based on schema fields
 //! - Defining fields with proper SurrealDB types
 //! - Managing indexes for optimized queries
 //! - Handling nested fields and array structures
@@ -20,14 +20,6 @@
 //! allowing NodeService to wrap both the node update and DDL execution in a
 //! single transaction.
 //!
-//! ## TODO: Issue #690 Remaining Work
-//!
-//! 1. Flatten schema properties to match TaskNode pattern (is_core, version, fields
-//!    stored flat in spoke table instead of nested in SchemaDefinition)
-//! 2. Delete SchemaDefinition struct after flattening
-//! 3. Move validation to SchemaNodeBehavior
-//! 4. Delete SchemaService entirely
-//!
 //! ## Example Usage
 //!
 //! ```ignore
@@ -40,14 +32,15 @@
 //!     let store = Arc::new(SurrealStore::new("./test.db").await?);
 //!     let table_manager = SchemaTableManager::new(store);
 //!
-//!     // Sync a schema to database tables
-//!     table_manager.sync_schema_to_database("person").await?;
+//!     // Sync schema fields to database tables
+//!     let fields = vec![]; // SchemaField instances
+//!     table_manager.sync_schema_to_database("person", &fields).await?;
 //!     Ok(())
 //! }
 //! ```
 
 use crate::db::SurrealStore;
-use crate::models::schema::{SchemaDefinition, SchemaField};
+use crate::models::schema::SchemaField;
 use crate::services::NodeServiceError;
 use std::sync::Arc;
 
@@ -106,9 +99,9 @@ where
     ///
     /// ```ignore
     /// # use nodespace_core::services::SchemaTableManager;
-    /// # use nodespace_core::models::schema::SchemaDefinition;
-    /// # fn example(manager: &SchemaTableManager, schema: &SchemaDefinition) -> Result<(), Box<dyn std::error::Error>> {
-    /// let ddl_statements = manager.generate_ddl_statements("person", schema)?;
+    /// # use nodespace_core::models::schema::SchemaField;
+    /// # fn example(manager: &SchemaTableManager, fields: &[SchemaField]) -> Result<(), Box<dyn std::error::Error>> {
+    /// let ddl_statements = manager.generate_ddl_statements("person", fields)?;
     /// // Execute these statements in a transaction along with the node update
     /// # Ok(())
     /// # }
@@ -116,7 +109,7 @@ where
     pub fn generate_ddl_statements(
         &self,
         type_name: &str,
-        schema: &SchemaDefinition,
+        fields: &[SchemaField],
     ) -> Result<Vec<String>, NodeServiceError> {
         // Validate type_name to prevent SQL injection
         if !type_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -138,7 +131,7 @@ where
         ));
 
         // Generate field definitions
-        for field in &schema.fields {
+        for field in fields {
             self.generate_field_ddl(type_name, field, None, &mut statements)?;
         }
 
@@ -231,15 +224,15 @@ where
         Ok(())
     }
 
-    /// Sync a schema definition to database table structure
+    /// Sync schema fields to database table structure
     ///
-    /// Creates or updates the database table to match the schema definition,
+    /// Creates or updates the database table to match the schema fields,
     /// including all fields, types, and indexes.
     ///
     /// # Arguments
     ///
     /// * `type_name` - The table name (must be alphanumeric + underscores)
-    /// * `schema` - The schema definition containing fields and configuration
+    /// * `fields` - The schema fields to sync
     ///
     /// # Returns
     ///
@@ -255,16 +248,16 @@ where
     ///
     /// ```ignore
     /// # use nodespace_core::services::SchemaTableManager;
-    /// # use nodespace_core::models::schema::SchemaDefinition;
-    /// # async fn example(manager: SchemaTableManager, schema: SchemaDefinition) -> Result<(), Box<dyn std::error::Error>> {
-    /// manager.sync_schema_to_database("person", &schema).await?;
+    /// # use nodespace_core::models::schema::SchemaField;
+    /// # async fn example(manager: SchemaTableManager, fields: Vec<SchemaField>) -> Result<(), Box<dyn std::error::Error>> {
+    /// manager.sync_schema_to_database("person", &fields).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn sync_schema_to_database(
         &self,
         type_name: &str,
-        schema: &SchemaDefinition,
+        fields: &[SchemaField],
     ) -> Result<(), NodeServiceError> {
         // Validate type_name to prevent SQL injection
         if !type_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -298,7 +291,7 @@ where
         tracing::info!("Synced table '{}' with mode {}", type_name, table_mode);
 
         // Define all fields recursively
-        for field in &schema.fields {
+        for field in fields {
             self.define_field(type_name, field, None).await?;
         }
 

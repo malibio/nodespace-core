@@ -7,7 +7,7 @@
 //!
 //! ```rust
 //! use nodespace_core::models::{Node, SchemaNode};
-//! use nodespace_core::models::schema::{SchemaDefinition, SchemaField, ProtectionLevel};
+//! use nodespace_core::models::schema::{SchemaField, ProtectionLevel};
 //! use serde_json::json;
 //!
 //! // Create from existing node
@@ -28,7 +28,7 @@
 //! assert_eq!(schema.version(), 1);
 //! ```
 
-use crate::models::schema::{SchemaDefinition, SchemaField};
+use crate::models::schema::{SchemaField, SchemaProtectionLevel};
 use crate::models::{Node, ValidationError};
 use serde::{Serialize, Serializer};
 
@@ -234,15 +234,56 @@ impl SchemaNode {
         Some(removed)
     }
 
-    /// Convert to SchemaDefinition (for backwards compatibility)
+    /// Get all valid values for an enum field (core + user values combined)
     ///
-    /// Returns the schema properties as a SchemaDefinition struct.
-    pub fn as_definition(&self) -> SchemaDefinition {
-        SchemaDefinition {
-            is_core: self.is_core(),
-            version: self.version(),
-            description: self.description(),
-            fields: self.fields(),
+    /// Returns `None` if the field doesn't exist or isn't an enum.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let schema = SchemaNode::from_node(node)?;
+    /// let status_values = schema.get_enum_values("status");
+    /// // Returns: Some(["open", "in_progress", "done", "blocked"])
+    /// ```
+    pub fn get_enum_values(&self, field_name: &str) -> Option<Vec<String>> {
+        let field = self.get_field(field_name)?;
+
+        // Only return values for enum fields
+        if field.field_type != "enum" {
+            return None;
+        }
+
+        let mut values = Vec::new();
+        if let Some(core_vals) = &field.core_values {
+            values.extend(core_vals.clone());
+        }
+        if let Some(user_vals) = &field.user_values {
+            values.extend(user_vals.clone());
+        }
+
+        Some(values)
+    }
+
+    /// Check if a field can be deleted based on its protection level
+    ///
+    /// Only `User` protected fields can be deleted.
+    pub fn can_delete_field(&self, field_name: &str) -> bool {
+        if let Some(field) = self.get_field(field_name) {
+            field.protection == SchemaProtectionLevel::User
+        } else {
+            false
+        }
+    }
+
+    /// Check if a field can be modified based on its protection level
+    ///
+    /// Only `User` protected fields can be modified (type changes, etc.).
+    /// Core/System fields are immutable.
+    pub fn can_modify_field(&self, field_name: &str) -> bool {
+        if let Some(field) = self.get_field(field_name) {
+            field.protection == SchemaProtectionLevel::User
+        } else {
+            false
         }
     }
 
@@ -275,7 +316,7 @@ impl SchemaNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::schema::ProtectionLevel;
+    use crate::models::schema::SchemaProtectionLevel;
     use serde_json::json;
 
     fn create_test_schema_node() -> Node {
@@ -366,7 +407,7 @@ mod tests {
         let new_field = SchemaField {
             name: "priority".to_string(),
             field_type: "number".to_string(),
-            protection: ProtectionLevel::User,
+            protection: SchemaProtectionLevel::User,
             core_values: None,
             user_values: None,
             indexed: false,
@@ -392,7 +433,7 @@ mod tests {
         let duplicate = SchemaField {
             name: "status".to_string(), // Already exists
             field_type: "string".to_string(),
-            protection: ProtectionLevel::User,
+            protection: SchemaProtectionLevel::User,
             core_values: None,
             user_values: None,
             indexed: false,
@@ -420,15 +461,28 @@ mod tests {
     }
 
     #[test]
-    fn test_as_definition() {
+    fn test_get_enum_values() {
         let node = create_test_schema_node();
         let schema = SchemaNode::from_node(node).unwrap();
 
-        let def = schema.as_definition();
-        assert!(def.is_core);
-        assert_eq!(def.version, 2);
-        assert_eq!(def.description, "Task tracking schema");
-        assert_eq!(def.fields.len(), 1);
+        let values = schema.get_enum_values("status").unwrap();
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&"open".to_string()));
+        assert!(values.contains(&"done".to_string()));
+
+        // Non-enum field should return None
+        assert!(schema.get_enum_values("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_can_delete_field() {
+        let node = create_test_schema_node();
+        let schema = SchemaNode::from_node(node).unwrap();
+
+        // Core field cannot be deleted
+        assert!(!schema.can_delete_field("status"));
+        // Non-existent field returns false
+        assert!(!schema.can_delete_field("nonexistent"));
     }
 
     #[test]

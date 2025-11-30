@@ -3798,40 +3798,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_schema_operations() -> Result<()> {
-        use crate::models::schema::{ProtectionLevel, SchemaDefinition, SchemaField};
+        use crate::models::schema::{SchemaField, SchemaProtectionLevel};
 
         let (store, _temp_dir) = create_test_store().await?;
 
-        // Create a proper SchemaDefinition with fields containing ProtectionLevel enum
+        // Create schema properties with fields containing SchemaProtectionLevel enum
         // This tests that enums are stored and retrieved correctly without stringification
-        let schema_def = SchemaDefinition {
-            is_core: false,
-            version: 1,
-            description: "Test task schema".to_string(),
-            // Status values use lowercase format (Issue #670)
-            fields: vec![SchemaField {
-                name: "status".to_string(),
-                field_type: "enum".to_string(),
-                protection: ProtectionLevel::Core,
-                core_values: Some(vec![
-                    "open".to_string(),
-                    "in_progress".to_string(),
-                    "done".to_string(),
-                ]),
-                user_values: None,
-                indexed: true,
-                required: Some(true),
-                extensible: Some(true),
-                default: Some(serde_json::json!("open")),
-                description: Some("Task status".to_string()),
-                item_type: None,
-                fields: None,
-                item_fields: None,
-            }],
-        };
+        let schema_props = serde_json::json!({
+            "isCore": false,
+            "version": 1,
+            "description": "Test task schema",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "protection": "core",
+                    "coreValues": ["open", "in_progress", "done"],
+                    "indexed": true,
+                    "required": true,
+                    "extensible": true,
+                    "default": "open",
+                    "description": "Task status"
+                }
+            ]
+        });
 
-        let schema = serde_json::to_value(&schema_def)?;
-        store.update_schema("task", &schema).await?;
+        store.update_schema("task", &schema_props).await?;
 
         // Fetch and verify the schema was stored correctly
         let fetched = store.get_schema("task").await?;
@@ -3839,14 +3831,16 @@ mod tests {
 
         let fetched_value = fetched.unwrap();
 
-        // Verify the schema was stored and retrieved correctly with enum handling
-        let retrieved_schema: SchemaDefinition = serde_json::from_value(fetched_value)?;
-        assert_eq!(retrieved_schema.version, 1);
-        assert_eq!(retrieved_schema.description, "Test task schema");
-        assert_eq!(retrieved_schema.fields.len(), 1);
-        assert_eq!(retrieved_schema.fields[0].name, "status");
-        // Key assertion: ProtectionLevel enum correctly deserialized
-        assert_eq!(retrieved_schema.fields[0].protection, ProtectionLevel::Core);
+        // Verify the schema was stored and retrieved correctly
+        assert_eq!(fetched_value["version"], 1);
+        assert_eq!(fetched_value["description"], "Test task schema");
+
+        // Parse and verify fields with SchemaProtectionLevel
+        let fields: Vec<SchemaField> = serde_json::from_value(fetched_value["fields"].clone())?;
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "status");
+        // Key assertion: SchemaProtectionLevel enum correctly deserialized
+        assert_eq!(fields[0].protection, SchemaProtectionLevel::Core);
 
         Ok(())
     }
