@@ -203,9 +203,8 @@ where
     /// use nodespace_core::models::schema::{SchemaField, ProtectionLevel};
     ///
     /// async fn example(service: SchemaService) -> Result<(), Box<dyn std::error::Error>> {
-    ///     // User fields must have namespace prefix (custom:, org:, or plugin:)
     ///     let field = SchemaField {
-    ///         name: "custom:priority".to_string(),
+///         name: "priority".to_string(),
     ///         field_type: "number".to_string(),
     ///         protection: ProtectionLevel::User,
     ///         indexed: false,
@@ -226,35 +225,16 @@ where
         schema_id: &str,
         field: SchemaField,
     ) -> Result<(), NodeServiceError> {
-        // Namespace validation: Enforce prefix requirements
-        if field.protection == ProtectionLevel::Core {
-            // Core fields must NOT have namespace prefix
-            if field.name.contains(':') {
-                return Err(NodeServiceError::invalid_update(
-                    "Core properties cannot use namespace prefix. \
-                     Core fields use simple names like 'status', 'priority', 'due_date'."
-                        .to_string(),
-                ));
-            }
-        } else {
-            // User/plugin fields MUST have namespace prefix
-            let valid_prefixes = ["custom:", "org:", "plugin:"];
-            let has_valid_prefix = valid_prefixes
-                .iter()
-                .any(|prefix| field.name.starts_with(prefix));
-
-            if !has_valid_prefix {
-                return Err(NodeServiceError::invalid_update(format!(
-                    "User properties must use namespace prefix to prevent conflicts with future core properties.\n\
-                     Valid namespaces:\n\
-                     - 'custom:{}' for personal custom properties\n\
-                     - 'org:{}' for organization-specific properties\n\
-                     - 'plugin:name:{}' for plugin-provided properties\n\n\
-                     See: docs/architecture/development/schema-management-implementation-guide.md\n\
-                     This ensures your custom properties will never conflict with future NodeSpace core features.",
-                    field.name, field.name, field.name
-                )));
-            }
+        // Validate field name characters (alphanumeric and underscores only, no colons)
+        if !field
+            .name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_')
+        {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Invalid field name '{}': must contain only alphanumeric characters and underscores (no colons)",
+                field.name
+            )));
         }
 
         // Protection: Only user fields can be added
@@ -1366,7 +1346,7 @@ mod tests {
                     item_fields: None,
                 },
                 SchemaField {
-                    name: "custom:priority".to_string(),
+                    name: "priority".to_string(),
                     field_type: "number".to_string(),
                     protection: ProtectionLevel::User,
                     core_values: None,
@@ -1411,7 +1391,7 @@ mod tests {
         assert_eq!(schema.version, 1);
         assert_eq!(schema.fields.len(), 2);
         assert_eq!(schema.fields[0].name, "status");
-        assert_eq!(schema.fields[1].name, "custom:priority");
+        assert_eq!(schema.fields[1].name, "priority");
     }
 
     #[tokio::test]
@@ -1420,179 +1400,7 @@ mod tests {
 
         let result = service.get_schema("nonexistent").await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_add_user_field_with_custom_namespace_succeeds() {
-        let (service, _temp) = setup_test_service().await;
-        let schema_id = create_test_schema(&service).await;
-
-        let new_field = SchemaField {
-            name: "custom:due_date".to_string(), // User field with namespace prefix
-            field_type: "string".to_string(),
-            protection: ProtectionLevel::User,
-            core_values: None,
-            user_values: None,
-            indexed: false,
-            required: Some(false),
-            extensible: None,
-            default: None,
-            description: Some("Due date".to_string()),
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        service.add_field(&schema_id, new_field).await.unwrap();
-
-        let schema = service.get_schema(&schema_id).await.unwrap();
-        assert_eq!(schema.version, 2); // Version incremented
-        assert_eq!(schema.fields.len(), 3);
-        assert_eq!(schema.fields[2].name, "custom:due_date");
-    }
-
-    #[tokio::test]
-    async fn test_add_user_field_without_namespace_rejected() {
-        let (service, _temp) = setup_test_service().await;
-        let schema_id = create_test_schema(&service).await;
-
-        let invalid_field = SchemaField {
-            name: "estimatedHours".to_string(), // Missing namespace prefix
-            field_type: "number".to_string(),
-            protection: ProtectionLevel::User,
-            core_values: None,
-            user_values: None,
-            indexed: false,
-            required: Some(false),
-            extensible: None,
-            default: None,
-            description: Some("Estimated hours".to_string()),
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        let result = service.add_field(&schema_id, invalid_field).await;
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("User properties must use namespace prefix"));
-        assert!(err_msg.contains("custom:estimatedHours"));
-        assert!(err_msg.contains("org:estimatedHours"));
-        assert!(err_msg.contains("plugin:name:estimatedHours"));
-    }
-
-    #[tokio::test]
-    async fn test_add_user_field_with_custom_namespace() {
-        let (service, _temp) = setup_test_service().await;
-        let schema_id = create_test_schema(&service).await;
-
-        let field = SchemaField {
-            name: "custom:estimatedHours".to_string(),
-            field_type: "number".to_string(),
-            protection: ProtectionLevel::User,
-            core_values: None,
-            user_values: None,
-            indexed: false,
-            required: Some(false),
-            extensible: None,
-            default: Some(json!(8)),
-            description: Some("Estimated hours".to_string()),
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        service.add_field(&schema_id, field).await.unwrap();
-
-        let schema = service.get_schema(&schema_id).await.unwrap();
-        assert_eq!(schema.fields.len(), 3);
-        assert_eq!(schema.fields[2].name, "custom:estimatedHours");
-    }
-
-    #[tokio::test]
-    async fn test_add_user_field_with_org_namespace() {
-        let (service, _temp) = setup_test_service().await;
-        let schema_id = create_test_schema(&service).await;
-
-        let field = SchemaField {
-            name: "org:departmentCode".to_string(),
-            field_type: "string".to_string(),
-            protection: ProtectionLevel::User,
-            core_values: None,
-            user_values: None,
-            indexed: true,
-            required: Some(false),
-            extensible: None,
-            default: None,
-            description: Some("Department code".to_string()),
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        service.add_field(&schema_id, field).await.unwrap();
-
-        let schema = service.get_schema(&schema_id).await.unwrap();
-        assert_eq!(schema.fields.len(), 3);
-        assert_eq!(schema.fields[2].name, "org:departmentCode");
-    }
-
-    #[tokio::test]
-    async fn test_add_user_field_with_plugin_namespace() {
-        let (service, _temp) = setup_test_service().await;
-        let schema_id = create_test_schema(&service).await;
-
-        let field = SchemaField {
-            name: "plugin:jira:issueId".to_string(),
-            field_type: "string".to_string(),
-            protection: ProtectionLevel::User,
-            core_values: None,
-            user_values: None,
-            indexed: true,
-            required: Some(false),
-            extensible: None,
-            default: None,
-            description: Some("JIRA issue ID".to_string()),
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        service.add_field(&schema_id, field).await.unwrap();
-
-        let schema = service.get_schema(&schema_id).await.unwrap();
-        assert_eq!(schema.fields.len(), 3);
-        assert_eq!(schema.fields[2].name, "plugin:jira:issueId");
-    }
-
-    #[tokio::test]
-    async fn test_core_field_with_namespace_rejected() {
-        let (service, _temp) = setup_test_service().await;
-        let schema_id = create_test_schema(&service).await;
-
-        let invalid_core_field = SchemaField {
-            name: "custom:status".to_string(), // Core field should not have prefix
-            field_type: "string".to_string(),
-            protection: ProtectionLevel::Core,
-            core_values: None,
-            user_values: None,
-            indexed: false,
-            required: Some(false),
-            extensible: None,
-            default: None,
-            description: None,
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        let result = service.add_field(&schema_id, invalid_core_field).await;
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Core properties cannot use namespace prefix"));
-    }
-
-    #[tokio::test]
+    }    #[tokio::test]
     async fn test_add_core_field_rejected() {
         let (service, _temp) = setup_test_service().await;
         let schema_id = create_test_schema(&service).await;
@@ -1627,7 +1435,7 @@ mod tests {
         let schema_id = create_test_schema(&service).await;
 
         service
-            .remove_field(&schema_id, "custom:priority")
+            .remove_field(&schema_id, "priority")
             .await
             .unwrap();
 
@@ -1674,7 +1482,7 @@ mod tests {
         let schema_id = create_test_schema(&service).await;
 
         let result = service
-            .extend_enum_field(&schema_id, "custom:priority", "HIGH".to_string())
+            .extend_enum_field(&schema_id, "priority", "HIGH".to_string())
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not an enum"));
@@ -1730,7 +1538,7 @@ mod tests {
             "test_widget".to_string(),
             "My widget".to_string(),
             // Status uses lowercase format (Issue #670)
-            json!({"test_widget": {"status": "open", "custom:priority": 5}}),
+            json!({"test_widget": {"status": "open", "priority": 5}}),
         );
 
         let result = service.validate_node_against_schema(&node).await;
@@ -1864,7 +1672,7 @@ mod tests {
         let node = Node::new(
             "test_widget".to_string(),
             "My widget".to_string(),
-            json!({"test_widget": {"custom:priority": 5}}), // Missing "status" but has default "open"
+            json!({"test_widget": {"priority": 5}}), // Missing "status" but has default "open"
         );
 
         let result = service.validate_node_against_schema(&node).await;
@@ -1945,7 +1753,7 @@ mod tests {
             version: 1,
             description: "Person with nested address".to_string(),
             fields: vec![SchemaField {
-                name: "custom:address".to_string(),
+                name: "address".to_string(),
                 field_type: "object".to_string(),
                 protection: ProtectionLevel::User,
                 core_values: None,
@@ -1958,7 +1766,7 @@ mod tests {
                 item_type: None,
                 fields: Some(vec![
                     SchemaField {
-                        name: "custom:street".to_string(),
+                        name: "street".to_string(),
                         field_type: "string".to_string(),
                         protection: ProtectionLevel::User,
                         core_values: None,
@@ -1973,7 +1781,7 @@ mod tests {
                         item_fields: None,
                     },
                     SchemaField {
-                        name: "custom:city".to_string(),
+                        name: "city".to_string(),
                         field_type: "string".to_string(),
                         protection: ProtectionLevel::User,
                         core_values: None,
@@ -2027,7 +1835,7 @@ mod tests {
             version: 1,
             description: "Person with indexed city".to_string(),
             fields: vec![SchemaField {
-                name: "custom:address".to_string(),
+                name: "address".to_string(),
                 field_type: "object".to_string(),
                 protection: ProtectionLevel::User,
                 core_values: None,
@@ -2039,7 +1847,7 @@ mod tests {
                 description: Some("Address information".to_string()),
                 item_type: None,
                 fields: Some(vec![SchemaField {
-                    name: "custom:city".to_string(),
+                    name: "city".to_string(),
                     field_type: "string".to_string(),
                     protection: ProtectionLevel::User,
                     core_values: None,
@@ -2098,7 +1906,7 @@ mod tests {
             version: 1,
             description: "Person with contacts array".to_string(),
             fields: vec![SchemaField {
-                name: "custom:contacts".to_string(),
+                name: "contacts".to_string(),
                 field_type: "array".to_string(),
                 protection: ProtectionLevel::User,
                 core_values: None,
@@ -2111,7 +1919,7 @@ mod tests {
                 item_type: Some("object".to_string()),
                 fields: None,
                 item_fields: Some(vec![SchemaField {
-                    name: "custom:email".to_string(),
+                    name: "email".to_string(),
                     field_type: "string".to_string(),
                     protection: ProtectionLevel::User,
                     core_values: None,
@@ -2319,14 +2127,14 @@ mod tests {
 
         let fields = vec![
             FieldDefinition {
-                name: "custom:name".to_string(),
+                name: "name".to_string(),
                 field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:address".to_string(),
+                name: "address".to_string(),
                 field_type: "object".to_string(),
                 required: Some(false),
                 default: None,
@@ -2352,7 +2160,7 @@ mod tests {
         // Create schema using FieldDefinition API (not SchemaField with enums)
         // This avoids the enum deserialization issue mentioned in issue #587
         let fields = vec![FieldDefinition {
-            name: "custom:category".to_string(),
+            name: "category".to_string(),
             field_type: "string".to_string(),
             required: Some(false),
             default: None,
@@ -2372,7 +2180,7 @@ mod tests {
         // Verify the schema can be retrieved
         let retrieved_schema = service.get_schema(&schema_id).await.unwrap();
         assert_eq!(retrieved_schema.fields.len(), 1);
-        assert_eq!(retrieved_schema.fields[0].name, "custom:category");
+        assert_eq!(retrieved_schema.fields[0].name, "category");
     }
 
     #[tokio::test]
@@ -2383,21 +2191,21 @@ mod tests {
         // This avoids the enum deserialization issue mentioned in issue #587
         let fields = vec![
             FieldDefinition {
-                name: "custom:city".to_string(),
+                name: "city".to_string(),
                 field_type: "string".to_string(),
                 required: Some(false),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:latitude".to_string(),
+                name: "latitude".to_string(),
                 field_type: "number".to_string(),
                 required: Some(false),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:longitude".to_string(),
+                name: "longitude".to_string(),
                 field_type: "number".to_string(),
                 required: Some(false),
                 default: None,
@@ -2418,9 +2226,9 @@ mod tests {
         // Verify the schema can be retrieved
         let retrieved_schema = service.get_schema(&schema_id).await.unwrap();
         assert_eq!(retrieved_schema.fields.len(), 3);
-        assert_eq!(retrieved_schema.fields[0].name, "custom:city");
-        assert_eq!(retrieved_schema.fields[1].name, "custom:latitude");
-        assert_eq!(retrieved_schema.fields[2].name, "custom:longitude");
+        assert_eq!(retrieved_schema.fields[0].name, "city");
+        assert_eq!(retrieved_schema.fields[1].name, "latitude");
+        assert_eq!(retrieved_schema.fields[2].name, "longitude");
     }
 
     #[tokio::test]
@@ -2429,14 +2237,14 @@ mod tests {
 
         let fields = vec![
             FieldDefinition {
-                name: "custom:name".to_string(),
+                name: "name".to_string(),
                 field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:amount".to_string(),
+                name: "amount".to_string(),
                 field_type: "number".to_string(),
                 required: Some(false),
                 default: Some(json!(0)),
@@ -2465,14 +2273,14 @@ mod tests {
         // Create schema with primitive fields only (self-contained, no external dependencies)
         let schema_fields = vec![
             FieldDefinition {
-                name: "custom:amount".to_string(),
+                name: "amount".to_string(),
                 field_type: "number".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:description".to_string(),
+                name: "description".to_string(),
                 field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
@@ -2505,21 +2313,21 @@ mod tests {
         // Create project schema with multiple fields (self-contained, no external references)
         let project_fields = vec![
             FieldDefinition {
-                name: "custom:name".to_string(),
+                name: "name".to_string(),
                 field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:budget".to_string(),
+                name: "budget".to_string(),
                 field_type: "number".to_string(),
                 required: Some(false),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:status".to_string(),
+                name: "status".to_string(),
                 field_type: "string".to_string(),
                 required: Some(false),
                 default: None,
@@ -2536,9 +2344,9 @@ mod tests {
         // Verify schema was created with all fields
         let schema = service.get_schema("project").await.unwrap();
         assert_eq!(schema.fields.len(), 3);
-        assert_eq!(schema.fields[0].name, "custom:name");
-        assert_eq!(schema.fields[1].name, "custom:budget");
-        assert_eq!(schema.fields[2].name, "custom:status");
+        assert_eq!(schema.fields[0].name, "name");
+        assert_eq!(schema.fields[1].name, "budget");
+        assert_eq!(schema.fields[2].name, "status");
 
         // Verify spoke table was created
         let db = service.node_service.store.db();
@@ -2551,7 +2359,7 @@ mod tests {
         let (service, _temp) = setup_test_service().await;
 
         let fields = vec![FieldDefinition {
-            name: "custom:name".to_string(),
+            name: "name".to_string(),
             field_type: "string".to_string(),
             required: Some(true),
             default: None,
@@ -2579,7 +2387,7 @@ mod tests {
         let (service, _temp) = setup_test_service().await;
 
         let fields = vec![FieldDefinition {
-            name: "custom:owner".to_string(),
+            name: "owner".to_string(),
             field_type: "nonexistent_type".to_string(), // Invalid reference
             required: Some(false),
             default: None,
@@ -2601,14 +2409,14 @@ mod tests {
 
         let fields = vec![
             FieldDefinition {
-                name: "custom:title".to_string(),
+                name: "title".to_string(),
                 field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:metadata".to_string(),
+                name: "metadata".to_string(),
                 field_type: "object".to_string(), // Nested object
                 required: Some(false),
                 default: None,
@@ -2640,7 +2448,7 @@ mod tests {
 
         // Create a schema that will fail mid-creation (invalid type name with SQL injection attempt)
         let fields = vec![FieldDefinition {
-            name: "custom:name".to_string(),
+            name: "name".to_string(),
             field_type: "string".to_string(),
             required: Some(true),
             default: None,
@@ -2670,7 +2478,7 @@ mod tests {
         // Test 1: SQL injection in field_type is rejected by reference validation
         // (validates type exists before reaching field type validation)
         let fields = vec![FieldDefinition {
-            name: "custom:owner".to_string(),
+            name: "owner".to_string(),
             field_type: "person; DROP TABLE node; --".to_string(), // SQL injection attempt
             required: Some(true),
             default: None,
@@ -2694,7 +2502,7 @@ mod tests {
         // field_type with special characters should be rejected
         // Create a schema with semicolon in name (should fail type_name validation)
         let sneaky_fields = vec![FieldDefinition {
-            name: "custom:test".to_string(),
+            name: "test".to_string(),
             field_type: "person_with_semicolon;".to_string(), // Invalid characters
             required: Some(true),
             default: None,
@@ -2728,21 +2536,21 @@ mod tests {
 
         let fields = vec![
             FieldDefinition {
-                name: "custom:title".to_string(),
+                name: "title".to_string(),
                 field_type: "string".to_string(), // Primitive
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:count".to_string(),
+                name: "count".to_string(),
                 field_type: "number".to_string(), // Primitive
                 required: Some(false),
                 default: Some(json!(0)),
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:active".to_string(),
+                name: "active".to_string(),
                 field_type: "boolean".to_string(), // Primitive
                 required: Some(false),
                 default: Some(json!(true)),
@@ -2757,11 +2565,11 @@ mod tests {
 
         // Verify all fields are primitive (no relation tables created)
         assert_eq!(schema_fields.len(), 3);
-        assert_eq!(schema_fields[0].name, "custom:title");
+        assert_eq!(schema_fields[0].name, "title");
         assert_eq!(schema_fields[0].field_type, "string");
-        assert_eq!(schema_fields[1].name, "custom:count");
+        assert_eq!(schema_fields[1].name, "count");
         assert_eq!(schema_fields[1].field_type, "number");
-        assert_eq!(schema_fields[2].name, "custom:active");
+        assert_eq!(schema_fields[2].name, "active");
         assert_eq!(schema_fields[2].field_type, "boolean");
 
         // No relation table DDL should be generated
@@ -2779,14 +2587,14 @@ mod tests {
         // Test 1: Valid schema with primitive fields
         let valid_fields = vec![
             FieldDefinition {
-                name: "custom:name".to_string(),
+                name: "name".to_string(),
                 field_type: "string".to_string(),
                 required: Some(true),
                 default: None,
                 schema: None,
             },
             FieldDefinition {
-                name: "custom:age".to_string(),
+                name: "age".to_string(),
                 field_type: "number".to_string(),
                 required: Some(false),
                 default: None,
@@ -2816,7 +2624,7 @@ mod tests {
 
         // Test 3: Invalid reference type rejected
         let invalid_fields = vec![FieldDefinition {
-            name: "custom:owner".to_string(),
+            name: "owner".to_string(),
             field_type: "nonexistent".to_string(),
             required: Some(false),
             default: None,
