@@ -6,6 +6,7 @@
 //! - `NodeEmbeddingService` - Embedding generation and semantic search
 //! - `EmbeddingProcessor` - Background task for processing stale root embeddings
 //! - `SchemaService` - Schema management with version tracking
+//! - `SchemaTableManager` - DDL generation for schema-defined tables
 //! - `MigrationRegistry` - Schema migration infrastructure (for future use)
 //! - `SearchService` - Semantic search and query operations (planned)
 //!
@@ -19,6 +20,7 @@ pub mod migration_registry;
 pub mod migrations;
 pub mod node_service;
 pub mod schema_service;
+pub mod schema_table_manager;
 
 #[cfg(test)]
 mod node_service_root_test;
@@ -29,3 +31,4 @@ pub use error::NodeServiceError;
 pub use migration_registry::{MigrationRegistry, MigrationTransform};
 pub use node_service::{CreateNodeParams, NodeService};
 pub use schema_service::SchemaService;
+pub use schema_table_manager::SchemaTableManager;
