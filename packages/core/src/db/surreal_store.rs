@@ -290,15 +290,6 @@ impl From<SurrealNode> for Node {
     }
 }
 
-/// Result struct for get_node() single-query pattern
-///
-/// Captures the hub node and optional spoke data from the RETURN statement.
-#[derive(Debug, Clone, Deserialize)]
-struct HubSpokeResult {
-    hub: Option<SurrealNode>,
-    spoke: Option<Value>,
-}
-
 /// Batch fetch properties for multiple nodes of the same type
 ///
 /// **Purpose**: Avoid N+1 query pattern when fetching properties for multiple nodes.
@@ -1217,56 +1208,104 @@ where
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
-        // Single round-trip query: hub + conditional spoke query
+        // Two-query approach: hub first, then spoke if needed
         //
-        // Uses the hub's `data` field to determine if a spoke exists. The `data` field
-        // is a record link (e.g., task:uuid) that points to the spoke table. If set,
-        // we query the spoke; if NONE, there's no spoke data.
+        // For embedded SurrealDB (RocksDB), the extra in-process call is ~microseconds.
+        // This approach scales with any number of spoke types without code changes.
         //
-        // This approach:
-        // - Works for all node types (core and user-defined)
-        // - No hardcoded type list needed
-        // - Automatically supports new spoke table types
-        //
-        // For compile-time type safety with specific types, use:
-        // - get_task_node(id) - Returns TaskNode with direct field access
-        // - get_schema_node(id) - Returns SchemaNode with direct field access
-        let query = format!(
-            r#"
-            LET $hub = (SELECT * FROM node:`{id}`)[0];
-            LET $spoke = IF $hub.data != NONE THEN
-                (SELECT * OMIT id, node FROM $hub.data)[0]
-            ELSE
-                NONE
-            END;
-            RETURN {{ hub: $hub, spoke: $spoke }};
-            "#,
-            id = id
-        );
+        // For compile-time type safety, use get_task_node() or get_schema_node().
 
+        // Query 1: Get hub node
+        let hub_query = format!("SELECT * OMIT id, data FROM node:`{id}` LIMIT 1;", id = id);
         let mut response = self
             .db
-            .query(&query)
+            .query(&hub_query)
             .await
-            .context("Failed to query node by record ID")?;
+            .context("Failed to query hub node")?;
 
-        // The RETURN statement is index 2 (after two LET statements)
-        let result: Option<HubSpokeResult> = response.take(2).unwrap_or(None);
+        let results: Vec<Value> = response.take(0).unwrap_or_default();
+        let Some(hub) = results.into_iter().next() else {
+            return Ok(None);
+        };
 
-        let node_opt = result.and_then(|r| {
-            r.hub.map(|hub| {
-                let mut node: Node = hub.into();
-                // Merge spoke properties if present
-                if let Some(Value::Object(props)) = r.spoke {
-                    if !props.is_empty() {
-                        node.properties = Value::Object(props);
-                    }
-                }
-                node
+        // Parse hub fields manually (SurrealDB snake_case → Node camelCase)
+        let node_type = hub["node_type"].as_str().unwrap_or("text").to_string();
+
+        // Query 2: Get spoke data if this type has a spoke table
+        let properties = if TYPES_WITH_SPOKE_TABLES.contains(&node_type.as_str()) {
+            let spoke_query = format!(
+                "SELECT * OMIT id, node FROM {table}:`{id}` LIMIT 1;",
+                table = node_type,
+                id = id
+            );
+            let mut spoke_response = self
+                .db
+                .query(&spoke_query)
+                .await
+                .context("Failed to query spoke table")?;
+
+            let spoke_results: Vec<Value> = spoke_response.take(0).unwrap_or_default();
+            spoke_results
+                .into_iter()
+                .next()
+                .unwrap_or(serde_json::json!({}))
+        } else {
+            hub.get("properties")
+                .cloned()
+                .unwrap_or(serde_json::json!({}))
+        };
+
+        let created_at = hub["created_at"]
+            .as_str()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+
+        let modified_at = hub["modified_at"]
+            .as_str()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+
+        let embedding_vector = hub["embedding_vector"]
+            .as_array()
+            .filter(|arr| !arr.is_empty())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                    .collect()
+            });
+
+        let mentions = hub["mentions"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
             })
-        });
+            .unwrap_or_default();
 
-        Ok(node_opt)
+        let mentioned_by = hub["mentioned_by"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Some(Node {
+            id: id.to_string(),
+            node_type,
+            content: hub["content"].as_str().unwrap_or("").to_string(),
+            version: hub["version"].as_i64().unwrap_or(1),
+            created_at,
+            modified_at,
+            properties,
+            embedding_vector,
+            mentions,
+            mentioned_by,
+        }))
     }
 
     pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<Node> {
