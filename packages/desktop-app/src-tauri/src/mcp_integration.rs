@@ -34,12 +34,7 @@ struct NodeDeletedEvent {
     node_id: String,
 }
 
-/// Event payload for schema-updated event
-#[derive(Debug, Serialize)]
-struct SchemaUpdatedEvent {
-    schema_id: String,
-    new_version: i32,
-}
+// NOTE: SchemaUpdatedEvent removed (Issue #690) - schema mutation commands not used by UI
 
 /// Run MCP server with Tauri event emissions
 ///
@@ -201,23 +196,8 @@ fn emit_event_for_method(app: &AppHandle, method: &str, result: &Value) {
                 }
             }
         }
-        "add_schema_field"
-        | "remove_schema_field"
-        | "extend_schema_enum"
-        | "remove_schema_enum_value" => {
-            // Schema mutation operations - emit schema-updated event
-            if let (Some(schema_id), Some(new_version)) =
-                (result["schema_id"].as_str(), result["new_version"].as_i64())
-            {
-                let event = SchemaUpdatedEvent {
-                    schema_id: schema_id.to_string(),
-                    new_version: new_version as i32,
-                };
-                if let Err(e) = app.emit("schema-updated", &event) {
-                    warn!("Failed to emit schema-updated event: {}", e);
-                }
-            }
-        }
+        // NOTE: Schema mutation commands (add_schema_field, remove_schema_field, etc.)
+        // were removed in Issue #690 as they weren't used by UI.
         _ => {} // No events for get/query operations
     }
 }

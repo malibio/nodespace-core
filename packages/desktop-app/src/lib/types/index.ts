@@ -18,6 +18,18 @@ export { isQuoteBlockNode, QuoteBlockNodeHelpers } from './quote-block-node';
 export type { OrderedListNode } from './ordered-list-node';
 export { isOrderedListNode, OrderedListNodeHelpers } from './ordered-list-node';
 
+export type { SchemaNode, SchemaField, ProtectionLevel } from './schema-node';
+export {
+  isSchemaNode,
+  isCore,
+  getSchemaVersion,
+  getSchemaDescription,
+  getSchemaFields,
+  getSchemaField,
+  getEnumValues,
+  SchemaNodeHelpers
+} from './schema-node';
+
 // Error types
 export type { CommandError } from './errors';
 export { isCommandError, toError, DatabaseInitializationError, NodeOperationError } from './errors';

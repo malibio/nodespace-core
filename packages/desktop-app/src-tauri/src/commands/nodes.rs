@@ -2,8 +2,11 @@
 //!
 //! As of Issue #676, all commands route through NodeService directly.
 //! NodeOperations layer has been removed - NodeService contains all business logic.
+//!
+//! As of Issue #690, SchemaService was removed. Schema validation is done
+//! via NodeService.get_schema_for_type() and SchemaNodeBehavior.
 
-use nodespace_core::services::{CreateNodeParams, SchemaService};
+use nodespace_core::services::CreateNodeParams;
 use nodespace_core::{Node, NodeQuery, NodeService, NodeServiceError, NodeUpdate};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -69,21 +72,21 @@ impl From<NodeServiceError> for CommandError {
 /// Checks if a schema exists for the given node type. This enables
 /// custom entity types while ensuring type safety.
 ///
+/// As of Issue #690, validation uses NodeService.get_schema_for_type()
+/// instead of the removed SchemaService.
+///
 /// # Arguments
 /// * `node_type` - Node type string to validate
-/// * `schema_service` - SchemaService instance for schema lookups
+/// * `service` - NodeService instance for schema lookups
 ///
 /// # Returns
 /// * `Ok(())` if schema exists for this node type
 /// * `Err(CommandError)` if no schema found
-async fn validate_node_type(
-    node_type: &str,
-    schema_service: &SchemaService,
-) -> Result<(), CommandError> {
-    // Check if schema exists for this type
-    match schema_service.get_schema(node_type).await {
-        Ok(_) => Ok(()),
-        Err(NodeServiceError::NodeNotFound { .. }) => Err(CommandError {
+async fn validate_node_type(node_type: &str, service: &NodeService) -> Result<(), CommandError> {
+    // Check if schema exists for this type via NodeService
+    match service.get_schema_for_type(node_type).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(CommandError {
             message: format!(
                 "No schema found for node type: {}. Create a schema first.",
                 node_type
@@ -106,7 +109,6 @@ async fn validate_node_type(
 ///
 /// # Arguments
 /// * `service` - NodeService instance from Tauri state
-/// * `schema_service` - SchemaService instance for validating node type
 /// * `node` - Node data to create (node_type must have a schema)
 ///
 /// # Returns
@@ -132,10 +134,9 @@ async fn validate_node_type(
 #[tauri::command]
 pub async fn create_node(
     service: State<'_, NodeService>,
-    schema_service: State<'_, SchemaService>,
     node: CreateNodeInput,
 ) -> Result<String, CommandError> {
-    validate_node_type(&node.node_type, &schema_service).await?;
+    validate_node_type(&node.node_type, &service).await?;
 
     // Use NodeService to create node with business rule enforcement
     // Pass frontend-generated ID so frontend can track node before persistence completes
@@ -187,7 +188,6 @@ pub struct SaveNodeWithParentInput {
 ///
 /// # Arguments
 /// * `service` - NodeService instance from Tauri state
-/// * `schema_service` - SchemaService instance for validating node type
 /// * `input` - Root node data
 ///
 /// # Returns
@@ -208,10 +208,9 @@ pub struct SaveNodeWithParentInput {
 #[tauri::command]
 pub async fn create_root_node(
     service: State<'_, NodeService>,
-    schema_service: State<'_, SchemaService>,
     input: CreateRootNodeInput,
 ) -> Result<String, CommandError> {
-    validate_node_type(&input.node_type, &schema_service).await?;
+    validate_node_type(&input.node_type, &service).await?;
 
     // Create root node with NodeService (parent_id = None means root)
     let node_id = service
@@ -718,7 +717,6 @@ pub async fn mention_autocomplete(
 ///
 /// # Arguments
 /// * `service` - Node service instance from Tauri state
-/// * `schema_service` - SchemaService instance for node type validation
 /// * `input` - SaveNodeWithParentInput containing node data
 ///
 /// # Returns
@@ -761,10 +759,9 @@ pub async fn mention_autocomplete(
 #[tauri::command]
 pub async fn save_node_with_parent(
     service: State<'_, NodeService>,
-    schema_service: State<'_, SchemaService>,
     input: SaveNodeWithParentInput,
 ) -> Result<(), CommandError> {
-    validate_node_type(&input.node_type, &schema_service).await?;
+    validate_node_type(&input.node_type, &service).await?;
 
     // Use single-transaction upsert method (bypasses NodeOperations for transactional reasons)
     service
@@ -922,7 +919,7 @@ mod tests {
     use super::*;
 
     // Note: Integration tests for schema-based validation are in the integration test suite
-    // since they require database setup and SchemaService instances.
+    // since they require database setup.
     // Unit tests here focus on command error serialization.
 
     #[test]

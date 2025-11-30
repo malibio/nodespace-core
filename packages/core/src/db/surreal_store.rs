@@ -48,7 +48,6 @@
 
 use crate::db::events::DomainEvent;
 use crate::db::fractional_ordering::FractionalOrderCalculator;
-use crate::models::schema::SchemaDefinition;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -1236,80 +1235,41 @@ where
 
                 let mut props_response = self.db.query(&props_query).await;
 
-                // For schema nodes, use strong typing (SchemaDefinition) which properly handles
-                // ProtectionLevel enums. SurrealDB SDK correctly serializes/deserializes when
-                // targeting a concrete Rust struct rather than generic serde_json::Value.
-                let result: Option<serde_json::Value> = if node.node_type == "schema" {
-                    match props_response {
-                        Ok(ref mut response) => {
-                            // Deserialize directly to SchemaDefinition - handles enums properly
-                            let raw: Result<Vec<SchemaDefinition>, _> = response.take(0);
-                            match raw {
-                                Ok(records) => {
-                                    records.into_iter().next().and_then(|schema_def| {
-                                        tracing::debug!(
-                                            "get_node({}) - deserialized SchemaDefinition with {} fields",
-                                            id,
-                                            schema_def.fields.len()
-                                        );
-                                        // Convert back to serde_json::Value for Node.properties
-                                        serde_json::to_value(&schema_def).ok()
-                                    })
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "get_node({}) - SchemaDefinition deserialization failed: {:?}",
-                                        id,
-                                        e
+                // All spoke table types (task, schema) use generic HashMap deserialization.
+                // Properties are stored flat in spoke tables and accessed as JSON values.
+                // This unified approach eliminates special-casing for schema nodes.
+                let result: Option<serde_json::Value> = match props_response {
+                    Ok(ref mut response) => {
+                        let raw: Result<
+                            Vec<std::collections::HashMap<String, serde_json::Value>>,
+                            _,
+                        > = response.take(0);
+                        match raw {
+                            Ok(records) => {
+                                let props_opt = records.into_iter().next().map(|map| {
+                                    tracing::debug!(
+                                        "Raw properties from {} - keys: {:?}",
+                                        node.node_type,
+                                        map.keys().collect::<Vec<_>>()
                                     );
-                                    None
-                                }
+                                    serde_json::Value::Object(map.into_iter().collect())
+                                });
+                                tracing::debug!(
+                                    "get_node({}) - properties after conversion: {:?}",
+                                    id,
+                                    props_opt
+                                );
+                                props_opt
                             }
-                        }
-                        Err(e) => {
-                            tracing::warn!("get_node({}) - query failed: {:?}", id, e);
-                            None
+                            Err(e) => {
+                                tracing::warn!("get_node({}) - failed to deserialize: {:?}", id, e);
+                                None
+                            }
                         }
                     }
-                } else {
-                    // For non-schema types (task), use generic HashMap deserialization
-                    match props_response {
-                        Ok(ref mut response) => {
-                            let raw: Result<
-                                Vec<std::collections::HashMap<String, serde_json::Value>>,
-                                _,
-                            > = response.take(0);
-                            match raw {
-                                Ok(records) => {
-                                    let props_opt = records.into_iter().next().map(|map| {
-                                        tracing::debug!(
-                                            "Raw properties from {} - keys: {:?}",
-                                            node.node_type,
-                                            map.keys().collect::<Vec<_>>()
-                                        );
-                                        serde_json::Value::Object(map.into_iter().collect())
-                                    });
-                                    tracing::debug!(
-                                        "get_node({}) - properties after conversion: {:?}",
-                                        id,
-                                        props_opt
-                                    );
-                                    props_opt
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "get_node({}) - failed to deserialize: {:?}",
-                                        id,
-                                        e
-                                    );
-                                    None
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("get_node({}) - query failed: {:?}", id, e);
-                            None
-                        }
+                    Err(e) => {
+                        tracing::warn!("get_node({}) - query failed: {:?}", id, e);
+                        None
                     }
                 };
 
@@ -1320,6 +1280,127 @@ where
         }
 
         Ok(node_opt)
+    }
+
+    /// Get a task node directly with strongly-typed TaskNode struct
+    ///
+    /// This method directly queries the hub (node) and spoke (task) tables,
+    /// returning a compile-time type-safe TaskNode instead of generic Node.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Node ID (UUID portion, without table prefix)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(TaskNode))` - Task node found and is of type "task"
+    /// * `Ok(None)` - Node not found
+    /// * `Err` - Query failed or node exists but is not a task type
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use nodespace_core::db::SurrealStore;
+    /// use std::path::PathBuf;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let store = SurrealStore::new(PathBuf::from("./data")).await?;
+    ///
+    ///     if let Some(task) = store.get_task_node("some-uuid").await? {
+    ///         println!("Task status: {:?}", task.status());
+    ///         println!("Task priority: {}", task.priority());
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_task_node(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::TaskNode>> {
+        use crate::models::TaskNode;
+
+        // First get the base node
+        let node = match self.get_node(id).await? {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+
+        // Verify it's a task node
+        if node.node_type != "task" {
+            return Err(anyhow::anyhow!(
+                "Node '{}' is not a task (found type: '{}')",
+                id,
+                node.node_type
+            ));
+        }
+
+        // Convert to TaskNode - properties are already loaded from spoke table by get_node
+        let task_node = TaskNode::from_node(node).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+
+        Ok(Some(task_node))
+    }
+
+    /// Get a schema node directly with strongly-typed SchemaNode struct
+    ///
+    /// This method directly queries the hub (node) and spoke (schema) tables,
+    /// returning a compile-time type-safe SchemaNode instead of generic Node.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Schema ID (e.g., "task", "person", without table prefix)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(SchemaNode))` - Schema node found and is of type "schema"
+    /// * `Ok(None)` - Node not found
+    /// * `Err` - Query failed or node exists but is not a schema type
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use nodespace_core::db::SurrealStore;
+    /// use std::path::PathBuf;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let store = SurrealStore::new(PathBuf::from("./data")).await?;
+    ///
+    ///     if let Some(schema) = store.get_schema_node("task").await? {
+    ///         println!("Schema version: {}", schema.version());
+    ///         println!("Is core: {}", schema.is_core());
+    ///         for field in schema.fields() {
+    ///             println!("  Field: {} ({})", field.name, field.field_type);
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_schema_node(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::SchemaNode>> {
+        use crate::models::SchemaNode;
+
+        // First get the base node
+        let node = match self.get_node(id).await? {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+
+        // Verify it's a schema node
+        if node.node_type != "schema" {
+            return Err(anyhow::anyhow!(
+                "Node '{}' is not a schema (found type: '{}')",
+                id,
+                node.node_type
+            ));
+        }
+
+        // Convert to SchemaNode - properties are already loaded from spoke table by get_node
+        let schema_node = SchemaNode::from_node(node).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+
+        Ok(Some(schema_node))
     }
 
     pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<Node> {

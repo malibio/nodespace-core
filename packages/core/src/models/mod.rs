@@ -14,6 +14,7 @@ pub mod time;
 
 // Type-safe node wrappers
 mod date_node;
+mod schema_node;
 mod task_node;
 mod text_node;
 
@@ -57,5 +58,6 @@ pub use time::{SystemTimeProvider, TimeProvider};
 
 // Export type-safe wrappers
 pub use date_node::DateNode;
+pub use schema_node::SchemaNode;
 pub use task_node::{TaskNode, TaskStatus};
 pub use text_node::TextNode;

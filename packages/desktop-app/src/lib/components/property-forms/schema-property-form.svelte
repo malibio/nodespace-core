@@ -23,9 +23,14 @@
   import * as Popover from '$lib/components/ui/popover';
   import { Calendar } from '$lib/components/ui/calendar';
   import { Input } from '$lib/components/ui/input';
-  import { schemaService } from '$lib/services/schema-service';
+  import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import type { SchemaDefinition, SchemaField } from '$lib/types/schema';
+  import {
+    type SchemaNode,
+    type SchemaField,
+    isSchemaNode,
+    getSchemaFields
+  } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { parseDate, type DateValue } from '@internationalized/date';
 
@@ -39,7 +44,7 @@
   } = $props();
 
   // State
-  let schema = $state<SchemaDefinition | null>(null);
+  let schema = $state<SchemaNode | null>(null);
   let isOpen = $state(false); // Collapsed by default
   let schemaError = $state<string | null>(null);
 
@@ -90,8 +95,13 @@
       schemaError = null;
 
       try {
-        const schemaDefinition = await schemaService.getSchema(nodeType);
-        schema = schemaDefinition;
+        const schemaNode = await backendAdapter.getSchema(nodeType);
+        if (isSchemaNode(schemaNode)) {
+          schema = schemaNode;
+        } else {
+          schemaError = `Invalid schema node for type: ${nodeType}`;
+          schema = null;
+        }
       } catch (error) {
         console.error('[SchemaPropertyForm] Failed to load schema:', error);
         schemaError = error instanceof Error ? error.message : 'Failed to load schema';
@@ -122,6 +132,9 @@
     return node.properties?.[fieldName];
   }
 
+  // Get schema fields using the helper (returns empty array if no schema)
+  const schemaFields = $derived(() => (schema ? getSchemaFields(schema) : []));
+
   // Calculate field completion stats
   const fieldStats = $derived(() => {
     if (!schema || !node) {
@@ -129,7 +142,7 @@
     }
 
     // Count all fields (core, user, and system)
-    const allFields = schema.fields;
+    const allFields = schemaFields();
     const total = allFields.length;
 
     // Count filled fields (non-null, non-undefined, non-empty)
@@ -150,7 +163,7 @@
     if (!schema || !node) return null;
 
     // Find status field (enum type, common in task schemas)
-    const statusField = schema.fields.find((f) => f.name === 'status' && f.type === 'enum');
+    const statusField = schemaFields().find((f) => f.name === 'status' && f.type === 'enum');
     // Use current value or default value from schema
     const statusValue = statusField
       ? getPropertyValue(statusField.name) || statusField.default || null
@@ -166,7 +179,7 @@
     }
 
     // Find due date field
-    const dueDateField = schema.fields.find((f) => f.name === 'dueDate' || f.name === 'due_date');
+    const dueDateField = schemaFields().find((f) => f.name === 'dueDate' || f.name === 'due_date');
     const dueDate = dueDateField ? getPropertyValue(dueDateField.name) : null;
 
     return { status, dueDate };
@@ -186,7 +199,7 @@
 
     if (isOldFormat) {
       // Migrate all schema fields from old flat format to new nested format
-      schema.fields.forEach((field) => {
+      schemaFields().forEach((field) => {
         // Type guard: node is guaranteed non-null due to early return above
         if (!node) return;
         const oldValue = node.properties?.[field.name];
@@ -210,7 +223,7 @@
 
     // If we migrated from old format, remove the old flat properties
     if (isOldFormat) {
-      schema.fields.forEach((field) => {
+      schemaFields().forEach((field) => {
         // Type guard: node is guaranteed non-null due to early return above
         if (!node) return;
         delete updatedProperties[field.name];
@@ -349,7 +362,7 @@
       <Collapsible.Content class="pb-4">
         <!-- Property Grid (2 columns) -->
         <div class="grid grid-cols-2 gap-4">
-          {#each schema.fields as field (field.name)}
+          {#each schemaFields() as field (field.name)}
             {@const fieldId = `property-${nodeId}-${field.name}`}
             <div class="space-y-2">
               <label for={fieldId} class="text-sm font-medium">

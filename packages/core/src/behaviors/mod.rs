@@ -9,7 +9,7 @@
 //! The behavior system enables extensibility while maintaining type safety
 //! and consistent validation across all node operations.
 
-use crate::models::schema::{SchemaDefinition, SchemaField};
+use crate::models::schema::SchemaField;
 use crate::models::{Node, ValidationError as NodeValidationError};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -879,27 +879,39 @@ impl NodeBehavior for SchemaNodeBehavior {
             ));
         }
 
-        // Try to parse properties as SchemaDefinition for detailed validation
-        let schema: SchemaDefinition = match serde_json::from_value(node.properties.clone()) {
-            Ok(s) => s,
+        // Schema properties are stored flat (matching TaskNode pattern).
+        // Extract and validate the fields array directly from JSON.
+        let props = node.properties.as_object().unwrap();
+
+        // Validate required schema properties exist
+        if !props.contains_key("fields") {
+            return Err(NodeValidationError::InvalidProperties(
+                "Schema must have 'fields' property".to_string(),
+            ));
+        }
+
+        // Parse fields array - each field is validated as SchemaField
+        let fields_value = props.get("fields").unwrap();
+        let fields: Vec<SchemaField> = match serde_json::from_value(fields_value.clone()) {
+            Ok(f) => f,
             Err(e) => {
                 return Err(NodeValidationError::InvalidProperties(format!(
-                    "Invalid schema definition: {}",
+                    "Invalid schema fields: {}",
                     e
                 )));
             }
         };
 
         // Validate field name uniqueness
-        let field_names: HashSet<_> = schema.fields.iter().map(|f| &f.name).collect();
-        if field_names.len() != schema.fields.len() {
+        let field_names: HashSet<_> = fields.iter().map(|f| &f.name).collect();
+        if field_names.len() != fields.len() {
             return Err(NodeValidationError::InvalidProperties(
                 "Schema contains duplicate field names".to_string(),
             ));
         }
 
         // Validate each field
-        for field in &schema.fields {
+        for field in &fields {
             validate_schema_field(field)?;
         }
 

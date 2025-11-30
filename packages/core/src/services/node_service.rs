@@ -562,6 +562,8 @@ where
     /// Queries the schema node directly from the database.
     /// Schema nodes are stored with id = node_type and node_type = "schema".
     ///
+    /// This method replaces the need for SchemaService.get_schema() (Issue #690).
+    ///
     /// # Arguments
     ///
     /// * `node_type` - The type of node to get the schema for (e.g., "task", "person")
@@ -571,7 +573,7 @@ where
     /// * `Ok(Some(value))` - Schema definition as JSON value if found
     /// * `Ok(None)` - No schema found for this node type
     /// * `Err` - Database error
-    async fn get_schema_for_type(
+    pub async fn get_schema_for_type(
         &self,
         node_type: &str,
     ) -> Result<Option<serde_json::Value>, NodeServiceError> {
@@ -1322,6 +1324,88 @@ where
 
             Ok(None)
         }
+    }
+
+    /// Get a task node with strongly-typed TaskNode struct
+    ///
+    /// Returns a compile-time type-safe TaskNode instead of generic Node.
+    /// This provides typed access to task-specific properties like status and priority.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Task node ID (UUID)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(TaskNode))` - Task node found
+    /// * `Ok(None)` - Node not found
+    /// * `Err` - Query failed or node exists but is not a task type
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use nodespace_core::services::NodeService;
+    /// use nodespace_core::models::TaskStatus;
+    ///
+    /// async fn example(service: &NodeService) -> Result<(), Box<dyn std::error::Error>> {
+    ///     if let Some(task) = service.get_task_node("some-uuid").await? {
+    ///         println!("Status: {:?}", task.status());
+    ///         println!("Priority: {}", task.priority());
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_task_node(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::TaskNode>, NodeServiceError> {
+        self.store.get_task_node(id).await.map_err(|e| {
+            NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                context: format!("Failed to get task node: {}", e),
+            })
+        })
+    }
+
+    /// Get a schema node with strongly-typed SchemaNode struct
+    ///
+    /// Returns a compile-time type-safe SchemaNode instead of generic Node.
+    /// This provides typed access to schema-specific properties like fields and version.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Schema ID (e.g., "task", "person")
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(SchemaNode))` - Schema node found
+    /// * `Ok(None)` - Node not found
+    /// * `Err` - Query failed or node exists but is not a schema type
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use nodespace_core::services::NodeService;
+    ///
+    /// async fn example(service: &NodeService) -> Result<(), Box<dyn std::error::Error>> {
+    ///     if let Some(schema) = service.get_schema_node("task").await? {
+    ///         println!("Version: {}", schema.version());
+    ///         println!("Is core: {}", schema.is_core());
+    ///         for field in schema.fields() {
+    ///             println!("  {} ({})", field.name, field.field_type);
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_schema_node(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::SchemaNode>, NodeServiceError> {
+        self.store.get_schema_node(id).await.map_err(|e| {
+            NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                context: format!("Failed to get schema node: {}", e),
+            })
+        })
     }
 
     /// Update a node
