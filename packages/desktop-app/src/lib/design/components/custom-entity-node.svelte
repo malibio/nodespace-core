@@ -47,11 +47,7 @@
   import SchemaPropertyForm from '$lib/components/property-forms/schema-property-form.svelte';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import type { NodeComponentProps } from '$lib/types/node-viewers';
-  import {
-    type SchemaNode,
-    isSchemaNode,
-    getSchemaDescription
-  } from '$lib/types/schema-node';
+  import { type SchemaNode, isSchemaNode } from '$lib/types/schema-node';
 
   // Component props match NodeComponentProps interface
   let { nodeId, nodeType, content, children }: NodeComponentProps = $props();
@@ -89,8 +85,8 @@
     loadSchema();
   });
 
-  // Get schema description using helper
-  const schemaDescription = $derived(schema ? getSchemaDescription(schema) : '');
+  // Get schema description directly from typed field
+  const schemaDescription = $derived(schema?.description ?? '');
 
   // Get custom icon from schema metadata (if available)
   // Note: Custom icon support would require extending SchemaNode with metadata

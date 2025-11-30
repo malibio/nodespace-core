@@ -25,12 +25,7 @@
   import { Input } from '$lib/components/ui/input';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import {
-    type SchemaNode,
-    type SchemaField,
-    isSchemaNode,
-    getSchemaFields
-  } from '$lib/types/schema-node';
+  import { type SchemaNode, type SchemaField, isSchemaNode } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { parseDate, type DateValue } from '@internationalized/date';
 
@@ -132,8 +127,8 @@
     return node.properties?.[fieldName];
   }
 
-  // Get schema fields using the helper (returns empty array if no schema)
-  const schemaFields = $derived(() => (schema ? getSchemaFields(schema) : []));
+  // Get schema fields directly from typed field (no helper needed)
+  const schemaFields = $derived(() => (schema ? schema.fields : []));
 
   // Calculate field completion stats
   const fieldStats = $derived(() => {

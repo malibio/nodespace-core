@@ -3,6 +3,21 @@
 //! Provides ergonomic, compile-time type-safe access to task node properties
 //! while maintaining the universal Node storage model.
 //!
+//! # Serialization
+//!
+//! When serialized (for Tauri/HTTP responses), outputs a flat structure with typed fields:
+//! ```json
+//! {
+//!   "id": "task-123",
+//!   "nodeType": "task",
+//!   "content": "Implement feature",
+//!   "status": "open",
+//!   "priority": 2,
+//!   "dueDate": null,
+//!   "assigneeId": null
+//! }
+//! ```
+//!
 //! # Examples
 //!
 //! ```rust
@@ -29,6 +44,7 @@
 //! ```
 
 use crate::models::{Node, ValidationError};
+use serde::{Serialize, Serializer};
 use serde_json::json;
 use std::str::FromStr;
 
@@ -78,10 +94,40 @@ impl TaskStatus {
     }
 }
 
+/// Serialization output for TaskNode - flat structure with typed fields
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskNodeSerialized<'a> {
+    id: &'a str,
+    node_type: &'a str,
+    content: &'a str,
+    created_at: &'a chrono::DateTime<chrono::Utc>,
+    modified_at: &'a chrono::DateTime<chrono::Utc>,
+    version: i64,
+    // Task-specific typed fields (not buried in properties)
+    status: &'static str,
+    priority: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assignee_id: Option<String>,
+}
+
 /// Type-safe wrapper for task nodes
 ///
 /// Provides ergonomic access to task-specific properties while maintaining
 /// the universal Node storage model underneath.
+///
+/// When serialized (for Tauri/HTTP responses), outputs a flat structure with typed fields:
+/// ```json
+/// {
+///   "id": "task-123",
+///   "nodeType": "task",
+///   "content": "Fix bug",
+///   "status": "done",
+///   "priority": 2
+/// }
+/// ```
 ///
 /// # Examples
 ///
@@ -102,6 +148,28 @@ impl TaskStatus {
 #[derive(Debug, Clone)]
 pub struct TaskNode {
     node: Node,
+}
+
+impl Serialize for TaskNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let output = TaskNodeSerialized {
+            id: &self.node.id,
+            node_type: &self.node.node_type,
+            content: &self.node.content,
+            created_at: &self.node.created_at,
+            modified_at: &self.node.modified_at,
+            version: self.node.version,
+            // Extract typed fields from properties
+            status: self.status().as_str(),
+            priority: self.priority(),
+            due_date: self.due_date(),
+            assignee_id: self.assignee_id(),
+        };
+        output.serialize(serializer)
+    }
 }
 
 impl TaskNode {

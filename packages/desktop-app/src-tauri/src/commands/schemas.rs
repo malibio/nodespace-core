@@ -5,11 +5,11 @@
 //! as they weren't used by any UI components.
 //!
 //! This module provides read-only schema commands:
-//! - `get_all_schemas` - List all schema nodes
-//! - `get_schema_definition` - Get a specific schema by ID
+//! - `get_all_schemas` - List all schema nodes (returns SchemaNode[] with typed fields)
+//! - `get_schema_definition` - Get a specific schema by ID (returns SchemaNode with typed fields)
 
 use nodespace_core::services::NodeServiceError;
-use nodespace_core::{Node, NodeQuery, NodeService};
+use nodespace_core::{NodeQuery, NodeService, SchemaNode};
 use serde::Serialize;
 use tauri::State;
 
@@ -33,44 +33,53 @@ impl From<NodeServiceError> for CommandError {
     }
 }
 
-/// Get all schema nodes
+/// Get all schema nodes with typed fields
 ///
 /// Retrieves all schema nodes (both core and custom) for plugin auto-registration.
-/// Uses NodeService.query_nodes_simple() (Issue #690 - uses strongly-typed SchemaNode).
+/// Returns SchemaNode[] with typed top-level fields (isCore, schemaVersion, description, fields).
 ///
 /// # Returns
-/// * `Ok(Vec<Node>)` - Array of schema nodes (properties contain schema data)
+/// * `Ok(Vec<SchemaNode>)` - Array of schema nodes with typed fields
 /// * `Err(CommandError)` - Error if retrieval fails
 #[tauri::command]
 pub async fn get_all_schemas(
     service: State<'_, NodeService>,
-) -> Result<Vec<Node>, CommandError> {
-    // Query all schema nodes
+) -> Result<Vec<SchemaNode>, CommandError> {
+    // Query all schema nodes and wrap in SchemaNode for typed serialization
     let query = NodeQuery {
         node_type: Some("schema".to_string()),
         ..Default::default()
     };
-    let schema_nodes = service.query_nodes_simple(query).await.map_err(CommandError::from)?;
+    let nodes = service
+        .query_nodes_simple(query)
+        .await
+        .map_err(CommandError::from)?;
+
+    // Convert to SchemaNode for typed serialization
+    let schema_nodes: Vec<SchemaNode> = nodes
+        .into_iter()
+        .filter_map(|node| SchemaNode::from_node(node).ok())
+        .collect();
 
     Ok(schema_nodes)
 }
 
-/// Get schema by ID using strongly-typed SchemaNode
+/// Get schema by ID with typed fields
 ///
 /// Retrieves the complete schema including all fields, protection levels,
-/// and metadata. Uses NodeService.get_schema_node() for type-safe access.
+/// and metadata. Returns SchemaNode with typed top-level fields.
 ///
 /// # Arguments
 /// * `schema_id` - ID of the schema to retrieve (e.g., "task", "person")
 ///
 /// # Returns
-/// * `Ok(Node)` - Schema node (properties contain isCore, version, fields, etc.)
+/// * `Ok(SchemaNode)` - Schema with typed fields (isCore, schemaVersion, description, fields)
 /// * `Err(CommandError)` - Error if schema not found
 #[tauri::command]
 pub async fn get_schema_definition(
     service: State<'_, NodeService>,
     schema_id: String,
-) -> Result<Node, CommandError> {
+) -> Result<SchemaNode, CommandError> {
     let schema_node = service
         .get_schema_node(&schema_id)
         .await
@@ -81,8 +90,8 @@ pub async fn get_schema_definition(
             details: None,
         })?;
 
-    // Return the underlying Node (properties contain schema data)
-    Ok(schema_node.into_node())
+    // Return SchemaNode directly - custom Serialize impl outputs typed fields
+    Ok(schema_node)
 }
 
 #[cfg(test)]

@@ -1314,10 +1314,7 @@ where
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_task_node(
-        &self,
-        id: &str,
-    ) -> Result<Option<crate::models::TaskNode>> {
+    pub async fn get_task_node(&self, id: &str) -> Result<Option<crate::models::TaskNode>> {
         use crate::models::TaskNode;
 
         // First get the base node
@@ -1376,10 +1373,7 @@ where
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_schema_node(
-        &self,
-        id: &str,
-    ) -> Result<Option<crate::models::SchemaNode>> {
+    pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
         use crate::models::SchemaNode;
 
         // First get the base node

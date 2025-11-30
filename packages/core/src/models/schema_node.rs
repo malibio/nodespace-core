@@ -30,6 +30,7 @@
 
 use crate::models::schema::{SchemaDefinition, SchemaField};
 use crate::models::{Node, ValidationError};
+use serde::{Serialize, Serializer};
 
 /// Type-safe wrapper for schema nodes
 ///
@@ -39,9 +40,60 @@ use crate::models::{Node, ValidationError};
 /// Schema nodes store entity type definitions (like "task", "person") and their
 /// field configurations. Properties are stored flat in the spoke table (schema:<id>)
 /// matching the TaskNode pattern.
+///
+/// When serialized (for Tauri/HTTP responses), outputs a flat structure with typed fields:
+/// ```json
+/// {
+///   "id": "task",
+///   "nodeType": "schema",
+///   "isCore": true,
+///   "version": 1,
+///   "description": "Task schema",
+///   "fields": [...]
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct SchemaNode {
     node: Node,
+}
+
+/// Serialization output for SchemaNode - flat structure with typed fields
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaNodeSerialized<'a> {
+    id: &'a str,
+    node_type: &'a str,
+    content: &'a str,
+    created_at: &'a chrono::DateTime<chrono::Utc>,
+    modified_at: &'a chrono::DateTime<chrono::Utc>,
+    version: i64,
+    // Schema-specific typed fields (not buried in properties)
+    is_core: bool,
+    schema_version: u32,
+    description: String,
+    fields: Vec<SchemaField>,
+}
+
+impl Serialize for SchemaNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let output = SchemaNodeSerialized {
+            id: &self.node.id,
+            node_type: &self.node.node_type,
+            content: &self.node.content,
+            created_at: &self.node.created_at,
+            modified_at: &self.node.modified_at,
+            version: self.node.version,
+            // Extract typed fields from properties
+            is_core: self.is_core(),
+            schema_version: self.version(),
+            description: self.description(),
+            fields: self.fields(),
+        };
+        output.serialize(serializer)
+    }
 }
 
 impl SchemaNode {

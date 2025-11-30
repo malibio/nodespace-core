@@ -12,8 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { backendAdapter } from '$lib/services/backend-adapter';
-import type { Node } from '$lib/types';
-import { type SchemaNode, isSchemaNode, getSchemaDescription } from '$lib/types/schema-node';
+import { type SchemaNode, isSchemaNode } from '$lib/types/schema-node';
 
 // Mock backend adapter
 vi.mock('$lib/services/backend-adapter', () => ({
@@ -23,16 +22,17 @@ vi.mock('$lib/services/backend-adapter', () => ({
 }));
 
 /**
- * Helper to create a mock schema node
+ * Helper to create a mock schema node with typed top-level fields
+ * Matches the backend SchemaNode serialization format
  */
 function createMockSchemaNode(
   id: string,
   options: {
     isCore?: boolean;
-    version?: number;
+    schemaVersion?: number;
     description?: string;
   } = {}
-): Node {
+): SchemaNode {
   return {
     id,
     nodeType: 'schema',
@@ -40,12 +40,11 @@ function createMockSchemaNode(
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
     version: 1,
-    properties: {
-      isCore: options.isCore ?? false,
-      version: options.version ?? 1,
-      description: options.description ?? '',
-      fields: []
-    }
+    // Typed top-level fields (not in properties)
+    isCore: options.isCore ?? false,
+    schemaVersion: options.schemaVersion ?? 1,
+    description: options.description ?? '',
+    fields: []
   };
 }
 
@@ -55,8 +54,8 @@ function createMockSchemaNode(
  */
 function getEntityName(schema: SchemaNode | null, nodeType: string): string {
   if (schema) {
-    const description = getSchemaDescription(schema);
-    if (description) return description;
+    // Access typed field directly (no helper needed)
+    if (schema.description) return schema.description;
   }
   return nodeType;
 }
@@ -276,29 +275,32 @@ describe('CustomEntityNode Logic', () => {
     it('should use description field for entity naming', () => {
       const schemaNode = createMockSchemaNode('invoice', {
         description: '💰 Invoice Management'
-      }) as SchemaNode;
+      });
 
       expect(getEntityName(schemaNode, 'invoice')).toBe('💰 Invoice Management');
-      expect(extractIconFromDescription(getSchemaDescription(schemaNode))).toBe('💰');
+      // Access typed field directly
+      expect(extractIconFromDescription(schemaNode.description)).toBe('💰');
     });
 
     it('should handle schema with fields array', () => {
-      const schemaNode = createMockSchemaNode('invoice', {
-        description: 'Invoice'
-      });
-      // Add fields to properties
-      schemaNode.properties.fields = [
-        {
-          name: 'amount',
-          type: 'number',
-          protection: 'user',
-          indexed: false
-        }
-      ];
+      // Create schema with fields
+      const schemaNode: SchemaNode = {
+        ...createMockSchemaNode('invoice', {
+          description: 'Invoice'
+        }),
+        fields: [
+          {
+            name: 'amount',
+            type: 'number',
+            protection: 'user',
+            indexed: false
+          }
+        ]
+      };
 
-      const fields = schemaNode.properties.fields as Array<{ name: string }>;
-      expect(fields.length).toBe(1);
-      expect(fields[0].name).toBe('amount');
+      // Access typed field directly (not in properties)
+      expect(schemaNode.fields.length).toBe(1);
+      expect(schemaNode.fields[0].name).toBe('amount');
     });
   });
 

@@ -15,7 +15,6 @@ import {
   initializeSchemaPluginSystem,
   PLUGIN_PRIORITIES
 } from '$lib/plugins/schema-plugin-loader';
-import type { Node } from '$lib/types';
 import type { SchemaNode } from '$lib/types/schema-node';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { backendAdapter } from '$lib/services/backend-adapter';
@@ -29,16 +28,17 @@ vi.mock('$lib/services/backend-adapter', () => ({
 }));
 
 /**
- * Helper to create a mock schema node
+ * Helper to create a mock schema node with typed top-level fields
+ * Matches the backend SchemaNode serialization format
  */
 function createMockSchemaNode(
   id: string,
   options: {
     isCore?: boolean;
-    version?: number;
+    schemaVersion?: number;
     description?: string;
   } = {}
-): Node {
+): SchemaNode {
   return {
     id,
     nodeType: 'schema',
@@ -46,12 +46,11 @@ function createMockSchemaNode(
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
     version: 1,
-    properties: {
-      isCore: options.isCore ?? false,
-      version: options.version ?? 1,
-      description: options.description ?? '',
-      fields: []
-    }
+    // Typed top-level fields (not in properties)
+    isCore: options.isCore ?? false,
+    schemaVersion: options.schemaVersion ?? 1,
+    description: options.description ?? '',
+    fields: []
   };
 }
 
@@ -59,8 +58,8 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
   it('should convert schema node to plugin with correct structure', () => {
     const schemaNode = createMockSchemaNode('invoice', {
       description: 'Sales Invoice',
-      version: 1
-    }) as SchemaNode;
+      schemaVersion: 1
+    });
 
     const plugin = createPluginFromSchema(schemaNode);
 
@@ -89,7 +88,7 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
   it('should use schema description as display name', () => {
     const schemaNode = createMockSchemaNode('invoice', {
       description: 'Customer Invoice'
-    }) as SchemaNode;
+    });
 
     const plugin = createPluginFromSchema(schemaNode);
 
@@ -110,7 +109,7 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
     testCases.forEach(({ id, expected }) => {
       const schemaNode = createMockSchemaNode(id, {
         description: ''
-      }) as SchemaNode;
+      });
 
       const plugin = createPluginFromSchema(schemaNode);
 
@@ -121,7 +120,7 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
   it('should set correct priority for custom entities', () => {
     const schemaNode = createMockSchemaNode('invoice', {
       description: 'Invoice'
-    }) as SchemaNode;
+    });
 
     const plugin = createPluginFromSchema(schemaNode);
 
@@ -131,9 +130,9 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
 
   it('should use schema version as plugin version', () => {
     const schemaNode = createMockSchemaNode('invoice', {
-      version: 5,
+      schemaVersion: 5,
       description: 'Invoice'
-    }) as SchemaNode;
+    });
 
     const plugin = createPluginFromSchema(schemaNode);
 
@@ -143,7 +142,7 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
   it('should include lazy-loaded CustomEntityNode component', () => {
     const schemaNode = createMockSchemaNode('invoice', {
       description: 'Invoice'
-    }) as SchemaNode;
+    });
 
     const plugin = createPluginFromSchema(schemaNode);
 
@@ -154,7 +153,7 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
   it('should set nodeType to schema ID for slash command creation', () => {
     const schemaNode = createMockSchemaNode('customEntity', {
       description: 'Custom Entity'
-    }) as SchemaNode;
+    });
 
     const plugin = createPluginFromSchema(schemaNode);
 
@@ -225,15 +224,17 @@ describe('Schema Plugin Loader - registerSchemaPlugin()', () => {
   });
 
   it('should skip non-schema nodes gracefully', async () => {
-    const nonSchemaNode: Node = {
+    // Mock returns a value that fails isSchemaNode() check
+    // (missing required typed fields like isCore, schemaVersion, fields)
+    const nonSchemaNode = {
       id: 'task-123',
-      nodeType: 'task', // Not a schema node
+      nodeType: 'task', // Not a schema node - isSchemaNode will return false
       content: 'Some task',
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      version: 1,
-      properties: {}
-    };
+      version: 1
+      // Missing: isCore, schemaVersion, description, fields
+    } as unknown as SchemaNode;
 
     vi.mocked(backendAdapter.getSchema).mockResolvedValue(nonSchemaNode);
 

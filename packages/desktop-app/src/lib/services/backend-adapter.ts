@@ -23,6 +23,7 @@
 /* global fetch, crypto */
 
 import type { Node, NodeWithChildren } from '$lib/types';
+import type { SchemaNode } from '$lib/types/schema-node';
 import { getClientId } from './client-id';
 
 // ============================================================================
@@ -107,9 +108,9 @@ export interface BackendAdapter {
   createContainerNode(input: CreateContainerInput): Promise<string>;
 
   // Schema operations (read-only - mutation commands removed in Issue #690)
-  // Returns Node[] / Node - use SchemaNode type wrapper for typed access
-  getAllSchemas(): Promise<Node[]>;
-  getSchema(schemaId: string): Promise<Node>;
+  // Returns SchemaNode with typed top-level fields (isCore, schemaVersion, description, fields)
+  getAllSchemas(): Promise<SchemaNode[]>;
+  getSchema(schemaId: string): Promise<SchemaNode>;
 }
 
 // ============================================================================
@@ -260,14 +261,14 @@ class TauriAdapter implements BackendAdapter {
     });
   }
 
-  async getAllSchemas(): Promise<Node[]> {
+  async getAllSchemas(): Promise<SchemaNode[]> {
     const invoke = await this.getInvoke();
-    return invoke<Node[]>('get_all_schemas');
+    return invoke<SchemaNode[]>('get_all_schemas');
   }
 
-  async getSchema(schemaId: string): Promise<Node> {
+  async getSchema(schemaId: string): Promise<SchemaNode> {
     const invoke = await this.getInvoke();
-    return invoke<Node>('get_schema_definition', { schemaId });
+    return invoke<SchemaNode>('get_schema_definition', { schemaId });
   }
 }
 
@@ -463,14 +464,14 @@ class HttpAdapter implements BackendAdapter {
     });
   }
 
-  async getAllSchemas(): Promise<Node[]> {
+  async getAllSchemas(): Promise<SchemaNode[]> {
     const response = await fetch(`${this.baseUrl}/api/schemas`);
-    return this.handleResponse<Node[]>(response);
+    return this.handleResponse<SchemaNode[]>(response);
   }
 
-  async getSchema(schemaId: string): Promise<Node> {
+  async getSchema(schemaId: string): Promise<SchemaNode> {
     const response = await fetch(`${this.baseUrl}/api/schemas/${encodeURIComponent(schemaId)}`);
-    return this.handleResponse<Node>(response);
+    return this.handleResponse<SchemaNode>(response);
   }
 }
 
@@ -534,11 +535,11 @@ class MockAdapter implements BackendAdapter {
   async createContainerNode(_input: CreateContainerInput): Promise<string> {
     return 'mock-container-id';
   }
-  async getAllSchemas(): Promise<Node[]> {
+  async getAllSchemas(): Promise<SchemaNode[]> {
     return [];
   }
-  async getSchema(schemaId: string): Promise<Node> {
-    // Return a mock schema node
+  async getSchema(schemaId: string): Promise<SchemaNode> {
+    // Return a mock schema node with typed top-level fields
     return {
       id: schemaId,
       nodeType: 'schema',
@@ -546,12 +547,11 @@ class MockAdapter implements BackendAdapter {
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
       version: 1,
-      properties: {
-        isCore: false,
-        version: 1,
-        description: '',
-        fields: []
-      }
+      // Typed schema fields at top level (not in properties)
+      isCore: false,
+      schemaVersion: 1,
+      description: '',
+      fields: []
     };
   }
 }

@@ -34,7 +34,7 @@ pub use db::{
     MentionRelationship, SurrealStore,
 };
 pub use models::{
-    FilterOperator, Node, NodeFilter, NodeQuery, NodeUpdate, OrderBy, PropertyFilter,
-    ValidationError,
+    FilterOperator, Node, NodeFilter, NodeQuery, NodeUpdate, OrderBy, PropertyFilter, SchemaNode,
+    TaskNode, TaskStatus, ValidationError,
 };
 pub use services::{CreateNodeParams, NodeService, NodeServiceError};

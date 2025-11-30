@@ -41,13 +41,7 @@
 import type { PluginDefinition } from './types';
 import { pluginRegistry } from './plugin-registry';
 import { backendAdapter } from '$lib/services/backend-adapter';
-import {
-  type SchemaNode,
-  isSchemaNode,
-  isCore,
-  getSchemaVersion,
-  getSchemaDescription
-} from '$lib/types/schema-node';
+import { type SchemaNode, isSchemaNode } from '$lib/types/schema-node';
 
 /**
  * Plugin priority constants
@@ -114,8 +108,9 @@ function humanizeSchemaId(id: string): string {
  */
 export function createPluginFromSchema(schema: SchemaNode): PluginDefinition {
   const schemaId = schema.id;
-  const description = getSchemaDescription(schema);
-  const version = getSchemaVersion(schema);
+  // Access typed fields directly (no helpers needed)
+  const description = schema.description;
+  const version = schema.schemaVersion;
 
   // Extract display name from schema description or humanize schema ID as fallback
   const displayName = description || humanizeSchemaId(schemaId);
@@ -175,7 +170,8 @@ export async function registerSchemaPlugin(schemaId: string): Promise<void> {
     }
 
     // Don't register core types (already registered in core-plugins.ts)
-    if (isCore(node)) {
+    // Access typed field directly (no helper needed)
+    if (node.isCore) {
       console.debug(
         `[SchemaPluginLoader] Skipping core type registration: ${schemaId}`
       );
@@ -257,8 +253,9 @@ async function _registerExistingSchemas(): Promise<void> {
     const nodes = await backendAdapter.getAllSchemas();
 
     // Filter to schema nodes that are not core types
+    // Access typed field directly (no helper needed)
     const customSchemas = nodes.filter(
-      (node) => isSchemaNode(node) && !isCore(node)
+      (node) => isSchemaNode(node) && !node.isCore
     );
 
     // Parallelize registration for better performance
@@ -317,8 +314,9 @@ export async function initializeSchemaPluginSystem(): Promise<InitializationResu
 
     // Register existing custom entity schemas on startup
     const nodes = await backendAdapter.getAllSchemas();
+    // Access typed field directly (no helper needed)
     const customSchemas = nodes.filter(
-      (node) => isSchemaNode(node) && !isCore(node)
+      (node) => isSchemaNode(node) && !node.isCore
     );
 
     await Promise.all(

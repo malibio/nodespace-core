@@ -1,25 +1,37 @@
 /**
- * Type-Safe Schema Node Wrapper
+ * Type-Safe Schema Node
  *
- * Provides ergonomic, type-safe access to schema node properties
- * while maintaining the universal Node storage model.
+ * Represents schema definitions with typed top-level fields.
+ * This matches the Rust SchemaNode custom Serialize output - fields are at the top level,
+ * NOT buried in properties.
  *
- * Mirrors the Rust SchemaNode struct for consistent type safety across the stack.
+ * ## Serialized Structure
+ *
+ * The backend returns SchemaNode with typed fields:
+ * ```json
+ * {
+ *   "id": "task",
+ *   "nodeType": "schema",
+ *   "content": "task",
+ *   "createdAt": "2025-01-01T00:00:00Z",
+ *   "modifiedAt": "2025-01-01T00:00:00Z",
+ *   "version": 1,
+ *   "isCore": true,
+ *   "schemaVersion": 1,
+ *   "description": "Task schema",
+ *   "fields": [...]
+ * }
+ * ```
  *
  * @example
  * ```typescript
- * import { Node } from '$lib/types/node';
- * import { SchemaNode, isSchemaNode, getSchemaFields } from '$lib/types/schema-node';
- *
  * // Type guard
  * if (isSchemaNode(node)) {
- *   const fields = getSchemaFields(node);
- *   console.log(`Schema has ${fields.length} fields`);
+ *   console.log(`Core schema: ${node.isCore}`);
+ *   console.log(`Has ${node.fields.length} fields`);
  * }
  * ```
  */
-
-import type { Node } from './node';
 
 /**
  * Protection level for schema fields
@@ -70,136 +82,60 @@ export interface SchemaField {
 }
 
 /**
- * Schema node interface extending base Node
+ * Schema node with typed top-level fields
  *
- * Represents a schema definition with typed properties.
- * Properties are stored flat in the node matching the Rust SchemaNode pattern.
+ * This matches the Rust SchemaNode custom Serialize output.
+ * Schema-specific fields are at the top level, NOT in properties.
  */
-export interface SchemaNode extends Node {
+export interface SchemaNode {
+  /** Unique identifier (same as schema type, e.g., "task", "person") */
+  id: string;
+
+  /** Always "schema" for schema nodes */
   nodeType: 'schema';
-  properties: {
-    /** Whether this is a core (built-in) schema */
-    isCore?: boolean;
-    /** Schema version (increments on changes) */
-    version?: number;
-    /** Human-readable schema description */
-    description?: string;
-    /** Array of field definitions */
-    fields?: SchemaField[];
-    [key: string]: unknown;
-  };
+
+  /** Schema name (same as id) */
+  content: string;
+
+  /** Creation timestamp */
+  createdAt: string;
+
+  /** Last modification timestamp */
+  modifiedAt: string;
+
+  /** Node version for OCC */
+  version: number;
+
+  // Schema-specific typed fields (NOT in properties)
+
+  /** Whether this is a core (built-in) schema */
+  isCore: boolean;
+
+  /** Schema version (increments on schema changes) */
+  schemaVersion: number;
+
+  /** Human-readable schema description */
+  description: string;
+
+  /** Array of field definitions */
+  fields: SchemaField[];
 }
 
 /**
- * Type guard to check if a node is a schema node
+ * Type guard to check if a value is a SchemaNode
  *
- * @param node - Node to check
- * @returns True if node is a schema node
- */
-export function isSchemaNode(node: Node): node is SchemaNode {
-  return node.nodeType === 'schema';
-}
-
-/**
- * Get whether this is a core (built-in) schema
+ * Checks for the presence of schema-specific typed fields.
  *
- * @param node - Schema node
- * @returns True if core schema
+ * @param value - Value to check
+ * @returns True if value is a SchemaNode
  */
-export function isCore(node: SchemaNode): boolean {
-  return node.properties.isCore ?? false;
+export function isSchemaNode(value: unknown): value is SchemaNode {
+  if (!value || typeof value !== 'object') return false;
+  const node = value as Record<string, unknown>;
+  return (
+    node.nodeType === 'schema' &&
+    typeof node.isCore === 'boolean' &&
+    typeof node.schemaVersion === 'number' &&
+    Array.isArray(node.fields)
+  );
 }
-
-/**
- * Get the schema version number
- *
- * @param node - Schema node
- * @returns Version number (defaults to 1)
- */
-export function getSchemaVersion(node: SchemaNode): number {
-  return node.properties.version ?? 1;
-}
-
-/**
- * Get the schema description
- *
- * @param node - Schema node
- * @returns Description string
- */
-export function getSchemaDescription(node: SchemaNode): string {
-  return node.properties.description ?? '';
-}
-
-/**
- * Get the schema fields
- *
- * @param node - Schema node
- * @returns Array of field definitions
- */
-export function getSchemaFields(node: SchemaNode): SchemaField[] {
-  return node.properties.fields ?? [];
-}
-
-/**
- * Get a specific field by name
- *
- * @param node - Schema node
- * @param fieldName - Name of the field to find
- * @returns Field definition or undefined if not found
- */
-export function getSchemaField(node: SchemaNode, fieldName: string): SchemaField | undefined {
-  return getSchemaFields(node).find((f) => f.name === fieldName);
-}
-
-/**
- * Get all enum values for a field (core + user values combined)
- *
- * @param field - Schema field (must be enum type)
- * @returns Combined array of all enum values
- */
-export function getEnumValues(field: SchemaField): string[] {
-  const coreValues = field.coreValues ?? [];
-  const userValues = field.userValues ?? [];
-  return [...coreValues, ...userValues];
-}
-
-/**
- * Helper namespace for schema node operations
- */
-export const SchemaNodeHelpers = {
-  isSchemaNode,
-  isCore,
-  getSchemaVersion,
-  getSchemaDescription,
-  getSchemaFields,
-  getSchemaField,
-  getEnumValues,
-
-  /**
-   * Check if a field can be deleted (user-protected only)
-   */
-  canDeleteField(node: SchemaNode, fieldName: string): boolean {
-    const field = getSchemaField(node, fieldName);
-    return field?.protection === 'user';
-  },
-
-  /**
-   * Check if an enum value can be removed (user values only)
-   */
-  canRemoveEnumValue(field: SchemaField, value: string): boolean {
-    return field.userValues?.includes(value) ?? false;
-  },
-
-  /**
-   * Extract default values for all fields
-   */
-  extractDefaults(node: SchemaNode): Record<string, unknown> {
-    const defaults: Record<string, unknown> = {};
-    for (const field of getSchemaFields(node)) {
-      if (field.default !== undefined) {
-        defaults[field.name] = field.default;
-      }
-    }
-    return defaults;
-  }
-};

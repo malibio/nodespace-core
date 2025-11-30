@@ -29,6 +29,7 @@ use nodespace_core::{
     db::HttpStore,
     models::{Node, NodeFilter, NodeUpdate},
     services::{CreateNodeParams, NodeService, NodeServiceError},
+    SchemaNode,
 };
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -904,11 +905,13 @@ async fn get_mentioning_containers(
     Ok(Json(container_ids))
 }
 
-/// Get all schema definitions
+/// Get all schema definitions with typed fields
 ///
 /// Retrieves all schema definitions stored in the database. This endpoint
 /// is used by the frontend SchemaPluginLoader to auto-register custom entity
 /// plugins on application startup.
+///
+/// Returns SchemaNode[] with typed top-level fields (isCore, schemaVersion, description, fields).
 ///
 /// # HTTP Endpoint
 /// ```text
@@ -920,14 +923,12 @@ async fn get_mentioning_containers(
 /// [
 ///   {
 ///     "id": "task",
+///     "nodeType": "schema",
 ///     "content": "Task",
 ///     "version": 1,
-///     "fields": [...]
-///   },
-///   {
-///     "id": "date",
-///     "content": "Date",
-///     "version": 1,
+///     "isCore": true,
+///     "schemaVersion": 1,
+///     "description": "Task schema",
 ///     "fields": [...]
 ///   }
 /// ]
@@ -935,29 +936,31 @@ async fn get_mentioning_containers(
 ///
 /// # Errors
 /// - `500 INTERNAL SERVER ERROR`: Database error
-///
-/// # Implementation Note
-/// Uses NodeService.get_schema_node() for strongly-typed retrieval (Issue #690).
-/// Returns the underlying Node objects which contain schema properties.
-async fn get_all_schemas(State(state): State<AppState>) -> ApiResult<Vec<Node>> {
+async fn get_all_schemas(State(state): State<AppState>) -> ApiResult<Vec<SchemaNode>> {
     // Query all schema nodes via NodeService
     let query = nodespace_core::NodeQuery {
         node_type: Some("schema".to_string()),
         ..Default::default()
     };
-    let schema_nodes = state
+    let nodes = state
         .node_service
         .query_nodes_simple(query)
         .await
         .map_err(map_node_service_error)?;
 
+    // Convert to SchemaNode for typed serialization
+    let schema_nodes: Vec<SchemaNode> = nodes
+        .into_iter()
+        .filter_map(|node| SchemaNode::from_node(node).ok())
+        .collect();
+
     Ok(Json(schema_nodes))
 }
 
-/// Get schema by ID using strongly-typed SchemaNode
+/// Get schema by ID with typed fields
 ///
 /// Retrieves the complete schema including all fields, protection levels,
-/// and metadata. Uses NodeService.get_schema_node() for type-safe access.
+/// and metadata. Returns SchemaNode with typed top-level fields.
 ///
 /// # HTTP Endpoint
 /// ```text
@@ -968,7 +971,7 @@ async fn get_all_schemas(State(state): State<AppState>) -> ApiResult<Vec<Node>> 
 /// - `id`: Schema ID (e.g., "task", "person", "project")
 ///
 /// # Response (200 OK)
-/// Returns the schema Node with properties containing isCore, version, fields, etc.
+/// Returns SchemaNode with typed fields (isCore, schemaVersion, description, fields).
 ///
 /// # Errors
 /// - `404 NOT FOUND`: Schema doesn't exist
@@ -976,7 +979,7 @@ async fn get_all_schemas(State(state): State<AppState>) -> ApiResult<Vec<Node>> 
 async fn get_schema(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Node> {
+) -> ApiResult<SchemaNode> {
     let schema_node = state
         .node_service
         .get_schema_node(&id)
@@ -992,8 +995,8 @@ async fn get_schema(
             )
         })?;
 
-    // Return the underlying Node (properties contain schema data)
-    Ok(Json(schema_node.into_node()))
+    // Return SchemaNode directly - custom Serialize impl outputs typed fields
+    Ok(Json(schema_node))
 }
 
 // NOTE: Schema mutation functions (add_schema_field, remove_schema_field,
