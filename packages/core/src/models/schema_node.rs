@@ -1,121 +1,109 @@
-//! Type-Safe SchemaNode Wrapper
+//! Strongly-Typed SchemaNode
 //!
-//! Provides ergonomic, compile-time type-safe access to schema node properties
-//! while maintaining the universal Node storage model.
+//! Provides direct deserialization from spoke table with hub data via record link,
+//! eliminating the intermediate JSON `properties` step for true compile-time type safety.
+//!
+//! # Architecture
+//!
+//! **Query Pattern:**
+//! ```sql
+//! SELECT
+//!     record::id(id) AS id,
+//!     is_core,
+//!     version AS schema_version,
+//!     description,
+//!     fields,
+//!     node.content AS content,
+//!     node.version AS version,
+//!     node.created_at AS created_at,
+//!     node.modified_at AS modified_at
+//! FROM schema:`task`;
+//! ```
 //!
 //! # Examples
 //!
 //! ```rust
-//! use nodespace_core::models::{Node, SchemaNode};
-//! use nodespace_core::models::schema::{SchemaField, SchemaProtectionLevel};
-//! use serde_json::json;
+//! use nodespace_core::models::SchemaNode;
 //!
-//! // Create from existing node
-//! let node = Node::new(
-//!     "schema".to_string(),
-//!     "task".to_string(),  // content = schema name
-//!     json!({
-//!         "isCore": true,
-//!         "version": 1,
-//!         "description": "Task schema",
-//!         "fields": []
-//!     }),
-//! );
-//! let schema = SchemaNode::from_node(node).unwrap();
-//!
-//! // Type-safe property access
-//! assert!(schema.is_core());
-//! assert_eq!(schema.version(), 1);
+//! // Direct field access (no JSON parsing)
+//! // let mut schema = service.get_schema_node("task").await?.unwrap();
+//! // schema.fields.push(new_field);
+//! // schema.schema_version += 1;
+//! // store.update_schema_node(schema).await?;
 //! ```
 
 use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
 use crate::models::{Node, ValidationError};
-use serde::{Serialize, Serializer};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-/// Type-safe wrapper for schema nodes
+/// Strongly-typed schema node with direct field access
 ///
-/// Provides ergonomic access to schema-specific properties while maintaining
-/// the universal Node storage model underneath.
+/// Deserializes directly from spoke table with hub data via record link.
+/// Combines hub metadata (id, content, timestamps) with spoke-specific
+/// schema definition fields (is_core, fields, description).
 ///
-/// Schema nodes store entity type definitions (like "task", "person") and their
-/// field configurations. Properties are stored flat in the spoke table (schema:<id>)
-/// matching the TaskNode pattern.
-///
-/// When serialized (for Tauri/HTTP responses), outputs a flat structure with typed fields:
-/// ```json
-/// {
-///   "id": "task",
-///   "nodeType": "schema",
-///   "isCore": true,
-///   "version": 1,
-///   "description": "Task schema",
-///   "fields": [...]
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct SchemaNode {
-    node: Node,
-}
-
-/// Serialization output for SchemaNode - flat structure with typed fields
-#[derive(Serialize)]
+/// Fields are public for direct mutation. After modifying, persist via
+/// `store.update_schema_node(schema)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SchemaNodeSerialized<'a> {
-    id: &'a str,
-    node_type: &'a str,
-    content: &'a str,
-    created_at: &'a chrono::DateTime<chrono::Utc>,
-    modified_at: &'a chrono::DateTime<chrono::Utc>,
-    version: i64,
-    // Schema-specific typed fields (not buried in properties)
-    is_core: bool,
-    schema_version: u32,
-    description: String,
-    fields: Vec<SchemaField>,
+pub struct SchemaNode {
+    // ========================================================================
+    // Hub fields (from schema.node.* via record link)
+    // ========================================================================
+    /// Unique identifier (matches hub node ID, e.g., "task", "date")
+    pub id: String,
+
+    /// Display name of the schema (e.g., "Task", "Date")
+    pub content: String,
+
+    /// Optimistic concurrency control version (hub's version)
+    #[serde(default = "default_version")]
+    pub version: i64,
+
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+
+    /// Last modification timestamp
+    pub modified_at: DateTime<Utc>,
+
+    // ========================================================================
+    // Spoke fields (direct from schema table)
+    // ========================================================================
+    /// Whether this is a core schema (shipped with NodeSpace)
+    #[serde(default)]
+    pub is_core: bool,
+
+    /// Schema version number (increments on schema changes)
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+
+    /// Human-readable description of this schema
+    #[serde(default)]
+    pub description: String,
+
+    /// List of fields in this schema
+    #[serde(default)]
+    pub fields: Vec<SchemaField>,
 }
 
-impl Serialize for SchemaNode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let output = SchemaNodeSerialized {
-            id: &self.node.id,
-            node_type: &self.node.node_type,
-            content: &self.node.content,
-            created_at: &self.node.created_at,
-            modified_at: &self.node.modified_at,
-            version: self.node.version,
-            // Extract typed fields from properties
-            is_core: self.is_core(),
-            schema_version: self.version(),
-            description: self.description(),
-            fields: self.fields(),
-        };
-        output.serialize(serializer)
-    }
+fn default_version() -> i64 {
+    1
+}
+
+fn default_schema_version() -> u32 {
+    1
 }
 
 impl SchemaNode {
-    /// Create a SchemaNode from an existing Node
+    /// Create a SchemaNode from an existing Node (for backward compatibility)
+    ///
+    /// This converts the JSON properties pattern to strongly-typed fields.
+    /// Prefer using `get_schema_node()` from NodeService for direct deserialization.
     ///
     /// # Errors
     ///
     /// Returns `ValidationError::InvalidNodeType` if the node type is not "schema".
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use nodespace_core::models::{Node, SchemaNode};
-    /// use serde_json::json;
-    ///
-    /// let node = Node::new(
-    ///     "schema".to_string(),
-    ///     "task".to_string(),
-    ///     json!({"isCore": true, "version": 1, "description": "", "fields": []})
-    /// );
-    /// let schema = SchemaNode::from_node(node).unwrap();
-    /// ```
     pub fn from_node(node: Node) -> Result<Self, ValidationError> {
         if node.node_type != "schema" {
             return Err(ValidationError::InvalidNodeType(format!(
@@ -123,125 +111,91 @@ impl SchemaNode {
                 node.node_type
             )));
         }
-        Ok(Self { node })
-    }
 
-    /// Get whether this is a core (built-in) schema
-    ///
-    /// Core schemas are shipped with NodeSpace and cannot be deleted.
-    pub fn is_core(&self) -> bool {
-        self.node
+        // Extract fields from properties JSON
+        let is_core = node
             .properties
             .get("isCore")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    }
+            .unwrap_or(false);
 
-    /// Set whether this is a core schema
-    pub fn set_is_core(&mut self, is_core: bool) {
-        if let Some(obj) = self.node.properties.as_object_mut() {
-            obj.insert("isCore".to_string(), serde_json::json!(is_core));
-        }
-    }
-
-    /// Get the schema version number
-    ///
-    /// Version increments on any schema change. Used for lazy migration.
-    pub fn version(&self) -> u32 {
-        self.node
+        let schema_version = node
             .properties
             .get("version")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
-            .unwrap_or(1)
-    }
+            .unwrap_or(1);
 
-    /// Set the schema version number
-    pub fn set_version(&mut self, version: u32) {
-        if let Some(obj) = self.node.properties.as_object_mut() {
-            obj.insert("version".to_string(), serde_json::json!(version));
-        }
-    }
-
-    /// Increment the schema version
-    pub fn increment_version(&mut self) {
-        self.set_version(self.version() + 1);
-    }
-
-    /// Get the schema description
-    pub fn description(&self) -> String {
-        self.node
+        let description = node
             .properties
             .get("description")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_default()
-    }
+            .unwrap_or_default();
 
-    /// Set the schema description
-    pub fn set_description(&mut self, description: String) {
-        if let Some(obj) = self.node.properties.as_object_mut() {
-            obj.insert("description".to_string(), serde_json::json!(description));
-        }
-    }
-
-    /// Get the schema fields
-    ///
-    /// Returns the array of field definitions, or empty vec if parsing fails.
-    pub fn fields(&self) -> Vec<SchemaField> {
-        self.node
+        let fields: Vec<SchemaField> = node
             .properties
             .get("fields")
-            .and_then(|v| serde_json::from_value::<Vec<SchemaField>>(v.clone()).ok())
-            .unwrap_or_default()
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        Ok(Self {
+            id: node.id,
+            content: node.content,
+            version: node.version,
+            created_at: node.created_at,
+            modified_at: node.modified_at,
+            is_core,
+            schema_version,
+            description,
+            fields,
+        })
     }
 
-    /// Set the schema fields
-    pub fn set_fields(&mut self, fields: Vec<SchemaField>) {
-        if let Some(obj) = self.node.properties.as_object_mut() {
-            if let Ok(fields_json) = serde_json::to_value(&fields) {
-                obj.insert("fields".to_string(), fields_json);
-            }
+    /// Convert to universal Node (for compatibility with existing APIs)
+    ///
+    /// This creates a Node with properties populated from the strongly-typed fields.
+    pub fn into_node(self) -> Node {
+        let properties = serde_json::json!({
+            "isCore": self.is_core,
+            "version": self.schema_version,
+            "description": self.description,
+            "fields": self.fields,
+        });
+
+        Node {
+            id: self.id,
+            node_type: "schema".to_string(),
+            content: self.content,
+            version: self.version,
+            created_at: self.created_at,
+            modified_at: self.modified_at,
+            properties,
+            embedding_vector: None,
+            mentions: Vec::new(),
+            mentioned_by: Vec::new(),
         }
     }
 
     /// Get a field by name
-    pub fn get_field(&self, name: &str) -> Option<SchemaField> {
-        self.fields().into_iter().find(|f| f.name == name)
+    pub fn get_field(&self, name: &str) -> Option<&SchemaField> {
+        self.fields.iter().find(|f| f.name == name)
     }
 
-    /// Add a field to the schema
-    ///
-    /// Returns error if field with same name already exists.
-    pub fn add_field(&mut self, field: SchemaField) -> Result<(), String> {
-        let mut fields = self.fields();
-        if fields.iter().any(|f| f.name == field.name) {
-            return Err(format!("Field '{}' already exists", field.name));
-        }
-        fields.push(field);
-        self.set_fields(fields);
-        Ok(())
-    }
-
-    /// Remove a field by name
-    ///
-    /// Returns the removed field, or None if not found.
-    pub fn remove_field(&mut self, name: &str) -> Option<SchemaField> {
-        let mut fields = self.fields();
-        let idx = fields.iter().position(|f| f.name == name)?;
-        let removed = fields.remove(idx);
-        self.set_fields(fields);
-        Some(removed)
+    /// Get a mutable field by name
+    pub fn get_field_mut(&mut self, name: &str) -> Option<&mut SchemaField> {
+        self.fields.iter_mut().find(|f| f.name == name)
     }
 
     /// Get all valid values for an enum field (core + user values combined)
     ///
     /// Returns `None` if the field doesn't exist or isn't an enum.
+    /// Returns `EnumValue` structs with both value and label.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let schema = SchemaNode::from_node(node)?;
+    /// let schema = store.get_schema_node("task").await?.unwrap();
     /// let status_values = schema.get_enum_values("status");
     /// // Returns: Some([EnumValue { value: "open", label: "Open" }, ...])
     /// ```
@@ -271,7 +225,7 @@ impl SchemaNode {
     /// you need both values and labels, use [`get_enum_values`] instead.
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// let valid_values = schema.get_enum_value_strings("status");
     /// // Returns: Some(["open", "in_progress", "done", "blocked"])
     /// ```
@@ -284,11 +238,9 @@ impl SchemaNode {
     ///
     /// Only `User` protected fields can be deleted.
     pub fn can_delete_field(&self, field_name: &str) -> bool {
-        if let Some(field) = self.get_field(field_name) {
-            field.protection == SchemaProtectionLevel::User
-        } else {
-            false
-        }
+        self.get_field(field_name)
+            .map(|f| f.protection == SchemaProtectionLevel::User)
+            .unwrap_or(false)
     }
 
     /// Check if a field can be modified based on its protection level
@@ -296,36 +248,9 @@ impl SchemaNode {
     /// Only `User` protected fields can be modified (type changes, etc.).
     /// Core/System fields are immutable.
     pub fn can_modify_field(&self, field_name: &str) -> bool {
-        if let Some(field) = self.get_field(field_name) {
-            field.protection == SchemaProtectionLevel::User
-        } else {
-            false
-        }
-    }
-
-    /// Get the schema ID (same as node ID, e.g., "task", "person")
-    pub fn schema_id(&self) -> &str {
-        &self.node.id
-    }
-
-    /// Get the schema name (same as node content)
-    pub fn name(&self) -> &str {
-        &self.node.content
-    }
-
-    /// Get a reference to the underlying Node
-    pub fn as_node(&self) -> &Node {
-        &self.node
-    }
-
-    /// Get a mutable reference to the underlying Node
-    pub fn as_node_mut(&mut self) -> &mut Node {
-        &mut self.node
-    }
-
-    /// Convert back to universal Node (consumes wrapper)
-    pub fn into_node(self) -> Node {
-        self.node
+        self.get_field(field_name)
+            .map(|f| f.protection == SchemaProtectionLevel::User)
+            .unwrap_or(false)
     }
 }
 
@@ -360,51 +285,42 @@ mod tests {
     }
 
     #[test]
-    fn test_from_node_valid() {
+    fn test_from_node_validates_type() {
         let node = create_test_schema_node();
-        let schema = SchemaNode::from_node(node).unwrap();
-        assert_eq!(schema.schema_id(), schema.as_node().id);
-        assert_eq!(schema.name(), "task");
-    }
+        assert!(SchemaNode::from_node(node).is_ok());
 
-    #[test]
-    fn test_from_node_invalid_type() {
-        let node = Node::new("task".to_string(), "Test".to_string(), json!({}));
-        let result = SchemaNode::from_node(node);
+        let wrong_type = Node::new("task".to_string(), "Test".to_string(), json!({}));
+        let result = SchemaNode::from_node(wrong_type);
         assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Expected 'schema'"));
     }
 
     #[test]
-    fn test_is_core() {
+    fn test_from_node_extracts_fields() {
         let node = create_test_schema_node();
         let schema = SchemaNode::from_node(node).unwrap();
-        assert!(schema.is_core());
+
+        assert!(schema.is_core);
+        assert_eq!(schema.schema_version, 2);
+        assert_eq!(schema.description, "Task tracking schema");
+        assert_eq!(schema.fields.len(), 1);
+        assert_eq!(schema.fields[0].name, "status");
     }
 
     #[test]
-    fn test_version() {
-        let node = create_test_schema_node();
-        let schema = SchemaNode::from_node(node).unwrap();
-        assert_eq!(schema.version(), 2);
-    }
+    fn test_into_node_preserves_data() {
+        let original = create_test_schema_node();
+        let original_id = original.id.clone();
 
-    #[test]
-    fn test_increment_version() {
-        let node = create_test_schema_node();
-        let mut schema = SchemaNode::from_node(node).unwrap();
-        assert_eq!(schema.version(), 2);
-        schema.increment_version();
-        assert_eq!(schema.version(), 3);
-    }
+        let schema = SchemaNode::from_node(original).unwrap();
+        let converted = schema.into_node();
 
-    #[test]
-    fn test_fields() {
-        let node = create_test_schema_node();
-        let schema = SchemaNode::from_node(node).unwrap();
-        let fields = schema.fields();
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].name, "status");
-        assert_eq!(fields[0].field_type, "enum");
+        assert_eq!(converted.id, original_id);
+        assert_eq!(converted.node_type, "schema");
+        assert_eq!(converted.content, "task");
     }
 
     #[test]
@@ -412,14 +328,29 @@ mod tests {
         let node = create_test_schema_node();
         let schema = SchemaNode::from_node(node).unwrap();
 
-        let field = schema.get_field("status").unwrap();
-        assert_eq!(field.name, "status");
+        let status_field = schema.get_field("status");
+        assert!(status_field.is_some());
+        assert_eq!(status_field.unwrap().field_type, "enum");
 
-        assert!(schema.get_field("nonexistent").is_none());
+        let missing_field = schema.get_field("nonexistent");
+        assert!(missing_field.is_none());
     }
 
     #[test]
-    fn test_add_field() {
+    fn test_direct_field_mutation() {
+        let node = create_test_schema_node();
+        let mut schema = SchemaNode::from_node(node).unwrap();
+
+        // Direct field mutation
+        schema.description = "Updated description".to_string();
+        schema.schema_version += 1;
+
+        assert_eq!(schema.description, "Updated description");
+        assert_eq!(schema.schema_version, 3);
+    }
+
+    #[test]
+    fn test_add_field_via_push() {
         let node = create_test_schema_node();
         let mut schema = SchemaNode::from_node(node).unwrap();
 
@@ -439,44 +370,9 @@ mod tests {
             item_fields: None,
         };
 
-        schema.add_field(new_field).unwrap();
-        assert_eq!(schema.fields().len(), 2);
+        schema.fields.push(new_field);
+        assert_eq!(schema.fields.len(), 2);
         assert!(schema.get_field("priority").is_some());
-    }
-
-    #[test]
-    fn test_add_duplicate_field_fails() {
-        let node = create_test_schema_node();
-        let mut schema = SchemaNode::from_node(node).unwrap();
-
-        let duplicate = SchemaField {
-            name: "status".to_string(), // Already exists
-            field_type: "string".to_string(),
-            protection: SchemaProtectionLevel::User,
-            core_values: None,
-            user_values: None,
-            indexed: false,
-            required: None,
-            extensible: None,
-            default: None,
-            description: None,
-            item_type: None,
-            fields: None,
-            item_fields: None,
-        };
-
-        let result = schema.add_field(duplicate);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_remove_field() {
-        let node = create_test_schema_node();
-        let mut schema = SchemaNode::from_node(node).unwrap();
-
-        let removed = schema.remove_field("status").unwrap();
-        assert_eq!(removed.name, "status");
-        assert_eq!(schema.fields().len(), 0);
     }
 
     #[test]
@@ -514,12 +410,38 @@ mod tests {
     }
 
     #[test]
-    fn test_into_node() {
+    fn test_serde_serialization() {
         let node = create_test_schema_node();
-        let original_id = node.id.clone();
         let schema = SchemaNode::from_node(node).unwrap();
-        let node_back = schema.into_node();
-        assert_eq!(node_back.id, original_id);
-        assert_eq!(node_back.node_type, "schema");
+
+        // Uses camelCase for JSON
+        let json = serde_json::to_value(&schema).unwrap();
+        assert_eq!(json["isCore"], true);
+        assert_eq!(json["schemaVersion"], 2);
+        assert_eq!(json["description"], "Task tracking schema");
+    }
+
+    #[test]
+    fn test_serde_deserialization() {
+        // Direct deserialization (simulates spoke table query result)
+        let json = json!({
+            "id": "test-schema",
+            "content": "Test Schema",
+            "version": 1,
+            "createdAt": "2025-01-01T00:00:00Z",
+            "modifiedAt": "2025-01-01T00:00:00Z",
+            "isCore": false,
+            "schemaVersion": 1,
+            "description": "A test schema",
+            "fields": []
+        });
+
+        let schema: SchemaNode = serde_json::from_value(json).unwrap();
+        assert_eq!(schema.id, "test-schema");
+        assert_eq!(schema.content, "Test Schema");
+        assert!(!schema.is_core);
+        assert_eq!(schema.schema_version, 1);
+        assert_eq!(schema.description, "A test schema");
+        assert!(schema.fields.is_empty());
     }
 }

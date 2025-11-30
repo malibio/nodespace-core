@@ -6,9 +6,11 @@
 //! As of Issue #690, SchemaService was removed. Schema validation is done
 //! via NodeService.get_schema_for_type() and SchemaNodeBehavior.
 
+use nodespace_core::models;
 use nodespace_core::services::CreateNodeParams;
 use nodespace_core::{Node, NodeQuery, NodeService, NodeServiceError, NodeUpdate};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::State;
 
 /// Client ID for Tauri frontend (used for event filtering - Issue #665)
@@ -100,6 +102,26 @@ async fn validate_node_type(node_type: &str, service: &NodeService) -> Result<()
         }),
         Err(e) => Err(CommandError::from(e)),
     }
+}
+
+/// Convert a Node to its strongly-typed JSON representation (Issue #673)
+///
+/// Delegates to the canonical `models::node_to_typed_value` and maps errors to CommandError.
+fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
+    models::node_to_typed_value(node).map_err(|e| CommandError {
+        message: e.clone(),
+        code: "CONVERSION_ERROR".to_string(),
+        details: Some(e),
+    })
+}
+
+/// Convert a list of Nodes to their strongly-typed JSON representations (Issue #673)
+fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, CommandError> {
+    models::nodes_to_typed_values(nodes).map_err(|e| CommandError {
+        message: e.clone(),
+        code: "CONVERSION_ERROR".to_string(),
+        details: Some(e),
+    })
 }
 
 /// Create a new node of any type with a registered schema
@@ -297,12 +319,17 @@ pub async fn create_node_mention(
 pub async fn get_node(
     service: State<'_, NodeService>,
     id: String,
-) -> Result<Option<Node>, CommandError> {
-    service
+) -> Result<Option<Value>, CommandError> {
+    let node = service
         .with_client(TAURI_CLIENT_ID)
         .get_node(&id)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+
+    match node {
+        Some(n) => Ok(Some(node_to_typed_value(n)?)),
+        None => Ok(None),
+    }
 }
 
 /// Update an existing node
@@ -342,14 +369,16 @@ pub async fn update_node(
     id: String,
     version: i64,
     update: NodeUpdate,
-) -> Result<Node, CommandError> {
+) -> Result<Value, CommandError> {
     // Use update_node_with_occ for OCC-protected updates
     // Returns the updated Node so frontend can refresh its local version
-    service
+    let node = service
         .with_client(TAURI_CLIENT_ID)
         .update_node_with_occ(&id, version, update)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+
+    node_to_typed_value(node)
 }
 
 /// Delete a node by ID with cascade deletion
@@ -517,12 +546,14 @@ pub async fn reorder_node(
 pub async fn get_children(
     service: State<'_, NodeService>,
     parent_id: String,
-) -> Result<Vec<Node>, CommandError> {
-    service
+) -> Result<Vec<Value>, CommandError> {
+    let nodes = service
         .with_client(TAURI_CLIENT_ID)
         .get_children(&parent_id)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+
+    nodes_to_typed_values(nodes)
 }
 
 /// Get a node with its entire subtree as a nested tree structure
@@ -598,13 +629,15 @@ pub async fn get_children_tree(
 pub async fn get_nodes_by_root_id(
     service: State<'_, NodeService>,
     root_id: String,
-) -> Result<Vec<Node>, CommandError> {
+) -> Result<Vec<Value>, CommandError> {
     // Phase 5 (Issue #511): Redirect to get_children (graph-native)
-    service
+    let nodes = service
         .with_client(TAURI_CLIENT_ID)
         .get_children(&root_id)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+
+    nodes_to_typed_values(nodes)
 }
 
 /// Query nodes with flexible filtering
@@ -652,12 +685,14 @@ pub async fn get_nodes_by_root_id(
 pub async fn query_nodes_simple(
     service: State<'_, NodeService>,
     query: NodeQuery,
-) -> Result<Vec<Node>, CommandError> {
-    service
+) -> Result<Vec<Value>, CommandError> {
+    let nodes = service
         .with_client(TAURI_CLIENT_ID)
         .query_nodes_simple(query)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+
+    nodes_to_typed_values(nodes)
 }
 
 /// Mention autocomplete query - specialized endpoint for @mention feature
@@ -696,7 +731,7 @@ pub async fn mention_autocomplete(
     service: State<'_, NodeService>,
     query: String,
     limit: Option<usize>,
-) -> Result<Vec<Node>, CommandError> {
+) -> Result<Vec<Value>, CommandError> {
     // Build NodeQuery with mention-specific defaults
     let node_query = NodeQuery {
         content_contains: if query.is_empty() { None } else { Some(query) },
@@ -704,10 +739,12 @@ pub async fn mention_autocomplete(
         ..Default::default()
     };
 
-    service
+    let nodes = service
         .query_nodes_simple(node_query)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+
+    nodes_to_typed_values(nodes)
 }
 
 /// Save a node with automatic parent creation - unified upsert operation

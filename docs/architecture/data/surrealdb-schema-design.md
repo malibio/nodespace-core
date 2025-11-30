@@ -511,7 +511,7 @@ SELECT * FROM $id;
 -- Returns: content, parent_id, embedding_vector, etc.
 ```
 
-**Option 2: Full node with type-specific fields**
+**Option 2: Full node with type-specific fields (Legacy JOIN)**
 ```rust
 // Parse type from ID
 let table = id.split(':').next().unwrap(); // "task"
@@ -527,6 +527,63 @@ db.query(format!("
 ", table = table))
     .bind(("id", id))
     .await?
+```
+
+**Option 3: Strongly-Typed Single Query via Record Link (Recommended - Issue #673)**
+
+The optimal pattern queries the spoke table and fetches hub data via the `node` record link in a single query:
+
+```sql
+-- TaskNode: spoke fields + hub fields via record link
+SELECT
+    record::id(id) AS id,
+    status,
+    priority,
+    due_date,
+    assignee,
+    node.content AS content,
+    node.version AS version,
+    node.created_at AS created_at,
+    node.modified_at AS modified_at
+FROM task:`some-uuid`;
+
+-- SchemaNode: spoke fields + hub fields via record link
+SELECT
+    record::id(id) AS id,
+    is_core,
+    version AS schema_version,
+    description,
+    fields,
+    node.content AS content,
+    node.version AS version,
+    node.created_at AS created_at,
+    node.modified_at AS modified_at
+FROM schema:`task`;
+```
+
+**Why Record Link Pattern is Better:**
+- ✅ **Single query** - No separate hub + spoke queries
+- ✅ **Direct deserialization** - Deserialize to strongly-typed Rust structs (TaskNode, SchemaNode)
+- ✅ **No JSON intermediary** - Fields like `status` deserialize directly to `TaskStatus` enum
+- ✅ **Compile-time type safety** - Errors caught at compile time, not runtime
+
+**Rust Usage:**
+```rust
+use nodespace_core::models::{TaskNode, SchemaNode};
+
+// Direct typed access via NodeService
+if let Some(task) = service.get_task_node("my-task-id").await? {
+    // task.status is TaskStatus enum, not JSON string
+    println!("Status: {:?}", task.status);
+    println!("Content: {}", task.content);
+}
+
+if let Some(schema) = service.get_schema_node("task").await? {
+    // schema.fields is Vec<SchemaField>, not JSON array
+    for field in &schema.fields {
+        println!("Field: {} ({:?})", field.name, field.field_type);
+    }
+}
 ```
 
 ### Update Node
