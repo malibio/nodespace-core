@@ -97,7 +97,7 @@ JSON-RPC Parser (MCP Task)
   ↓
 NodeService Operation (shared instance)
   ↓
-Database Update (Turso/libSQL)
+Database Update (SurrealDB)
   ↓
 Tauri Event Emission
   ↓
@@ -112,13 +112,13 @@ UI Re-render (automatic - user sees changes immediately)
 
 ### Concurrent Database Access
 
-Both Tauri command handlers and MCP handlers access the same SurrealDB through a shared connection pool. This is **safe and supported** by libSQL/Turso architecture:
+Both Tauri command handlers and MCP handlers access the same SurrealDB through a shared connection pool. This is **safe and supported** by SurrealDB's architecture:
 
-**How Turso Handles Concurrency:**
-- ✅ **WAL Mode**: Write-Ahead Logging enables concurrent readers and writers
-- ✅ **Automatic Locking**: libSQL manages locks transparently
+**How SurrealDB Handles Concurrency:**
+- ✅ **Async Runtime**: Tokio async runtime enables concurrent operations
+- ✅ **Transaction Isolation**: SurrealDB manages transactions transparently
 - ✅ **Read Concurrency**: Multiple operations can read simultaneously without blocking
-- ✅ **Write Serialization**: Writes are automatically serialized via database locks
+- ✅ **Write Serialization**: Writes are serialized via database transactions
 - ✅ **Transaction Safety**: ACID guarantees maintained
 
 **Example Concurrent Access:**

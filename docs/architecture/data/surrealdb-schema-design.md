@@ -231,39 +231,70 @@ DEFINE FIELD * ON code_block FLEXIBLE;  -- Themes, run configs, annotations
 
 **CRITICAL**: Validation is enforced at **application layer** via schema nodes, not database constraints.
 
-**Schema Node (stored in universal `nodes` table):**
+**Schema Node (stored in hub `node` table with spoke in `schema` table):**
+
+Per Issue #690, schemas are stored using the **hub-and-spoke pattern** like other typed nodes:
+- **Hub (`node` table)**: Universal metadata (id, content, version, timestamps)
+- **Spoke (`schema` table)**: Schema-specific fields (is_core, schema_version, description, fields)
+
+**Hub Node:**
+```sql
+CREATE node:task CONTENT {
+  id: 'node:task',
+  nodeType: 'schema',
+  content: 'Task',
+  data: schema:task,  -- Record Link to spoke
+  version: 1,
+  createdAt: time::now(),
+  modifiedAt: time::now()
+};
+```
+
+**Schema Spoke:**
 ```sql
 CREATE schema:task CONTENT {
   id: 'schema:task',
-  node_type: 'schema',
-  content: 'Task',
-  properties: {
-    version: 1,
-    is_core: true,
-    fields: [
-      {
-        name: 'status',
-        type: 'enum',
-        protection: 'core',  -- Field cannot be deleted
-        core_values: ['open', 'in_progress', 'done', 'cancelled'],  -- App behavior (Issue #670)
-        user_values: [],  -- User can extend via UI
-        extensible: true,
-        required: true,
-        default: 'open'
-      },
-      {
-        name: 'priority',
-        type: 'enum',
-        protection: 'user',  -- User can modify/delete
-        core_values: ['urgent', 'high', 'medium', 'low'],
-        user_values: [],
-        extensible: true,
-        required: false
-      }
-    ]
-  }
+  node: node:task,  -- Reverse link to hub
+  is_core: true,
+  version: 1,
+  description: 'Task tracking with status and due dates',
+  fields: [
+    {
+      name: 'status',
+      type: 'enum',
+      protection: 'core',  -- Field cannot be deleted
+      core_values: [
+        { value: 'open', label: 'Open' },
+        { value: 'in_progress', label: 'In Progress' },
+        { value: 'done', label: 'Done' },
+        { value: 'cancelled', label: 'Cancelled' }
+      ],
+      user_values: [],  -- User can extend via UI
+      extensible: true,
+      indexed: true,
+      required: true,
+      default: 'open'
+    },
+    {
+      name: 'priority',
+      type: 'enum',
+      protection: 'user',  -- User can modify/delete
+      core_values: [
+        { value: 'urgent', label: 'Urgent' },
+        { value: 'high', label: 'High' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'low', label: 'Low' }
+      ],
+      user_values: [],
+      extensible: true,
+      indexed: true,
+      required: false
+    }
+  ]
 };
 ```
+
+**Note**: Enum values now use `EnumValue` struct with `{ value, label }` for human-readable display (Issue #690).
 
 **Application Validation (Rust):**
 ```rust
