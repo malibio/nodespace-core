@@ -125,7 +125,7 @@ properties: {
 - **Location**: `ReactiveNodeService.updateNodeType()`
 - **Performance**: Synchronous operation using schema cache (no async delay)
 - **Graceful Degradation**: If schema not found, conversion proceeds without defaults
-- **Cache-Based**: Uses LRU cache in `SchemaService` for instant access
+- **Cache-Based**: Uses LRU cache in frontend schema cache for instant access
 
 #### When Defaults Are Applied
 
@@ -136,7 +136,9 @@ properties: {
 | Programmatic API | ✅ Yes | `updateNodeType()` call |
 | Initial Creation | ❌ No | Handled separately by node creation logic |
 
-See [Schema Service Documentation](../../lib/services/schema-service.ts) for schema default configuration.
+See [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) for schema configuration details.
+
+**Note**: Per Issue #690, `SchemaService` was deleted. Schema operations now use `NodeService` with strongly-typed `SchemaNode` structs. Both frontend and backend use flat `SchemaNode` interfaces that map directly to each other.
 
 ### Why This Approach?
 

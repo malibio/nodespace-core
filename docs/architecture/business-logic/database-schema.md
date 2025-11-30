@@ -249,21 +249,20 @@ const PRIMITIVE_TYPES: &[&str] = &["text", "number", "boolean", "date", "json"];
 
 **Enum Field Extension:**
 
-Users can extend enum values through the SchemaService API:
-- Add new values to `user_values` array
+Users can extend enum values through the generic NodeService CRUD API (per Issue #690, SchemaService was deleted):
+- Add new values to `user_values` array via schema node update
 - Cannot remove `core_values` (UI depends on these)
 - Cannot delete core-protected enum fields
 
 ```typescript
-// User extends status enum
-await schemaService.extendEnumField('task', 'status', 'BLOCKED');
-// Result: user_values = ["BLOCKED"]
+// User extends status enum via schema node update
+const schema = await nodeService.getSchemaForType('task');
+schema.fields.find(f => f.name === 'status').user_values.push(
+  { value: 'blocked', label: 'Blocked' }
+);
+await nodeService.updateNode('task', { properties: schema });
 
-// User adds another value
-await schemaService.extendEnumField('task', 'status', 'WAITING');
-// Result: user_values = ["BLOCKED", "WAITING"]
-
-// Valid values now: ["OPEN", "IN_PROGRESS", "DONE", "BLOCKED", "WAITING"]
+// Valid values now include core + user values
 ```
 
 ### Core Built-In Schemas
@@ -597,43 +596,27 @@ impl NodeService {
 
 ### 2. Schema Lookup and Validation
 
+**Note**: Per Issue #690, `SchemaService` was deleted. Schema operations now use `NodeService` with strongly-typed `SchemaNode` structs. See [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) for current patterns.
+
 ```rust
-const PRIMITIVE_TYPES: &[&str] = &["text", "number", "boolean", "date", "json"];
-
-impl SchemaService {
-    // Get schema definition
-    pub async fn get_schema(&self, schema_name: &str) -> Result<SchemaDefinition> {
-        let mut stmt = self.db.prepare(
-            "SELECT properties FROM nodes
-             WHERE id = ?1 AND node_type = 'schema'"
-        ).await?;
-
-        let row = stmt.query_row([schema_name]).await?;
-        let properties: SchemaDefinition = serde_json::from_str(&row.get::<String>(0)?)?;
-        Ok(properties)
+// Current pattern: Use NodeService for schema access
+impl NodeService {
+    /// Get schema for a node type (returns strongly-typed SchemaNode)
+    pub async fn get_schema_node(&self, type_name: &str) -> Result<Option<SchemaNode>> {
+        self.store.get_schema_node(type_name).await
     }
 
-    // Auto-detect field type
-    pub async fn detect_field_type(&self, field_type: &str) -> Result<FieldType> {
-        if PRIMITIVE_TYPES.contains(&field_type) {
-            Ok(FieldType::Primitive(field_type.to_string()))
-        } else {
-            // Check if schema exists
-            if self.schema_exists(field_type).await? {
-                Ok(FieldType::Reference { schema_name: field_type.to_string() })
-            } else {
-                Err(anyhow!("Unknown type: {}", field_type))
-            }
-        }
+    /// Get schema as JSON (for API responses)
+    pub async fn get_schema_for_type(&self, type_name: &str) -> Result<Option<serde_json::Value>> {
+        // Fetches from schema spoke table via record link
+        self.store.get_schema(type_name).await
     }
+}
 
-    async fn schema_exists(&self, schema_name: &str) -> Result<bool> {
-        let mut stmt = self.db.prepare(
-            "SELECT COUNT(*) FROM nodes WHERE id = ?1 AND node_type = 'schema'"
-        ).await?;
-
-        let count: i64 = stmt.query_row([schema_name]).await?.get(0)?;
-        Ok(count > 0)
+// SchemaTableManager handles DDL generation for schema-defined tables
+impl SchemaTableManager {
+    pub fn generate_ddl_statements(&self, type_name: &str, fields: &[SchemaField]) -> Vec<String> {
+        // Generates DEFINE TABLE/FIELD/INDEX statements
     }
 }
 ```
