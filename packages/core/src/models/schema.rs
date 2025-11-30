@@ -25,8 +25,14 @@
 //!       "name": "status",
 //!       "type": "enum",
 //!       "protection": "core",
-//!       "coreValues": ["open", "in_progress", "done"],
-//!       "userValues": ["blocked"],
+//!       "coreValues": [
+//!         { "value": "open", "label": "Open" },
+//!         { "value": "in_progress", "label": "In Progress" },
+//!         { "value": "done", "label": "Done" }
+//!       ],
+//!       "userValues": [
+//!         { "value": "blocked", "label": "Blocked" }
+//!       ],
 //!       "extensible": true,
 //!       "indexed": true,
 //!       "required": true,
@@ -37,6 +43,23 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+
+/// A single enum value with its display label
+///
+/// Used for enum fields to provide both the stored value and a human-readable label.
+/// Array order determines display order in UI dropdowns.
+///
+/// ## Example
+/// ```json
+/// { "value": "in_progress", "label": "In Progress" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnumValue {
+    /// The actual value stored in the database
+    pub value: String,
+    /// Human-readable display label for UI/MCP clients
+    pub label: String,
+}
 
 /// Protection level for schema fields
 ///
@@ -82,12 +105,14 @@ pub struct SchemaField {
     pub protection: SchemaProtectionLevel,
 
     /// Protected enum values (cannot be removed) - enum fields only
+    /// Array order determines display order in UI.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub core_values: Option<Vec<String>>,
+    pub core_values: Option<Vec<EnumValue>>,
 
     /// User-extensible enum values (can be added/removed) - enum fields only
+    /// These appear after core_values in display order.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_values: Option<Vec<String>>,
+    pub user_values: Option<Vec<EnumValue>>,
 
     /// Whether this field should be indexed for faster queries
     pub indexed: bool,
@@ -138,8 +163,20 @@ mod tests {
             name: "status".to_string(),
             field_type: "enum".to_string(),
             protection: SchemaProtectionLevel::Core,
-            core_values: Some(vec!["open".to_string(), "done".to_string()]),
-            user_values: Some(vec!["blocked".to_string()]),
+            core_values: Some(vec![
+                EnumValue {
+                    value: "open".to_string(),
+                    label: "Open".to_string(),
+                },
+                EnumValue {
+                    value: "done".to_string(),
+                    label: "Done".to_string(),
+                },
+            ]),
+            user_values: Some(vec![EnumValue {
+                value: "blocked".to_string(),
+                label: "Blocked".to_string(),
+            }]),
             indexed: true,
             required: Some(true),
             extensible: Some(true),
@@ -171,7 +208,10 @@ mod tests {
             "name": "status",
             "type": "enum",
             "protection": "core",
-            "coreValues": ["open", "done"],
+            "coreValues": [
+                { "value": "open", "label": "Open" },
+                { "value": "done", "label": "Done" }
+            ],
             "indexed": true
         });
 
@@ -180,6 +220,11 @@ mod tests {
         assert_eq!(field.field_type, "enum");
         assert_eq!(field.protection, SchemaProtectionLevel::Core);
         assert!(field.indexed);
+
+        let core_values = field.core_values.unwrap();
+        assert_eq!(core_values.len(), 2);
+        assert_eq!(core_values[0].value, "open");
+        assert_eq!(core_values[0].label, "Open");
     }
 
     #[test]

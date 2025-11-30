@@ -41,6 +41,19 @@
 export type ProtectionLevel = 'core' | 'user' | 'system';
 
 /**
+ * Enum value with display label
+ *
+ * Provides human-readable labels for enum options displayed in UI/MCP clients.
+ */
+export interface EnumValue {
+  /** The actual value stored in the database */
+  value: string;
+
+  /** Human-readable display label for UI/MCP clients */
+  label: string;
+}
+
+/**
  * Definition of a single field in a schema
  *
  * Supports various field types including primitives, enums, arrays, and objects.
@@ -57,10 +70,10 @@ export interface SchemaField {
   protection: ProtectionLevel;
 
   /** Protected enum values (cannot be removed) - enum fields only */
-  coreValues?: string[];
+  coreValues?: EnumValue[];
 
   /** User-extensible enum values (can be added/removed) - enum fields only */
-  userValues?: string[];
+  userValues?: EnumValue[];
 
   /** Whether this field should be indexed for faster queries */
   indexed: boolean;

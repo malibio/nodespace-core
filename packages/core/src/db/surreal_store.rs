@@ -620,6 +620,7 @@ where
             modified_at: now,
             // Schema uses camelCase to match frontend TypeScript conventions (Issue #670)
             // Status values are lowercase for consistency across all layers
+            // EnumValue format: { value, label } for display in UI/MCP clients
             properties: json!({
                 "isCore": true,
                 "version": 1,
@@ -629,7 +630,12 @@ where
                         "name": "status",
                         "type": "enum",
                         "protection": "core",
-                        "coreValues": ["open", "in_progress", "done", "cancelled"],
+                        "coreValues": [
+                            { "value": "open", "label": "Open" },
+                            { "value": "in_progress", "label": "In Progress" },
+                            { "value": "done", "label": "Done" },
+                            { "value": "cancelled", "label": "Cancelled" }
+                        ],
                         "userValues": [],
                         "indexed": true,
                         "required": true,
@@ -641,7 +647,11 @@ where
                         "name": "priority",
                         "type": "enum",
                         "protection": "user",
-                        "coreValues": ["low", "medium", "high"],
+                        "coreValues": [
+                            { "value": "low", "label": "Low" },
+                            { "value": "medium", "label": "Medium" },
+                            { "value": "high", "label": "High" }
+                        ],
                         "userValues": [],
                         "indexed": true,
                         "required": false,
@@ -3813,7 +3823,11 @@ mod tests {
                     "name": "status",
                     "type": "enum",
                     "protection": "core",
-                    "coreValues": ["open", "in_progress", "done"],
+                    "coreValues": [
+                        { "value": "open", "label": "Open" },
+                        { "value": "in_progress", "label": "In Progress" },
+                        { "value": "done", "label": "Done" }
+                    ],
                     "indexed": true,
                     "required": true,
                     "extensible": true,

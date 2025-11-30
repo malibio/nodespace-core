@@ -25,7 +25,7 @@
   import { Input } from '$lib/components/ui/input';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { type SchemaNode, type SchemaField, isSchemaNode } from '$lib/types/schema-node';
+  import { type SchemaNode, type SchemaField, type EnumValue, isSchemaNode } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { parseDate, type DateValue } from '@internationalized/date';
 
@@ -165,11 +165,18 @@
       : null;
     // Ensure status is a string - handle arrays incorrectly stored
     let status: string | null = null;
+    let statusLabel: string | null = null;
     if (statusValue) {
       if (Array.isArray(statusValue)) {
         status = statusValue.join(''); // Fix incorrectly stored array
       } else {
         status = String(statusValue);
+      }
+      // Look up label from enum values
+      if (statusField && status) {
+        const enumValues = getEnumValues(statusField);
+        const enumValue = enumValues.find(ev => ev.value === status);
+        statusLabel = enumValue?.label || formatEnumLabel(status);
       }
     }
 
@@ -177,7 +184,7 @@
     const dueDateField = schemaFields().find((f) => f.name === 'dueDate' || f.name === 'due_date');
     const dueDate = dueDateField ? getPropertyValue(dueDateField.name) : null;
 
-    return { status, dueDate };
+    return { status, statusLabel, dueDate };
   });
 
   // Update node property
@@ -233,8 +240,8 @@
   }
 
   // Get enum values for a field (core + user values combined)
-  function getEnumValues(field: SchemaField): string[] {
-    const values: string[] = [];
+  function getEnumValues(field: SchemaField): EnumValue[] {
+    const values: EnumValue[] = [];
     if (field.coreValues) values.push(...field.coreValues);
     if (field.userValues) values.push(...field.userValues);
     return values;
@@ -318,11 +325,11 @@
         <div class="flex items-center gap-3">
           <!-- Status Badge (if available) -->
           {#if headerSummary()?.status}
-            {@const status = headerSummary()!.status!}
+            {@const statusLabel = headerSummary()!.statusLabel!}
             <span
               class="inline-flex items-center rounded-md border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-foreground"
             >
-              {formatEnumLabel(status)}
+              {statusLabel}
             </span>
           {/if}
 
@@ -367,9 +374,11 @@
               {#if field.type === 'enum'}
                 <!-- Enum Field → shadcn Select Component (Fixed with bind:value) -->
                 {@const enumValues = getEnumValues(field)}
+                {@const currentEnumValue = getEnumValue(field)}
+                {@const currentLabel = enumValues.find(ev => ev.value === currentEnumValue)?.label || formatEnumLabel(currentEnumValue)}
                 <Select.Root
                   type="single"
-                  value={getEnumValue(field)}
+                  value={currentEnumValue}
                   onValueChange={(newValue) => {
                     if (newValue) {
                       updateProperty(field.name, newValue);
@@ -377,11 +386,11 @@
                   }}
                 >
                   <Select.Trigger class="w-full">
-                    {formatEnumLabel(getEnumValue(field))}
+                    {currentLabel}
                   </Select.Trigger>
                   <Select.Content>
-                    {#each enumValues as enumValue}
-                      <Select.Item value={enumValue} label={formatEnumLabel(enumValue)} />
+                    {#each enumValues as ev}
+                      <Select.Item value={ev.value} label={ev.label} />
                     {/each}
                   </Select.Content>
                 </Select.Root>

@@ -461,9 +461,10 @@ where
                     )));
                 }
 
+                // Extract just the value strings for DDL (not labels)
                 let values_list = all_values
                     .iter()
-                    .map(|v| format!("'{}'", v))
+                    .map(|ev| format!("'{}'", ev.value))
                     .collect::<Vec<_>>()
                     .join(", ");
 

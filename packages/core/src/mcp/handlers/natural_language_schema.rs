@@ -6,7 +6,7 @@
 //! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
 
 use crate::mcp::types::MCPError;
-use crate::models::schema::{SchemaField, SchemaProtectionLevel};
+use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
 use crate::services::{CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -327,6 +327,24 @@ fn normalize_field_name(name: &str) -> String {
         .join("_")
 }
 
+/// Convert a value string to title case for display label
+/// e.g., "in_progress" -> "In Progress", "DRAFT" -> "Draft"
+fn to_title_case(s: &str) -> String {
+    s.replace('_', " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Infer field type from description
 ///
 /// # Type Inference Priority (in order of precedence)
@@ -516,12 +534,20 @@ fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<Sc
             // Apply custom: namespace prefix to all user fields
             let namespaced_name = format!("custom:{}", field_name);
 
+            // Convert string enum values to EnumValue with auto-generated labels
+            let user_values = inferred.enum_values.as_ref().map(|values| {
+                values.iter().map(|v| EnumValue {
+                    value: v.clone(),
+                    label: to_title_case(v),
+                }).collect()
+            });
+
             SchemaField {
                 name: namespaced_name,
                 field_type: inferred.field_type.clone(),
                 protection: SchemaProtectionLevel::User,
                 core_values: None,
-                user_values: inferred.enum_values.clone(),
+                user_values,
                 indexed: false, // Not indexed by default
                 required: Some(inferred.required),
                 extensible: Some(inferred.field_type == "enum"), // Enums are extensible by default

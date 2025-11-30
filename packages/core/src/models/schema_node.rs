@@ -28,7 +28,7 @@
 //! assert_eq!(schema.version(), 1);
 //! ```
 
-use crate::models::schema::{SchemaField, SchemaProtectionLevel};
+use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
 use crate::models::{Node, ValidationError};
 use serde::{Serialize, Serializer};
 
@@ -243,9 +243,9 @@ impl SchemaNode {
     /// ```ignore
     /// let schema = SchemaNode::from_node(node)?;
     /// let status_values = schema.get_enum_values("status");
-    /// // Returns: Some(["open", "in_progress", "done", "blocked"])
+    /// // Returns: Some([EnumValue { value: "open", label: "Open" }, ...])
     /// ```
-    pub fn get_enum_values(&self, field_name: &str) -> Option<Vec<String>> {
+    pub fn get_enum_values(&self, field_name: &str) -> Option<Vec<EnumValue>> {
         let field = self.get_field(field_name)?;
 
         // Only return values for enum fields
@@ -262,6 +262,14 @@ impl SchemaNode {
         }
 
         Some(values)
+    }
+
+    /// Get all valid value strings for an enum field (for validation)
+    ///
+    /// Returns only the value strings, not the labels.
+    pub fn get_enum_value_strings(&self, field_name: &str) -> Option<Vec<String>> {
+        self.get_enum_values(field_name)
+            .map(|values| values.into_iter().map(|v| v.value).collect())
     }
 
     /// Check if a field can be deleted based on its protection level
@@ -332,7 +340,10 @@ mod tests {
                         "name": "status",
                         "type": "enum",
                         "protection": "core",
-                        "coreValues": ["open", "done"],
+                        "coreValues": [
+                            { "value": "open", "label": "Open" },
+                            { "value": "done", "label": "Done" }
+                        ],
                         "indexed": true
                     }
                 ]
@@ -467,8 +478,17 @@ mod tests {
 
         let values = schema.get_enum_values("status").unwrap();
         assert_eq!(values.len(), 2);
-        assert!(values.contains(&"open".to_string()));
-        assert!(values.contains(&"done".to_string()));
+        assert!(values.iter().any(|v| v.value == "open"));
+        assert!(values.iter().any(|v| v.value == "done"));
+        // Verify labels are present
+        assert!(values.iter().any(|v| v.label == "Open"));
+        assert!(values.iter().any(|v| v.label == "Done"));
+
+        // Test the string-only helper
+        let value_strings = schema.get_enum_value_strings("status").unwrap();
+        assert_eq!(value_strings.len(), 2);
+        assert!(value_strings.contains(&"open".to_string()));
+        assert!(value_strings.contains(&"done".to_string()));
 
         // Non-enum field should return None
         assert!(schema.get_enum_values("nonexistent").is_none());

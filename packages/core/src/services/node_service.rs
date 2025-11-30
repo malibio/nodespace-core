@@ -719,12 +719,18 @@ where
                             valid_values.extend(user_vals.clone());
                         }
 
-                        if !valid_values.contains(&value_str.to_string()) {
+                        // Check if the value matches any EnumValue.value
+                        let is_valid = valid_values.iter().any(|ev| ev.value == value_str);
+                        if !is_valid {
+                            let valid_labels: Vec<_> = valid_values
+                                .iter()
+                                .map(|ev| format!("{} ({})", ev.label, ev.value))
+                                .collect();
                             return Err(NodeServiceError::invalid_update(format!(
                                 "Invalid value '{}' for enum field '{}'. Valid values: {}",
                                 value_str,
                                 field.name,
-                                valid_values.join(", ")
+                                valid_labels.join(", ")
                             )));
                         }
                     } else if !value.is_null() {

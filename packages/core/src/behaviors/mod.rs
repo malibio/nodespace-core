@@ -1965,7 +1965,11 @@ mod tests {
                         "name": "status",
                         "type": "enum",
                         "protection": "core",
-                        "coreValues": ["open", "in_progress", "done"],
+                        "coreValues": [
+                            { "value": "open", "label": "Open" },
+                            { "value": "in_progress", "label": "In Progress" },
+                            { "value": "done", "label": "Done" }
+                        ],
                         "indexed": false
                     }
                 ]
@@ -1985,7 +1989,11 @@ mod tests {
                         "name": "priority",
                         "type": "enum",
                         "protection": "user",
-                        "userValues": ["low", "medium", "high"],
+                        "userValues": [
+                            { "value": "low", "label": "Low" },
+                            { "value": "medium", "label": "Medium" },
+                            { "value": "high", "label": "High" }
+                        ],
                         "indexed": false
                     }
                 ]
@@ -2040,8 +2048,13 @@ mod tests {
                         "name": "status",
                         "type": "enum",
                         "protection": "user",
-                        "coreValues": ["active", "archived"],
-                        "userValues": ["on_hold"],
+                        "coreValues": [
+                            { "value": "active", "label": "Active" },
+                            { "value": "archived", "label": "Archived" }
+                        ],
+                        "userValues": [
+                            { "value": "on_hold", "label": "On Hold" }
+                        ],
                         "indexed": false
                     },
                     {
