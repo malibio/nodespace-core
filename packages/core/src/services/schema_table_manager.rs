@@ -20,6 +20,14 @@
 //! allowing NodeService to wrap both the node update and DDL execution in a
 //! single transaction.
 //!
+//! ## TODO: Issue #690 Remaining Work
+//!
+//! 1. Flatten schema properties to match TaskNode pattern (is_core, version, fields
+//!    stored flat in spoke table instead of nested in SchemaDefinition)
+//! 2. Delete SchemaDefinition struct after flattening
+//! 3. Move validation to SchemaNodeBehavior
+//! 4. Delete SchemaService entirely
+//!
 //! ## Example Usage
 //!
 //! ```ignore
