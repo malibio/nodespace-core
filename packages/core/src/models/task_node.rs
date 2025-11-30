@@ -240,6 +240,9 @@ impl TaskNode {
             .map(|dt| dt.with_timezone(&Utc));
 
         // Extract assignee from properties
+        // Note: Supports both "assignee_id" (legacy) and "assignee" (canonical) field names.
+        // The struct field is `assignee`, and `into_node()` serializes as "assignee".
+        // We read both for backward compatibility with any older data using "assignee_id".
         let assignee = props
             .get("assignee_id")
             .or_else(|| props.get("assignee"))

@@ -20,6 +20,13 @@ use std::sync::Arc;
 /// which provides proper field structure. For simple types, returns the generic Node.
 ///
 /// This ensures MCP responses have consistent, well-typed JSON shapes.
+///
+/// # Implementation Note
+///
+/// Uses `TaskNode::from_node()` / `SchemaNode::from_node()` rather than the typed
+/// retrieval methods (`get_task_node()`, etc.) because this function receives a Node
+/// that's already been fetched. Re-querying the database would be wasteful when we
+/// already have all the data needed for conversion.
 fn node_to_typed_value(node: Node) -> Result<Value, MCPError> {
     match node.node_type.as_str() {
         "task" => {

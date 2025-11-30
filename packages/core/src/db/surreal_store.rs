@@ -61,6 +61,7 @@ use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 use tokio::sync::broadcast;
+use tracing::warn;
 
 /// Broadcast channel capacity for domain events.
 ///
@@ -1259,13 +1260,19 @@ where
             .as_str()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
+            .unwrap_or_else(|| {
+                warn!(node_id = %id, "Missing or invalid created_at timestamp, using current time");
+                Utc::now()
+            });
 
         let modified_at = hub["modified_at"]
             .as_str()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
+            .unwrap_or_else(|| {
+                warn!(node_id = %id, "Missing or invalid modified_at timestamp, using current time");
+                Utc::now()
+            });
 
         let embedding_vector = hub["embedding_vector"]
             .as_array()
