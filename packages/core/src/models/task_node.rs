@@ -52,8 +52,11 @@ use std::str::FromStr;
 /// - "in_progress" - Currently being worked on
 /// - "done" - Finished
 /// - "cancelled" - Cancelled/abandoned
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+/// - User-defined statuses via schema extension (e.g., "blocked", "review")
+///
+/// Core statuses are strongly typed; user-defined statuses use `User(String)`.
+/// This aligns with the schema system's `core_values` / `user_values` model.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TaskStatus {
     /// Task has not been started
     #[default]
@@ -64,6 +67,8 @@ pub enum TaskStatus {
     Done,
     /// Task has been cancelled/abandoned
     Cancelled,
+    /// User-defined status (extended via schema)
+    User(String),
 }
 
 impl FromStr for TaskStatus {
@@ -75,20 +80,51 @@ impl FromStr for TaskStatus {
             "in_progress" => Ok(Self::InProgress),
             "done" => Ok(Self::Done),
             "cancelled" => Ok(Self::Cancelled),
-            _ => Err(format!("Invalid task status: {}", s)),
+            // Any other value is treated as user-defined
+            other => Ok(Self::User(other.to_string())),
         }
     }
 }
 
 impl TaskStatus {
     /// Convert status to string representation
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Open => "open",
             Self::InProgress => "in_progress",
             Self::Done => "done",
             Self::Cancelled => "cancelled",
+            Self::User(s) => s.as_str(),
         }
+    }
+
+    /// Check if this is a core (built-in) status
+    pub fn is_core(&self) -> bool {
+        !matches!(self, Self::User(_))
+    }
+
+    /// Check if this is a user-defined status
+    pub fn is_user_defined(&self) -> bool {
+        matches!(self, Self::User(_))
+    }
+}
+
+impl Serialize for TaskStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_str(&s).unwrap()) // from_str never fails now
     }
 }
 
@@ -320,7 +356,7 @@ impl TaskNode {
 
     /// Get the task's status (for API compatibility)
     pub fn status(&self) -> TaskStatus {
-        self.status
+        self.status.clone()
     }
 
     /// Set the task's status

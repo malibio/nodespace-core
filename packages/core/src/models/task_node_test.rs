@@ -37,15 +37,17 @@ mod tests {
     }
 
     #[test]
-    fn test_status_getter_invalid() {
+    fn test_status_getter_user_defined() {
         let node = Node::new(
             "task".to_string(),
             "Test".to_string(),
-            json!({"status": "invalid_status"}),
+            json!({"status": "blocked"}),
         );
         let task = TaskNode::from_node(node).unwrap();
-        // Should default to Open on invalid status (Issue #670)
-        assert_eq!(task.status(), TaskStatus::Open);
+        // User-defined statuses are now valid (schema extensibility)
+        assert_eq!(task.status(), TaskStatus::User("blocked".to_string()));
+        assert!(task.status().is_user_defined());
+        assert!(!task.status().is_core());
     }
 
     #[test]
@@ -310,10 +312,15 @@ mod tests {
     }
 
     #[test]
-    fn test_task_status_from_str_invalid() {
-        let result = "invalid".parse::<TaskStatus>();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid task status"));
+    fn test_task_status_from_str_user_defined() {
+        // User-defined statuses are now valid (schema extensibility)
+        let result = "blocked".parse::<TaskStatus>();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), TaskStatus::User("blocked".to_string()));
+
+        let result = "review".parse::<TaskStatus>();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), TaskStatus::User("review".to_string()));
     }
 
     #[test]
@@ -323,6 +330,9 @@ mod tests {
         assert_eq!(TaskStatus::InProgress.as_str(), "in_progress");
         assert_eq!(TaskStatus::Done.as_str(), "done");
         assert_eq!(TaskStatus::Cancelled.as_str(), "cancelled");
+        // User-defined statuses preserve their original value
+        assert_eq!(TaskStatus::User("blocked".to_string()).as_str(), "blocked");
+        assert_eq!(TaskStatus::User("review".to_string()).as_str(), "review");
     }
 
     #[test]
