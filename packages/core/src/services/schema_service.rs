@@ -204,7 +204,7 @@ where
     ///
     /// async fn example(service: SchemaService) -> Result<(), Box<dyn std::error::Error>> {
     ///     let field = SchemaField {
-///         name: "priority".to_string(),
+    ///         name: "priority".to_string(),
     ///         field_type: "number".to_string(),
     ///         protection: ProtectionLevel::User,
     ///         indexed: false,
@@ -226,11 +226,7 @@ where
         field: SchemaField,
     ) -> Result<(), NodeServiceError> {
         // Validate field name characters (alphanumeric and underscores only, no colons)
-        if !field
-            .name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_')
-        {
+        if !field.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
             return Err(NodeServiceError::invalid_update(format!(
                 "Invalid field name '{}': must contain only alphanumeric characters and underscores (no colons)",
                 field.name
@@ -1400,7 +1396,8 @@ mod tests {
 
         let result = service.get_schema("nonexistent").await;
         assert!(result.is_err());
-    }    #[tokio::test]
+    }
+    #[tokio::test]
     async fn test_add_core_field_rejected() {
         let (service, _temp) = setup_test_service().await;
         let schema_id = create_test_schema(&service).await;
@@ -1434,10 +1431,7 @@ mod tests {
         let (service, _temp) = setup_test_service().await;
         let schema_id = create_test_schema(&service).await;
 
-        service
-            .remove_field(&schema_id, "priority")
-            .await
-            .unwrap();
+        service.remove_field(&schema_id, "priority").await.unwrap();
 
         let schema = service.get_schema(&schema_id).await.unwrap();
         assert_eq!(schema.version, 2); // Version incremented

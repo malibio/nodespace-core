@@ -822,11 +822,7 @@ pub struct SchemaNodeBehavior;
 /// Validate a single schema field (standalone function for recursive validation)
 fn validate_schema_field(field: &SchemaField) -> Result<(), NodeValidationError> {
     // Validate field name characters (alphanumeric and underscores only)
-    if !field
-        .name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
-    {
+    if !field.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(NodeValidationError::InvalidProperties(format!(
             "Invalid field name '{}': must contain only alphanumeric characters and underscores",
             field.name
@@ -1914,7 +1910,6 @@ mod tests {
                 if msg.contains("duplicate field names")
         ));
     }
-
 
     #[test]
     fn test_schema_node_enum_requires_values() {

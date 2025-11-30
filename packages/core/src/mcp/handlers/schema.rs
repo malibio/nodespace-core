@@ -480,10 +480,7 @@ mod tests {
 
         // Verify field was added
         let schema = schema_service.get_schema("test_schema").await.unwrap();
-        let field = schema
-            .fields
-            .iter()
-            .find(|f| f.name == "custom_field");
+        let field = schema.fields.iter().find(|f| f.name == "custom_field");
         assert!(field.is_some());
         assert_eq!(field.unwrap().protection, ProtectionLevel::User);
     }
