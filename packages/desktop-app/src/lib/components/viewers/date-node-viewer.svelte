@@ -17,17 +17,15 @@
 <script lang="ts">
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
-  import { getDateTabTitle } from '$lib/stores/navigation.js';
   import { parseDateString, formatDateISO, normalizeDate } from '$lib/utils/date-formatting';
 
   // Props using Svelte 5 runes mode - unified NodeViewerProps interface
+  // Note: onTitleChange removed - parent derives title directly from nodeId
   let {
     nodeId,
-    onTitleChange,
     onNodeIdChange
   }: {
     nodeId: string;
-    onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void;
   } = $props();
 
@@ -52,15 +50,6 @@
 
   // Derive current date ID from currentDate (using local timezone, not UTC)
   const currentDateId = $derived(formatDateISO(currentDate));
-
-  // Derive the tab title from current date
-  const tabTitle = $derived(getDateTabTitle(currentDate));
-
-  // Notify parent when title changes
-  // Title is recomputed on page load by TabPersistence.migrate()
-  $effect(() => {
-    onTitleChange?.(tabTitle);
-  });
 
   /**
    * Navigate to previous or next day

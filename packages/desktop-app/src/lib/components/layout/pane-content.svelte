@@ -4,6 +4,7 @@
   import { tabState, updateTabTitle, updateTabContent } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import type { Pane } from '$lib/stores/navigation.js';
+  import { formatDateTitle, parseDateString } from '$lib/utils/date-formatting';
 
   // ✅ Receive the PANE as a prop - each pane instance gets its own pane object
   let { pane }: { pane: Pane } = $props();
@@ -66,6 +67,18 @@
     const nodeType = activeTab?.content?.nodeType;
     if (nodeType) {
       loadViewerForNodeType(nodeType);
+    }
+  });
+
+  // Derive and update tab title for date nodes directly from nodeId
+  // This replaces the callback-based approach (anti-pattern) with parent-derived title
+  $effect(() => {
+    if (activeTab?.content?.nodeType === 'date' && activeTab.content.nodeId) {
+      const parsed = parseDateString(activeTab.content.nodeId);
+      if (parsed) {
+        const title = formatDateTitle(parsed);
+        updateTabTitle(activeTab.id, title);
+      }
     }
   });
 </script>
