@@ -266,7 +266,15 @@ impl SchemaNode {
 
     /// Get all valid value strings for an enum field (for validation)
     ///
-    /// Returns only the value strings, not the labels.
+    /// Returns only the value strings, not the labels. Use this for validation
+    /// when checking if a value is valid for an enum field. For UI display where
+    /// you need both values and labels, use [`get_enum_values`] instead.
+    ///
+    /// # Example
+    /// ```
+    /// let valid_values = schema.get_enum_value_strings("status");
+    /// // Returns: Some(["open", "in_progress", "done", "blocked"])
+    /// ```
     pub fn get_enum_value_strings(&self, field_name: &str) -> Option<Vec<String>> {
         self.get_enum_values(field_name)
             .map(|values| values.into_iter().map(|v| v.value).collect())
