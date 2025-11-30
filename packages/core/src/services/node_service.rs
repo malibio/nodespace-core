@@ -1448,10 +1448,38 @@ where
             },
         };
 
-        self.store
-            .update_node(id, node_update)
-            .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        // For schema nodes, use atomic update with DDL generation (Issue #690)
+        // This ensures schema node data AND SurrealDB table definitions change atomically
+        if updated.node_type == "schema" {
+            // Parse the updated schema definition from properties
+            let schema_def: crate::models::SchemaDefinition =
+                serde_json::from_value(updated.properties.clone()).map_err(|e| {
+                    NodeServiceError::invalid_update(format!(
+                        "Failed to parse schema definition: {}",
+                        e
+                    ))
+                })?;
+
+            // Generate DDL statements for the schema
+            // The schema node ID is the table name (e.g., "task", "person")
+            let table_manager =
+                crate::services::schema_table_manager::SchemaTableManager::new(self.store.clone());
+            let ddl_statements = table_manager.generate_ddl_statements(id, &schema_def)?;
+
+            // Execute atomic update: node + DDL in one transaction
+            self.store
+                .update_schema_node_atomic(id, node_update, ddl_statements)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+            tracing::info!("Atomically updated schema node '{}' with DDL sync", id);
+        } else {
+            // Regular node update
+            self.store
+                .update_node(id, node_update)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        }
 
         // Emit NodeUpdated event (Phase 2 of Issue #665)
         self.emit_event(DomainEvent::NodeUpdated {

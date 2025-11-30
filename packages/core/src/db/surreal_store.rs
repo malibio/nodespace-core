@@ -1436,6 +1436,134 @@ where
         Ok(updated_node)
     }
 
+    /// Update a schema node and execute DDL statements atomically
+    ///
+    /// When a schema node is updated, both the node data AND the corresponding
+    /// SurrealDB table definitions must change together. This method ensures
+    /// atomicity by wrapping both operations in a single transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The schema node ID (also the table name, e.g., "person", "task")
+    /// * `update` - The node update to apply
+    /// * `ddl_statements` - DDL statements to execute (DEFINE TABLE, DEFINE FIELD, etc.)
+    ///
+    /// # Returns
+    ///
+    /// The updated schema node
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Node not found
+    /// - DDL execution fails
+    /// - Transaction fails
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::NodeUpdate;
+    /// # async fn example(store: &SurrealStore) -> anyhow::Result<()> {
+    /// let ddl = vec![
+    ///     "DEFINE TABLE IF NOT EXISTS person SCHEMAFULL;".to_string(),
+    ///     "DEFINE FIELD IF NOT EXISTS name ON person TYPE string;".to_string(),
+    /// ];
+    /// let update = NodeUpdate::new().with_properties(serde_json::json!({"schema": "..."}));
+    /// store.update_schema_node_atomic("person", update, ddl).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_schema_node_atomic(
+        &self,
+        id: &str,
+        update: NodeUpdate,
+        ddl_statements: Vec<String>,
+    ) -> Result<Node> {
+        // Fetch current node to verify it exists and get current state
+        let current = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Schema node not found: {}", id))?;
+
+        // Prepare updated values
+        let updated_content = update.content.unwrap_or(current.content);
+        let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+        let embedding_f32 = update.embedding_vector.flatten();
+
+        // Merge properties if they're being updated
+        let properties_update = if let Some(ref updated_props) = update.properties {
+            let mut merged_props = current.properties.as_object().cloned().unwrap_or_default();
+            if let Some(new_props) = updated_props.as_object() {
+                for (key, value) in new_props {
+                    merged_props.insert(key.clone(), value.clone());
+                }
+            }
+            serde_json::Value::Object(merged_props)
+        } else {
+            current.properties.clone()
+        };
+
+        // Build the atomic transaction query
+        // This wraps: node update + spoke table update + all DDL statements in one transaction
+        let mut transaction_parts = vec!["BEGIN TRANSACTION;".to_string()];
+
+        // Add node update statement (updates the hub node table)
+        transaction_parts.push(
+            r#"UPDATE type::thing('node', $id) SET
+                content = $content,
+                node_type = $node_type,
+                modified_at = time::now(),
+                version = version + 1,
+                embedding_vector = $embedding_vector,
+                properties = $properties;"#
+                .to_string(),
+        );
+
+        // CRITICAL: Also update the spoke table (schema:id) where properties are actually read from
+        // get_node() reads properties from the spoke table for types in TYPES_WITH_SPOKE_TABLES
+        transaction_parts
+            .push(r#"UPSERT type::thing('schema', $id) MERGE $properties;"#.to_string());
+
+        // Ensure data link exists
+        transaction_parts.push(
+            r#"UPDATE type::thing('node', $id) SET data = type::thing('schema', $id);"#.to_string(),
+        );
+
+        // Add all DDL statements
+        for ddl in ddl_statements {
+            transaction_parts.push(ddl);
+        }
+
+        transaction_parts.push("COMMIT TRANSACTION;".to_string());
+        let transaction_query = transaction_parts.join("\n");
+
+        // Execute the atomic transaction
+        self.db
+            .query(&transaction_query)
+            .bind(("id", id.to_string()))
+            .bind(("content", updated_content))
+            .bind(("node_type", updated_node_type))
+            .bind(("embedding_vector", embedding_f32))
+            .bind(("properties", properties_update.clone()))
+            .await
+            .context("Failed to execute atomic schema update transaction")?;
+
+        // Fetch and return updated node
+        let updated_node = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Schema node not found after atomic update"))?;
+
+        tracing::info!(
+            "Atomically updated schema node '{}' with {} DDL statements",
+            id,
+            transaction_parts.len() - 3 // Exclude BEGIN, UPDATE, COMMIT
+        );
+
+        Ok(updated_node)
+    }
+
     /// Switch a node's type atomically, preserving old type in variants map
     ///
     /// This is an atomic type-switching operation that guarantees:

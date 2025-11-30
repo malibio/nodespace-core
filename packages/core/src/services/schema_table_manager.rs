@@ -10,6 +10,15 @@
 //! - Defining fields with proper SurrealDB types
 //! - Managing indexes for optimized queries
 //! - Handling nested fields and array structures
+//! - Generating DDL statements for atomic transactions (Issue #690)
+//!
+//! ## Atomic Schema Updates
+//!
+//! When updating a schema node via the generic CRUD API (update_node), both the
+//! node data and the SurrealDB table definitions must change atomically. The
+//! `generate_ddl_statements` method produces DDL statements without executing them,
+//! allowing NodeService to wrap both the node update and DDL execution in a
+//! single transaction.
 //!
 //! ## Example Usage
 //!
@@ -42,18 +51,176 @@ use std::sync::Arc;
 /// - Defining fields with proper SurrealDB types
 /// - Creating indexes for optimized queries
 /// - Managing nested object fields and array structures
-pub struct SchemaTableManager {
-    store: Arc<SurrealStore>,
+pub struct SchemaTableManager<C = surrealdb::engine::local::Db>
+where
+    C: surrealdb::Connection,
+{
+    store: Arc<SurrealStore<C>>,
 }
 
-impl SchemaTableManager {
+impl<C> SchemaTableManager<C>
+where
+    C: surrealdb::Connection,
+{
     /// Create a new SchemaTableManager
     ///
     /// # Arguments
     ///
     /// * `store` - SurrealDB store instance
-    pub fn new(store: Arc<SurrealStore>) -> Self {
+    pub fn new(store: Arc<SurrealStore<C>>) -> Self {
         Self { store }
+    }
+
+    /// Generate DDL statements for a schema without executing them
+    ///
+    /// This method produces a list of DDL statements (DEFINE TABLE, DEFINE FIELD,
+    /// DEFINE INDEX) that can be executed atomically alongside node updates.
+    ///
+    /// Used by NodeService.update_node to ensure atomic schema updates where
+    /// both the schema node data and the SurrealDB table definitions change
+    /// together in a single transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_name` - The table name (must be alphanumeric + underscores)
+    /// * `schema` - The schema definition containing fields and configuration
+    ///
+    /// # Returns
+    ///
+    /// A vector of DDL statements to be executed atomically
+    ///
+    /// # Errors
+    ///
+    /// - Invalid type name (contains non-alphanumeric characters besides underscores)
+    /// - Invalid field names or types
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// # use nodespace_core::services::SchemaTableManager;
+    /// # use nodespace_core::models::schema::SchemaDefinition;
+    /// # fn example(manager: &SchemaTableManager, schema: &SchemaDefinition) -> Result<(), Box<dyn std::error::Error>> {
+    /// let ddl_statements = manager.generate_ddl_statements("person", schema)?;
+    /// // Execute these statements in a transaction along with the node update
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn generate_ddl_statements(
+        &self,
+        type_name: &str,
+        schema: &SchemaDefinition,
+    ) -> Result<Vec<String>, NodeServiceError> {
+        // Validate type_name to prevent SQL injection
+        if !type_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Invalid type name '{}': must contain only alphanumeric characters and underscores",
+                type_name
+            )));
+        }
+
+        let mut statements = Vec::new();
+
+        // Use SCHEMAFULL for all types
+        let table_mode = "SCHEMAFULL";
+
+        // DEFINE TABLE statement
+        statements.push(format!(
+            "DEFINE TABLE IF NOT EXISTS {} {};",
+            type_name, table_mode
+        ));
+
+        // Generate field definitions
+        for field in &schema.fields {
+            self.generate_field_ddl(type_name, field, None, &mut statements)?;
+        }
+
+        Ok(statements)
+    }
+
+    /// Generate DDL statements for a field (recursive for nested fields)
+    ///
+    /// Appends DEFINE FIELD and DEFINE INDEX statements to the provided vector.
+    ///
+    /// # Arguments
+    ///
+    /// * `table` - The table name
+    /// * `field` - The field definition
+    /// * `parent_path` - Optional parent path for nested fields
+    /// * `statements` - Vector to append DDL statements to
+    fn generate_field_ddl(
+        &self,
+        table: &str,
+        field: &SchemaField,
+        parent_path: Option<&str>,
+        statements: &mut Vec<String>,
+    ) -> Result<(), NodeServiceError> {
+        // Build full field path (e.g., "address.city")
+        let field_path = if let Some(parent) = parent_path {
+            format!("{}.{}", parent, field.name)
+        } else {
+            field.name.clone()
+        };
+
+        // Validate field name to prevent SQL injection
+        if !field
+            .name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
+        {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Invalid field name '{}': must contain only alphanumeric characters, underscores, and colons",
+                field.name
+            )));
+        }
+
+        // Map schema field type to SurrealDB type
+        let db_type = self.map_field_type(&field.field_type, field)?;
+
+        // Quote field paths that contain colons
+        let quoted_field = if field_path.contains(':') {
+            format!("`{}`", field_path)
+        } else {
+            field_path.clone()
+        };
+
+        // Add DEFINE FIELD statement
+        statements.push(format!(
+            "DEFINE FIELD IF NOT EXISTS {} ON {} TYPE {};",
+            quoted_field, table, db_type
+        ));
+
+        // Add index if requested
+        if field.indexed {
+            let index_name = format!(
+                "idx_{}_{}",
+                table,
+                field_path
+                    .replace('.', "_")
+                    .replace("[*]", "_arr")
+                    .replace(':', "_")
+            );
+            statements.push(format!(
+                "DEFINE INDEX IF NOT EXISTS {} ON {} FIELDS {};",
+                index_name, table, quoted_field
+            ));
+        }
+
+        // Recursively handle nested fields (for object types)
+        if let Some(ref nested_fields) = field.fields {
+            for nested_field in nested_fields {
+                self.generate_field_ddl(table, nested_field, Some(&field_path), statements)?;
+            }
+        }
+
+        // Recursively handle item fields (for array of objects)
+        if let Some(ref item_fields) = field.item_fields {
+            let array_item_path = format!("{}[*]", field_path);
+            for item_field in item_fields {
+                self.generate_field_ddl(table, item_field, Some(&array_item_path), statements)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Sync a schema definition to database table structure
