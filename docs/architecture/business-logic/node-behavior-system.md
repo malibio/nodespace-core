@@ -46,8 +46,10 @@ if let Some(schema) = schema_service.get_schema(&node.node_type)? {
 | Property Type | Protection | Modifiable | Example |
 |--------------|------------|------------|---------|
 | **Core Properties** | `core` | ❌ No | task.status, task.priority |
-| **User Extensions** | `user` | ✅ Yes | custom:estimatedHours, custom:tags |
+| **User Extensions** | `user` | ✅ Yes | estimatedHours, tags |
 | **Custom Types** | N/A | ✅ Yes | recipe, workout (no hardcoded behavior) |
+
+**Note**: The `is_core` flag on schemas and fields distinguishes system-defined vs user-defined. No namespace prefixes are required for user properties - anything not defined by the core system is inherently user-defined.
 
 ### Schema Defaults During Type Conversion
 
