@@ -1426,7 +1426,7 @@
                     // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
                       // Add to store and trigger persistence
-                      // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                      // Note: domain events handles parent-child relationship via edge:created events
                       sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                       // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
@@ -1646,7 +1646,7 @@
                     // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
                       // Add to store and trigger persistence
-                      // Note: LIVE SELECT handles parent-child relationship via edge:created events
+                      // Note: domain events handles parent-child relationship via edge:created events
                       sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
                       // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
