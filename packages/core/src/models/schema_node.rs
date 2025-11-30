@@ -7,7 +7,7 @@
 //!
 //! ```rust
 //! use nodespace_core::models::{Node, SchemaNode};
-//! use nodespace_core::models::schema::{SchemaField, ProtectionLevel};
+//! use nodespace_core::models::schema::{SchemaField, SchemaProtectionLevel};
 //! use serde_json::json;
 //!
 //! // Create from existing node
