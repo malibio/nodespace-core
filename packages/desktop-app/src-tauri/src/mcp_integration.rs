@@ -8,7 +8,7 @@
 //! All MCP handlers now use NodeService directly.
 
 use nodespace_core::mcp;
-use nodespace_core::services::{NodeEmbeddingService, SchemaService};
+use nodespace_core::services::NodeEmbeddingService;
 use nodespace_core::{Node, NodeService};
 use serde::Serialize;
 use serde_json::Value;
@@ -69,15 +69,12 @@ pub async fn run_mcp_server_with_events(
         emit_event_for_method(&app, method, result);
     });
 
-    // Create SchemaService from NodeService
-    let schema_service = Arc::new(SchemaService::new(node_service.clone()));
-
     // Create combined services struct for MCP
     // (Issue #676: NodeOperations merged into NodeService, now use node_service directly)
+    // (Issue #690: SchemaService removed from MCP - use generic CRUD for schema nodes)
     let services = mcp::server::McpServices {
         node_service,
         embedding_service,
-        schema_service,
     };
 
     // Run core MCP server with HTTP transport and event-emitting callback
