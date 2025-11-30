@@ -28,8 +28,9 @@ use futures::stream::Stream;
 use nodespace_core::{
     db::HttpStore,
     models::{
+        self,
         schema::{ProtectionLevel, SchemaDefinition, SchemaField},
-        Node, NodeFilter, NodeUpdate, SchemaNode, TaskNode,
+        Node, NodeFilter, NodeUpdate,
     },
     operations::CreateNodeParams,
     services::{NodeService, NodeServiceError, SchemaService},
@@ -169,38 +170,22 @@ type ApiSchemaResult = Result<Json<SchemaFieldResult>, (StatusCode, Json<ApiErro
 
 /// Convert a Node to its strongly-typed JSON representation (Issue #673)
 ///
-/// For types with spoke tables (task, schema), converts to the typed struct
-/// which provides proper field structure. For simple types, returns the generic Node.
+/// Delegates to the canonical `models::node_to_typed_value` and maps errors to ApiError.
 fn node_to_typed_value(node: Node) -> Result<serde_json::Value, ApiError> {
-    match node.node_type.as_str() {
-        "task" => {
-            let task = TaskNode::from_node(node).map_err(|e| ApiError {
-                message: format!("Failed to convert to TaskNode: {}", e),
-                code: "CONVERSION_ERROR".to_string(),
-                details: Some(e.to_string()),
-            })?;
-            serde_json::to_value(task)
-        }
-        "schema" => {
-            let schema = SchemaNode::from_node(node).map_err(|e| ApiError {
-                message: format!("Failed to convert to SchemaNode: {}", e),
-                code: "CONVERSION_ERROR".to_string(),
-                details: Some(e.to_string()),
-            })?;
-            serde_json::to_value(schema)
-        }
-        _ => serde_json::to_value(node),
-    }
-    .map_err(|e| ApiError {
-        message: format!("Failed to serialize node: {}", e),
-        code: "SERIALIZATION_ERROR".to_string(),
-        details: Some(e.to_string()),
+    models::node_to_typed_value(node).map_err(|e| ApiError {
+        message: e.clone(),
+        code: "CONVERSION_ERROR".to_string(),
+        details: Some(e),
     })
 }
 
 /// Convert a list of Nodes to their strongly-typed JSON representations (Issue #673)
 fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<serde_json::Value>, ApiError> {
-    nodes.into_iter().map(node_to_typed_value).collect()
+    models::nodes_to_typed_values(nodes).map_err(|e| ApiError {
+        message: e.clone(),
+        code: "CONVERSION_ERROR".to_string(),
+        details: Some(e),
+    })
 }
 
 /// Update node request with OCC version

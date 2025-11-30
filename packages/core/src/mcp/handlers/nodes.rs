@@ -7,7 +7,7 @@
 
 use crate::mcp::types::MCPError;
 use crate::models::schema::ProtectionLevel;
-use crate::models::{Node, NodeFilter, NodeUpdate, OrderBy, SchemaNode, TaskNode};
+use crate::models::{Node, NodeFilter, NodeUpdate, OrderBy};
 use crate::services::{NodeService, NodeServiceError, SchemaService};
 use chrono::NaiveDate;
 use serde::Deserialize;
@@ -16,39 +16,14 @@ use std::sync::Arc;
 
 /// Convert a Node to its strongly-typed JSON representation
 ///
-/// For types with spoke tables (task, schema), converts to the typed struct
-/// which provides proper field structure. For simple types, returns the generic Node.
-///
-/// This ensures MCP responses have consistent, well-typed JSON shapes.
-///
-/// # Implementation Note
-///
-/// Uses `TaskNode::from_node()` / `SchemaNode::from_node()` rather than the typed
-/// retrieval methods (`get_task_node()`, etc.) because this function receives a Node
-/// that's already been fetched. Re-querying the database would be wasteful when we
-/// already have all the data needed for conversion.
+/// Delegates to the canonical `models::node_to_typed_value` and maps errors to MCPError.
 fn node_to_typed_value(node: Node) -> Result<Value, MCPError> {
-    match node.node_type.as_str() {
-        "task" => {
-            let task = TaskNode::from_node(node).map_err(|e| {
-                MCPError::internal_error(format!("Failed to convert to TaskNode: {}", e))
-            })?;
-            serde_json::to_value(task)
-        }
-        "schema" => {
-            let schema = SchemaNode::from_node(node).map_err(|e| {
-                MCPError::internal_error(format!("Failed to convert to SchemaNode: {}", e))
-            })?;
-            serde_json::to_value(schema)
-        }
-        _ => serde_json::to_value(node),
-    }
-    .map_err(|e| MCPError::internal_error(format!("Failed to serialize node: {}", e)))
+    crate::models::node_to_typed_value(node).map_err(MCPError::internal_error)
 }
 
 /// Convert a list of Nodes to their strongly-typed JSON representations
 fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, MCPError> {
-    nodes.into_iter().map(node_to_typed_value).collect()
+    crate::models::nodes_to_typed_values(nodes).map_err(MCPError::internal_error)
 }
 
 /// Convert NodeServiceError to MCPError with proper formatting
