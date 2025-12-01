@@ -1562,6 +1562,84 @@ where
         })
     }
 
+    /// Update a task node with type-safe spoke field updates
+    ///
+    /// Updates task-specific fields (status, priority, due_date, assignee) directly
+    /// in the spoke table, and optionally updates hub content. Uses optimistic
+    /// concurrency control (OCC) to prevent lost updates.
+    ///
+    /// # Type Safety
+    ///
+    /// This method provides end-to-end type safety for task updates:
+    /// - Frontend sends strongly-typed `TaskNodeUpdate` (not generic NodeUpdate)
+    /// - Backend updates spoke table fields directly (not via JSON properties)
+    /// - Returns strongly-typed `TaskNode` with updated fields
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The task node ID
+    /// * `expected_version` - Version for OCC check (prevents lost updates)
+    /// * `update` - TaskNodeUpdate with fields to update
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(TaskNode)` - Updated task with new version
+    /// * `Err(VersionMismatch)` - Version conflict, refresh and retry
+    /// * `Err(NodeNotFound)` - Task doesn't exist
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::models::{TaskNodeUpdate, TaskStatus};
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(db)?;
+    /// // Update task status
+    /// let update = TaskNodeUpdate::new().with_status(TaskStatus::InProgress);
+    /// let task = service.update_task_node("task-123", 1, update).await?;
+    /// println!("New status: {:?}", task.status);
+    /// println!("New version: {}", task.version);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_task_node(
+        &self,
+        id: &str,
+        expected_version: i64,
+        update: crate::models::TaskNodeUpdate,
+    ) -> Result<crate::models::TaskNode, NodeServiceError> {
+        if update.is_empty() {
+            return Err(NodeServiceError::invalid_update(
+                "TaskNodeUpdate contains no changes",
+            ));
+        }
+
+        self.store
+            .update_task_node(id, expected_version, update)
+            .await
+            .map_err(|e| {
+                let error_msg = e.to_string();
+                if error_msg.contains("VersionMismatch") {
+                    NodeServiceError::VersionConflict {
+                        node_id: id.to_string(),
+                        expected_version,
+                        actual_version: 0, // Actual version is in the error message
+                    }
+                } else if error_msg.contains("not found") {
+                    NodeServiceError::node_not_found(id)
+                } else {
+                    NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                        context: format!("Failed to update task node '{}': {}", id, e),
+                    })
+                }
+            })
+    }
+
     /// Get a schema node with strong typing using single-query pattern
     ///
     /// Provides direct deserialization from the spoke table with hub data via

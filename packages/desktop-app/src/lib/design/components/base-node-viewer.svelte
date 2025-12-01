@@ -357,10 +357,10 @@
   /**
    * Update a schema field value for a node (schema-aware property update)
    *
-   * Follows the same nested format pattern as schema-property-form.svelte:
-   * - Builds nested structure: properties[nodeType][fieldName] = value
-   * - Handles auto-migration from flat to nested format
-   * - Calls sharedNodeStore.updateNode() to persist
+   * For task nodes (Issue #709): Routes through type-safe update path that
+   * directly modifies spoke table fields (status, priority, dueDate, assignee).
+   *
+   * For other nodes: Uses generic update path via properties JSON.
    *
    * @param targetNodeId - Node ID to update
    * @param fieldName - Schema field name (e.g., 'status', 'due_date')
@@ -370,6 +370,24 @@
     const targetNode = sharedNodeStore.getNode(targetNodeId);
     if (!targetNode) return;
 
+    // Issue #709: Route task node spoke field updates through type-safe path
+    if (targetNode.nodeType === 'task') {
+      // Map field names to TaskNodeUpdate structure
+      // The spoke fields are: status, priority, dueDate, assignee
+      const taskSpokeFields = ['status', 'priority', 'due_date', 'dueDate', 'assignee'];
+
+      if (taskSpokeFields.includes(fieldName)) {
+        // Use type-safe task node update
+        sharedNodeStore.updateTaskNode(
+          targetNodeId,
+          { [fieldName === 'due_date' ? 'dueDate' : fieldName]: value },
+          { type: 'viewer', viewerId: viewerId }
+        );
+        return;
+      }
+    }
+
+    // Fallback: Generic update path via properties JSON
     // Build nested namespace (properties[nodeType][fieldName])
     const typeNamespace = targetNode.properties?.[targetNode.nodeType];
     const isOldFormat = !typeNamespace || typeof typeNamespace !== 'object';

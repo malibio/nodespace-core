@@ -3744,6 +3744,155 @@ where
         Ok(tasks.into_iter().next())
     }
 
+    /// Update a task node with type-safe spoke field updates
+    ///
+    /// Updates the task spoke table fields (status, priority, due_date, assignee) and
+    /// optionally the hub content field. Uses optimistic concurrency control (OCC)
+    /// to prevent lost updates.
+    ///
+    /// # Transaction Pattern
+    ///
+    /// Updates are atomic - spoke fields and hub fields (if provided) are updated
+    /// in a single transaction with OCC check:
+    ///
+    /// ```sql
+    /// BEGIN TRANSACTION;
+    /// -- OCC check
+    /// LET $current = SELECT version FROM node:`id`;
+    /// IF $current.version != $expected { THROW "Version mismatch" };
+    /// -- Update spoke table
+    /// UPDATE task:`id` SET status = $status, ...;
+    /// -- Update hub (if content changed)
+    /// UPDATE node:`id` SET content = $content, version = version + 1, modified_at = time::now();
+    /// COMMIT;
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The task node ID
+    /// * `expected_version` - Version for OCC check (prevents lost updates)
+    /// * `update` - TaskNodeUpdate with fields to update
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(TaskNode)` - Updated task with new version and modified_at
+    /// * `Err(_)` - Version mismatch, node not found, or database error
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::models::{TaskNodeUpdate, TaskStatus};
+    /// # use std::path::PathBuf;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
+    /// let update = TaskNodeUpdate::new().with_status(TaskStatus::InProgress);
+    /// let updated = store.update_task_node("task-123", 1, update).await?;
+    /// println!("New status: {:?}", updated.status);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_task_node(
+        &self,
+        id: &str,
+        expected_version: i64,
+        update: crate::models::TaskNodeUpdate,
+    ) -> Result<crate::models::TaskNode> {
+        // Build SET clauses for spoke table update
+        let mut spoke_set_clauses: Vec<String> = Vec::new();
+
+        if let Some(ref status) = update.status {
+            spoke_set_clauses.push(format!("status = '{}'", status.as_str()));
+        }
+
+        if let Some(ref priority_opt) = update.priority {
+            match priority_opt {
+                Some(p) => spoke_set_clauses.push(format!("priority = {}", p)),
+                None => spoke_set_clauses.push("priority = NONE".to_string()),
+            }
+        }
+
+        if let Some(ref due_date_opt) = update.due_date {
+            match due_date_opt {
+                Some(dt) => {
+                    spoke_set_clauses.push(format!("due_date = <datetime>'{}'", dt.to_rfc3339()))
+                }
+                None => spoke_set_clauses.push("due_date = NONE".to_string()),
+            }
+        }
+
+        if let Some(ref assignee_opt) = update.assignee {
+            match assignee_opt {
+                Some(a) => spoke_set_clauses.push(format!("assignee = '{}'", a)),
+                None => spoke_set_clauses.push("assignee = NONE".to_string()),
+            }
+        }
+
+        // Build transaction
+        let mut transaction_parts = vec!["BEGIN TRANSACTION;".to_string()];
+
+        // OCC check: verify version matches
+        transaction_parts.push(format!(
+            r#"LET $current = (SELECT version FROM node:`{id}`);"#,
+            id = id
+        ));
+        transaction_parts.push(format!(
+            r#"IF $current[0].version != {expected_version} {{ THROW "VersionMismatch: expected {expected_version}, got " + <string>$current[0].version; }};"#,
+            expected_version = expected_version
+        ));
+
+        // Update spoke table if there are spoke field changes
+        if !spoke_set_clauses.is_empty() {
+            transaction_parts.push(format!(
+                r#"UPDATE task:`{id}` SET {sets};"#,
+                id = id,
+                sets = spoke_set_clauses.join(", ")
+            ));
+        }
+
+        // Update hub table: always bump version and modified_at, optionally update content
+        let hub_sets = if let Some(ref content) = update.content {
+            format!(
+                "content = '{}', version = version + 1, modified_at = time::now()",
+                content.replace('\'', "\\'")
+            )
+        } else {
+            "version = version + 1, modified_at = time::now()".to_string()
+        };
+
+        transaction_parts.push(format!(
+            r#"UPDATE node:`{id}` SET {sets};"#,
+            id = id,
+            sets = hub_sets
+        ));
+
+        // Emit domain event for SSE sync
+        transaction_parts.push(format!(
+            r#"CREATE domain_event CONTENT {{
+                event_type: 'NodeUpdated',
+                payload: {{ id: '{}' }},
+                created_at: time::now()
+            }};"#,
+            id
+        ));
+
+        transaction_parts.push("COMMIT TRANSACTION;".to_string());
+
+        let transaction_query = transaction_parts.join("\n");
+
+        // Execute transaction
+        self.db
+            .query(&transaction_query)
+            .await
+            .context(format!("Failed to update task node '{}'", id))?;
+
+        // Fetch and return updated task node
+        self.get_task_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Task node '{}' not found after update", id))
+    }
+
     /// Get a schema node with strong typing using single-query pattern
     ///
     /// Fetches spoke fields (is_core, schema_version, description, fields) and hub

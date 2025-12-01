@@ -191,6 +191,46 @@ export function setTaskAssignee(node: TaskNode, assignee: string | undefined): T
 }
 
 /**
+ * Partial update structure for task nodes
+ *
+ * Supports updating task-specific spoke fields (status, priority, dueDate, assignee)
+ * and hub fields (content). All fields are optional - only include fields to update.
+ *
+ * This interface matches the Rust `TaskNodeUpdate` struct for type-safe CRUD operations.
+ *
+ * @example
+ * ```typescript
+ * // Update only status
+ * const update: TaskNodeUpdate = { status: 'in_progress' };
+ *
+ * // Update status and clear due date
+ * const update: TaskNodeUpdate = {
+ *   status: 'done',
+ *   dueDate: null  // Explicitly clear the field
+ * };
+ *
+ * // Update content (hub field)
+ * const update: TaskNodeUpdate = { content: 'Updated task description' };
+ * ```
+ */
+export interface TaskNodeUpdate {
+  /** Update task status (spoke field) */
+  status?: TaskStatus;
+
+  /** Update task priority (spoke field) - null to clear */
+  priority?: TaskPriority | null;
+
+  /** Update due date (spoke field) - null to clear */
+  dueDate?: string | null;
+
+  /** Update assignee (spoke field) - null to clear */
+  assignee?: string | null;
+
+  /** Update content (hub field) */
+  content?: string;
+}
+
+/**
  * Helper namespace for task node operations
  */
 export const TaskNodeHelpers = {

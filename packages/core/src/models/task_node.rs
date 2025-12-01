@@ -485,3 +485,120 @@ impl TaskNodeBuilder {
         }
     }
 }
+
+/// Partial update structure for task nodes
+///
+/// Supports updating task-specific spoke fields (status, priority, due_date, assignee)
+/// as well as hub fields (content). Uses Option for each field to enable partial updates.
+///
+/// # Double-Option Pattern
+///
+/// Some fields use double-Option to distinguish between:
+/// - `None` - Don't change this field
+/// - `Some(None)` - Set the field to NULL
+/// - `Some(Some(value))` - Set to specific value
+///
+/// # Examples
+///
+/// ```rust
+/// use nodespace_core::models::{TaskNodeUpdate, TaskStatus};
+///
+/// // Update only status
+/// let update = TaskNodeUpdate::new().with_status(TaskStatus::InProgress);
+///
+/// // Update status and clear due date
+/// let update = TaskNodeUpdate::new()
+///     .with_status(TaskStatus::Done)
+///     .with_due_date(None);  // Clears the due date
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskNodeUpdate {
+    /// Update task status (spoke field)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+
+    /// Update task priority (spoke field)
+    /// - `None` - Don't change
+    /// - `Some(None)` - Clear priority
+    /// - `Some(Some(n))` - Set to priority n
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Option<i32>>,
+
+    /// Update due date (spoke field)
+    /// - `None` - Don't change
+    /// - `Some(None)` - Clear due date
+    /// - `Some(Some(dt))` - Set to specific date
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<Option<DateTime<Utc>>>,
+
+    /// Update assignee (spoke field)
+    /// - `None` - Don't change
+    /// - `Some(None)` - Clear assignee
+    /// - `Some(Some(id))` - Set to specific assignee
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<Option<String>>,
+
+    /// Update content (hub field)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+impl TaskNodeUpdate {
+    /// Create a new empty update
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set status update
+    pub fn with_status(mut self, status: TaskStatus) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    /// Set priority update (Some(value) to set, None to clear)
+    pub fn with_priority(mut self, priority: Option<i32>) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Set due date update (Some(value) to set, None to clear)
+    pub fn with_due_date(mut self, due_date: Option<DateTime<Utc>>) -> Self {
+        self.due_date = Some(due_date);
+        self
+    }
+
+    /// Set assignee update (Some(value) to set, None to clear)
+    pub fn with_assignee(mut self, assignee: Option<String>) -> Self {
+        self.assignee = Some(assignee);
+        self
+    }
+
+    /// Set content update
+    pub fn with_content(mut self, content: String) -> Self {
+        self.content = Some(content);
+        self
+    }
+
+    /// Check if the update contains any changes
+    pub fn is_empty(&self) -> bool {
+        self.status.is_none()
+            && self.priority.is_none()
+            && self.due_date.is_none()
+            && self.assignee.is_none()
+            && self.content.is_none()
+    }
+
+    /// Check if this update contains spoke fields (requires spoke table update)
+    pub fn has_spoke_fields(&self) -> bool {
+        self.status.is_some()
+            || self.priority.is_some()
+            || self.due_date.is_some()
+            || self.assignee.is_some()
+    }
+
+    /// Check if this update contains hub fields (requires hub table update)
+    pub fn has_hub_fields(&self) -> bool {
+        self.content.is_some()
+    }
+}

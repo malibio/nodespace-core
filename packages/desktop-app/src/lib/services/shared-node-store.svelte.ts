@@ -1173,6 +1173,127 @@ export class SharedNodeStore {
   }
 
   /**
+   * Update a task node with type-safe spoke field updates (Issue #709)
+   *
+   * Routes task-specific field updates (status, priority, dueDate, assignee) through
+   * the type-safe update path that directly modifies the spoke table in the backend.
+   *
+   * This method provides end-to-end type safety for task updates:
+   * - Frontend sends TaskNodeUpdate (not generic NodeUpdate)
+   * - Backend updates spoke table fields directly (not via JSON properties)
+   * - Returns TaskNode with updated fields and new version
+   *
+   * @param nodeId - Task node ID to update
+   * @param update - TaskNodeUpdate with spoke fields to update
+   * @param source - Source of the update (viewer, database, MCP)
+   */
+  updateTaskNode(
+    nodeId: string,
+    update: import('$lib/types').TaskNodeUpdate,
+    source: UpdateSource
+  ): void {
+    const existingNode = this.nodes.get(nodeId);
+    if (!existingNode) {
+      console.warn(`[SharedNodeStore] Cannot update non-existent task node: ${nodeId}`);
+      return;
+    }
+
+    if (existingNode.nodeType !== 'task') {
+      console.warn(`[SharedNodeStore] updateTaskNode called on non-task node: ${nodeId} (type: ${existingNode.nodeType})`);
+      return;
+    }
+
+    // Apply update optimistically to local state
+    // Map TaskNodeUpdate fields to Node properties for local state
+    const localChanges: Partial<import('$lib/types').Node> = {};
+    if (update.status !== undefined) {
+      // Status is stored as a flat field on TaskNode
+      (localChanges as Record<string, unknown>)['status'] = update.status;
+    }
+    if (update.priority !== undefined) {
+      (localChanges as Record<string, unknown>)['priority'] = update.priority;
+    }
+    if (update.dueDate !== undefined) {
+      (localChanges as Record<string, unknown>)['dueDate'] = update.dueDate;
+    }
+    if (update.assignee !== undefined) {
+      (localChanges as Record<string, unknown>)['assignee'] = update.assignee;
+    }
+    if (update.content !== undefined) {
+      localChanges.content = update.content;
+    }
+
+    // Update local node optimistically
+    const updatedNode = { ...existingNode, ...localChanges };
+    this.nodes.set(nodeId, updatedNode);
+    this.notifySubscribers(nodeId, updatedNode, source);
+
+    // Persist to backend via type-safe task update
+    const currentVersion = existingNode.version ?? 1;
+
+    // Capture handle to catch cancellation errors
+    const handle = PersistenceCoordinator.getInstance().persist(
+      nodeId,
+      async () => {
+        try {
+          const updatedTaskNode = await tauriCommands.updateTaskNode(
+            nodeId,
+            currentVersion,
+            update
+          );
+
+          // Update local node with backend version
+          const localNode = this.nodes.get(nodeId);
+          if (localNode && updatedTaskNode) {
+            localNode.version = updatedTaskNode.version;
+            // Also update spoke fields from backend response
+            // Use Object.assign to safely update fields that may not exist on Node interface
+            Object.assign(localNode, {
+              status: updatedTaskNode.status,
+              priority: updatedTaskNode.priority,
+              dueDate: updatedTaskNode.dueDate,
+              assignee: updatedTaskNode.assignee
+            });
+            if (updatedTaskNode.content !== undefined) {
+              localNode.content = updatedTaskNode.content;
+            }
+            this.nodes.set(nodeId, localNode);
+          }
+        } catch (dbError) {
+          const error = dbError instanceof Error ? dbError : new Error(String(dbError));
+
+          // Suppress expected errors in in-memory test mode
+          if (shouldLogDatabaseErrors()) {
+            console.error(
+              `[SharedNodeStore] Task update failed for node ${nodeId}:`,
+              error
+            );
+          }
+
+          // Always track errors in test environment for verification
+          this.trackErrorIfTesting(error);
+
+          // Rollback the optimistic update
+          this.nodes.set(nodeId, existingNode);
+          this.notifySubscribers(nodeId, existingNode, source);
+
+          throw error;
+        }
+      },
+      {
+        mode: 'immediate' // Task status updates should be immediate (not debounced)
+      }
+    );
+
+    // Handle cancellation errors (expected when operations are superseded)
+    handle.promise.catch((err) => {
+      if (err instanceof OperationCancelledError) {
+        return; // Expected - operation was cancelled by a newer operation
+      }
+    });
+  }
+
+  /**
    * Clear all nodes (for testing)
    */
   clearAll(): void {
