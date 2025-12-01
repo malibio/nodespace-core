@@ -414,6 +414,8 @@
                 </svg>
               </Popover.Trigger>
               <Popover.Content class="w-auto p-0" align="start">
+                <!-- Cast to `never` works around bits-ui Calendar expecting CalendarDate but we pass
+                     DateValue from @internationalized/date. Both are compatible at runtime. -->
                 <Calendar
                   value={dateValue as never}
                   onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
@@ -556,6 +558,7 @@
                     </svg>
                   </Popover.Trigger>
                   <Popover.Content class="w-auto p-0" align="start">
+                    <!-- Cast to `never` works around bits-ui Calendar type mismatch (see core dueDate field comment) -->
                     <Calendar
                       value={dateVal as never}
                       onValueChange={(newValue: DateValue | DateValue[] | undefined) => {

@@ -3824,7 +3824,10 @@ where
 
         if let Some(ref assignee_opt) = update.assignee {
             match assignee_opt {
-                Some(a) => spoke_set_clauses.push(format!("assignee = '{}'", a)),
+                // Escape single quotes to prevent SQL injection
+                Some(a) => {
+                    spoke_set_clauses.push(format!("assignee = '{}'", a.replace('\'', "\\'")))
+                }
                 None => spoke_set_clauses.push("assignee = NONE".to_string()),
             }
         }
