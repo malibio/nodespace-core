@@ -67,7 +67,8 @@ export function isCodeBlockNode(node: Node): node is CodeBlockNode {
  */
 export function getLanguage(node: CodeBlockNode): string {
   // Parse language from code fence syntax: ```language
-  const match = node.content.match(/^```(\w+)?/);
+  // Supports c++, c#, objective-c, and other languages with special characters
+  const match = node.content.match(/^```([\w\-+#]+)?/);
   if (match && match[1]) {
     return match[1].toLowerCase();
   }

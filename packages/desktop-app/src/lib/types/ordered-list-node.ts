@@ -60,14 +60,12 @@ export const OrderedListNodeHelpers = {
    * Create a new ordered list node with specified content
    *
    * @param content - The list item content
-   * @param parentId - Optional parent node ID
    * @returns New ordered list node
    *
    * @example
    * ```typescript
    * const item = OrderedListNodeHelpers.createOrderedListItem(
-   *   'First step in the process',
-   *   'parent-123'
+   *   'First step in the process'
    * );
    * ```
    */
