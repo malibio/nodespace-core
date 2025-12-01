@@ -911,7 +911,7 @@ fn get_tool_schemas() -> Value {
         },
         {
             "name": "update_schema",
-            "description": "Update a schema's mutable properties in a single operation. Supports updating description and adding/removing relationships. For bulk relationship changes, this is more efficient than individual add/remove calls.",
+            "description": "Update a schema's mutable properties in a single operation. Supports updating description, adding/removing fields, and adding/removing relationships. For bulk changes, this is more efficient than individual operations.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -922,6 +922,26 @@ fn get_tool_schemas() -> Value {
                     "description": {
                         "type": "string",
                         "description": "New description for the schema"
+                    },
+                    "add_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "type": {"type": "string", "enum": ["string", "number", "boolean", "datetime", "enum", "array", "object"]},
+                                "required": {"type": "boolean"},
+                                "indexed": {"type": "boolean"},
+                                "description": {"type": "string"}
+                            },
+                            "required": ["name", "type"]
+                        },
+                        "description": "Fields to add to the schema"
+                    },
+                    "remove_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Names of fields to remove"
                     },
                     "add_relationships": {
                         "type": "array",

@@ -452,9 +452,18 @@ pub async fn handle_update_schema(
         fields_removed = before - fields.len();
     }
 
-    if let Some(add_fields) = params.add_fields {
+    if let Some(ref add_fields) = params.add_fields {
+        // Check for duplicates before adding
+        for field in add_fields {
+            if fields.iter().any(|f| f.name == field.name) {
+                return Err(MCPError::invalid_params(format!(
+                    "Field '{}' already exists in schema '{}'",
+                    field.name, params.schema_id
+                )));
+            }
+        }
         fields_added = add_fields.len();
-        fields.extend(add_fields);
+        fields.extend(add_fields.clone());
     }
 
     // Process relationships
@@ -468,9 +477,18 @@ pub async fn handle_update_schema(
         relationships_removed = before - relationships.len();
     }
 
-    if let Some(add_rels) = params.add_relationships {
+    if let Some(ref add_rels) = params.add_relationships {
+        // Check for duplicates before adding
+        for rel in add_rels {
+            if relationships.iter().any(|r| r.name == rel.name) {
+                return Err(MCPError::invalid_params(format!(
+                    "Relationship '{}' already exists in schema '{}'",
+                    rel.name, params.schema_id
+                )));
+            }
+        }
         relationships_added = add_rels.len();
-        relationships.extend(add_rels);
+        relationships.extend(add_rels.clone());
     }
 
     // Update description if provided
