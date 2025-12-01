@@ -177,6 +177,10 @@ export interface PluginDefinition {
    *
    * @param node - Node with properties from database
    * @returns Metadata object compatible with node component expectations
+   * @example
+   * // Task node example:
+   * extractMetadata({ nodeType: 'task', properties: { task: { status: 'IN_PROGRESS' } } })
+   * // Returns: { taskState: 'inProgress', task: { status: 'IN_PROGRESS' } }
    */
   extractMetadata?: (node: {
     nodeType: string;

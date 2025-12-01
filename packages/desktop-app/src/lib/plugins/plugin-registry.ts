@@ -439,14 +439,18 @@ export class PluginRegistry {
    * @param state - UI state value
    * @param fieldName - Schema field name
    * @returns Schema-compatible property value
+   * @example
+   * // Task node example:
+   * mapStateToSchema('task', 'pending', 'status') // Returns: 'open'
+   * mapStateToSchema('task', 'inProgress', 'status') // Returns: 'in_progress'
    */
-  mapStateToSchema(nodeType: string, state: string, fieldName: string): unknown {
+  mapStateToSchema<T = unknown>(nodeType: string, state: string, fieldName: string): T {
     const plugin = this.plugins.get(nodeType);
     if (plugin && this.enabledPlugins.has(nodeType) && plugin.mapStateToSchema) {
-      return plugin.mapStateToSchema(state, fieldName);
+      return plugin.mapStateToSchema(state, fieldName) as T;
     }
     // Default: Return state as-is
-    return state;
+    return state as T;
   }
 
   /**
