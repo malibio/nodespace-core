@@ -4310,6 +4310,186 @@ where
 
         Ok(nodes)
     }
+
+    // ========================================================================
+    // NLP Discovery API (Phase 5)
+    // ========================================================================
+
+    /// Get all schema nodes with their relationships
+    ///
+    /// Returns all schema definitions including fields and relationships.
+    /// This is the primary entry point for NLP to understand the data model.
+    ///
+    /// # Returns
+    ///
+    /// Vector of all schema nodes, ordered by ID.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(db)?;
+    /// // Get all schemas to understand the data model
+    /// let schemas = service.get_all_schemas().await?;
+    /// for schema in schemas {
+    ///     println!("Type: {} ({} fields, {} relationships)",
+    ///         schema.id, schema.fields.len(), schema.relationships.len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_all_schemas(
+        &self,
+    ) -> Result<Vec<crate::models::SchemaNode>, NodeServiceError> {
+        self.store.get_all_schemas().await.map_err(|e| {
+            NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                context: format!("Failed to get all schemas: {}", e),
+            })
+        })
+    }
+
+    /// Get a schema with full relationship information
+    ///
+    /// Convenience method that returns a SchemaNode with its relationships.
+    /// Use this when you need the complete schema definition including relationships.
+    ///
+    /// # Arguments
+    ///
+    /// * `schema_id` - The schema ID (e.g., "task", "invoice")
+    ///
+    /// # Returns
+    ///
+    /// The SchemaNode if found, None otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(db)?;
+    /// if let Some(schema) = service.get_schema_with_relationships("invoice").await? {
+    ///     for rel in &schema.relationships {
+    ///         println!("{} -> {} ({})", rel.name, rel.target_type, rel.cardinality);
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_schema_with_relationships(
+        &self,
+        schema_id: &str,
+    ) -> Result<Option<crate::models::SchemaNode>, NodeServiceError> {
+        // get_schema_node already includes relationships now
+        self.get_schema_node(schema_id).await
+    }
+
+    /// Compute inbound relationships for a node type
+    ///
+    /// Returns all relationships from other schemas that point TO this node type.
+    /// This is a computed lookup (not cached) - for frequently accessed data,
+    /// use `InboundRelationshipCache` instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_type` - The node type to find inbound relationships for (e.g., "customer")
+    ///
+    /// # Returns
+    ///
+    /// Vector of tuples: (source_schema_id, relationship)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(db)?;
+    /// // What relationships point TO customer?
+    /// let inbound = service.get_inbound_relationships("customer").await?;
+    /// for (source_type, rel) in inbound {
+    ///     println!("{}.{} -> customer", source_type, rel.name);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_inbound_relationships(
+        &self,
+        target_type: &str,
+    ) -> Result<Vec<(String, crate::models::schema::SchemaRelationship)>, NodeServiceError> {
+        let schemas = self.get_all_schemas().await?;
+
+        let mut inbound = Vec::new();
+        for schema in schemas {
+            for relationship in schema.relationships {
+                if relationship.target_type == target_type {
+                    inbound.push((schema.id.clone(), relationship));
+                }
+            }
+        }
+
+        Ok(inbound)
+    }
+
+    /// Get relationship graph summary for NLP
+    ///
+    /// Returns a summary of all relationships in the system, useful for
+    /// NLP to understand the overall data model structure.
+    ///
+    /// # Returns
+    ///
+    /// Vector of tuples: (source_type, relationship_name, target_type)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::db::SurrealStore;
+    /// # use std::path::PathBuf;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(db)?;
+    /// let graph = service.get_relationship_graph().await?;
+    /// for (source, rel_name, target) in graph {
+    ///     println!("{} --{}-> {}", source, rel_name, target);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_relationship_graph(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, NodeServiceError> {
+        let schemas = self.get_all_schemas().await?;
+
+        let mut edges = Vec::new();
+        for schema in schemas {
+            for relationship in schema.relationships {
+                edges.push((
+                    schema.id.clone(),
+                    relationship.name.clone(),
+                    relationship.target_type.clone(),
+                ));
+            }
+        }
+
+        Ok(edges)
+    }
 }
 
 #[cfg(test)]

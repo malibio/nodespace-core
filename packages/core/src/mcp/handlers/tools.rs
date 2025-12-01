@@ -7,7 +7,7 @@
 //! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
 //! As of Issue #690, SchemaService was removed - schema nodes use generic CRUD.
 
-use crate::mcp::handlers::{markdown, natural_language_schema, nodes, search};
+use crate::mcp::handlers::{markdown, natural_language_schema, nodes, relationships, search};
 use crate::mcp::types::MCPError;
 use crate::services::{NodeEmbeddingService, NodeService};
 use serde_json::{json, Value};
@@ -157,6 +157,26 @@ pub async fn handle_tools_call(
             )
             .await
         }
+
+        // Relationship CRUD (Issue #703)
+        "create_relationship" => {
+            relationships::handle_create_relationship(node_service, arguments).await
+        }
+        "delete_relationship" => {
+            relationships::handle_delete_relationship(node_service, arguments).await
+        }
+        "get_related_nodes" => {
+            relationships::handle_get_related_nodes(node_service, arguments).await
+        }
+
+        // NLP Discovery API (Issue #703)
+        "get_relationship_graph" => {
+            relationships::handle_get_relationship_graph(node_service, arguments).await
+        }
+        "get_inbound_relationships" => {
+            relationships::handle_get_inbound_relationships(node_service, arguments).await
+        }
+        "get_all_schemas" => relationships::handle_get_all_schemas(node_service, arguments).await,
 
         _ => {
             return Err(MCPError::invalid_params(format!(
@@ -657,6 +677,111 @@ fn get_tool_schemas() -> Value {
                     }
                 },
                 "required": ["entity_name", "description"]
+            }
+        },
+        // Relationship CRUD tools (Issue #703)
+        {
+            "name": "create_relationship",
+            "description": "Create a relationship between two nodes. The relationship must be defined in the source node's schema. Edge data can include field values defined in the relationship's edgeFields.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source_id": {
+                        "type": "string",
+                        "description": "ID of the source node"
+                    },
+                    "relationship_name": {
+                        "type": "string",
+                        "description": "Name of the relationship (must be defined in source node's schema)"
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "ID of the target node"
+                    },
+                    "edge_data": {
+                        "type": "object",
+                        "description": "Optional edge field values (JSON object)"
+                    }
+                },
+                "required": ["source_id", "relationship_name", "target_id"]
+            }
+        },
+        {
+            "name": "delete_relationship",
+            "description": "Delete a relationship between two nodes. This is idempotent - succeeds even if the edge doesn't exist.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source_id": {
+                        "type": "string",
+                        "description": "ID of the source node"
+                    },
+                    "relationship_name": {
+                        "type": "string",
+                        "description": "Name of the relationship"
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "ID of the target node"
+                    }
+                },
+                "required": ["source_id", "relationship_name", "target_id"]
+            }
+        },
+        {
+            "name": "get_related_nodes",
+            "description": "Get all nodes connected via a specific relationship. Supports both forward ('out') and reverse ('in') directions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": "ID of the node to get relationships for"
+                    },
+                    "relationship_name": {
+                        "type": "string",
+                        "description": "Name of the relationship"
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["out", "in"],
+                        "description": "Direction to traverse: 'out' for forward, 'in' for reverse (default: 'out')"
+                    }
+                },
+                "required": ["node_id", "relationship_name"]
+            }
+        },
+        // NLP Discovery tools (Issue #703)
+        {
+            "name": "get_relationship_graph",
+            "description": "Get a summary of all relationships defined in schemas. Returns the complete relationship graph for understanding the data model structure.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
+            "name": "get_inbound_relationships",
+            "description": "Discover all relationships from other schemas that point TO a specific node type. Useful for understanding reverse relationships without mutating target schemas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_type": {
+                        "type": "string",
+                        "description": "The node type to find inbound relationships for (e.g., 'customer', 'person')"
+                    }
+                },
+                "required": ["target_type"]
+            }
+        },
+        {
+            "name": "get_all_schemas",
+            "description": "Get all schema definitions including their fields and relationships. This is the primary entry point for understanding the complete data model.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     ])
