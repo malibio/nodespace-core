@@ -503,8 +503,13 @@ where
             .map(|s| (s.id.clone(), !s.fields.is_empty()))
             .collect();
 
-        // Create SchemaTableManager for DDL generation in a scope so it drops before Arc::get_mut()
-        // (SchemaTableManager holds an Arc clone, which would prevent get_mut)
+        // CRITICAL: SchemaTableManager must be scoped to drop before Arc::get_mut()
+        //
+        // SchemaTableManager::new() clones the Arc<SurrealStore> for DDL generation.
+        // If this clone exists during Arc::get_mut() call (below), get_mut() will fail
+        // because Arc requires exactly 1 strong reference for mutable access.
+        //
+        // This scope ensures the Arc clone is dropped before the cache update phase.
         {
             let table_manager =
                 crate::services::schema_table_manager::SchemaTableManager::new(Arc::clone(store));
@@ -540,14 +545,14 @@ where
                         ))
                     })?;
             }
-        } // table_manager dropped here, releasing Arc clone
+        } // ← Arc clone dropped here, enabling Arc::get_mut() below
 
         // Update schema caches incrementally (Issue #704)
         // We use Arc::get_mut() since we're the only owner at this point (before cloning into Self)
         let store_mut = Arc::get_mut(store).ok_or_else(|| {
-            NodeServiceError::SerializationError(
-                "Cannot update schema cache: store has multiple references. \
-                 Ensure NodeService::new() is called with the only Arc reference."
+            NodeServiceError::InitializationError(
+                "Cannot update schema cache: store has multiple Arc references. \
+                 Ensure NodeService::new() is called before cloning the store."
                     .to_string(),
             )
         })?;

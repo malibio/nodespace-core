@@ -100,13 +100,17 @@ export interface SchemaField {
  *
  * This matches the Rust SchemaNode custom Serialize output.
  * Schema-specific fields are at the top level, NOT in properties.
+ *
+ * **Important**: The `nodeType` field is optional because the /api/schemas/:id
+ * endpoint may omit it (it's implicit - always "schema" for this endpoint).
+ * Use `isSchemaNode()` for runtime validation which handles both cases.
  */
 export interface SchemaNode {
   /** Unique identifier (same as schema type, e.g., "task", "person") */
   id: string;
 
-  /** Always "schema" for schema nodes */
-  nodeType: 'schema';
+  /** Always "schema" for schema nodes. Optional - may be omitted in API responses where it's implicit. */
+  nodeType?: 'schema';
 
   /** Schema name (same as id) */
   content: string;

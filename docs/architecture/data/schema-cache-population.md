@@ -121,3 +121,30 @@ With potentially hundreds of node types (especially with user plugins), querying
 - **With cache**: 1 query at startup + O(1) HashSet lookups
 
 The caches are tiny (few KB) but queried constantly during all CRUD operations.
+
+## Verification
+
+### Manual Testing (Dev-Proxy Fresh DB)
+
+1. Delete SurrealDB data: `rm -rf ~/.nodespace/dev.db`
+2. Start SurrealDB: `bun run dev:db:persist`
+3. Start dev-proxy: `bun run dev:proxy`
+4. Verify schemas seeded: `curl http://localhost:3001/api/schemas/date`
+5. Expected: 200 OK with date schema JSON (not 404)
+
+### Automated Testing
+
+The implementation is verified by tests in `packages/core/src/services/node_service.rs`:
+
+1. **Fresh database seeding test**: `test_seeding_fresh_database` (line ~600)
+   - Creates fresh SurrealStore with no schemas
+   - Calls `NodeService::new()` which triggers seeding
+   - Verifies all 7 core schemas created via `get_schema_node()`
+
+2. **Idempotent seeding test**: `test_seeding_idempotent` (line ~630)
+   - Calls `NodeService::new()` twice
+   - Verifies schemas only created once (not duplicated)
+
+3. **Cache population test**: Cache is verified indirectly through subsequent CRUD operations
+   - After seeding, `has_spoke_table("task")` returns true
+   - Node creation for "task" type works correctly with spoke table
