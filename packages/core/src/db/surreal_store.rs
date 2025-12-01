@@ -3846,7 +3846,12 @@ where
         ));
 
         // Update spoke table if there are spoke field changes
+        // CRITICAL: Always include node link to hub for proper hub-spoke architecture
+        // This ensures the spoke record has the bidirectional link even if it was
+        // just created (e.g., when converting text → task via generic node type update)
         if !spoke_set_clauses.is_empty() {
+            // Add the node link to ensure spoke → hub connection exists
+            spoke_set_clauses.push(format!("node = node:`{}`", id));
             transaction_parts.push(format!(
                 r#"UPDATE task:`{id}` SET {sets};"#,
                 id = id,
@@ -3855,13 +3860,18 @@ where
         }
 
         // Update hub table: always bump version and modified_at, optionally update content
+        // Also ensure hub → spoke link exists (data field points to spoke record)
         let hub_sets = if let Some(ref content) = update.content {
             format!(
-                "content = '{}', version = version + 1, modified_at = time::now()",
-                content.replace('\'', "\\'")
+                "content = '{}', version = version + 1, modified_at = time::now(), data = task:`{}`",
+                content.replace('\'', "\\'"),
+                id
             )
         } else {
-            "version = version + 1, modified_at = time::now()".to_string()
+            format!(
+                "version = version + 1, modified_at = time::now(), data = task:`{}`",
+                id
+            )
         };
 
         transaction_parts.push(format!(

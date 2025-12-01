@@ -7860,5 +7860,63 @@ mod tests {
             let task_refetch = service.get_task_node(&task_id).await.unwrap().unwrap();
             assert_eq!(task_refetch.status, TaskStatus::User("blocked".to_string()));
         }
+
+        /// Test that update_task_node works on nodes that were converted from text to task
+        /// via generic update (which only updates node_type, not creating spoke record).
+        ///
+        /// This reproduces the scenario where:
+        /// 1. User creates a text node
+        /// 2. User converts it to task via /task slash command (generic update changes node_type)
+        /// 3. User tries to update task fields like status
+        ///
+        /// The fix ensures update_task_node properly creates the spoke record with hub link
+        /// when it doesn't exist (Issue #709).
+        #[tokio::test]
+        async fn test_update_task_after_type_conversion_from_text() {
+            let (service, _temp) = create_test_service().await;
+
+            // Step 1: Create a text node (no spoke record)
+            let text_node = Node::new_with_id(
+                format!("converted-task-{}", uuid::Uuid::new_v4()),
+                "text".to_string(),
+                "This will become a task".to_string(),
+                json!({}),
+            );
+            service.create_node(text_node.clone()).await.unwrap();
+
+            // Step 2: Convert text to task via generic update (simulates /task command)
+            // This only updates node_type in hub - NO spoke record is created
+            let type_update = crate::models::NodeUpdate {
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            };
+            service
+                .update_node(&text_node.id, type_update)
+                .await
+                .unwrap();
+
+            // Verify node type was updated in hub
+            let node_after_convert = service.get_node(&text_node.id).await.unwrap().unwrap();
+            assert_eq!(node_after_convert.node_type, "task");
+
+            // Step 3: Update task status via type-specific method
+            // This should work even though no spoke record exists yet
+            // Version is 2 after the type conversion update
+            let status_update = TaskNodeUpdate::new().with_status(TaskStatus::InProgress);
+            let task_after = service
+                .update_task_node(&text_node.id, 2, status_update)
+                .await
+                .unwrap();
+
+            // Verify update succeeded
+            assert_eq!(task_after.status, TaskStatus::InProgress);
+            assert_eq!(task_after.content, "This will become a task");
+            assert_eq!(task_after.version, 3);
+
+            // Verify persistence via get_task_node
+            let task_refetch = service.get_task_node(&text_node.id).await.unwrap().unwrap();
+            assert_eq!(task_refetch.status, TaskStatus::InProgress);
+            assert_eq!(task_refetch.content, "This will become a task");
+        }
     }
 }
