@@ -944,8 +944,6 @@ where
             }
 
             // Generate edge table DDL (if it has relationships)
-            // Note: Backend DDL generation works, but UI for relationship interaction
-            // is pending (Issue #710 - Schema-Driven Relationship UI Components)
             if !relationships.is_empty() {
                 ddl_statements.extend(
                     table_manager.generate_relationship_ddl_statements(&node.id, &relationships)?,
@@ -1634,8 +1632,6 @@ where
             ddl_statements.extend(table_manager.generate_ddl_statements(id, &fields)?);
 
             // Generate edge table DDL (if it has relationships)
-            // Note: Backend DDL generation works, but UI for relationship interaction
-            // is pending (Issue #710 - Schema-Driven Relationship UI Components)
             if !relationships.is_empty() {
                 ddl_statements.extend(
                     table_manager.generate_relationship_ddl_statements(id, &relationships)?,
