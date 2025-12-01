@@ -27,6 +27,7 @@
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
 use crate::db::SurrealStore;
+use crate::models::schema::SchemaRelationship;
 use crate::models::{Node, NodeFilter, NodeUpdate};
 use crate::services::error::NodeServiceError;
 use crate::services::migration_registry::MigrationRegistry;
@@ -913,8 +914,8 @@ where
 
         // NOTE: root_id filtering removed - hierarchy now managed via edges
 
-        // For schema nodes, use atomic creation with DDL generation (Issue #691)
-        // This ensures schema node data AND spoke table DDL are created together atomically
+        // For schema nodes, use atomic creation with DDL generation (Issue #691, #703)
+        // This ensures schema node data, spoke table DDL, AND edge table DDL are created together atomically
         if node.node_type == "schema" {
             // Parse schema fields from properties
             let fields: Vec<crate::models::SchemaField> = node
@@ -923,18 +924,33 @@ where
                 .and_then(|f| serde_json::from_value(f.clone()).ok())
                 .unwrap_or_default();
 
-            // Generate DDL statements for the schema (if it has fields)
-            // The schema node ID is the table name (e.g., "task", "person")
-            let ddl_statements = if !fields.is_empty() {
-                let table_manager = crate::services::schema_table_manager::SchemaTableManager::new(
-                    self.store.clone(),
-                );
-                table_manager.generate_ddl_statements(&node.id, &fields)?
-            } else {
-                vec![]
-            };
+            // Parse schema relationships from properties (Issue #703)
+            let relationships: Vec<SchemaRelationship> = node
+                .properties
+                .get("relationships")
+                .and_then(|r| serde_json::from_value(r.clone()).ok())
+                .unwrap_or_default();
 
-            // Execute atomic create: schema node + DDL in one transaction
+            // Generate DDL statements for the schema
+            // The schema node ID is the table name (e.g., "task", "person")
+            let table_manager =
+                crate::services::schema_table_manager::SchemaTableManager::new(self.store.clone());
+
+            let mut ddl_statements = Vec::new();
+
+            // Generate spoke table DDL (if it has fields)
+            if !fields.is_empty() {
+                ddl_statements.extend(table_manager.generate_ddl_statements(&node.id, &fields)?);
+            }
+
+            // Generate edge table DDL (if it has relationships)
+            if !relationships.is_empty() {
+                ddl_statements.extend(
+                    table_manager.generate_relationship_ddl_statements(&node.id, &relationships)?,
+                );
+            }
+
+            // Execute atomic create: schema node + spoke DDL + edge DDL in one transaction
             self.store
                 .create_schema_node_atomic(node.clone(), ddl_statements)
                 .await
@@ -1588,8 +1604,8 @@ where
             },
         };
 
-        // For schema nodes, use atomic update with DDL generation (Issue #690)
-        // This ensures schema node data AND SurrealDB table definitions change atomically
+        // For schema nodes, use atomic update with DDL generation (Issue #690, #703)
+        // This ensures schema node data, spoke table DDL, AND edge table DDL change atomically
         if updated.node_type == "schema" {
             // Parse schema fields from properties
             let fields: Vec<crate::models::SchemaField> = updated
@@ -1598,13 +1614,31 @@ where
                 .and_then(|f| serde_json::from_value(f.clone()).ok())
                 .unwrap_or_default();
 
+            // Parse schema relationships from properties (Issue #703)
+            let relationships: Vec<SchemaRelationship> = updated
+                .properties
+                .get("relationships")
+                .and_then(|r| serde_json::from_value(r.clone()).ok())
+                .unwrap_or_default();
+
             // Generate DDL statements for the schema
             // The schema node ID is the table name (e.g., "task", "person")
             let table_manager =
                 crate::services::schema_table_manager::SchemaTableManager::new(self.store.clone());
-            let ddl_statements = table_manager.generate_ddl_statements(id, &fields)?;
 
-            // Execute atomic update: node + DDL in one transaction
+            let mut ddl_statements = Vec::new();
+
+            // Generate spoke table DDL (always, even if fields is empty - ensures table exists)
+            ddl_statements.extend(table_manager.generate_ddl_statements(id, &fields)?);
+
+            // Generate edge table DDL (if it has relationships)
+            if !relationships.is_empty() {
+                ddl_statements.extend(
+                    table_manager.generate_relationship_ddl_statements(id, &relationships)?,
+                );
+            }
+
+            // Execute atomic update: node + spoke DDL + edge DDL in one transaction
             self.store
                 .update_schema_node_atomic(id, node_update, ddl_statements)
                 .await
@@ -5961,5 +5995,285 @@ mod tests {
             assert_eq!(children[0].content, "Child 1");
             assert_eq!(children[1].content, "Child 2");
         }
+    }
+
+    // ============================================================================
+    // Schema CRUD with Relationships Tests (Issue #703)
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_create_schema_with_relationships() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create a schema node with relationships
+        // IMPORTANT: Schema ID must be a valid type name (used as table name)
+        let schema_node = Node::new_with_id(
+            "invoice".to_string(),
+            "schema".to_string(),
+            "Invoice".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "description": "Invoice schema with customer relationship",
+                "fields": [
+                    {
+                        "name": "amount",
+                        "type": "number",
+                        "required": true
+                    },
+                    {
+                        "name": "due_date",
+                        "type": "date"
+                    }
+                ],
+                "relationships": [
+                    {
+                        "name": "billed_to",
+                        "targetType": "customer",
+                        "direction": "out",
+                        "cardinality": "one",
+                        "required": true,
+                        "reverseName": "invoices",
+                        "reverseCardinality": "many",
+                        "edgeFields": [
+                            {
+                                "name": "billing_date",
+                                "fieldType": "date",
+                                "required": true
+                            },
+                            {
+                                "name": "payment_terms",
+                                "fieldType": "string"
+                            }
+                        ]
+                    }
+                ]
+            }),
+        );
+
+        // Create the schema node (should generate edge table DDL)
+        let id = service.create_node(schema_node).await.unwrap();
+
+        // Verify the schema node was created
+        let retrieved = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(retrieved.node_type, "schema");
+        assert_eq!(retrieved.content, "Invoice");
+
+        // Verify relationships are stored
+        let relationships = retrieved.properties.get("relationships").unwrap();
+        assert!(relationships.is_array());
+        let relationships_array = relationships.as_array().unwrap();
+        assert_eq!(relationships_array.len(), 1);
+
+        // Verify relationship details
+        let relationship = &relationships_array[0];
+        assert_eq!(relationship.get("name").unwrap(), "billed_to");
+        assert_eq!(relationship.get("targetType").unwrap(), "customer");
+        assert_eq!(relationship.get("direction").unwrap(), "out");
+        assert_eq!(relationship.get("cardinality").unwrap(), "one");
+    }
+
+    #[tokio::test]
+    async fn test_update_schema_add_relationships() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create a schema node without relationships
+        // IMPORTANT: Schema ID must be a valid type name (used as table name)
+        let schema_node = Node::new_with_id(
+            "project".to_string(),
+            "schema".to_string(),
+            "Project".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "description": "Project schema",
+                "fields": [
+                    {
+                        "name": "title",
+                        "type": "string",
+                        "required": true
+                    }
+                ],
+                "relationships": []
+            }),
+        );
+
+        let id = service.create_node(schema_node).await.unwrap();
+
+        // Update to add relationships
+        let update = NodeUpdate::new().with_properties(json!({
+            "isCore": false,
+            "version": 1,
+            "description": "Project schema with team relationships",
+            "fields": [
+                {
+                    "name": "title",
+                    "type": "string",
+                    "required": true
+                }
+            ],
+            "relationships": [
+                {
+                    "name": "assigned_to",
+                    "targetType": "person",
+                    "direction": "out",
+                    "cardinality": "many",
+                    "reverseName": "projects",
+                    "reverseCardinality": "many",
+                    "edgeFields": [
+                        {
+                            "name": "role",
+                            "fieldType": "string",
+                            "required": true
+                        }
+                    ]
+                }
+            ]
+        }));
+
+        service.update_node(&id, update).await.unwrap();
+
+        // Verify relationships were added
+        let retrieved = service.get_node(&id).await.unwrap().unwrap();
+        let relationships = retrieved.properties.get("relationships").unwrap();
+        assert!(relationships.is_array());
+        let relationships_array = relationships.as_array().unwrap();
+        assert_eq!(relationships_array.len(), 1);
+
+        let relationship = &relationships_array[0];
+        assert_eq!(relationship.get("name").unwrap(), "assigned_to");
+        assert_eq!(relationship.get("targetType").unwrap(), "person");
+    }
+
+    #[tokio::test]
+    async fn test_create_schema_multiple_relationships() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create a schema node with multiple relationships
+        // IMPORTANT: Schema ID must be a valid type name (used as table name)
+        let schema_node = Node::new_with_id(
+            "task_test".to_string(),
+            "schema".to_string(),
+            "Task".to_string(),
+            json!({
+                "isCore": true,
+                "version": 2,
+                "description": "Task schema with multiple relationships",
+                "fields": [
+                    {
+                        "name": "status",
+                        "type": "enum",
+                        "required": true
+                    }
+                ],
+                "relationships": [
+                    {
+                        "name": "assigned_to",
+                        "targetType": "person",
+                        "direction": "out",
+                        "cardinality": "many"
+                    },
+                    {
+                        "name": "part_of",
+                        "targetType": "project",
+                        "direction": "out",
+                        "cardinality": "one"
+                    },
+                    {
+                        "name": "blocked_by",
+                        "targetType": "task",
+                        "direction": "out",
+                        "cardinality": "many"
+                    }
+                ]
+            }),
+        );
+
+        let id = service.create_node(schema_node).await.unwrap();
+
+        // Verify all relationships are stored
+        let retrieved = service.get_node(&id).await.unwrap().unwrap();
+        let relationships = retrieved.properties.get("relationships").unwrap();
+        let relationships_array = relationships.as_array().unwrap();
+        assert_eq!(relationships_array.len(), 3);
+
+        // Verify each relationship
+        let names: Vec<&str> = relationships_array
+            .iter()
+            .map(|r| r.get("name").unwrap().as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"assigned_to"));
+        assert!(names.contains(&"part_of"));
+        assert!(names.contains(&"blocked_by"));
+    }
+
+    #[tokio::test]
+    async fn test_schema_relationship_reserved_name_validation() {
+        let (service, _temp) = create_test_service().await;
+
+        // Try to create a schema with a reserved relationship name
+        // IMPORTANT: Schema ID must be a valid type name (used as table name)
+        let schema_node = Node::new_with_id(
+            "bad_schema".to_string(),
+            "schema".to_string(),
+            "BadSchema".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "description": "Schema with reserved relationship name",
+                "fields": [],
+                "relationships": [
+                    {
+                        "name": "has_child",
+                        "targetType": "other",
+                        "direction": "out",
+                        "cardinality": "many"
+                    }
+                ]
+            }),
+        );
+
+        // Should fail validation
+        let result = service.create_node(schema_node).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("reserved") || err_msg.contains("has_child"));
+    }
+
+    #[tokio::test]
+    async fn test_schema_forward_reference_allowed() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create invoice schema that references customer (which doesn't exist yet)
+        // This should succeed - forward references are allowed during schema creation
+        // IMPORTANT: Schema ID must be a valid type name (used as table name)
+        let invoice_schema = Node::new_with_id(
+            "invoice_fwd".to_string(),
+            "schema".to_string(),
+            "Invoice".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "description": "Invoice with forward reference to customer",
+                "fields": [],
+                "relationships": [
+                    {
+                        "name": "billed_to",
+                        "targetType": "customer",
+                        "direction": "out",
+                        "cardinality": "one"
+                    }
+                ]
+            }),
+        );
+
+        // Should succeed even though customer schema doesn't exist yet
+        let result = service.create_node(invoice_schema).await;
+        assert!(result.is_ok());
+
+        let id = result.unwrap();
+        let retrieved = service.get_node(&id).await.unwrap().unwrap();
+        let relationships = retrieved.properties.get("relationships").unwrap();
+        assert_eq!(relationships.as_array().unwrap().len(), 1);
     }
 }

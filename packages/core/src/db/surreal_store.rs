@@ -1454,7 +1454,8 @@ where
                 is_core: $is_core,
                 version: $schema_version,
                 description: $description,
-                fields: $fields
+                fields: $fields,
+                relationships: $relationships
             }};"#,
             node.id
         ));
@@ -1483,6 +1484,11 @@ where
             .get("fields")
             .cloned()
             .unwrap_or(serde_json::json!([]));
+        let relationships = node
+            .properties
+            .get("relationships")
+            .cloned()
+            .unwrap_or(serde_json::json!([]));
 
         // Execute atomic transaction
         self.db
@@ -1494,6 +1500,7 @@ where
             .bind(("schema_version", schema_version))
             .bind(("description", description.to_string()))
             .bind(("fields", fields))
+            .bind(("relationships", relationships))
             .await
             .context("Failed to execute atomic schema creation transaction")?;
 
