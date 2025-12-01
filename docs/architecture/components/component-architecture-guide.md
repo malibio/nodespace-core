@@ -572,6 +572,353 @@ import DateNodeViewer from './date-node-viewer.svelte';
 import TextNode from './text-node.svelte';
 ```
 
+## Type-Safe CRUD Architecture (Issue #709)
+
+NodeSpace uses a **hybrid architecture** for schema property forms that provides:
+- **Compile-time type safety** for core node types (task, date, entity, etc.)
+- **Runtime flexibility** for user-defined types (dynamic schemas)
+
+### The Hybrid Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        BaseNodeViewer                                │
+│                                                                      │
+│  ┌────────────────────────┐      ┌────────────────────────┐         │
+│  │   Core Node Types      │      │   User-Defined Types   │         │
+│  │   (compile-time)       │      │   (runtime schema)     │         │
+│  └──────────┬─────────────┘      └──────────┬─────────────┘         │
+│             │                               │                        │
+│             ▼                               ▼                        │
+│  ┌────────────────────────┐      ┌────────────────────────┐         │
+│  │   TaskSchemaForm       │      │   SchemaPropertyForm   │         │
+│  │   DateSchemaForm       │      │   (generic/dynamic)    │         │
+│  │   EntitySchemaForm     │      │                        │         │
+│  │   (typed, hardcoded)   │      │                        │         │
+│  └──────────┬─────────────┘      └──────────┬─────────────┘         │
+│             │                               │                        │
+│             └───────────┬───────────────────┘                        │
+│                         ▼                                            │
+│           ┌─────────────────────────────────┐                        │
+│           │  sharedNodeStore.updateNode()   │                        │
+│           │  (smart routing via plugin)     │                        │
+│           └──────────┬──────────────────────┘                        │
+│                      │                                               │
+│        ┌─────────────┼─────────────┐                                │
+│        ▼             ▼             ▼                                │
+│   updateTaskNode  updateNode   (other typed                         │
+│   (spoke table)   (properties)  updaters)                           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Schema Form Components
+
+#### Type-Specific Schema Forms (Core Types)
+
+For core node types with spoke tables, create **hardcoded schema forms** with full TypeScript type safety:
+
+```svelte
+<!-- task-schema-form.svelte -->
+<script lang="ts">
+  import type { TaskNode, TaskStatus, TaskPriority } from '$lib/types';
+  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+
+  let { nodeId }: { nodeId: string } = $props();
+
+  // Fully typed - IDE autocomplete, compile-time checking
+  let node = $derived(sharedNodeStore.getNode(nodeId) as TaskNode | null);
+
+  function updateStatus(status: TaskStatus) {
+    // Type-safe update - TypeScript validates the shape
+    sharedNodeStore.updateNode(nodeId, { status });
+  }
+
+  function updatePriority(priority: TaskPriority) {
+    sharedNodeStore.updateNode(nodeId, { priority });
+  }
+</script>
+
+{#if node}
+  <div class="task-schema-form">
+    <Select value={node.status} onchange={updateStatus}>
+      <option value="open">Open</option>
+      <option value="in_progress">In Progress</option>
+      <option value="done">Done</option>
+    </Select>
+
+    <Select value={node.priority} onchange={updatePriority}>
+      <option value={1}>Low</option>
+      <option value={2}>Medium</option>
+      <option value={3}>High</option>
+    </Select>
+
+    <DatePicker value={node.dueDate} onchange={(d) => sharedNodeStore.updateNode(nodeId, { dueDate: d })} />
+  </div>
+{/if}
+```
+
+**Benefits of hardcoded forms:**
+- ✅ Full TypeScript inference (`node.status` is `TaskStatus`, not `unknown`)
+- ✅ Compile-time error catching (typos, wrong field types)
+- ✅ IDE autocomplete for all properties
+- ✅ Optimized rendering (no schema lookup at runtime)
+- ✅ Direct spoke field access (no nested `properties.task.status`)
+
+#### Generic Schema Form (User-Defined Types)
+
+For user-defined types (runtime schemas), use the **dynamic SchemaPropertyForm**:
+
+```svelte
+<!-- schema-property-form.svelte (existing) -->
+<script lang="ts">
+  // Generic - works with any schema-defined type
+  let { nodeId, nodeType }: { nodeId: string; nodeType: string } = $props();
+
+  // Runtime schema lookup
+  let schema = $state<SchemaNode | null>(null);
+  $effect(() => {
+    loadSchema(nodeType);
+  });
+
+  function updateProperty(fieldName: string, value: unknown) {
+    // Generic update - no type safety on field values
+    sharedNodeStore.updateNode(nodeId, {
+      properties: { [nodeType]: { [fieldName]: value } }
+    });
+  }
+</script>
+
+{#each schema?.fields as field}
+  <!-- Dynamic field rendering based on schema -->
+{/each}
+```
+
+### Smart Routing in SharedNodeStore
+
+The `sharedNodeStore.updateNode()` method uses **plugin-based routing** to dispatch updates to the correct backend method:
+
+```typescript
+// shared-node-store.svelte.ts
+class SharedNodeStore {
+  // Cache updaters for O(1) lookup after first access
+  private updaterCache = new Map<string, NodeUpdater>();
+
+  async updateNode(nodeId: string, changes: Partial<Node>, source: UpdateSource) {
+    const node = this.getNode(nodeId);
+    if (!node) return;
+
+    try {
+      // Cached plugin lookup (O(1) after first access per type)
+      let updater = this.updaterCache.get(node.nodeType);
+      if (updater === undefined) {
+        updater = pluginRegistry.getNodeUpdater(node.nodeType) ?? null;
+        this.updaterCache.set(node.nodeType, updater);
+      }
+
+      if (updater) {
+        // Type-specific path → spoke table
+        return await updater.update(nodeId, node.version, changes);
+      }
+
+      // Generic path → properties JSON (hub table only)
+      return await backendAdapter.updateNode(nodeId, node.version, { properties: changes });
+    } catch (error) {
+      // Unified error handling for both paths
+      this.handleUpdateError(nodeId, error, source);
+      throw error;
+    }
+  }
+
+  // Also expose type-specific methods for explicit calls (tests, specialized workflows)
+  async updateTaskNode(nodeId: string, changes: TaskNodeUpdate, source: UpdateSource) {
+    return this.updateNode(nodeId, changes, source); // Routes through plugin
+  }
+}
+```
+
+**Design decisions:**
+- **Updater caching**: Avoids repeated plugin lookups for hot paths
+- **Unified error handling**: Both spoke and hub updates use same rollback/notification logic
+- **Explicit type methods**: Export `updateTaskNode()` for tests and type-safe direct calls
+- **Single pipeline**: All updates flow through same debouncing/conflict detection
+
+### Plugin Registration for Type-Specific Updaters
+
+```typescript
+// core-plugins.ts
+export const taskNodePlugin: PluginDefinition = {
+  id: 'task',
+  // ... existing config
+
+  // NEW: Schema form component (lazy-loaded)
+  schemaForm: {
+    lazyLoad: () => import('../components/property-forms/task-schema-form.svelte'),
+  },
+
+  // NEW: Type-specific updater
+  updater: {
+    update: async (id: string, version: number, changes: TaskNodeUpdate) => {
+      return backendAdapter.updateTaskNode(id, version, changes);
+    }
+  }
+};
+```
+
+### Type-Safe Plugin Lookup
+
+Use type guards in the plugin registry for full type safety:
+
+```typescript
+// plugin-registry.ts
+export interface NodeUpdater<T extends Node = Node> {
+  update: (id: string, version: number, changes: Partial<T>) => Promise<T>;
+}
+
+export function getNodeUpdater<T extends Node>(
+  nodeType: string
+): NodeUpdater<T> | null {
+  const plugin = this.plugins.get(nodeType);
+  return plugin?.updater ?? null;
+}
+
+// Usage with full type inference
+const updater = pluginRegistry.getNodeUpdater<TaskNode>('task');
+if (updater) {
+  const result = await updater.update(nodeId, version, { status: 'done' }); // Fully typed!
+}
+```
+
+### When to Use Each Pattern
+
+| Scenario | Pattern | Example |
+|----------|---------|---------|
+| Core node type with spoke table | Type-specific SchemaForm | TaskSchemaForm, DateSchemaForm |
+| Core node type without spoke table | SchemaPropertyForm (generic) | TextNode (hub-only) |
+| User-defined type | SchemaPropertyForm (generic) | Custom "recipe" or "workout" types |
+| New core type being added | Create type-specific form | EntitySchemaForm (planned) |
+
+### Implementation Checklist for New Core Types
+
+When adding a new core node type with type-safe CRUD:
+
+1. **Backend (Rust)**
+   - [ ] Create `TypeNodeUpdate` struct in `models/`
+   - [ ] Add `update_type_node()` to `SurrealStore`
+   - [ ] Add `update_type_node()` to `NodeService`
+   - [ ] Add Tauri command in `commands/nodes.rs`
+   - [ ] Register command in `lib.rs`
+
+2. **Frontend (TypeScript)**
+   - [ ] Create `TypeNode` interface in `types/`
+   - [ ] Create `TypeNodeUpdate` interface
+   - [ ] Add to BackendAdapter interface and implementations
+   - [ ] Add wrapper in `tauri-commands.ts`
+   - [ ] Create `type-schema-form.svelte` component
+   - [ ] Register in plugin system with `schemaForm` and `updater`
+
+3. **Integration**
+   - [ ] Update BaseNodeViewer to use plugin's schema form
+   - [ ] Ensure `sharedNodeStore.updateNode()` routes correctly
+   - [ ] Add tests for type-safe update flow
+
+### Data Flow Example: Task Status Update
+
+```
+1. User clicks task status dropdown in TaskSchemaForm
+   ↓
+2. TaskSchemaForm calls sharedNodeStore.updateNode(nodeId, { status: 'in_progress' })
+   ↓
+3. sharedNodeStore detects nodeType === 'task', looks up plugin
+   ↓
+4. Plugin's updater.update() calls backendAdapter.updateTaskNode()
+   ↓
+5. TauriAdapter invokes 'update_task_node' command
+   ↓
+6. Rust NodeService::update_task_node() validates TaskNodeUpdate
+   ↓
+7. SurrealStore updates spoke table (task) with atomic transaction
+   ↓
+8. Returns updated TaskNode with new version
+   ↓
+9. sharedNodeStore updates local state, notifies subscribers
+   ↓
+10. TaskSchemaForm re-renders with new status (reactive)
+```
+
+### Incremental Implementation Strategy
+
+Implement this architecture **progressively** to avoid big-bang refactoring:
+
+**Phase 1: Plugin Registration (no behavior change)**
+```typescript
+// Add to taskNodePlugin - SchemaPropertyForm still used
+taskNodePlugin.schemaForm = { lazyLoad: () => import('./task-schema-form.svelte') };
+```
+
+**Phase 2: TaskSchemaForm Component**
+- Create hardcoded form with full type safety
+- Test alongside existing SchemaPropertyForm as fallback
+- BaseNodeViewer selects form via plugin lookup
+
+**Phase 3: Type-Specific Updater**
+```typescript
+// Add updater - routes through sharedNodeStore.updateNode()
+taskNodePlugin.updater = {
+  update: (id, version, changes) => backendAdapter.updateTaskNode(id, version, changes)
+};
+```
+
+**Phase 4: Repeat for Other Core Types**
+- DateSchemaForm (if date nodes have spoke fields)
+- EntitySchemaForm (planned)
+- Each type follows same pattern
+
+This approach allows **per-type validation** and avoids breaking existing functionality.
+
+### BaseNodeViewer Schema Form Selection
+
+```svelte
+<!-- base-node-viewer.svelte -->
+{#if currentViewedNode && nodeId}
+  {@const SchemaFormComponent = pluginRegistry.getSchemaForm(currentViewedNode.nodeType)}
+
+  {#if SchemaFormComponent}
+    <!-- Type-specific form (TaskSchemaForm, etc.) -->
+    <svelte:component this={SchemaFormComponent} {nodeId} />
+  {:else}
+    <!-- Fallback to generic form for user-defined types -->
+    <SchemaPropertyForm {nodeId} nodeType={currentViewedNode.nodeType} />
+  {/if}
+{/if}
+```
+
+### Relation to Node Behavior System
+
+This pattern complements the [Node Behavior System](../business-logic/node-behavior-system.md):
+
+- **Behaviors** (Rust): Validation, deletion rules, computed content
+- **Schema Forms** (Svelte): UI for editing spoke table fields
+- **Both**: Compile-time type safety for core types, runtime flexibility for extensions
+
+The hybrid approach ensures:
+- Core types are **fast and type-safe** (hardcoded UI + typed backend)
+- User types are **flexible and extensible** (dynamic UI + schema validation)
+
+### Important: Dual Update Paths
+
+Document clearly for future developers:
+
+| Update Path | When Used | Backend Method |
+|-------------|-----------|----------------|
+| **Plugin updater** | Core types with spoke tables | `updateTaskNode()`, `updateDateNode()`, etc. |
+| **Generic update** | Hub-only types, user-defined types | `updateNode()` with properties JSON |
+
+Both paths share:
+- Same debouncing logic
+- Same optimistic update/rollback
+- Same error handling and notifications
+- Same version conflict detection (OCC)
+
 ## Summary
 
 This architecture provides:
@@ -580,5 +927,6 @@ This architecture provides:
 - **Extensible patterns** for new node types
 - **Maintainable code** with predictable structure
 - **Type safety** with proper interfaces
+- **Hybrid CRUD pattern** - compile-time safety for core types, runtime flexibility for user types
 
 Follow these patterns for all new component development to maintain architectural consistency and developer productivity.
