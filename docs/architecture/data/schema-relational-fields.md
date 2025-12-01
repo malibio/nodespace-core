@@ -15,62 +15,36 @@ This document defines the architecture for supporting **runtime schema-driven re
 - `Task "is_assigned_to" Person` (with assigned_at, assigned_by, role)
 - `Task "is_part_of" Project`
 
-## Current State Analysis
-
-### What Works Today
-
-NodeSpace has two existing patterns for relating nodes:
-
-#### 1. Composition via Record Links (Spoke Table Fields)
-- **Implementation**: `record` field type in `SchemaField`
-- **Storage**: Property stored in spoke table
-- **Example**: `task.assignee: option<record>`
-- **Queries**: Fast direct access via spoke table
-- **Use case**: Single unidirectional reference without metadata
-
-#### 2. Structural Graph Edges (Hardcoded Relations)
-- **Implementation**: Defined in `schema.surql`
-- **Storage**: Dedicated edge tables with IN/OUT constraints
-- **Examples**:
-  - `has_child` - Hierarchy with ordering and OCC
-  - `mentions` - Cross-references with context and offset
-- **Queries**: Bidirectional graph traversal
-- **Use case**: Core structural relationships with edge metadata
-
-### What Doesn't Work
-
-- **No automatic edge table generation** from schema definitions
-- **No schema-driven bidirectional relationships**
-- **No support for declaring relations with edge properties**
-- **No migration path** from simple `record` to complex `relation`
+---
 
 ## Architecture Decisions
 
-### Decision 1: Composition vs. Relationship - Decision Tree
+### Decision 1: Edge-Only Storage for Relationships
 
-Use this decision tree to determine the appropriate pattern:
+**Recommendation**: Relationships are stored **only in edge tables** - no spoke table fields.
 
+**Rationale:**
+- **Single source of truth** - The edge table IS the relationship
+- **Consistency** - Both directions work the same way (query edge table)
+- **No sync issues** - No need to keep spoke fields in sync with edges
+- **Simpler mental model** - Relationships = edge tables, period
+
+**How it works:**
+```sql
+-- Create relationship (edge only, no spoke field)
+RELATE invoice:INV-001->billed_to->customer:acme CONTENT {
+  billing_date: time::now(),
+  payment_terms: 'net-30'
+};
+
+-- Query from invoice side
+SELECT ->billed_to->customer.* FROM invoice:INV-001;
+
+-- Query from customer side (same edge table, reverse direction)
+SELECT <-billed_to<-invoice.* FROM customer:acme;
 ```
-START: Does this reference need edge metadata (timestamps, context, properties)?
-  ├─ NO → Does it need bidirectional queries?
-  │   ├─ NO → Use COMPOSITION (record field in spoke table)
-  │   └─ YES → Use RELATIONSHIP (graph edge with minimal metadata)
-  └─ YES → Use RELATIONSHIP (graph edge with properties)
 
-COMPOSITION PATTERN (Record Field):
-  - 1-to-1 or 1-to-many from owner's perspective
-  - Queries primarily in one direction
-  - No edge metadata needed
-  - Fast direct access required
-  - Example: task.assignee → person
-
-RELATIONSHIP PATTERN (Graph Edge):
-  - Many-to-many relationships
-  - Bidirectional query requirements
-  - Edge has properties (assigned_at, role, context)
-  - Structural relationship (hierarchy, mentions)
-  - Example: person ←assigned_to→ task (with assigned_at, assigned_by)
-```
+**No spoke field like `invoice.customer_id` is created.**
 
 ### Decision 2: Relationships Stored Separately from Fields
 
@@ -80,640 +54,423 @@ RELATIONSHIP PATTERN (Graph Edge):
 - Relationships create edge tables (different from spoke fields)
 - Clearer separation of concerns
 - Easier for NLP to parse and understand entity relationships
-- Retrieval can use abstract graph traversal methods (no dynamic SQL building)
+- Retrieval uses abstract graph traversal methods
 
-#### Option A: Enhanced `record` Type (Simple References)
-
-Use existing `record` type for composition:
-
-```json
-{
-  "name": "assignee",
-  "type": "record",
-  "targetType": "person",
-  "indexed": true,
-  "required": false,
-  "description": "Person assigned to this task"
-}
-```
-
-**Generated DDL:**
-```sql
-DEFINE FIELD assignee ON TABLE task TYPE option<record>;
-DEFINE INDEX idx_task_assignee ON TABLE task COLUMNS assignee;
-```
-
-**Advantages:**
-- ✅ Simple, fast queries: `SELECT * FROM task WHERE assignee = person:alice`
-- ✅ Minimal overhead - just a field in the spoke table
-- ✅ Works with existing `SchemaTableManager` code
-- ✅ Natural for 1-to-1 ownership patterns
-
-**Limitations:**
-- ❌ No automatic bidirectional support
-- ❌ No edge metadata
-- ❌ Reverse queries require manual indexing
-
-#### Option B: New `relation` Type (Graph Edges)
-
-Add new `relation` field type for complex relationships:
-
-```json
-{
-  "name": "assigned_to",
-  "type": "relation",
-  "targetType": "task",
-  "direction": "out",
-  "edgeTable": "person_assigned_to_task",
-  "bidirectional": true,
-  "edgeFields": [
-    {
-      "name": "assigned_at",
-      "type": "datetime",
-      "indexed": true,
-      "required": true,
-      "default": "time::now()"
-    },
-    {
-      "name": "assigned_by",
-      "type": "record",
-      "targetType": "person",
-      "indexed": false
-    },
-    {
-      "name": "role",
-      "type": "string",
-      "indexed": true
-    }
-  ],
-  "indexed": true
-}
-```
-
-**Generated DDL:**
-```sql
--- Edge table definition
-DEFINE TABLE person_assigned_to_task SCHEMAFULL TYPE RELATION IN person OUT task;
-
--- Edge properties
-DEFINE FIELD assigned_at ON TABLE person_assigned_to_task TYPE datetime DEFAULT time::now();
-DEFINE FIELD assigned_by ON TABLE person_assigned_to_task TYPE option<record>;
-DEFINE FIELD role ON TABLE person_assigned_to_task TYPE option<string>;
-
--- Indexes for bidirectional queries
-DEFINE INDEX idx_assigned_to_in ON TABLE person_assigned_to_task COLUMNS in;
-DEFINE INDEX idx_assigned_to_out ON TABLE person_assigned_to_task COLUMNS out;
-DEFINE INDEX idx_assigned_to_unique ON TABLE person_assigned_to_task COLUMNS in, out UNIQUE;
-DEFINE INDEX idx_assigned_to_assigned_at ON TABLE person_assigned_to_task COLUMNS assigned_at;
-DEFINE INDEX idx_assigned_to_role ON TABLE person_assigned_to_task COLUMNS role;
-```
-
-**Advantages:**
-- ✅ Bidirectional queries: "tasks assigned to Alice" AND "who is assigned to this task"
-- ✅ Edge metadata: assigned_at, assigned_by, role
-- ✅ Many-to-many relationships naturally supported
-- ✅ Queryable edge properties: "assignments created last week"
-
-**Limitations:**
-- ❌ More complex DDL generation
-- ❌ Requires edge table cleanup on deletion
-- ❌ Slightly slower than direct record field access
-
-### Decision 3: Atomic Schema + Relationship Creation
-
-**Requirement**: When a custom node schema is created/updated, both the spoke table AND edge tables must be created atomically in a single transaction.
-
-**Mandatory Relationships**: If a relationship is marked as `required: true`, validation ensures:
-- Target node type schema exists
-- Edge must exist when creating/updating nodes of this type
-
-**Example:**
+**Schema Structure:**
 ```json
 {
   "id": "invoice",
+  "nodeType": "schema",
+  "content": "Invoice",
+  "fields": [
+    { "name": "amount", "type": "number", "required": true },
+    { "name": "due_date", "type": "date" }
+  ],
   "relationships": [
     {
       "name": "billed_to",
       "targetType": "customer",
-      "required": true,  // Cannot create invoice without customer
-      "cardinality": "one"
-    }
-  ]
-}
-```
-
-### Decision 4: Bidirectional Relationship Auto-Sync
-
-**Recommendation**: Auto-add reverse relationship metadata to target schema
-
-When `invoice` defines `billed_to -> customer`, automatically update `customer` schema to include reverse relationship metadata:
-
-```json
-{
-  "id": "customer",
-  "relationships": [
-    {
-      "name": "invoices",
-      "targetType": "invoice",
-      "direction": "in",
-      "cardinality": "many",
-      "reverseOf": "billed_to",  // Links back to source relationship
-      "autoGenerated": true       // Flag for UI/NLP
-    }
-  ]
-}
-```
-
-**Benefits:**
-- ✅ NLP can discover relationships from either side
-- ✅ Schema introspection shows complete graph
-- ✅ No extra storage cost (just metadata)
-- ✅ Queries work in both directions
-
-### Decision 5: Edge Table Generation Strategy
-
-For relationships, generate edge tables automatically:
-
-#### Naming Convention
-
-**Pattern**: `{source_type}_{field_name}_{target_type}`
-
-**Examples**:
-- `person_assigned_to_task`
-- `invoice_has_line_item_line_item`
-- `document_authored_by_person`
-
-**Validation Rules**:
-- All lowercase with underscores
-- Must be unique across all schemas
-- Alphanumeric characters and underscores only
-
-#### DDL Structure Template
-
-```sql
--- Edge table (RELATION type enforces graph semantics)
-DEFINE TABLE {edge_table_name} SCHEMAFULL TYPE RELATION IN {source_type} OUT {target_type};
-
--- Core tracking fields (always generated)
-DEFINE FIELD created_at ON TABLE {edge_table_name} TYPE datetime DEFAULT time::now();
-DEFINE FIELD version ON TABLE {edge_table_name} TYPE int DEFAULT 1;
-
--- User-defined edge fields (from edgeFields array)
-{for each edge_field}
-  DEFINE FIELD {field.name} ON TABLE {edge_table_name} TYPE {mapped_type};
-{end for}
-
--- Core indexes (always generated)
-DEFINE INDEX idx_{edge_table_name}_in ON TABLE {edge_table_name} COLUMNS in;
-DEFINE INDEX idx_{edge_table_name}_out ON TABLE {edge_table_name} COLUMNS out;
-DEFINE INDEX idx_{edge_table_name}_unique ON TABLE {edge_table_name} COLUMNS in, out UNIQUE;
-
--- User-defined indexes (from edgeFields with indexed: true)
-{for each indexed edge_field}
-  DEFINE INDEX idx_{edge_table_name}_{field_name} ON TABLE {edge_table_name} COLUMNS {field_name};
-{end for}
-```
-
-#### Generation Timing
-
-**When to generate edge tables:**
-
-1. **Schema Creation**: Edge table generated atomically with schema node and spoke table
-2. **Schema Update**: Edge table updated when relation field added/modified
-3. **Field Deletion**: Edge table removed when relation field deleted (with confirmation)
-
-**Atomic Transaction Pattern:**
-
-```rust
-// When creating/updating schema with relation fields
-db.query("BEGIN TRANSACTION;").await?;
-
-// 1. Update schema node in hub table
-db.query("UPDATE node:task SET ...").await?;
-
-// 2. Update spoke table for schema
-db.query("UPDATE schema:task SET fields = ...").await?;
-
-// 3. Generate/update edge tables for relation fields
-for relation_field in relation_fields {
-    let ddl = generate_edge_table_ddl(type_name, relation_field)?;
-    for statement in ddl {
-        db.query(&statement).await?;
-    }
-}
-
-db.query("COMMIT TRANSACTION;").await?;
-```
-
-#### Cleanup Strategy
-
-**When relation field is deleted:**
-
-1. **Confirm with user** (data loss warning)
-2. **Delete edge table**: `REMOVE TABLE {edge_table_name};`
-3. **All edges deleted** automatically by SurrealDB
-4. **No orphaned data** (foreign key constraints prevent dangling references)
-
-**When node is deleted:**
-
-- **Option 1 (Default)**: Cascade delete edges
-  ```sql
-  -- Automatically handled by SurrealDB for RELATION tables
-  DELETE node:task-123;  -- Also deletes all has_child and mentions edges
-  ```
-
-- **Option 2 (Configurable)**: Keep orphaned edges (useful for audit trails)
-  ```json
-  {
-    "type": "relation",
-    "onSourceDelete": "keep_orphaned",
-    "onTargetDelete": "cascade"
-  }
-  ```
-
-### Decision 4: Existing Structural Relations
-
-**Recommendation**: Keep `has_child` and `mentions` as structural (defined in `schema.surql`)
-
-#### Rationale
-
-1. **Core to NodeSpace architecture** - These are not user-extensible
-2. **Performance critical** - Hierarchy traversal happens constantly
-3. **Special semantics** - `has_child.order` uses fractional indexing, custom OCC
-4. **UI dependencies** - Components hardcode these relation names
-
-#### Future Consideration
-
-If users request custom hierarchy types (e.g., "alternative view", "timeline order"):
-- Create new schema-driven relation: `custom_hierarchy`
-- Keep `has_child` as primary structural relation
-- UI can optionally render custom hierarchies
-
-### Decision 5: Schema Field Type Extensions
-
-Extend `SchemaField` to support `relation` type:
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SchemaField {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub field_type: String,  // "string" | "number" | "record" | "relation"
-    pub protection: SchemaProtectionLevel,
-
-    // ... existing fields ...
-
-    // NEW: Relation-specific fields
-    /// Target node type for record and relation fields
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_type: Option<String>,
-
-    /// Direction for relation fields: "in" | "out" | "both"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub direction: Option<String>,
-
-    /// Generated edge table name (auto-computed if not specified)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub edge_table: Option<String>,
-
-    /// Whether this relation supports bidirectional queries
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bidirectional: Option<bool>,
-
-    /// Properties stored on the edge itself (relation type only)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub edge_fields: Option<Vec<SchemaField>>,
-
-    /// Cascade behavior on deletion: "cascade" | "keep_orphaned"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub on_delete: Option<String>,
-}
-```
-
-## Implementation Approach
-
-### Phase 1: Documentation & Design ✅ (This Document)
-
-- [x] Document composition vs. relationship decision tree
-- [x] Define when to use `record` vs. `relation`
-- [x] Specify edge table naming conventions
-- [x] Design `relation` field schema structure
-
-### Phase 2: Schema Type Extension (Future)
-
-**Not implemented yet - requires separate issue**
-
-- [ ] Extend `SchemaField` with relation-specific fields
-- [ ] Add validation for relation field definitions
-- [ ] Support `targetType` for type safety on `record` fields
-- [ ] Implement edge table name generation logic
-
-### Phase 3: DDL Generation (Future)
-
-**Not implemented yet - requires separate issue**
-
-- [ ] Extend `SchemaTableManager.generate_ddl_statements()` to handle `relation` type
-- [ ] Generate edge table DDL from relation field definitions
-- [ ] Generate edge field DDL from `edgeFields` array
-- [ ] Generate bidirectional indexes automatically
-
-### Phase 4: CRUD Operations (Future)
-
-**Not implemented yet - requires separate issue**
-
-- [ ] Extend `NodeService` to create/delete edge records
-- [ ] Support querying relations in both directions
-- [ ] Implement cascade delete behavior
-- [ ] Add transaction support for atomic edge + node updates
-
-### Phase 5: Migration Path (Future)
-
-**Not implemented yet - requires separate issue**
-
-- [ ] Document how to migrate `record` → `relation`
-- [ ] Provide data migration utilities
-- [ ] Support gradual rollout for large datasets
-
-## Use Case Examples
-
-### Example 1: Task Assignment (Start with `record`, migrate to `relation` if needed)
-
-**Initial Simple Approach (Composition):**
-
-```json
-{
-  "id": "task",
-  "fields": [
-    {
-      "name": "assignee",
-      "type": "record",
-      "targetType": "person",
-      "indexed": true,
-      "required": false
-    }
-  ]
-}
-```
-
-**Queries:**
-```sql
--- Get task's assignee (fast, direct)
-SELECT *, assignee.* FROM task:daily-standup;
-
--- Find tasks assigned to Alice (indexed)
-SELECT * FROM task WHERE assignee = person:alice;
-
--- Find who Alice is assigned to (reverse query - slower, requires full scan)
-SELECT * FROM task WHERE assignee = person:alice;  -- Same as above
-```
-
-**When to Migrate to `relation`:**
-- Need to track "assigned_at" timestamp
-- Need to track "assigned_by" (who made the assignment)
-- Need efficient "all assignments for this person" queries
-- Support multiple assignees per task
-
-**Migrated Complex Approach (Relationship):**
-
-```json
-{
-  "id": "person",
-  "fields": [
-    {
-      "name": "assigned_to",
-      "type": "relation",
-      "targetType": "task",
       "direction": "out",
-      "bidirectional": true,
+      "cardinality": "one",
+      "required": true,
+      "reverseName": "invoices",
+      "reverseCardinality": "many",
       "edgeFields": [
-        {
-          "name": "assigned_at",
-          "type": "datetime",
-          "default": "time::now()",
-          "indexed": true
-        },
-        {
-          "name": "assigned_by",
-          "type": "record",
-          "targetType": "person"
-        },
-        {
-          "name": "role",
-          "type": "enum",
-          "coreValues": [
-            {"value": "owner", "label": "Owner"},
-            {"value": "collaborator", "label": "Collaborator"}
-          ]
-        }
+        { "name": "billing_date", "type": "date", "required": true },
+        { "name": "payment_terms", "type": "string" }
       ]
     }
   ]
 }
 ```
 
-**Queries:**
+### Decision 3: Computed Reverse Relationship Discovery
+
+**Recommendation**: Do NOT mutate target schemas. Use computed metadata instead.
+
+**Problem with auto-mutating target schemas:**
+- Write amplification (updating one schema requires updating another)
+- Transaction/locking complexity
+- OCC version conflicts
+- User confusion ("I never created that relationship!")
+
+**Solution**: Query-time discovery of reverse relationships:
+
+```rust
+/// Discover all inbound relationships for a node type
+pub async fn get_inbound_relationships(type_name: &str) -> Vec<RelationshipMetadata> {
+    // Query ALL schemas for relationships targeting this type
+    let query = "SELECT * FROM schema WHERE relationships[*].targetType = $type_name";
+    // Return computed list of inbound relationships with reverse names
+}
+```
+
+**Benefits:**
+- No schema mutation cascades
+- No version conflicts
+- NLP can still discover relationships from either side
+- Consistent with "schema-as-metadata" pattern
+
+**Performance:** Cache inbound relationship index in memory, rebuild on schema changes.
+
+### Decision 4: Forward-Looking Schema Changes (Grandfathering)
+
+**Recommendation**: Schema changes apply to **new data only**. Existing data is grandfathered.
+
+This is consistent with how fields already work in NodeSpace (see [Schema Migration Behavior](#schema-migration-behavior) section).
+
+| Change | Historical Data | New Data |
+|--------|-----------------|----------|
+| Add relationship | N/A (no edges exist) | Must provide if required |
+| Remove relationship | Edges preserved (soft-delete) | Can't create new edges |
+| Set `required: true` | Null allowed (grandfathered) | Must provide |
+| Change cardinality `many→one` | Keep all existing (no enforcement) | Enforce on new |
+| Add edge field | Null for historical | Required if marked required |
+| Remove edge field | Data preserved (not exposed) | Not stored |
+
+**Example - Making relationship required:**
+```rust
+// Setting required = true means:
+// - Future invoice creation MUST include billed_to relationship
+// - Existing invoices with no billed_to edge are fine (grandfathered)
+// - If you UPDATE an existing invoice, you must now provide billed_to
+
+schema.relationship("billed_to").set_required(true)
+// No backfill needed. No default customer creation. Clean.
+```
+
+**Optional backfill for simple types:**
+```rust
+// For edge fields, user can optionally provide retroactive default
+schema.relationship("assigned_to")
+    .add_edge_field("role", type: "enum", required: true)
+    // Historical edges: role = null (grandfathered by default)
+
+// OR with explicit backfill (opt-in)
+schema.relationship("assigned_to")
+    .add_edge_field("role", type: "enum", required: true, retroactive_default: "collaborator")
+    // Historical edges: role = "collaborator" (backfilled)
+```
+
+### Decision 5: Soft-Delete for Relationship Removal
+
+**Recommendation**: When user removes a relationship from schema, preserve the edge table and data.
+
+**Behavior:**
+- **Schema node**: Relationship definition removed (source of truth for what's "active")
+- **Edge table**: Kept in SurrealDB (data preserved)
+- **Existing edges**: Preserved but not exposed in queries
+- **Future operations**: Cannot create new edges for removed relationship
+
+This mirrors how fields work - SurrealDB keeps the data (FLEXIBLE tables), but we stop reading/writing it.
+
+**Why soft-delete?**
+- No accidental data loss
+- User can recover by re-adding relationship definition
+- Consistent with existing field behavior
+- "Permanent delete" can be a separate explicit operation if needed
+
+### Decision 6: Atomic Schema + Relationship Creation
+
+**Requirement**: Schema node, spoke table, AND edge tables created atomically in single transaction.
+
+NodeSpace already supports this pattern for schema + spoke table creation (see `create_schema_node_atomic` in `surreal_store.rs`). We extend it to include edge table DDL.
+
+```rust
+// Atomic transaction includes:
+// 1. Schema node in hub table
+// 2. Schema spoke record
+// 3. Spoke table DDL (for the type this schema defines)
+// 4. Edge table DDL (for each relationship)
+
+let mut transaction_parts = vec!["BEGIN TRANSACTION;".to_string()];
+
+// DDL for spoke table
+transaction_parts.extend(spoke_ddl_statements);
+
+// DDL for edge tables (NEW)
+for relationship in &relationships {
+    transaction_parts.extend(generate_edge_table_ddl(type_name, relationship)?);
+}
+
+// Create hub node
+transaction_parts.push(create_hub_node_sql);
+
+// Create spoke record (includes relationships array)
+transaction_parts.push(create_spoke_record_sql);
+
+transaction_parts.push("COMMIT TRANSACTION;".to_string());
+```
+
+### Decision 7: Existing Structural Relations Remain Hardcoded
+
+**Recommendation**: Keep `has_child` and `mentions` in `schema.surql` (infrastructure)
+
+**Rationale:**
+- Core to NodeSpace architecture - not user-extensible
+- Performance critical - hierarchy traversal happens constantly
+- Special semantics - `has_child.order` uses fractional indexing, custom OCC
+- UI dependencies - components hardcode these relation names
+
+User-defined relationships use the new schema-driven approach. Structural relations are infrastructure.
+
+---
+
+## Schema Migration Behavior
+
+### How Field Changes Work Today
+
+NodeSpace already implements a "soft-delete" pattern for fields:
+
+| Operation | DDL Generated | Data Behavior |
+|-----------|---------------|---------------|
+| **Add field** | `DEFINE FIELD IF NOT EXISTS` | New field available |
+| **Remove field** | No `REMOVE FIELD` generated | Data preserved (FLEXIBLE tables keep it) |
+| **Modify field** | `DEFINE FIELD IF NOT EXISTS` | May or may not update |
+
+**Key insight**: We don't explicitly remove fields from SurrealDB when user deletes them from schema. The schema node is the source of truth for what fields are "active", but SurrealDB preserves the data.
+
+### Applying Same Pattern to Relationships
+
+| Operation | DDL Generated | Data Behavior |
+|-----------|---------------|---------------|
+| **Add relationship** | `DEFINE TABLE IF NOT EXISTS` (edge table) | New edge table available |
+| **Remove relationship** | No `REMOVE TABLE` generated | Edge table + edges preserved |
+| **Modify relationship** | Regenerate edge table DDL | May add new fields/indexes |
+
+**Consistency**: Fields and relationships follow the same migration pattern.
+
+### Breaking Changes Require Decision Points
+
+For changes that could affect data integrity, the API requires explicit decisions:
+
+```rust
+// Example: Changing cardinality from many to one
+schema.update_relationship("managers", RelationshipUpdate {
+    cardinality: Some("one".to_string()),
+    // Decision required: what to do with nodes that have multiple edges?
+    on_cardinality_violation: Some(CardinalityResolution::KeepNewest),
+})?;
+
+// Options for on_cardinality_violation:
+// - KeepNewest: Keep most recent edge, soft-delete others
+// - KeepOldest: Keep first edge, soft-delete others
+// - Error: Reject the change if violations exist
+// - AllowViolations: Change schema but don't enforce on existing data
+```
+
+---
+
+## Data Structures
+
+### SchemaRelationship Struct
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaRelationship {
+    /// Relationship name (e.g., "billed_to", "assigned_to")
+    pub name: String,
+
+    /// Target node type (e.g., "customer", "person")
+    pub target_type: String,
+
+    /// Direction: "out" (this->target) or "in" (target->this)
+    pub direction: String,
+
+    /// Cardinality: "one" or "many"
+    pub cardinality: String,
+
+    /// Whether this relationship is required for new nodes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+
+    /// Suggested reverse relationship name (for NLP discovery, not schema mutation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverse_name: Option<String>,
+
+    /// Reverse cardinality
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverse_cardinality: Option<String>,
+
+    /// Auto-computed edge table name (can be overridden)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_table: Option<String>,
+
+    /// Fields stored on the edge itself
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_fields: Option<Vec<EdgeField>>,
+
+    /// Human-readable description (for NLP)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+```
+
+### EdgeField Struct (Simplified)
+
+Edge fields are simpler than schema fields - they're always on the edge table:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeField {
+    /// Field name
+    pub name: String,
+
+    /// Field type: "string" | "number" | "boolean" | "date" | "record"
+    pub field_type: String,
+
+    /// Whether to create an index
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed: Option<bool>,
+
+    /// Whether field is required for new edges
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+
+    /// Default value for new edges
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+
+    /// Target type for record fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_type: Option<String>,
+}
+```
+
+---
+
+## Edge Table DDL Generation
+
+### Naming Convention
+
+**Pattern**: `{source_type}_{relationship_name}_{target_type}`
+
+**Examples**:
+- `invoice_billed_to_customer`
+- `task_assigned_to_person`
+- `document_tagged_with_tag`
+
+### Generated DDL Template
+
 ```sql
--- All tasks assigned to Alice (bidirectional, fast)
+-- Edge table with RELATION type
+DEFINE TABLE IF NOT EXISTS {edge_table_name} SCHEMAFULL TYPE RELATION IN {source_type} OUT {target_type};
+
+-- Core tracking fields (always generated)
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE {edge_table_name} TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS version ON TABLE {edge_table_name} TYPE int DEFAULT 1;
+
+-- User-defined edge fields
+DEFINE FIELD IF NOT EXISTS {field.name} ON TABLE {edge_table_name} TYPE {mapped_type};
+
+-- Core indexes (always generated)
+DEFINE INDEX IF NOT EXISTS idx_{edge_table_name}_in ON TABLE {edge_table_name} COLUMNS in;
+DEFINE INDEX IF NOT EXISTS idx_{edge_table_name}_out ON TABLE {edge_table_name} COLUMNS out;
+DEFINE INDEX IF NOT EXISTS idx_{edge_table_name}_unique ON TABLE {edge_table_name} COLUMNS in, out UNIQUE;
+
+-- User-defined indexes
+DEFINE INDEX IF NOT EXISTS idx_{edge_table_name}_{field_name} ON TABLE {edge_table_name} COLUMNS {field_name};
+```
+
+---
+
+## Query Patterns
+
+### Creating Relationships
+
+```sql
+-- Create edge (no spoke field involved)
+RELATE invoice:INV-001->billed_to->customer:acme CONTENT {
+  billing_date: time::now(),
+  payment_terms: 'net-30'
+};
+```
+
+### Querying Forward (Source → Target)
+
+```sql
+-- Get customer for invoice
+SELECT ->billed_to->customer.* FROM invoice:INV-001;
+
+-- Get all tasks assigned to person
 SELECT ->assigned_to->task.* FROM person:alice;
+```
 
--- Who is assigned to this task (reverse direction, fast)
+### Querying Reverse (Target → Source)
+
+```sql
+-- Get invoices for customer
+SELECT <-billed_to<-invoice.* FROM customer:acme;
+
+-- Get who is assigned to task
 SELECT <-assigned_to<-person.* FROM task:daily-standup;
+```
 
--- Assignments created last week with edge metadata
-SELECT in, out, assigned_at, assigned_by, role
-FROM person_assigned_to_task
+### Querying with Edge Properties
+
+```sql
+-- Assignments with edge metadata
+SELECT in AS person, out AS task, assigned_at, role
+FROM task_assigned_to_person
 WHERE assigned_at > time::now() - 7d;
 
--- Tasks where Alice is the owner (query edge property)
-SELECT out.* FROM person_assigned_to_task
+-- Tasks where Alice is owner
+SELECT out.* FROM task_assigned_to_person
 WHERE in = person:alice AND role = 'owner';
 ```
 
-### Example 2: Invoice Line Items (Composition is sufficient)
+---
 
-**Schema:**
+## Implementation Phases
 
-```json
-{
-  "id": "line_item",
-  "fields": [
-    {
-      "name": "invoice",
-      "type": "record",
-      "targetType": "invoice",
-      "indexed": true,
-      "required": true
-    },
-    {
-      "name": "product",
-      "type": "record",
-      "targetType": "product",
-      "indexed": true
-    },
-    {
-      "name": "quantity",
-      "type": "number",
-      "required": true
-    },
-    {
-      "name": "price",
-      "type": "number",
-      "required": true
-    }
-  ]
-}
-```
+### Phase 1: Data Model Extensions
+- [ ] Add `SchemaRelationship` struct to `packages/core/src/models/schema.rs`
+- [ ] Add `EdgeField` struct
+- [ ] Update `packages/core/src/db/schema.surql` - add `relationships` field to schema table
+- [ ] Add serialization/deserialization tests
 
-**Why Composition?**
-- Line items "belong to" invoices (ownership)
-- Queries are primarily "get line items for invoice" (one direction)
-- No need for "invoices containing this product" reverse queries
-- Quantity and price are properties of the line item itself, not the relationship
+### Phase 2: DDL Generation for Edge Tables
+- [ ] Add `generate_relationship_ddl_statements()` to `SchemaTableManager`
+- [ ] Implement edge table name computation
+- [ ] Generate edge field DDL
+- [ ] Generate bidirectional indexes
+- [ ] Add tests for edge table DDL generation
 
-**Queries:**
-```sql
--- Get all line items for an invoice (fast, indexed)
-SELECT * FROM line_item WHERE invoice = invoice:INV-001;
+### Phase 3: Schema CRUD API
+- [ ] Extend `NodeService` to handle schemas with relationships
+- [ ] Atomic transaction: schema node + spoke + edge tables
+- [ ] Add relationship validation (target schema exists if required)
+- [ ] Add tests for schema CRUD with relationships
 
--- Total invoice amount (aggregate over owned items)
-SELECT sum(quantity * price) FROM line_item WHERE invoice = invoice:INV-001;
+### Phase 4: Relationship CRUD API
+- [ ] Add `create_relationship(source_id, relationship_name, target_id, edge_data)`
+- [ ] Add `delete_relationship(source_id, relationship_name, target_id)`
+- [ ] Add `get_related_nodes(node_id, relationship_name, direction)`
+- [ ] Add tests for relationship CRUD
 
--- Line items for a specific product (possible but secondary use case)
-SELECT * FROM line_item WHERE product = product:widget-pro;
-```
+### Phase 5: NLP Discovery API
+- [ ] Add `get_schema_with_relationships(schema_id)` helper
+- [ ] Add `get_inbound_relationships(node_type)` computed lookup
+- [ ] Cache relationship metadata for fast NLP access
+- [ ] Add documentation for NLP integration
 
-### Example 3: Document Author (Simple Composition)
+### Phase 6: MCP Handler Integration
+- [ ] Extend MCP schema handlers to support relationships
+- [ ] Add relationship CRUD handlers
+- [ ] Add integration tests
 
-**Schema:**
+---
 
-```json
-{
-  "id": "document",
-  "fields": [
-    {
-      "name": "author",
-      "type": "record",
-      "targetType": "person",
-      "indexed": true,
-      "required": true
-    },
-    {
-      "name": "created_at",
-      "type": "datetime",
-      "default": "time::now()"
-    }
-  ]
-}
-```
+## Related Documents
 
-**Why Not `relation`?**
-- Single author per document (1-to-1 from document perspective)
-- Primary query: "who authored this document" (stored directly)
-- Secondary query: "documents by this person" (indexed, fast enough)
-- No edge metadata needed (created_at is document property)
-
-**Queries:**
-```sql
--- Get document author (direct access)
-SELECT *, author.* FROM document:proposal;
-
--- All documents by Alice (indexed, efficient)
-SELECT * FROM document WHERE author = person:alice;
-```
-
-## Summary and Recommendations
-
-### Current State (Issue #703)
-
-**This architecture document establishes:**
-
-✅ **Clear decision tree** for composition vs. relationship
-✅ **Hybrid approach** keeping both `record` and defining new `relation` type
-✅ **Edge table generation strategy** with naming conventions and DDL templates
-✅ **Existing relations remain structural** (`has_child`, `mentions` stay in schema.surql)
-✅ **Migration path** from simple `record` to complex `relation`
-
-### Future Implementation (Separate Issues Required)
-
-The following work is **NOT included in Issue #703**:
-
-- ⏳ **Schema field type extensions** (add `targetType`, `direction`, `edgeFields` to `SchemaField`)
-- ⏳ **DDL generation for edge tables** (extend `SchemaTableManager`)
-- ⏳ **CRUD operations for relations** (extend `NodeService`)
-- ⏳ **Migration utilities** (tools to convert `record` → `relation`)
-
-### When to Use Each Pattern
-
-| Use Case | Pattern | Field Type | Example |
-|----------|---------|------------|---------|
-| Single owner reference | Composition | `record` | document.author |
-| Owned collection items | Composition | `record` | line_item.invoice |
-| Bidirectional queries | Relationship | `relation` | person ↔ task |
-| Edge metadata needed | Relationship | `relation` | assigned_at, role |
-| Many-to-many | Relationship | `relation` | tags ↔ documents |
-| Structural relations | Hardcoded | N/A | has_child, mentions |
-
-## Acceptance Criteria
-
-- [x] Architecture decision documented: composition vs. relationship
-- [x] Schema field type defined for relational fields (both `record` and `relation`)
-- [x] DDL generation strategy for edge tables specified
-- [x] Decision on existing structural relations (keep in schema.surql)
-- [x] Documentation with examples and decision tree
-- [ ] Implementation deferred to future issues (not part of #703)
+- [Schema Management Implementation Guide](../development/schema-management-implementation-guide.md) - How schemas work today
+- [SurrealDB Schema Design](./surrealdb-schema-design.md) - Hub-spoke architecture
+- [Node Behavior System](../business-logic/node-behavior-system.md) - Validation architecture
 
 ## Related Issues
 
+- #703 - This architecture design
 - #691 - Schema seeding and DDL generation foundation
 - #690 - Schema simplification (removed SchemaDefinition)
-- #670 - Date node spoke table removal
-- #614 - Sibling ordering via has_child edges
-
-## Appendix: SurrealDB Record Link vs RELATE Reference
-
-### Record Links (For Composition)
-
-```sql
--- Hub points to spoke
-DEFINE FIELD data ON TABLE node TYPE option<record>;
-
--- Spoke points back to hub
-DEFINE FIELD node ON TABLE task TYPE option<record>;
-
--- Create with record links
-CREATE node:task-1 CONTENT {
-  nodeType: 'task',
-  data: task:task-1  -- Composition: node "contains" task data
-};
-
-CREATE task:task-1 CONTENT {
-  node: node:task-1,  -- Reverse link
-  status: 'open'
-};
-
--- Query with record links (direct access)
-SELECT *, data.status FROM node:task-1;
-```
-
-### RELATE Edges (For Relationships)
-
-```sql
--- Edge table with IN/OUT constraints
-DEFINE TABLE has_child SCHEMAFULL TYPE RELATION IN node OUT node;
-DEFINE FIELD order ON TABLE has_child TYPE float;
-
--- Create with RELATE
-RELATE node:parent->has_child->node:child CONTENT {
-  order: 1.0,
-  version: 1
-};
-
--- Query with graph traversal
-SELECT ->has_child->node.* FROM node:parent;  -- Children
-SELECT <-has_child<-node.* FROM node:child;   -- Parent
-```
-
-**Key Difference:**
-- **Record Link**: Direct field pointer (composition, ownership)
-- **RELATE Edge**: Explicit relationship entity (association, graph)
