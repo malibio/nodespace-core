@@ -26,6 +26,7 @@ import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { requiresAtomicBatching } from '$lib/utils/placeholder-detection';
 import { shouldLogDatabaseErrors, isTestEnvironment } from '$lib/utils/test-environment';
 import * as tauriCommands from './tauri-commands';
+import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import type { Node } from '$lib/types';
 import type {
   NodeUpdate,
@@ -706,19 +707,32 @@ export class SharedNodeStore {
         // FOREIGN KEY validation is handled by persistence coordinator dependencies
         // Structural changes (sibling ordering) are now handled via backend moveNode()
 
-        // TODO (Issue #709): This whitelist approach doesn't support spoke fields
-        // (status, priority, etc.). Once type-safe CRUD is implemented, spoke field
-        // updates will route through type-specific methods that update spoke tables.
+        // Issue #709: Smart routing via plugin system supports spoke fields
+        // Type-specific updaters route to spoke table methods (updateTaskNode, etc.)
+        // The persistence whitelist now includes spoke field changes
         const isStructuralChange = false; // Structural changes now handled via backend moveNode()
         const isContentChange = 'content' in changes;
         const isNodeTypeChange = 'nodeType' in changes;
         const isPropertyChange = 'properties' in changes;
+        // Issue #709: Check for spoke field changes (status, priority, dueDate, assignee, etc.)
+        // These are persisted via type-specific updaters registered in the plugin system
+        const currentNode = this.nodes.get(nodeId);
+        const hasSpokeFieldUpdater = currentNode?.nodeType
+          ? pluginRegistry.hasNodeUpdater(currentNode.nodeType)
+          : false;
+        const isSpokeFieldChange =
+          hasSpokeFieldUpdater &&
+          ('status' in changes ||
+            'priority' in changes ||
+            'dueDate' in changes ||
+            'assignee' in changes);
         const shouldPersist =
           source.type !== 'viewer' ||
           isStructuralChange ||
           isContentChange ||
           isNodeTypeChange ||
-          isPropertyChange;
+          isPropertyChange ||
+          isSpokeFieldChange;
 
         // Issue #479: Do NOT check isPlaceholder here - that's a UI-only concept
         // Real nodes created by user actions (Enter key) should persist even if blank
@@ -764,13 +778,33 @@ export class SharedNodeStore {
                   const currentVersion = currentNode?.version ?? 1;
 
                   try {
-                    // CRITICAL: Capture updated node to get new version from backend
-                    // This prevents version conflicts on subsequent updates
-                    const updatedNodeFromBackend = await tauriCommands.updateNode(
-                      nodeId,
-                      currentVersion,
-                      updatePayload
-                    );
+                    // Issue #709: Smart routing via plugin system
+                    // Type-specific updaters route to spoke table methods (updateTaskNode, etc.)
+                    // Generic updater falls back to hub table properties JSON update
+                    const nodeType = currentNode?.nodeType;
+                    const typeUpdater = nodeType ? pluginRegistry.getNodeUpdater(nodeType) : null;
+
+                    let updatedNodeFromBackend: Node | null = null;
+
+                    if (typeUpdater) {
+                      // Type-specific path → spoke table update
+                      // The plugin updater handles mapping changes to type-specific fields
+                      console.debug(`[SharedNodeStore] Using type-specific updater for ${nodeType}`);
+                      updatedNodeFromBackend = await typeUpdater.update(
+                        nodeId,
+                        currentVersion,
+                        updatePayload
+                      );
+                    } else {
+                      // Generic path → hub table properties JSON update
+                      // CRITICAL: Capture updated node to get new version from backend
+                      // This prevents version conflicts on subsequent updates
+                      updatedNodeFromBackend = await tauriCommands.updateNode(
+                        nodeId,
+                        currentVersion,
+                        updatePayload
+                      );
+                    }
 
                     // Update local node with backend version
                     const localNode = this.nodes.get(nodeId);

@@ -15,6 +15,7 @@
   import SchemaPropertyForm from '$lib/components/property-forms/schema-property-form.svelte';
   // Plugin registry provides all node components dynamically
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
+  import type { SchemaFormComponent } from '$lib/plugins/types';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
@@ -288,6 +289,12 @@
         headerContent = node?.content || '';
         // Issue #679: No longer need viewedNodeCache workaround
         // sharedNodeStore.nodes is now $state, so currentViewedNode $derived updates automatically
+
+        // Issue #709: Preload type-specific schema form for viewed node if available
+        // This triggers lazy loading of TaskSchemaForm, DateSchemaForm, etc.
+        if (node?.nodeType) {
+          loadSchemaFormComponent(node.nodeType);
+        }
 
         // Update tab title after node is loaded
         if (!shouldDisableTitleUpdates) {
@@ -1098,6 +1105,45 @@
     }
   }
 
+  // Issue #709: Type-specific schema forms loaded via plugin registry
+  // Core types (task, date, entity) use hardcoded forms for compile-time type safety
+  // User-defined types fall back to generic SchemaPropertyForm
+  let loadedSchemaForms = $state<Record<string, unknown>>({});
+
+  /**
+   * Load a schema form component from the plugin registry if not already loaded
+   * Returns true if type-specific form exists, false if should use generic fallback
+   * Components are cached in loadedSchemaForms for subsequent renders
+   */
+  async function loadSchemaFormComponent(nodeType: string): Promise<boolean> {
+    // Skip if already loaded (check for both component and explicit null)
+    if (nodeType in loadedSchemaForms) {
+      return loadedSchemaForms[nodeType] !== null;
+    }
+
+    // Check if plugin has a schema form registered
+    if (!pluginRegistry.hasSchemaForm(nodeType)) {
+      // Mark as null to indicate we checked and there's no type-specific form
+      loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: null };
+      return false;
+    }
+
+    try {
+      const component = await pluginRegistry.getSchemaForm(nodeType);
+      if (component) {
+        loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: component };
+        return true;
+      }
+      // Mark as null if loading failed
+      loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: null };
+      return false;
+    } catch (error) {
+      console.warn(`[BaseNodeViewer] Failed to load schema form for ${nodeType}:`, error);
+      loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: null };
+      return false;
+    }
+  }
+
   // Derive the list of nodes to render - either viewer placeholder or real children
   const nodesToRender = $derived(() => {
     const realChildren = visibleNodesFromStores;
@@ -1198,8 +1244,17 @@
   <!-- Scrollable Node Content Area (children structure) -->
   <div class="node-content-area" bind:this={scrollContainer}>
     <!-- Schema-Driven Properties Panel - appears after header, before children -->
+    <!-- Issue #709: Type-specific schema forms use plugin registry for smart dispatch -->
+    <!-- Core types (task, date) use hardcoded forms; user-defined types use generic SchemaPropertyForm -->
     {#if currentViewedNode && nodeId}
-      <SchemaPropertyForm {nodeId} nodeType={currentViewedNode.nodeType} />
+      {#if currentViewedNode.nodeType in loadedSchemaForms && loadedSchemaForms[currentViewedNode.nodeType]}
+        <!-- Type-specific schema form (TaskSchemaForm, etc.) -->
+        {@const TypedSchemaForm = loadedSchemaForms[currentViewedNode.nodeType] as SchemaFormComponent}
+        <TypedSchemaForm {nodeId} />
+      {:else}
+        <!-- Generic schema form for user-defined types -->
+        <SchemaPropertyForm {nodeId} nodeType={currentViewedNode.nodeType} />
+      {/if}
     {/if}
 
     {#each nodesToRender() as node (node.id)}
