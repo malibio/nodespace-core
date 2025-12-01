@@ -64,9 +64,6 @@ export type TaskPriority = CoreTaskPriority | string | number;
  *   "assignee": null
  * }
  * ```
- *
- * This interface does NOT extend Node because task-specific fields are at the top level,
- * not nested in properties. The type guard isTaskNode() handles both formats.
  */
 export interface TaskNode {
   // Hub fields (from node table)
@@ -77,7 +74,7 @@ export interface TaskNode {
   createdAt: string;
   modifiedAt: string;
 
-  // Spoke fields (flat, not nested in properties)
+  // Spoke fields (flat, at top level)
   status: TaskStatus;
   priority?: TaskPriority;
   dueDate?: string | null;
@@ -87,20 +84,8 @@ export interface TaskNode {
 /**
  * Type guard to check if a node is a task node
  *
- * Supports both:
- * - New flat format from backend (node.status)
- * - Legacy nested format (node.properties.task.status) for backward compatibility
- *
  * @param node - Node to check
  * @returns True if node is a task node
- *
- * @example
- * ```typescript
- * if (isTaskNode(node)) {
- *   // TypeScript knows node is TaskNode here
- *   const status = getTaskStatus(node);
- * }
- * ```
  */
 export function isTaskNode(node: Node | TaskNode): node is TaskNode {
   return node.nodeType === 'task';
@@ -109,50 +94,19 @@ export function isTaskNode(node: Node | TaskNode): node is TaskNode {
 /**
  * Get the task status
  *
- * Handles both flat format (node.status) and legacy nested format (node.properties.task.status)
- *
- * @param node - Task node (or Node that is a task)
+ * @param node - Task node
  * @returns Task status (defaults to "open")
- *
- * @example
- * ```typescript
- * const status = getTaskStatus(taskNode);
- * console.log(status); // "open", "in_progress", "done", "cancelled"
- * ```
  */
-export function getTaskStatus(node: TaskNode | Node): TaskStatus {
-  // Check for flat format first (new backend serialization)
-  if ('status' in node && typeof node.status === 'string') {
-    return node.status as TaskStatus;
-  }
-
-  // Fall back to legacy nested format for backward compatibility
-  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
-    const props = node.properties as Record<string, unknown>;
-    const taskProps = props.task as Record<string, unknown> | undefined;
-    if (taskProps?.status && typeof taskProps.status === 'string') {
-      return taskProps.status as TaskStatus;
-    }
-  }
-
-  return 'open';
+export function getTaskStatus(node: TaskNode): TaskStatus {
+  return node.status ?? 'open';
 }
 
 /**
  * Set the task status (immutable)
  *
- * Returns a new node with the updated status.
- * Original node is not modified.
- *
  * @param node - Task node
  * @param status - New status value
  * @returns New node with updated status
- *
- * @example
- * ```typescript
- * const updated = setTaskStatus(taskNode, 'in_progress');
- * // original node unchanged, updated has new status
- * ```
  */
 export function setTaskStatus(node: TaskNode, status: TaskStatus): TaskNode {
   return {
@@ -164,27 +118,11 @@ export function setTaskStatus(node: TaskNode, status: TaskStatus): TaskNode {
 /**
  * Get the task priority
  *
- * Handles both flat format and legacy nested format.
- *
  * @param node - Task node
  * @returns Task priority or undefined if not set
  */
-export function getTaskPriority(node: TaskNode | Node): TaskPriority | undefined {
-  // Check for flat format first
-  if ('priority' in node && node.priority !== undefined && node.priority !== null) {
-    return node.priority as TaskPriority;
-  }
-
-  // Fall back to legacy nested format
-  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
-    const props = node.properties as Record<string, unknown>;
-    const taskProps = props.task as Record<string, unknown> | undefined;
-    if (taskProps?.priority !== undefined && taskProps.priority !== null) {
-      return taskProps.priority as TaskPriority;
-    }
-  }
-
-  return undefined;
+export function getTaskPriority(node: TaskNode): TaskPriority | undefined {
+  return node.priority;
 }
 
 /**
@@ -204,27 +142,11 @@ export function setTaskPriority(node: TaskNode, priority: TaskPriority): TaskNod
 /**
  * Get the task due date
  *
- * Handles both flat format and legacy nested format.
- *
  * @param node - Task node
  * @returns Due date string or undefined if not set
  */
-export function getTaskDueDate(node: TaskNode | Node): string | undefined {
-  // Check for flat format first
-  if ('dueDate' in node && node.dueDate !== undefined && node.dueDate !== null) {
-    return node.dueDate as string;
-  }
-
-  // Fall back to legacy nested format
-  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
-    const props = node.properties as Record<string, unknown>;
-    const taskProps = props.task as Record<string, unknown> | undefined;
-    if (taskProps?.dueDate && typeof taskProps.dueDate === 'string') {
-      return taskProps.dueDate;
-    }
-  }
-
-  return undefined;
+export function getTaskDueDate(node: TaskNode): string | undefined {
+  return node.dueDate ?? undefined;
 }
 
 /**
@@ -247,22 +169,8 @@ export function setTaskDueDate(node: TaskNode, dueDate: string | undefined): Tas
  * @param node - Task node
  * @returns Assignee ID string or undefined if not set
  */
-export function getTaskAssignee(node: TaskNode | Node): string | undefined {
-  // Check for flat format first
-  if ('assignee' in node && node.assignee !== undefined && node.assignee !== null) {
-    return node.assignee as string;
-  }
-
-  // Fall back to legacy nested format
-  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
-    const props = node.properties as Record<string, unknown>;
-    const taskProps = props.task as Record<string, unknown> | undefined;
-    if (taskProps?.assignee && typeof taskProps.assignee === 'string') {
-      return taskProps.assignee;
-    }
-  }
-
-  return undefined;
+export function getTaskAssignee(node: TaskNode): string | undefined {
+  return node.assignee ?? undefined;
 }
 
 /**
@@ -296,23 +204,22 @@ export const TaskNodeHelpers = {
   /**
    * Check if task is completed (done or cancelled)
    */
-  isCompleted(node: TaskNode | Node): boolean {
-    const status = getTaskStatus(node);
-    return status === 'done' || status === 'cancelled';
+  isCompleted(node: TaskNode): boolean {
+    return node.status === 'done' || node.status === 'cancelled';
   },
 
   /**
    * Check if task is active (in_progress)
    */
-  isActive(node: TaskNode | Node): boolean {
-    return getTaskStatus(node) === 'in_progress';
+  isActive(node: TaskNode): boolean {
+    return node.status === 'in_progress';
   },
 
   /**
    * Check if task is pending (open)
    */
-  isPending(node: TaskNode | Node): boolean {
-    return getTaskStatus(node) === 'open';
+  isPending(node: TaskNode): boolean {
+    return node.status === 'open';
   },
 
   /**
@@ -331,7 +238,6 @@ export const TaskNodeHelpers = {
 
   /**
    * Get display-friendly status name
-   * For user-defined statuses, capitalizes and replaces underscores with spaces
    */
   getStatusDisplayName(status: TaskStatus): string {
     const coreDisplayNames: Record<CoreTaskStatus, string> = {
@@ -354,7 +260,6 @@ export const TaskNodeHelpers = {
 
   /**
    * Get display-friendly priority name
-   * For user-defined priorities, capitalizes and replaces underscores with spaces
    */
   getPriorityDisplayName(priority: TaskPriority): string {
     // Handle numeric priorities
@@ -415,16 +320,3 @@ export const TaskNodeHelpers = {
     };
   }
 };
-
-// Legacy type exports for backward compatibility (deprecated)
-/**
- * @deprecated Use TaskNode directly - properties are now flat, not nested
- */
-export interface TaskProperties {
-  status?: TaskStatus;
-  priority?: TaskPriority;
-  dueDate?: string;
-  startedAt?: string;
-  completedAt?: string;
-  assignee?: string;
-}
