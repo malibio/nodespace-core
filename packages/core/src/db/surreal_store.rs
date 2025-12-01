@@ -88,45 +88,11 @@ pub struct EdgeRecord {
 }
 
 // REMOVED: TYPES_WITH_SPOKE_TABLES constant (Issue #691)
-// Spoke table requirements are now derived from schema definitions at runtime.
-// See SurrealStore::build_spoke_table_cache() and has_spoke_table() method.
-
-/// All valid node types that can be used in SurrealDB queries
-/// Used to validate node_type parameters and prevent SQL injection
-const VALID_NODE_TYPES: &[&str] = &[
-    "text",
-    "date",
-    "header",
-    "code_block",
-    "quote_block",
-    "ordered_list",
-    "task",
-    "schema",
-];
-
-/// Validates a node type against the whitelist of valid types
-///
-/// This prevents SQL injection attacks where malicious node_type values could
-/// alter query semantics. All node_type parameters used in dynamic queries
-/// must be validated with this function before use.
-///
-/// # Arguments
-/// * `node_type` - The node type string to validate
-///
-/// # Returns
-/// * `Ok(())` if the node_type is in the valid types list
-/// * `Err(...)` if the node_type is not recognized
-fn validate_node_type(node_type: &str) -> Result<()> {
-    if VALID_NODE_TYPES.contains(&node_type) {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "Invalid node type: '{}'. Valid types are: {}",
-            node_type,
-            VALID_NODE_TYPES.join(", ")
-        ))
-    }
-}
+// REMOVED: VALID_NODE_TYPES constant and validate_node_type() function (Issue #691)
+//
+// Both spoke table requirements and valid node types are now derived from
+// schema definitions at runtime. See SurrealStore::build_schema_caches(),
+// has_spoke_table(), and validate_node_type() methods.
 
 /// Internal struct matching SurrealDB's schema
 ///
@@ -371,6 +337,14 @@ where
     /// Populated during initialization after seeding schemas.
     /// Replaces the hardcoded TYPES_WITH_SPOKE_TABLES constant (Issue #691).
     types_with_spoke_tables: std::collections::HashSet<String>,
+    /// Cache of all valid node types (derived from schema definitions)
+    ///
+    /// Contains all schema IDs from the database, used for validating
+    /// node_type parameters in queries to prevent SQL injection.
+    ///
+    /// Populated during initialization after seeding schemas.
+    /// Replaces the hardcoded VALID_NODE_TYPES constant (Issue #691).
+    valid_node_types: std::collections::HashSet<String>,
 }
 
 /// Type alias for embedded RocksDB store
@@ -428,8 +402,8 @@ impl SurrealStore<Db> {
         // Seed core schemas (create schema nodes and sync spoke table DDL)
         Self::seed_core_schemas(&db).await?;
 
-        // Build spoke table cache from schema definitions (Issue #691)
-        let types_with_spoke_tables = Self::build_spoke_table_cache(&db).await?;
+        // Build schema caches from definitions (Issue #691)
+        let (types_with_spoke_tables, valid_node_types) = Self::build_schema_caches(&db).await?;
 
         // Initialize broadcast channel for domain events
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
@@ -438,6 +412,7 @@ impl SurrealStore<Db> {
             db,
             event_tx,
             types_with_spoke_tables,
+            valid_node_types,
         })
     }
 }
@@ -508,9 +483,9 @@ impl SurrealStore<Client> {
         // Even in HTTP mode, we need to ensure schema exists for fresh databases
         Self::initialize_schema(&db).await?;
 
-        // Build spoke table cache from schema definitions (Issue #691)
+        // Build schema caches from definitions (Issue #691)
         // In HTTP mode, schemas should already be seeded by the server
-        let types_with_spoke_tables = Self::build_spoke_table_cache(&db).await?;
+        let (types_with_spoke_tables, valid_node_types) = Self::build_schema_caches(&db).await?;
 
         tracing::info!("✅ Connected to SurrealDB HTTP server");
 
@@ -521,6 +496,7 @@ impl SurrealStore<Client> {
             db,
             event_tx,
             types_with_spoke_tables,
+            valid_node_types,
         })
     }
 }
@@ -582,37 +558,70 @@ where
         self.types_with_spoke_tables.contains(node_type)
     }
 
-    /// Build the spoke table cache from schema definitions
+    /// Validates a node type against the schema-derived whitelist
     ///
-    /// Queries all schema nodes and checks which have fields defined.
-    /// The `schema` type is always included (structural spoke table).
+    /// This prevents SQL injection attacks where malicious node_type values could
+    /// alter query semantics. All node_type parameters used in dynamic queries
+    /// must be validated with this method before use.
     ///
+    /// Replaces the hardcoded VALID_NODE_TYPES constant (Issue #691).
+    ///
+    /// # Arguments
+    /// * `node_type` - The node type string to validate
+    ///
+    /// # Returns
+    /// * `Ok(())` if the node_type exists as a schema in the database
+    /// * `Err(...)` if the node_type is not recognized
+    fn validate_node_type(&self, node_type: &str) -> Result<()> {
+        if self.valid_node_types.contains(node_type) {
+            Ok(())
+        } else {
+            let valid_types: Vec<&String> = self.valid_node_types.iter().collect();
+            Err(anyhow::anyhow!(
+                "Invalid node type: '{}'. Valid types are: {:?}",
+                node_type,
+                valid_types
+            ))
+        }
+    }
+
+    /// Build both schema caches from database schema definitions
+    ///
+    /// Returns:
+    /// - `types_with_spoke_tables`: Types that have spoke tables (schema type + types with fields)
+    /// - `valid_node_types`: All valid node types (all schema IDs)
+    ///
+    /// The `schema` type is always included in spoke tables (structural).
     /// Called during initialization after seeding schemas.
-    async fn build_spoke_table_cache(
+    async fn build_schema_caches(
         db: &Arc<Surreal<C>>,
-    ) -> Result<std::collections::HashSet<String>> {
-        let mut cache = std::collections::HashSet::new();
+    ) -> Result<(
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    )> {
+        let mut spoke_tables = std::collections::HashSet::new();
+        let mut valid_types = std::collections::HashSet::new();
 
         // Schema type always has a spoke table (structural, defined in schema.surql)
-        cache.insert("schema".to_string());
+        // and is always a valid type
+        spoke_tables.insert("schema".to_string());
+        valid_types.insert("schema".to_string());
 
-        // Query all schema nodes to find which have fields
+        // Query all schema nodes to get all valid types and which have fields
         // Schema nodes have node_type = "schema" and id = the type name (e.g., "task", "text")
         let query = r#"
-            SELECT id, fields FROM schema
-            WHERE array::len(fields) > 0;
+            SELECT id, fields FROM schema;
         "#;
 
         let mut response = db
             .query(query)
             .await
-            .context("Failed to query schema nodes for spoke table cache")?;
+            .context("Failed to query schema nodes for caches")?;
 
         // Parse results - each row has id (the type name) and fields
         #[derive(serde::Deserialize)]
         struct SchemaRow {
             id: surrealdb::sql::Thing,
-            #[allow(dead_code)]
             fields: Vec<serde_json::Value>,
         }
 
@@ -624,10 +633,17 @@ where
                 surrealdb::sql::Id::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            cache.insert(type_name.clone());
+
+            // All schema IDs are valid node types
+            valid_types.insert(type_name.clone());
+
+            // Types with fields need spoke tables
+            if !row.fields.is_empty() {
+                spoke_tables.insert(type_name);
+            }
         }
 
-        Ok(cache)
+        Ok((spoke_tables, valid_types))
     }
 
     /// Initialize database schema from schema.surql file (Issue #560)
@@ -684,12 +700,15 @@ where
         // Create temporary SurrealStore to use create_node method
         // Bootstrap cache with "schema" since we're creating schema nodes
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
-        let mut bootstrap_cache = std::collections::HashSet::new();
-        bootstrap_cache.insert("schema".to_string());
+        let mut bootstrap_spoke_cache = std::collections::HashSet::new();
+        let mut bootstrap_valid_cache = std::collections::HashSet::new();
+        bootstrap_spoke_cache.insert("schema".to_string());
+        bootstrap_valid_cache.insert("schema".to_string());
         let store = SurrealStore::<Db> {
             db: Arc::clone(db),
             event_tx,
-            types_with_spoke_tables: bootstrap_cache,
+            types_with_spoke_tables: bootstrap_spoke_cache,
+            valid_node_types: bootstrap_valid_cache,
         };
 
         // Get core schemas as SchemaNode instances
@@ -945,7 +964,7 @@ where
         use uuid::Uuid;
 
         // Validate node type to prevent SQL injection
-        validate_node_type(node_type)?;
+        self.validate_node_type(node_type)?;
 
         // Generate node ID and convert parameters to owned strings for 'static lifetime
         let node_id = Uuid::new_v4().to_string();
@@ -1633,7 +1652,7 @@ where
         new_properties: Value,
     ) -> Result<Node> {
         // Validate new_type to prevent SQL injection
-        validate_node_type(new_type)?;
+        self.validate_node_type(new_type)?;
 
         // Convert parameters to owned strings for 'static lifetime
         let node_id = node_id.to_string();
