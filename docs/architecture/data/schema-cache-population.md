@@ -84,14 +84,31 @@ pub(crate) fn add_to_schema_cache(&mut self, type_name: String, has_fields: bool
 ### NodeService Logic
 
 ```rust
-async fn seed_core_schemas_if_needed(&self) -> Result<()> {
+// NodeService::new() takes &mut Arc to enable cache updates
+pub async fn new(store: &mut Arc<SurrealStore<C>>) -> Result<Self> {
+    // Seed before cloning the Arc into Self
+    Self::seed_core_schemas_if_needed(store).await?;
+
+    // Now clone into Self
+    let service = Self { store: Arc::clone(store), ... };
+    Ok(service)
+}
+
+async fn seed_core_schemas_if_needed(store: &mut Arc<SurrealStore<C>>) -> Result<()> {
+    // Check if already seeded
+    if store.get_node("task").await?.is_some() {
+        return Ok(());
+    }
+
     for schema in core_schemas {
         // Create schema node + spoke table
-        self.store.create_schema_node_atomic(node, ddl).await?;
+        store.create_schema_node_atomic(node, ddl).await?;
+    }
 
-        // Add to cache immediately (in-memory, no DB query)
-        Arc::get_mut(&mut self.store)?
-            .add_to_schema_cache(schema.id, !schema.fields.is_empty());
+    // Get mutable access (we're the only Arc owner at this point)
+    let store_mut = Arc::get_mut(store)?;
+    for schema in core_schemas {
+        store_mut.add_to_schema_cache(schema.id, !schema.fields.is_empty());
     }
 }
 ```

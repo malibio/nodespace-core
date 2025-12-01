@@ -338,8 +338,8 @@ fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let db = Arc::new(SurrealStore::new(PathBuf::from("./data/test.db")).await?);
-///     let service = NodeService::new(db).await?;
+///     let mut db = Arc::new(SurrealStore::new(PathBuf::from("./data/test.db")).await?);
+///     let service = NodeService::new(&mut db).await?;
 ///
 ///     let node = Node::new(
 ///         "text".to_string(),
@@ -405,7 +405,7 @@ where
     ///
     /// # Arguments
     ///
-    /// * `store` - SurrealStore instance
+    /// * `store` - Mutable reference to Arc<SurrealStore> (allows cache updates during seeding)
     ///
     /// # Examples
     ///
@@ -415,12 +415,18 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
-    /// let service = NodeService::new(store).await?;
+    /// let mut store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// let service = NodeService::new(&mut store).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn new(store: Arc<SurrealStore<C>>) -> Result<Self, NodeServiceError> {
+    ///
+    /// # Cache Population (Issue #704)
+    ///
+    /// Takes `&mut Arc<SurrealStore>` to enable cache updates during schema seeding:
+    /// - On first launch: Seeds schemas and updates caches incrementally via `Arc::get_mut()`
+    /// - On subsequent launches: Caches already populated by `SurrealStore::new()`
+    pub async fn new(store: &mut Arc<SurrealStore<C>>) -> Result<Self, NodeServiceError> {
         // Create empty migration registry (no migrations registered yet - pre-deployment)
         // Infrastructure exists for future schema evolution post-deployment
         let migration_registry = MigrationRegistry::new();
@@ -428,17 +434,18 @@ where
         // Initialize broadcast channel for domain events
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
+        // Seed core schemas if needed (Issue #704)
+        // This must happen BEFORE we clone the Arc into Self, so we can use Arc::get_mut()
+        // to update schema caches incrementally during seeding.
+        Self::seed_core_schemas_if_needed(store).await?;
+
         let service = Self {
-            store,
+            store: Arc::clone(store),
             behaviors: Arc::new(NodeBehaviorRegistry::new()),
             migration_registry: Arc::new(migration_registry),
             event_tx,
             client_id: None,
         };
-
-        // Seed core schemas if needed (Issue #704)
-        // This ensures schema nodes exist before NodeService is used
-        service.seed_core_schemas_if_needed().await?;
 
         Ok(service)
     }
@@ -459,18 +466,20 @@ where
     /// - Works identically for embedded and HTTP modes
     /// - Single source of truth for schema seeding
     ///
-    /// # Cache Population Strategy (TODO)
+    /// # Cache Population Strategy (Issue #704)
     ///
-    /// During seeding, as each schema is created, it should be added to SurrealStore's
-    /// caches via `add_to_schema_cache()`. This avoids re-querying the database after
-    /// seeding since we already have the schema data in memory. Implementation pending.
-    async fn seed_core_schemas_if_needed(&self) -> Result<(), NodeServiceError> {
+    /// Takes `&mut Arc<SurrealStore>` to enable incremental cache updates:
+    /// - After creating each schema, calls `add_to_schema_cache()` via `Arc::get_mut()`
+    /// - This avoids re-querying the database since we have schema data in memory
+    /// - On subsequent launches, caches are already populated by `SurrealStore::new()`
+    async fn seed_core_schemas_if_needed(
+        store: &mut Arc<SurrealStore<C>>,
+    ) -> Result<(), NodeServiceError> {
         use crate::models::core_schemas::get_core_schemas;
 
         // Check if schemas already exist by trying to get task schema
         // If task exists, assume all core schemas are seeded
-        let task_exists = self
-            .store
+        let task_exists = store
             .get_node("task")
             .await
             .map_err(|e| {
@@ -488,43 +497,66 @@ where
         // Get core schemas from canonical source
         let core_schemas = get_core_schemas();
 
-        // Create SchemaTableManager for DDL generation
-        let table_manager =
-            crate::services::schema_table_manager::SchemaTableManager::new(Arc::clone(&self.store));
+        // Collect schema info for cache updates (before we start creating nodes)
+        let schema_cache_updates: Vec<(String, bool)> = core_schemas
+            .iter()
+            .map(|s| (s.id.clone(), !s.fields.is_empty()))
+            .collect();
 
-        // For each schema: atomically create schema node + spoke table DDL
-        for schema in &core_schemas {
-            let schema_id = schema.id.clone();
-            let node = schema.clone().into_node();
+        // Create SchemaTableManager for DDL generation in a scope so it drops before Arc::get_mut()
+        // (SchemaTableManager holds an Arc clone, which would prevent get_mut)
+        {
+            let table_manager =
+                crate::services::schema_table_manager::SchemaTableManager::new(Arc::clone(store));
 
-            // Generate DDL statements for schemas with fields (e.g., task)
-            // Simple schemas (text, date, header) have no fields, so no DDL
-            let ddl_statements = if !schema.fields.is_empty() {
-                table_manager
-                    .generate_ddl_statements(&schema_id, &schema.fields)
+            // For each schema: atomically create schema node + spoke table DDL
+            for schema in &core_schemas {
+                let schema_id = schema.id.clone();
+                let node = schema.clone().into_node();
+
+                // Generate DDL statements for schemas with fields (e.g., task)
+                // Simple schemas (text, date, header) have no fields, so no DDL
+                let ddl_statements = if !schema.fields.is_empty() {
+                    table_manager
+                        .generate_ddl_statements(&schema_id, &schema.fields)
+                        .map_err(|e| {
+                            NodeServiceError::SerializationError(format!(
+                                "Failed to generate DDL for '{}': {}",
+                                schema_id, e
+                            ))
+                        })?
+                } else {
+                    vec![]
+                };
+
+                // Atomically create schema node + execute DDL
+                store
+                    .create_schema_node_atomic(node, ddl_statements)
+                    .await
                     .map_err(|e| {
                         NodeServiceError::SerializationError(format!(
-                            "Failed to generate DDL for '{}': {}",
+                            "Failed to create schema node '{}': {}",
                             schema_id, e
                         ))
-                    })?
-            } else {
-                vec![]
-            };
+                    })?;
+            }
+        } // table_manager dropped here, releasing Arc clone
 
-            // Atomically create schema node + execute DDL
-            self.store
-                .create_schema_node_atomic(node, ddl_statements)
-                .await
-                .map_err(|e| {
-                    NodeServiceError::SerializationError(format!(
-                        "Failed to create schema node '{}': {}",
-                        schema_id, e
-                    ))
-                })?;
+        // Update schema caches incrementally (Issue #704)
+        // We use Arc::get_mut() since we're the only owner at this point (before cloning into Self)
+        let store_mut = Arc::get_mut(store).ok_or_else(|| {
+            NodeServiceError::SerializationError(
+                "Cannot update schema cache: store has multiple references. \
+                 Ensure NodeService::new() is called with the only Arc reference."
+                    .to_string(),
+            )
+        })?;
+
+        for (type_name, has_fields) in schema_cache_updates {
+            store_mut.add_to_schema_cache(type_name, has_fields);
         }
 
-        tracing::info!("✅ Core schemas seeded successfully");
+        tracing::info!("✅ Core schemas seeded successfully (caches updated)");
 
         Ok(())
     }
@@ -554,8 +586,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
-    /// let service = NodeService::new(store)?;
+    /// # let mut store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// let service = NodeService::new(&mut store).await?;
     ///
     /// // Create a scoped service for a specific client
     /// let tauri_service = service.with_client("tauri-window-1");
@@ -583,8 +615,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
-    /// # let service = NodeService::new(store)?;
+    /// # let mut store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// # let service = NodeService::new(&mut store).await?;
     /// let mut rx = service.subscribe_to_events();
     /// tokio::spawn(async move {
     ///     while let Ok(event) = rx.recv().await {
@@ -638,8 +670,8 @@ where
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let node = Node::new(
     ///     "text".to_string(),
     ///     "My note".to_string(),
@@ -1084,8 +1116,8 @@ where
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Create a child node under a date container
     /// let id = service.create_node_with_parent(CreateNodeParams {
     ///     id: None,
@@ -1274,8 +1306,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Create mention: "daily-note" mentions "project-planning"
     /// service.create_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
@@ -1370,8 +1402,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// service.delete_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
     /// # }
@@ -1416,8 +1448,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(node) = service.get_node("node-id-123").await? {
     ///     println!("Found: {}", node.content);
     /// }
@@ -1488,8 +1520,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(task) = service.get_task_node("my-task-id").await? {
     ///     // Direct field access - no JSON parsing
     ///     println!("Status: {:?}", task.status);
@@ -1533,8 +1565,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(schema) = service.get_schema_node("task").await? {
     ///     // Direct field access - no JSON parsing
     ///     println!("Is core: {}", schema.is_core);
@@ -1581,8 +1613,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let update = NodeUpdate::new()
     ///     .with_content("Updated content".to_string());
     /// service.update_node("node-id", update).await?;
@@ -1762,8 +1794,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let rows = service.update_with_version_check(
     ///     "node-123",
     ///     5,  // Expected version
@@ -1930,8 +1962,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let update = NodeUpdate::new().with_content("Updated content".to_string());
     /// let updated = service.update_node_with_occ("node-id", 5, update).await?;
     /// println!("New version: {}", updated.version);
@@ -2085,8 +2117,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// service.delete_node("node-id-123").await?;
     /// # Ok(())
     /// # }
@@ -2144,8 +2176,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let rows = service.delete_with_version_check("node-123", 5).await?;
     ///
     /// if rows == 0 {
@@ -2213,8 +2245,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let result = service.delete_node_with_occ("node-id", 5).await?;
     /// println!("Node existed: {}", result.existed);
     /// # Ok(())
@@ -2289,8 +2321,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let children = service.get_children("parent-id").await?;
     /// println!("Found {} children", children.len());
     /// # Ok(())
@@ -2593,8 +2625,8 @@ where
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Fetch all nodes for a date page
     /// let nodes = service.get_nodes_by_root_id("2025-10-05").await?;
     /// println!("Found {} nodes in this document", nodes.len());
@@ -2634,8 +2666,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Move node under new parent
     /// service.move_node("node-id", Some("new-parent-id"), None).await?;
     ///
@@ -2741,8 +2773,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Move node under new parent with version check
     /// service.move_node_with_occ("node-id", 5, Some("new-parent-id"), None).await?;
     /// # Ok(())
@@ -2853,8 +2885,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Reorder with version check
     /// service.reorder_node_with_occ("node-id", 5, Some("sibling-id")).await?;
     /// # Ok(())
@@ -2978,8 +3010,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Position node after sibling
     /// service.reorder_child("node-id", Some("sibling-id")).await?;
     ///
@@ -3130,8 +3162,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let filter = NodeFilter::new()
     ///     .with_node_type("task".to_string())
     ///     .with_limit(10);
@@ -3198,8 +3230,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // Query by ID
     /// let query = NodeQuery::by_id("node-123".to_string());
     /// let nodes = service.query_nodes_simple(query).await?;
@@ -3358,8 +3390,8 @@ where
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let nodes = vec![
     ///     Node::new("text".to_string(), "Note 1".to_string(), json!({})),
     ///     Node::new("text".to_string(), "Note 2".to_string(), json!({})),
@@ -3425,8 +3457,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let updates = vec![
     ///     ("node-1".to_string(), NodeUpdate::new().with_content("Updated 1".to_string())),
     ///     ("node-2".to_string(), NodeUpdate::new().with_content("Updated 2".to_string())),
@@ -3539,8 +3571,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let ids = vec!["node-1".to_string(), "node-2".to_string()];
     /// service.bulk_delete(ids).await?;
     /// # Ok(())
@@ -3777,8 +3809,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// service.add_mention("node-123", "node-456").await?;
     /// # Ok(())
     /// # }
@@ -3844,8 +3876,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// service.remove_mention("node-123", "node-456").await?;
     /// # Ok(())
     /// # }
@@ -3890,8 +3922,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let mentions = service.get_mentions("node-123").await?;
     /// # Ok(())
     /// # }
@@ -3922,8 +3954,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// let backlinks = service.get_mentioned_by("node-456").await?;
     /// # Ok(())
     /// # }
@@ -3951,8 +3983,8 @@ where
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(db).await?;
+    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let service = NodeService::new(&mut db).await?;
     /// // If nodes A and B (both children of Container X) mention target node,
     /// // returns ['container-x-id'] (deduplicated)
     /// let containers = service.get_mentioning_containers("target-node-id").await?;
@@ -3985,8 +4017,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        let store = Arc::new(SurrealStore::new(db_path).await.unwrap());
-        let service = NodeService::new(store).await.unwrap();
+        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let service = NodeService::new(&mut store).await.unwrap();
         (service, temp_dir)
     }
 
@@ -6061,10 +6093,10 @@ mod tests {
 
             let temp_dir = TempDir::new()?;
             let db_path = temp_dir.path().join("test.db");
-            let store = Arc::new(SurrealStore::new(db_path).await?);
+            let mut store = Arc::new(SurrealStore::new(db_path).await?);
 
             // Create NodeService - should seed schemas automatically
-            let _service = NodeService::new(store.clone()).await?;
+            let _service = NodeService::new(&mut store).await?;
 
             // Verify all 7 core schemas exist
             assert!(
@@ -6105,19 +6137,30 @@ mod tests {
 
             let temp_dir = TempDir::new()?;
             let db_path = temp_dir.path().join("test.db");
-            let store = Arc::new(SurrealStore::new(db_path).await?);
 
-            // Create NodeService twice - should seed only once
-            let _service1 = NodeService::new(store.clone()).await?;
-            let _service2 = NodeService::new(store.clone()).await?;
+            // First "launch" - seeds schemas
+            {
+                let mut store = Arc::new(SurrealStore::new(db_path.clone()).await?);
+                let _service = NodeService::new(&mut store).await?;
+                // Service and store dropped at end of scope (simulates app shutdown)
+            }
 
-            // Verify schemas still exist and weren't duplicated
-            let task = store.get_node("task").await?.unwrap();
-            assert_eq!(task.node_type, "schema");
+            // Wait for RocksDB to release file lock (async drop may not be instant)
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-            // Verify we can query task schema (ensures it's valid)
-            let schema = store.get_schema_node("task").await?;
-            assert!(schema.is_some(), "task schema should be retrievable");
+            // Second "launch" - should NOT re-seed (idempotent)
+            {
+                let mut store = Arc::new(SurrealStore::new(db_path).await?);
+                let _service = NodeService::new(&mut store).await?;
+
+                // Verify schemas still exist and weren't duplicated
+                let task = store.get_node("task").await?.unwrap();
+                assert_eq!(task.node_type, "schema");
+
+                // Verify we can query task schema (ensures it's valid)
+                let schema = store.get_schema_node("task").await?;
+                assert!(schema.is_some(), "task schema should be retrievable");
+            }
 
             Ok(())
         }

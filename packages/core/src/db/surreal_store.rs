@@ -732,26 +732,11 @@ where
     /// **Subsequent launches:**
     /// - Caches already populated by `build_schema_caches()` during `SurrealStore::new()`
     /// - This method is not called
-    #[allow(dead_code)] // TODO: Remove when NodeService implementation is complete
     pub(crate) fn add_to_schema_cache(&mut self, type_name: String, has_fields: bool) {
         self.valid_node_types.insert(type_name.clone());
         if has_fields {
             self.types_with_spoke_tables.insert(type_name);
         }
-    }
-
-    /// Rebuild schema caches from database (temporary solution for tests)
-    ///
-    /// This is a TEMPORARY method used by test helpers until the incremental caching
-    /// approach is fully implemented. Will be removed when NodeService calls
-    /// `add_to_schema_cache()` during seeding.
-    #[allow(dead_code)] // TODO: Remove when incremental caching is implemented
-    pub(crate) async fn rebuild_schema_caches(&mut self) -> Result<()> {
-        let (types_with_spoke_tables, valid_node_types) =
-            Self::build_schema_caches(&self.db).await?;
-        self.types_with_spoke_tables = types_with_spoke_tables;
-        self.valid_node_types = valid_node_types;
-        Ok(())
     }
 }
 
@@ -3845,9 +3830,8 @@ mod tests {
     /// Test helper to create a SurrealStore with schemas seeded
     ///
     /// Since schema seeding moved to NodeService (Issue #704), we use NodeService
-    /// to seed schemas, then rebuild the schema caches for testing.
-    ///
-    /// Returns Arc<SurrealStore> since we can't unwrap the Arc without Clone.
+    /// to seed schemas. The new() method now takes &mut Arc to update caches
+    /// incrementally during seeding - no rebuild needed.
     async fn create_test_store() -> Result<(Arc<SurrealStore>, TempDir)> {
         use crate::services::NodeService;
 
@@ -3856,17 +3840,12 @@ mod tests {
         let mut store_arc = Arc::new(SurrealStore::new(db_path).await?);
 
         // Seed schemas via NodeService (Issue #704)
-        // NodeService::new() seeds core schemas automatically
-        let _ = NodeService::new(Arc::clone(&store_arc))
+        // NodeService::new() takes &mut Arc to update caches incrementally during seeding
+        let _ = NodeService::new(&mut store_arc)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to initialize NodeService: {}", e))?;
 
-        // Rebuild schema caches after seeding (get mutable reference to Arc contents)
-        Arc::get_mut(&mut store_arc)
-            .ok_or_else(|| anyhow::anyhow!("Failed to get mutable reference to store"))?
-            .rebuild_schema_caches()
-            .await?;
-
+        // Caches are now populated by NodeService::new() - no rebuild needed!
         Ok((store_arc, temp_dir))
     }
 
