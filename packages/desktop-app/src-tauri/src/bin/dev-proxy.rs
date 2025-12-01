@@ -339,8 +339,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize NodeService with all business logic
     // NodeService has ALL the logic (virtual dates, schema backfill, etc.)
+    // NodeService::new() is async now - it seeds core schemas if needed (Issue #704)
     println!("🧠 Initializing NodeService...");
-    let node_service = match NodeService::new(Arc::clone(&store)) {
+    let node_service = match NodeService::new(Arc::clone(&store)).await {
         Ok(s) => {
             println!("✅ NodeService initialized");
             Arc::new(s)

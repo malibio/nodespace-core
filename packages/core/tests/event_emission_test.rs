@@ -27,7 +27,7 @@ mod event_emission_tests {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
         let store = SurrealStore::new(db_path).await?;
-        let service = NodeService::new(Arc::new(store))?;
+        let service = NodeService::new(Arc::new(store)).await?;
         Ok((service, temp_dir))
     }
 

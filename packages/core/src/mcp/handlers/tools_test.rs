@@ -133,7 +133,7 @@ mod async_integration_tests {
         let db_path = temp_dir.path().join("test.db");
 
         let store = Arc::new(SurrealStore::new(db_path).await.unwrap());
-        let node_service = Arc::new(NodeService::new(store.clone()).unwrap());
+        let node_service = Arc::new(NodeService::new(store.clone()).await.unwrap());
 
         // Create NLP engine for embedding service
         let mut nlp_engine = EmbeddingService::new(EmbeddingConfig::default()).unwrap();

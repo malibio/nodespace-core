@@ -53,8 +53,10 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
     tracing::info!("✅ [init_services] SurrealDB store initialized");
 
     // Initialize node service with SurrealStore
+    // NodeService::new() is async now - it seeds core schemas if needed (Issue #704)
     tracing::info!("🔧 [init_services] Initializing NodeService...");
     let node_service = NodeService::new(store.clone())
+        .await
         .map_err(|e| format!("Failed to initialize node service: {}", e))?;
 
     let node_service_arc = Arc::new(node_service);
