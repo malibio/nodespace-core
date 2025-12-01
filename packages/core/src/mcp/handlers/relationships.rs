@@ -16,6 +16,17 @@
 //!
 //! These handlers wrap the NodeService relationship CRUD API (Phase 4) and
 //! NLP Discovery API (Phase 5) for MCP-compliant access.
+//!
+//! ## Wire Format (JSON Serialization)
+//!
+//! All response structs use `#[serde(rename_all = "camelCase")]` which means
+//! Rust snake_case field names are serialized to camelCase in JSON responses.
+//! For example:
+//! - `source_id` → `"sourceId"`
+//! - `relationship_name` → `"relationshipName"`
+//! - `target_type` → `"targetType"`
+//!
+//! This follows MCP and JavaScript conventions for wire format.
 
 use crate::mcp::types::MCPError;
 use crate::services::NodeService;
