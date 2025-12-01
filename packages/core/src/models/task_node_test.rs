@@ -421,7 +421,10 @@ mod tests {
             json!({"priority": "critical"}),
         );
         let task = TaskNode::from_node(node).unwrap();
-        assert_eq!(task.get_priority(), TaskPriority::User("critical".to_string()));
+        assert_eq!(
+            task.get_priority(),
+            TaskPriority::User("critical".to_string())
+        );
         assert!(task.get_priority().is_user_defined());
         assert!(!task.get_priority().is_core());
     }
@@ -431,6 +434,9 @@ mod tests {
         assert_eq!(TaskPriority::Low.as_str(), "low");
         assert_eq!(TaskPriority::Medium.as_str(), "medium");
         assert_eq!(TaskPriority::High.as_str(), "high");
-        assert_eq!(TaskPriority::User("critical".to_string()).as_str(), "critical");
+        assert_eq!(
+            TaskPriority::User("critical".to_string()).as_str(),
+            "critical"
+        );
     }
 }
