@@ -94,6 +94,9 @@ export function isTaskNode(node: Node | TaskNode): node is TaskNode {
 /**
  * Get the task status
  *
+ * TaskNode has flat structure with `status` at top level (from backend serialization).
+ * See TaskNode interface documentation for structure details.
+ *
  * @param node - Task node
  * @returns Task status (defaults to "open")
  */

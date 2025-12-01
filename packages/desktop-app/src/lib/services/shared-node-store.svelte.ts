@@ -706,6 +706,9 @@ export class SharedNodeStore {
         // FOREIGN KEY validation is handled by persistence coordinator dependencies
         // Structural changes (sibling ordering) are now handled via backend moveNode()
 
+        // TODO (Issue #709): This whitelist approach doesn't support spoke fields
+        // (status, priority, etc.). Once type-safe CRUD is implemented, spoke field
+        // updates will route through type-specific methods that update spoke tables.
         const isStructuralChange = false; // Structural changes now handled via backend moveNode()
         const isContentChange = 'content' in changes;
         const isNodeTypeChange = 'nodeType' in changes;
