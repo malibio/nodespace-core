@@ -82,6 +82,9 @@ export class PluginRegistry {
       this.enabledPlugins.delete(pluginId);
       this.lifecycleEvents.onDisable?.(pluginId);
     }
+
+    // Clear updater cache for this plugin to ensure enabled state is respected
+    this.updaterCache.delete(pluginId);
   }
 
   /**

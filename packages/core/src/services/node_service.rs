@@ -7605,7 +7605,7 @@ mod tests {
     /// with type safety, OCC version checking, and proper error handling.
     mod update_task_node_tests {
         use super::*;
-        use crate::models::{TaskNodeUpdate, TaskStatus};
+        use crate::models::{TaskNodeUpdate, TaskPriority, TaskStatus};
         use chrono::Utc;
 
         /// Helper to create a task node and return its ID
@@ -7646,29 +7646,30 @@ mod tests {
             assert_eq!(task_refetch.version, 2);
         }
 
-        /// Note: This test is marked as ignored because there's a schema/struct mismatch for priority:
-        /// - Schema defines priority as enum ("low", "medium", "high") - string values
-        /// - TaskNode struct defines priority as Option<i32> - numeric values
-        /// This mismatch predates Issue #709 and needs to be resolved in a separate issue.
-        /// The update_task_node() SQL correctly handles numeric priority, but deserialization fails
-        /// when the spoke table contains string enum values from schema-validated creation.
         #[tokio::test]
-        #[ignore = "Schema/struct mismatch: priority is enum(string) in schema but i32 in TaskNode"]
         async fn test_update_task_priority() {
             let (service, _temp) = create_test_service().await;
 
             let task_id = create_task(&service, "Test task for priority update").await;
 
-            // Update priority
-            let update = TaskNodeUpdate::new().with_priority(Some(1));
+            // Update priority to high
+            let update = TaskNodeUpdate::new().with_priority(Some(TaskPriority::High));
             let task_after = service.update_task_node(&task_id, 1, update).await.unwrap();
 
-            assert_eq!(task_after.priority, Some(1));
+            assert_eq!(task_after.priority, Some(TaskPriority::High));
+
+            // Update priority to low
+            let low_update = TaskNodeUpdate::new().with_priority(Some(TaskPriority::Low));
+            let task_low = service
+                .update_task_node(&task_id, 2, low_update)
+                .await
+                .unwrap();
+            assert_eq!(task_low.priority, Some(TaskPriority::Low));
 
             // Clear priority (set to None)
             let clear_update = TaskNodeUpdate::new().with_priority(None);
             let task_cleared = service
-                .update_task_node(&task_id, 2, clear_update)
+                .update_task_node(&task_id, 3, clear_update)
                 .await
                 .unwrap();
 

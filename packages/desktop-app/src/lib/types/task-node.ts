@@ -37,14 +37,16 @@ export type TaskStatus = CoreTaskStatus | string;
 
 /**
  * Core task priority values (user-extensible)
- * Note: Rust backend uses integer priority (1-4), but string format is also supported
+ * Rust backend now uses string enum format (Issue #709)
  */
 export type CoreTaskPriority = 'low' | 'medium' | 'high';
 
 /**
- * Task priority - supports both integer (1-4) and string formats
+ * Task priority - string enum format
+ * Core values: 'low', 'medium', 'high'
+ * User-defined values allowed via schema extension
  */
-export type TaskPriority = CoreTaskPriority | string | number;
+export type TaskPriority = CoreTaskPriority | string;
 
 /**
  * TaskNode - Flat structure matching Rust backend serialization
@@ -59,7 +61,7 @@ export type TaskPriority = CoreTaskPriority | string | number;
  *   "createdAt": "2025-01-01T00:00:00Z",
  *   "modifiedAt": "2025-01-01T00:00:00Z",
  *   "status": "open",
- *   "priority": 2,
+ *   "priority": "medium",
  *   "dueDate": null,
  *   "assignee": null
  * }
@@ -305,17 +307,6 @@ export const TaskNodeHelpers = {
    * Get display-friendly priority name
    */
   getPriorityDisplayName(priority: TaskPriority): string {
-    // Handle numeric priorities
-    if (typeof priority === 'number') {
-      const numericLabels: Record<number, string> = {
-        1: 'Urgent',
-        2: 'High',
-        3: 'Medium',
-        4: 'Low'
-      };
-      return numericLabels[priority] || `Priority ${priority}`;
-    }
-
     const coreDisplayNames: Record<CoreTaskPriority, string> = {
       low: 'Low',
       medium: 'Medium',

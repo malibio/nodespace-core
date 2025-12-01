@@ -3808,7 +3808,7 @@ where
 
         if let Some(ref priority_opt) = update.priority {
             match priority_opt {
-                Some(p) => spoke_set_clauses.push(format!("priority = {}", p)),
+                Some(p) => spoke_set_clauses.push(format!("priority = '{}'", p.as_str())),
                 None => spoke_set_clauses.push("priority = NONE".to_string()),
             }
         }
