@@ -7,7 +7,7 @@
 //! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
 //! As of Issue #690, SchemaService was removed - schema nodes use generic CRUD.
 
-use crate::mcp::handlers::{markdown, natural_language_schema, nodes, relationships, search};
+use crate::mcp::handlers::{markdown, nodes, relationships, schema, search};
 use crate::mcp::types::MCPError;
 use crate::services::{NodeEmbeddingService, NodeService};
 use serde_json::{json, Value};
@@ -150,9 +150,7 @@ pub async fn handle_tools_call(
         }
 
         // Schema creation (uses generic node creation)
-        "create_schema" => {
-            natural_language_schema::handle_create_schema(node_service, arguments).await
-        }
+        "create_schema" => schema::handle_create_schema(node_service, arguments).await,
 
         // Relationship CRUD (Issue #703)
         "create_relationship" => {

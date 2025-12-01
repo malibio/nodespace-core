@@ -1,9 +1,8 @@
-//! Natural Language Schema Generation
+//! Schema MCP Handlers
 //!
-//! Converts natural language descriptions into schema definitions with intelligent
-//! field type inference and namespace enforcement.
-//!
-//! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
+//! Provides the `create_schema` tool for creating custom schemas with fields and relationships.
+//! Supports both explicit field/relationship definitions and natural language descriptions
+//! with intelligent type inference.
 
 use crate::mcp::types::MCPError;
 use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
