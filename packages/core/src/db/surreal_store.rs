@@ -3884,10 +3884,17 @@ where
 
         let transaction_query = transaction_parts.join("\n");
 
-        // Execute transaction
-        self.db
+        // Execute transaction and check for errors (including IF/THROW version mismatch)
+        let response = self
+            .db
             .query(&transaction_query)
             .await
+            .context(format!("Failed to update task node '{}'", id))?;
+
+        // Check the response for errors - SurrealDB transactions with THROW will produce errors
+        // that need to be explicitly checked via .check()
+        response
+            .check()
             .context(format!("Failed to update task node '{}'", id))?;
 
         // Fetch and return updated task node
