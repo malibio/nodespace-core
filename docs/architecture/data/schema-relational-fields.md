@@ -336,8 +336,33 @@ pub struct EdgeField {
     /// Target type for record fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_type: Option<String>,
+
+    /// Human-readable description (for NLP)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 ```
+
+**Why EdgeField is Simpler than SchemaField:**
+
+1. **No Protection Levels** - Edge fields are always user-defined
+   - Core relationships (`has_child`, `mentions`) remain in `schema.surql` as infrastructure
+   - User-defined relationships are inherently `protection: "user"`
+   - No need for `protection` field on edge fields
+
+2. **No Nested Types** - Edge fields use primitives only
+   - Prevents complex nested structures in relationship metadata
+   - Keeps edge tables lightweight and performant
+   - No `fields` or `item_fields` recursion needed
+
+3. **No Enum Extension** - No `coreValues`/`userValues`/`extensible` fields
+   - Edge fields can use simple string type with application-level validation
+   - Simpler lifecycle than spoke table enum fields
+
+4. **Tightly Coupled Lifecycle** - Edge fields live/die with relationship
+   - Created when relationship created
+   - Removed when relationship removed
+   - No independent field evolution
 
 ---
 
@@ -460,6 +485,280 @@ WHERE in = person:alice AND role = 'owner';
 - [ ] Extend MCP schema handlers to support relationships
 - [ ] Add relationship CRUD handlers
 - [ ] Add integration tests
+
+---
+
+## Implementation Details
+
+### Cardinality Enforcement
+
+Cardinality constraints are enforced at **application level** when creating relationships:
+
+**For `cardinality: "one"`:**
+```rust
+// When creating a relationship with cardinality="one"
+pub async fn create_relationship(
+    source_id: &str,
+    relationship_name: &str,
+    target_id: &str,
+    edge_data: Value,
+) -> Result<(), NodeServiceError> {
+    // Get schema and find relationship definition
+    let schema = self.get_schema_for_node(source_id).await?;
+    let relationship = schema.find_relationship(relationship_name)?;
+
+    // For cardinality="one", check if edge already exists
+    if relationship.cardinality == "one" {
+        let existing_edges = self.query_edges(source_id, relationship_name).await?;
+        if !existing_edges.is_empty() {
+            return Err(NodeServiceError::CardinalityViolation(format!(
+                "Relationship '{}' has cardinality 'one' but edge already exists",
+                relationship_name
+            )));
+        }
+    }
+
+    // Create edge using RELATE
+    let edge_table = compute_edge_table_name(&schema.id, relationship);
+    db.query(&format!(
+        "RELATE {}->{}->{}",
+        source_id, edge_table, target_id
+    )).await?;
+}
+```
+
+**Database-level uniqueness** is enforced via `UNIQUE` index on `(in, out)`:
+```sql
+DEFINE INDEX idx_{edge_table}_unique ON TABLE {edge_table} COLUMNS in, out UNIQUE;
+```
+
+This prevents duplicate edges (same source + target), but doesn't prevent multiple targets for `cardinality="one"`. Application logic handles cardinality.
+
+### Relationship Name Validation
+
+**Valid characters**: Alphanumeric, underscores, hyphens
+- Pattern: `^[a-zA-Z][a-zA-Z0-9_-]*$`
+- Must start with letter
+- Case-sensitive (stored exactly as defined)
+
+**Reserved names** (cannot be used):
+- `has_child` - Structural hierarchy relation
+- `mentions` - Structural reference relation
+- `node` - Reserved for hub-spoke link
+- `data` - Reserved for hub-spoke link
+
+**Validation timing**: During schema node validation (in `SchemaNodeBehavior`)
+
+```rust
+fn validate_relationship_name(name: &str) -> Result<(), ValidationError> {
+    // Check reserved names
+    let reserved = ["has_child", "mentions", "node", "data"];
+    if reserved.contains(&name) {
+        return Err(ValidationError::ReservedName(name.to_string()));
+    }
+
+    // Check pattern
+    let pattern = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]*$").unwrap();
+    if !pattern.is_match(name) {
+        return Err(ValidationError::InvalidName(format!(
+            "Relationship name '{}' must start with letter and contain only alphanumeric, underscores, hyphens",
+            name
+        )));
+    }
+
+    Ok(())
+}
+```
+
+### Target Schema Validation Timing
+
+**Validation happens at two points:**
+
+1. **Schema Creation/Update** (Lenient for forward references):
+   ```rust
+   // When creating schema with relationships
+   // - Do NOT require target schema to exist yet (allow forward references)
+   // - Allows creating Invoice schema before Customer schema exists
+   // - Validation deferred to relationship creation time
+   ```
+
+2. **Relationship Creation** (Strict):
+   ```rust
+   // When creating actual relationship edge
+   pub async fn create_relationship(...) -> Result<(), NodeServiceError> {
+       // 1. Validate source node exists
+       let source = self.get_node(source_id).await?
+           .ok_or(NodeServiceError::NodeNotFound)?;
+
+       // 2. Validate target schema exists
+       let target_schema_exists = self.schema_exists(&relationship.target_type).await?;
+       if !target_schema_exists {
+           return Err(NodeServiceError::TargetSchemaNotFound(
+               relationship.target_type.clone()
+           ));
+       }
+
+       // 3. Validate target node exists
+       let target = self.get_node(target_id).await?
+           .ok_or(NodeServiceError::NodeNotFound)?;
+
+       // 4. Validate target node type matches
+       if target.node_type != relationship.target_type {
+           return Err(NodeServiceError::TargetTypeMismatch);
+       }
+
+       // All validations pass - create edge
+   }
+   ```
+
+### Edge Table Name Collision Handling
+
+**Pattern**: `{source_type}_{relationship_name}_{target_type}`
+
+**Collision scenarios:**
+
+1. **Same source, same name, same target** - No collision (same relationship redefined)
+   ```
+   invoice_billed_to_customer (defined by invoice schema)
+   invoice_billed_to_customer (redefined by invoice schema update)
+   → Same table, DDL uses IF NOT EXISTS
+   ```
+
+2. **Different source, same name, same target** - No collision (different edge tables)
+   ```
+   invoice_billed_to_customer (invoice → customer)
+   quote_billed_to_customer   (quote → customer)
+   → Different tables, different relationships
+   ```
+
+3. **Same source, different name, same target** - No collision (different relationships)
+   ```
+   invoice_billed_to_customer   (invoice.billed_to → customer)
+   invoice_shipped_to_customer  (invoice.shipped_to → customer)
+   → Different tables, different purposes
+   ```
+
+**Edge table names are unique by design** - the triplet `(source, relationship_name, target)` uniquely identifies each relationship.
+
+**Validation during schema creation:**
+```rust
+fn validate_edge_table_uniqueness(
+    source_type: &str,
+    relationship: &SchemaRelationship,
+) -> Result<(), NodeServiceError> {
+    let edge_table = compute_edge_table_name(source_type, relationship);
+
+    // Check if table already exists for DIFFERENT relationship
+    // (Same relationship updating is OK - uses IF NOT EXISTS)
+    let existing = self.get_edge_table_owner(&edge_table).await?;
+
+    if let Some((existing_source, existing_rel_name)) = existing {
+        if existing_source != source_type || existing_rel_name != relationship.name {
+            return Err(NodeServiceError::EdgeTableCollision(format!(
+                "Edge table '{}' already used by {}.{}",
+                edge_table, existing_source, existing_rel_name
+            )));
+        }
+    }
+
+    Ok(())
+}
+```
+
+### Inbound Relationship Caching Strategy
+
+**Goal**: Fast NLP discovery of "what points to this node type" without scanning all schemas.
+
+**Implementation:**
+
+```rust
+pub struct InboundRelationshipCache {
+    /// Map: target_type → Vec<(source_type, relationship_name, metadata)>
+    cache: Arc<RwLock<HashMap<String, Vec<InboundRelationship>>>>,
+
+    /// Last cache refresh time
+    last_refresh: Arc<RwLock<Instant>>,
+}
+
+#[derive(Clone)]
+pub struct InboundRelationship {
+    pub source_type: String,
+    pub relationship_name: String,
+    pub reverse_name: Option<String>,
+    pub cardinality: String,
+    pub edge_table: String,
+}
+
+impl InboundRelationshipCache {
+    /// Get all relationships pointing TO a node type
+    pub async fn get_inbound_relationships(
+        &self,
+        target_type: &str,
+    ) -> Result<Vec<InboundRelationship>, Error> {
+        // Check if cache is stale
+        if self.needs_refresh().await {
+            self.refresh_cache().await?;
+        }
+
+        // Return from cache (fast!)
+        Ok(self.cache.read().await
+            .get(target_type)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn refresh_cache(&self) -> Result<(), Error> {
+        // Query ALL schemas once
+        let all_schemas: Vec<SchemaNode> = self.db
+            .query("SELECT * FROM schema")
+            .await?;
+
+        // Build index of inbound relationships
+        let mut index: HashMap<String, Vec<InboundRelationship>> = HashMap::new();
+
+        for schema in all_schemas {
+            for relationship in schema.relationships {
+                let inbound = InboundRelationship {
+                    source_type: schema.id.clone(),
+                    relationship_name: relationship.name.clone(),
+                    reverse_name: relationship.reverse_name.clone(),
+                    cardinality: relationship.cardinality.clone(),
+                    edge_table: relationship.edge_table
+                        .unwrap_or_else(|| compute_edge_table_name(&schema.id, &relationship)),
+                };
+
+                index.entry(relationship.target_type.clone())
+                    .or_default()
+                    .push(inbound);
+            }
+        }
+
+        // Atomic swap
+        *self.cache.write().await = index;
+        *self.last_refresh.write().await = Instant::now();
+
+        Ok(())
+    }
+
+    fn needs_refresh(&self) -> bool {
+        // Refresh if stale (>60s) OR if schema change event detected
+        let stale = self.last_refresh.read().await.elapsed() > Duration::from_secs(60);
+        let schema_changed = self.schema_change_flag.load(Ordering::Relaxed);
+
+        stale || schema_changed
+    }
+}
+```
+
+**Cache Invalidation:**
+- **Event-driven**: When schema node created/updated/deleted, set `schema_change_flag`
+- **Time-based**: Max 60 seconds stale
+- **On-demand**: First query after schema change triggers refresh
+
+**Performance:**
+- **Cache hit**: <1µs (HashMap lookup)
+- **Cache refresh**: 50-200ms (loads all schemas once)
+- **Memory overhead**: ~10KB per 100 schemas
 
 ---
 
