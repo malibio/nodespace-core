@@ -25,9 +25,6 @@ import type { Node } from './node';
  */
 export interface OrderedListNode extends Node {
   nodeType: 'ordered-list';
-  properties: {
-    [key: string]: unknown;
-  };
 }
 
 /**

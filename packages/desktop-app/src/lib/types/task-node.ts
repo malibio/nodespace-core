@@ -1,12 +1,13 @@
 /**
- * Type-Safe Task Node Wrapper
+ * Type-Safe Task Node Interface
  *
- * Provides ergonomic, type-safe access to task node properties
- * while maintaining the universal Node storage model.
+ * Flat structure matching Rust backend serialization (Issue #673, #700).
+ *
+ * The Rust backend serializes TaskNode as a flat JSON structure with spoke fields
+ * at the top level, not nested under properties.task. This interface matches that output.
  *
  * @example
  * ```typescript
- * import { Node } from '$lib/types/node';
  * import { TaskNode, isTaskNode, getTaskStatus, setTaskStatus } from '$lib/types/task-node';
  *
  * // Type guard
@@ -36,41 +37,59 @@ export type TaskStatus = CoreTaskStatus | string;
 
 /**
  * Core task priority values (user-extensible)
+ * Note: Rust backend uses integer priority (1-4), but string format is also supported
  */
 export type CoreTaskPriority = 'low' | 'medium' | 'high';
 
 /**
- * Task priority - core values plus any user-defined extensions
+ * Task priority - supports both integer (1-4) and string formats
  */
-export type TaskPriority = CoreTaskPriority | string;
+export type TaskPriority = CoreTaskPriority | string | number;
 
 /**
- * Task-specific properties stored under properties.task
- */
-export interface TaskProperties {
-  status?: TaskStatus;
-  priority?: TaskPriority;
-  dueDate?: string;
-  startedAt?: string;
-  completedAt?: string;
-  assignee?: string;
-}
-
-/**
- * Task node interface extending base Node
+ * TaskNode - Flat structure matching Rust backend serialization
  *
- * Represents a task with status tracking and metadata.
+ * When the backend serializes a TaskNode, it produces a flat JSON structure:
+ * ```json
+ * {
+ *   "id": "task-123",
+ *   "nodeType": "task",
+ *   "content": "Fix the bug",
+ *   "version": 1,
+ *   "createdAt": "2025-01-01T00:00:00Z",
+ *   "modifiedAt": "2025-01-01T00:00:00Z",
+ *   "status": "open",
+ *   "priority": 2,
+ *   "dueDate": null,
+ *   "assignee": null
+ * }
+ * ```
+ *
+ * This interface does NOT extend Node because task-specific fields are at the top level,
+ * not nested in properties. The type guard isTaskNode() handles both formats.
  */
-export interface TaskNode extends Node {
+export interface TaskNode {
+  // Hub fields (from node table)
+  id: string;
   nodeType: 'task';
-  properties: {
-    task?: TaskProperties;
-    [key: string]: unknown;
-  };
+  content: string;
+  version: number;
+  createdAt: string;
+  modifiedAt: string;
+
+  // Spoke fields (flat, not nested in properties)
+  status: TaskStatus;
+  priority?: TaskPriority;
+  dueDate?: string | null;
+  assignee?: string | null;
 }
 
 /**
  * Type guard to check if a node is a task node
+ *
+ * Supports both:
+ * - New flat format from backend (node.status)
+ * - Legacy nested format (node.properties.task.status) for backward compatibility
  *
  * @param node - Node to check
  * @returns True if node is a task node
@@ -83,14 +102,16 @@ export interface TaskNode extends Node {
  * }
  * ```
  */
-export function isTaskNode(node: Node): node is TaskNode {
+export function isTaskNode(node: Node | TaskNode): node is TaskNode {
   return node.nodeType === 'task';
 }
 
 /**
  * Get the task status
  *
- * @param node - Task node
+ * Handles both flat format (node.status) and legacy nested format (node.properties.task.status)
+ *
+ * @param node - Task node (or Node that is a task)
  * @returns Task status (defaults to "open")
  *
  * @example
@@ -99,14 +120,28 @@ export function isTaskNode(node: Node): node is TaskNode {
  * console.log(status); // "open", "in_progress", "done", "cancelled"
  * ```
  */
-export function getTaskStatus(node: TaskNode): TaskStatus {
-  return node.properties.task?.status ?? 'open';
+export function getTaskStatus(node: TaskNode | Node): TaskStatus {
+  // Check for flat format first (new backend serialization)
+  if ('status' in node && typeof node.status === 'string') {
+    return node.status as TaskStatus;
+  }
+
+  // Fall back to legacy nested format for backward compatibility
+  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
+    const props = node.properties as Record<string, unknown>;
+    const taskProps = props.task as Record<string, unknown> | undefined;
+    if (taskProps?.status && typeof taskProps.status === 'string') {
+      return taskProps.status as TaskStatus;
+    }
+  }
+
+  return 'open';
 }
 
 /**
  * Set the task status (immutable)
  *
- * Returns a new node with the updated status property.
+ * Returns a new node with the updated status.
  * Original node is not modified.
  *
  * @param node - Task node
@@ -122,24 +157,34 @@ export function getTaskStatus(node: TaskNode): TaskStatus {
 export function setTaskStatus(node: TaskNode, status: TaskStatus): TaskNode {
   return {
     ...node,
-    properties: {
-      ...node.properties,
-      task: {
-        ...node.properties.task,
-        status
-      }
-    }
+    status
   };
 }
 
 /**
  * Get the task priority
  *
+ * Handles both flat format and legacy nested format.
+ *
  * @param node - Task node
  * @returns Task priority or undefined if not set
  */
-export function getTaskPriority(node: TaskNode): TaskPriority | undefined {
-  return node.properties.task?.priority;
+export function getTaskPriority(node: TaskNode | Node): TaskPriority | undefined {
+  // Check for flat format first
+  if ('priority' in node && node.priority !== undefined && node.priority !== null) {
+    return node.priority as TaskPriority;
+  }
+
+  // Fall back to legacy nested format
+  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
+    const props = node.properties as Record<string, unknown>;
+    const taskProps = props.task as Record<string, unknown> | undefined;
+    if (taskProps?.priority !== undefined && taskProps.priority !== null) {
+      return taskProps.priority as TaskPriority;
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -152,43 +197,85 @@ export function getTaskPriority(node: TaskNode): TaskPriority | undefined {
 export function setTaskPriority(node: TaskNode, priority: TaskPriority): TaskNode {
   return {
     ...node,
-    properties: {
-      ...node.properties,
-      task: {
-        ...node.properties.task,
-        priority
-      }
-    }
+    priority
   };
 }
 
 /**
  * Get the task due date
  *
+ * Handles both flat format and legacy nested format.
+ *
  * @param node - Task node
  * @returns Due date string or undefined if not set
  */
-export function getTaskDueDate(node: TaskNode): string | undefined {
-  return node.properties.task?.dueDate;
+export function getTaskDueDate(node: TaskNode | Node): string | undefined {
+  // Check for flat format first
+  if ('dueDate' in node && node.dueDate !== undefined && node.dueDate !== null) {
+    return node.dueDate as string;
+  }
+
+  // Fall back to legacy nested format
+  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
+    const props = node.properties as Record<string, unknown>;
+    const taskProps = props.task as Record<string, unknown> | undefined;
+    if (taskProps?.dueDate && typeof taskProps.dueDate === 'string') {
+      return taskProps.dueDate;
+    }
+  }
+
+  return undefined;
 }
 
 /**
  * Set the task due date (immutable)
  *
  * @param node - Task node
- * @param dueDate - Due date string (ISO 8601)
+ * @param dueDate - Due date string (ISO 8601) or undefined to clear
  * @returns New node with updated due date
  */
 export function setTaskDueDate(node: TaskNode, dueDate: string | undefined): TaskNode {
   return {
     ...node,
-    properties: {
-      ...node.properties,
-      task: {
-        ...node.properties.task,
-        dueDate
-      }
+    dueDate: dueDate ?? null
+  };
+}
+
+/**
+ * Get the task assignee
+ *
+ * @param node - Task node
+ * @returns Assignee ID string or undefined if not set
+ */
+export function getTaskAssignee(node: TaskNode | Node): string | undefined {
+  // Check for flat format first
+  if ('assignee' in node && node.assignee !== undefined && node.assignee !== null) {
+    return node.assignee as string;
+  }
+
+  // Fall back to legacy nested format
+  if ('properties' in node && typeof node.properties === 'object' && node.properties !== null) {
+    const props = node.properties as Record<string, unknown>;
+    const taskProps = props.task as Record<string, unknown> | undefined;
+    if (taskProps?.assignee && typeof taskProps.assignee === 'string') {
+      return taskProps.assignee;
     }
+  }
+
+  return undefined;
+}
+
+/**
+ * Set the task assignee (immutable)
+ *
+ * @param node - Task node
+ * @param assignee - Assignee ID string or undefined to clear
+ * @returns New node with updated assignee
+ */
+export function setTaskAssignee(node: TaskNode, assignee: string | undefined): TaskNode {
+  return {
+    ...node,
+    assignee: assignee ?? null
   };
 }
 
@@ -203,11 +290,13 @@ export const TaskNodeHelpers = {
   setTaskPriority,
   getTaskDueDate,
   setTaskDueDate,
+  getTaskAssignee,
+  setTaskAssignee,
 
   /**
    * Check if task is completed (done or cancelled)
    */
-  isCompleted(node: TaskNode): boolean {
+  isCompleted(node: TaskNode | Node): boolean {
     const status = getTaskStatus(node);
     return status === 'done' || status === 'cancelled';
   },
@@ -215,14 +304,14 @@ export const TaskNodeHelpers = {
   /**
    * Check if task is active (in_progress)
    */
-  isActive(node: TaskNode): boolean {
+  isActive(node: TaskNode | Node): boolean {
     return getTaskStatus(node) === 'in_progress';
   },
 
   /**
    * Check if task is pending (open)
    */
-  isPending(node: TaskNode): boolean {
+  isPending(node: TaskNode | Node): boolean {
     return getTaskStatus(node) === 'open';
   },
 
@@ -230,14 +319,14 @@ export const TaskNodeHelpers = {
    * Check if status is a core (protected) status
    */
   isCoreStatus(status: TaskStatus): status is CoreTaskStatus {
-    return ['open', 'in_progress', 'done', 'cancelled'].includes(status);
+    return ['open', 'in_progress', 'done', 'cancelled'].includes(status as string);
   },
 
   /**
    * Check if priority is a core (protected) priority
    */
   isCorePriority(priority: TaskPriority): priority is CoreTaskPriority {
-    return ['low', 'medium', 'high'].includes(priority);
+    return ['low', 'medium', 'high'].includes(priority as string);
   },
 
   /**
@@ -257,7 +346,7 @@ export const TaskNodeHelpers = {
     }
 
     // Format user-defined status: replace underscores, capitalize words
-    return status
+    return String(status)
       .split('_')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
@@ -268,6 +357,17 @@ export const TaskNodeHelpers = {
    * For user-defined priorities, capitalizes and replaces underscores with spaces
    */
   getPriorityDisplayName(priority: TaskPriority): string {
+    // Handle numeric priorities
+    if (typeof priority === 'number') {
+      const numericLabels: Record<number, string> = {
+        1: 'Urgent',
+        2: 'High',
+        3: 'Medium',
+        4: 'Low'
+      };
+      return numericLabels[priority] || `Priority ${priority}`;
+    }
+
     const coreDisplayNames: Record<CoreTaskPriority, string> = {
       low: 'Low',
       medium: 'Medium',
@@ -279,9 +379,52 @@ export const TaskNodeHelpers = {
     }
 
     // Format user-defined priority: replace underscores, capitalize words
-    return priority
+    return String(priority)
       .split('_')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
+  },
+
+  /**
+   * Create a new task node with specified content
+   *
+   * @param content - The task content/description
+   * @param options - Optional task properties
+   * @returns New task node
+   */
+  createTaskNode(
+    content: string,
+    options: {
+      status?: TaskStatus;
+      priority?: TaskPriority;
+      dueDate?: string;
+      assignee?: string;
+    } = {}
+  ): TaskNode {
+    return {
+      id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      nodeType: 'task',
+      content,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      version: 1,
+      status: options.status ?? 'open',
+      priority: options.priority,
+      dueDate: options.dueDate ?? null,
+      assignee: options.assignee ?? null
+    };
   }
 };
+
+// Legacy type exports for backward compatibility (deprecated)
+/**
+ * @deprecated Use TaskNode directly - properties are now flat, not nested
+ */
+export interface TaskProperties {
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  dueDate?: string;
+  startedAt?: string;
+  completedAt?: string;
+  assignee?: string;
+}

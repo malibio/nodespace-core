@@ -25,9 +25,6 @@ import type { Node } from './node';
  */
 export interface QuoteBlockNode extends Node {
   nodeType: 'quote-block';
-  properties: {
-    [key: string]: unknown;
-  };
 }
 
 /**
