@@ -483,8 +483,11 @@ impl SurrealStore<Client> {
         // Even in HTTP mode, we need to ensure schema exists for fresh databases
         Self::initialize_schema(&db).await?;
 
+        // Seed core schemas (idempotent - checks if schemas already exist)
+        // Issue #691: TypeScript seeding was removed, now Rust handles it everywhere
+        Self::seed_core_schemas_http(&db).await?;
+
         // Build schema caches from definitions (Issue #691)
-        // In HTTP mode, schemas should already be seeded by the server
         let (types_with_spoke_tables, valid_node_types) = Self::build_schema_caches(&db).await?;
 
         tracing::info!("✅ Connected to SurrealDB HTTP server");
@@ -748,6 +751,79 @@ where
         }
 
         tracing::info!("✅ Core schemas seeded successfully");
+
+        Ok(())
+    }
+
+    /// Seed core schema definitions for HTTP mode
+    ///
+    /// This is the HTTP-specific version of `seed_core_schemas` that works with
+    /// the HTTP client connection type. Added in Issue #691 when TypeScript seeding
+    /// was removed.
+    async fn seed_core_schemas_http(db: &Arc<Surreal<Client>>) -> Result<()> {
+        use crate::models::core_schemas::get_core_schemas;
+
+        // Check if schemas already exist by trying to get one
+        let task_exists = db
+            .query("SELECT * FROM type::thing('node', 'task') LIMIT 1")
+            .await
+            .context("Failed to check for existing schemas")?
+            .take::<Option<SurrealNode>>(0)
+            .ok()
+            .flatten()
+            .is_some();
+
+        if task_exists {
+            tracing::info!("✅ Core schemas already seeded");
+            return Ok(());
+        }
+
+        tracing::info!("🌱 Seeding core schemas (HTTP mode)...");
+
+        // Create temporary SurrealStore to use create_schema_node_atomic method
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+        let mut bootstrap_spoke_cache = std::collections::HashSet::new();
+        let mut bootstrap_valid_cache = std::collections::HashSet::new();
+        bootstrap_spoke_cache.insert("schema".to_string());
+        bootstrap_valid_cache.insert("schema".to_string());
+        let store = SurrealStore::<Client> {
+            db: Arc::clone(db),
+            event_tx,
+            types_with_spoke_tables: bootstrap_spoke_cache,
+            valid_node_types: bootstrap_valid_cache,
+        };
+
+        // Get core schemas as SchemaNode instances
+        let core_schemas = get_core_schemas();
+
+        // Wrap store in Arc for SchemaTableManager
+        let store_arc = Arc::new(store);
+        let table_manager =
+            crate::services::schema_table_manager::SchemaTableManager::new(store_arc.clone());
+
+        // For each schema: atomically create schema node + spoke table DDL
+        for schema in &core_schemas {
+            let schema_id = schema.id.clone();
+            let node = schema.clone().into_node();
+
+            // Generate DDL statements for schemas with fields
+            let ddl_statements = if !schema.fields.is_empty() {
+                table_manager
+                    .generate_ddl_statements(&schema_id, &schema.fields)
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to generate DDL for '{}': {}", schema_id, e)
+                    })?
+            } else {
+                vec![]
+            };
+
+            // Atomically create schema node + execute DDL
+            store_arc
+                .create_schema_node_atomic(node, ddl_statements)
+                .await?;
+        }
+
+        tracing::info!("✅ Core schemas seeded successfully (HTTP mode)");
 
         Ok(())
     }
@@ -3696,17 +3772,19 @@ where
     ///
     /// # Query Pattern
     ///
+    /// Column aliases use camelCase to match TaskNode's `#[serde(rename_all = "camelCase")]`:
+    ///
     /// ```sql
     /// SELECT
     ///     record::id(id) AS id,
     ///     status,
     ///     priority,
-    ///     due_date,
+    ///     due_date AS dueDate,
     ///     assignee,
     ///     node.content AS content,
     ///     node.version AS version,
-    ///     node.created_at AS created_at,
-    ///     node.modified_at AS modified_at
+    ///     node.created_at AS createdAt,
+    ///     node.modified_at AS modifiedAt
     /// FROM task:`some-id`;
     /// ```
     ///
@@ -3738,19 +3816,20 @@ where
     /// ```
     pub async fn get_task_node(&self, id: &str) -> Result<Option<crate::models::TaskNode>> {
         // Single query: spoke fields + hub fields via record link
-        // Use record::id() to extract the string ID from the Thing type
+        // Note: Column aliases use camelCase to match TaskNode's #[serde(rename_all = "camelCase")]
+        // Database stores snake_case, but serde expects camelCase for deserialization
         let query = format!(
             r#"
             SELECT
                 record::id(id) AS id,
                 status,
                 priority,
-                due_date,
+                due_date AS dueDate,
                 assignee,
                 node.content AS content,
                 node.version AS version,
-                node.created_at AS created_at,
-                node.modified_at AS modified_at
+                node.created_at AS createdAt,
+                node.modified_at AS modifiedAt
             FROM task:`{}`;
             "#,
             id
@@ -3775,17 +3854,19 @@ where
     ///
     /// # Query Pattern
     ///
+    /// Column aliases use camelCase to match SchemaNode's `#[serde(rename_all = "camelCase")]`:
+    ///
     /// ```sql
     /// SELECT
     ///     record::id(id) AS id,
-    ///     is_core,
-    ///     version AS schema_version,
+    ///     is_core AS isCore,
+    ///     version AS schemaVersion,
     ///     description,
     ///     fields,
     ///     node.content AS content,
     ///     node.version AS version,
-    ///     node.created_at AS created_at,
-    ///     node.modified_at AS modified_at
+    ///     node.created_at AS createdAt,
+    ///     node.modified_at AS modifiedAt
     /// FROM schema:`task`;
     /// ```
     ///
@@ -3817,19 +3898,20 @@ where
     /// ```
     pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
         // Single query: spoke fields + hub fields via record link
-        // Note: spoke `version` is aliased to `schema_version` to avoid collision with hub version
+        // Note: Column aliases use camelCase to match SchemaNode's #[serde(rename_all = "camelCase")]
+        // Database stores snake_case, but serde expects camelCase for deserialization
         let query = format!(
             r#"
             SELECT
                 record::id(id) AS id,
-                is_core,
-                version AS schema_version,
+                is_core AS isCore,
+                version AS schemaVersion,
                 description,
                 fields,
                 node.content AS content,
                 node.version AS version,
-                node.created_at AS created_at,
-                node.modified_at AS modified_at
+                node.created_at AS createdAt,
+                node.modified_at AS modifiedAt
             FROM schema:`{}`;
             "#,
             id
