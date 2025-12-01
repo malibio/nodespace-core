@@ -149,13 +149,9 @@ pub async fn handle_tools_call(
             search::handle_search_roots(embedding_service, arguments)
         }
 
-        // Schema creation from natural language (uses generic node creation)
-        "create_entity_schema_from_description" => {
-            natural_language_schema::handle_create_entity_schema_from_description(
-                node_service,
-                arguments,
-            )
-            .await
+        // Schema creation (uses generic node creation)
+        "create_schema" => {
+            natural_language_schema::handle_create_schema(node_service, arguments).await
         }
 
         // Relationship CRUD (Issue #703)
@@ -643,26 +639,68 @@ fn get_tool_schemas() -> Value {
                 "required": ["query"]
             }
         },
-        // Schema-specific tools removed per Issue #690
-        // Use generic CRUD (create_node, update_node, query_nodes) for schema management
-        // Schema nodes have node_type="schema" and can be queried with query_nodes({filters: [{field: "node_type", op: "eq", value: "schema"}]})
+        // Schema creation tool
         {
-            "name": "create_entity_schema_from_description",
-            "description": "Create a custom entity schema from a natural language description. Intelligently infers field types (string, number, date, enum, boolean, array) and automatically enforces namespace prefixes for user-defined properties. Ideal for rapid prototyping and user-driven schema creation.",
+            "name": "create_schema",
+            "description": "Create a custom schema with fields and relationships. Fields can be provided explicitly or inferred from a natural language description. Relationships define edges to other node types.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "entity_name": {
+                    "name": {
                         "type": "string",
-                        "description": "Name of the entity (e.g., 'Invoice', 'Customer', 'Project')"
+                        "description": "Schema name (e.g., 'Invoice', 'Customer', 'Project')"
                     },
                     "description": {
                         "type": "string",
-                        "description": "Natural language description of the entity fields. Example: 'invoice number (required), amount in USD, status (draft/sent/paid), due date, and optional notes'"
+                        "description": "Optional natural language description of fields. Example: 'invoice number (required), amount in USD, status (draft/sent/paid)'. Used if 'fields' not provided."
+                    },
+                    "fields": {
+                        "type": "array",
+                        "description": "Optional explicit field definitions. Takes precedence over description parsing.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "type": {"type": "string", "enum": ["string", "number", "boolean", "date", "enum", "array", "object"]},
+                                "required": {"type": "boolean"},
+                                "indexed": {"type": "boolean"},
+                                "description": {"type": "string"}
+                            },
+                            "required": ["name", "type"]
+                        }
+                    },
+                    "relationships": {
+                        "type": "array",
+                        "description": "Optional relationship definitions to other schemas",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Relationship name (e.g., 'billed_to', 'assigned_to')"},
+                                "targetType": {"type": "string", "description": "Target schema ID (e.g., 'customer', 'person')"},
+                                "direction": {"type": "string", "enum": ["out", "in"], "default": "out"},
+                                "cardinality": {"type": "string", "enum": ["one", "many"], "default": "one"},
+                                "required": {"type": "boolean", "default": false},
+                                "reverseName": {"type": "string", "description": "Optional name for reverse lookups (e.g., 'invoices')"},
+                                "reverseCardinality": {"type": "string", "enum": ["one", "many"]},
+                                "edgeFields": {
+                                    "type": "array",
+                                    "description": "Optional fields stored on the edge",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "type": {"type": "string"},
+                                            "required": {"type": "boolean"}
+                                        }
+                                    }
+                                }
+                            },
+                            "required": ["name", "targetType"]
+                        }
                     },
                     "additional_constraints": {
                         "type": "object",
-                        "description": "Optional constraints to override or refine inferred types",
+                        "description": "Optional constraints for description parsing (only used when description provided)",
                         "properties": {
                             "required_fields": {
                                 "type": "array",
@@ -671,12 +709,12 @@ fn get_tool_schemas() -> Value {
                             },
                             "enum_values": {
                                 "type": "object",
-                                "description": "Map of field names to their enum values. Example: {\"status\": [\"DRAFT\", \"SENT\", \"PAID\"]}"
+                                "description": "Map of field names to their enum values"
                             }
                         }
                     }
                 },
-                "required": ["entity_name", "description"]
+                "required": ["name"]
             }
         },
         // Relationship CRUD tools (Issue #703)

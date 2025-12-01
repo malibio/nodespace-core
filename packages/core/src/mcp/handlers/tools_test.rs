@@ -53,8 +53,8 @@ fn test_tools_list_returns_all_schemas() {
     assert!(tool_names.contains(&"search_containers"));
     assert!(tool_names.contains(&"search_roots"));
 
-    // Schema creation (natural language) - kept
-    assert!(tool_names.contains(&"create_entity_schema_from_description"));
+    // Schema creation - renamed from create_entity_schema_from_description
+    assert!(tool_names.contains(&"create_schema"));
 
     // Relationship CRUD - Issue #703
     assert!(tool_names.contains(&"create_relationship"));

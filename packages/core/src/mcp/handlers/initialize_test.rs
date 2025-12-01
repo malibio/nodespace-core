@@ -104,8 +104,8 @@ fn test_all_expected_tools_present() {
         "update_container_from_markdown",
         // Search
         "search_containers",
-        // Schema creation (natural language) - Issue #690: schema-specific tools removed
-        "create_entity_schema_from_description",
+        // Schema creation - Issue #703: renamed and extended with relationships
+        "create_schema",
         // Relationship CRUD - Issue #703
         "create_relationship",
         "delete_relationship",
