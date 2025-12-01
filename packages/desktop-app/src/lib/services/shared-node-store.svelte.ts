@@ -781,8 +781,14 @@ export class SharedNodeStore {
                     // Issue #709: Smart routing via plugin system
                     // Type-specific updaters route to spoke table methods (updateTaskNode, etc.)
                     // Generic updater falls back to hub table properties JSON update
+                    //
+                    // CRITICAL: Don't use type-specific updater when nodeType is CHANGING
+                    // Type-specific updaters are only for spoke field updates on nodes that
+                    // are ALREADY of that type. Node type changes must go through generic path.
                     const nodeType = currentNode?.nodeType;
-                    const typeUpdater = nodeType ? pluginRegistry.getNodeUpdater(nodeType) : null;
+                    const isNodeTypeChanging = 'nodeType' in updatePayload;
+                    const typeUpdater =
+                      nodeType && !isNodeTypeChanging ? pluginRegistry.getNodeUpdater(nodeType) : null;
 
                     let updatedNodeFromBackend: Node | null = null;
 
