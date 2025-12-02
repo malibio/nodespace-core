@@ -19,7 +19,6 @@
 
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
-import { getClientId } from './client-id';
 import type { SseEvent } from '$lib/types/sse-events';
 import type { Node } from '$lib/types/node';
 import { nodeToTaskNode } from '$lib/types/task-node';
@@ -140,9 +139,8 @@ class BrowserSyncService {
 
     this.connectionState = 'connecting';
 
-    // Include clientId as query parameter (EventSource doesn't support custom headers)
-    const clientId = getClientId();
-    const sseUrl = `${this.sseEndpoint}?clientId=${encodeURIComponent(clientId)}`;
+    // No clientId needed (Issue #715) - dev-proxy handles filtering server-side
+    const sseUrl = this.sseEndpoint;
 
     console.log('[BrowserSyncService] Connecting to SSE endpoint:', sseUrl);
 
@@ -208,17 +206,12 @@ class BrowserSyncService {
    * Handle parsed SSE event
    *
    * Routes events to appropriate store/tree handlers to update UI.
-   * Filters out events that originated from this browser client (Issue #715).
+   * Filtering handled server-side by dev-proxy (Issue #715).
    */
   private handleEvent(event: SseEvent): void {
-    // Filter out events from this client (prevent feedback loop - Issue #715)
-    // When this browser makes changes, it receives SSE events back.
-    // Skip processing those to avoid overwriting optimistic updates.
-    const clientId = getClientId();
-    if ('clientId' in event && event.clientId === clientId) {
-      console.log('[BrowserSyncService] Filtering out event from same client:', event.type);
-      return;
-    }
+    // No client-side filtering needed - dev-proxy filters out events from browser operations
+    // Dev-proxy NodeService has client_id="dev-proxy", so all browser HTTP operations
+    // emit events with source_client_id="dev-proxy", which SSE handler filters out.
 
     switch (event.type) {
       case 'nodeCreated': {

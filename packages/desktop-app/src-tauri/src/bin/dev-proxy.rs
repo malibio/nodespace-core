@@ -366,7 +366,10 @@ async fn main() -> anyhow::Result<()> {
     let node_service = match NodeService::new(&mut store).await {
         Ok(s) => {
             println!("✅ NodeService initialized");
-            Arc::new(s)
+            // Set client_id for dev-proxy - represents all browser clients (Issue #715)
+            // All browser operations emit events with source_client_id: "dev-proxy"
+            // SSE filtering then prevents browsers from receiving their own changes
+            Arc::new(s.with_client("dev-proxy"))
         }
         Err(e) => {
             eprintln!("❌ Failed to initialize NodeService: {}", e);
@@ -625,22 +628,19 @@ async fn health_check() -> &'static str {
 /// ```
 async fn sse_handler(
     State(state): State<AppState>,
-    query: axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Extract client ID from query parameters (EventSource API doesn't support custom headers)
-    let client_id = query.get("clientId").cloned();
-
-    tracing::debug!("SSE client connected with client_id: {:?}", client_id);
+    tracing::debug!("SSE client connected");
 
     let rx = state.event_tx.subscribe();
 
-    // Transform broadcast messages into SSE events, filtering out events from this client
+    // Transform broadcast messages into SSE events, filtering out events from dev-proxy
+    // (Issue #715: dev-proxy represents all browser clients as single logical client)
     let stream = BroadcastStream::new(rx).filter_map(move |result| {
-        let client_id = client_id.clone();
         // Skip lagged/closed errors, only process actual messages
         match result {
             Ok(sse_event) => {
-                // Filter out events from this client (prevent feedback loop)
+                // Filter out events from dev-proxy itself (prevent feedback loop)
+                // All browser HTTP operations go through dev-proxy NodeService with client_id="dev-proxy"
                 let event_client_id = match &sse_event {
                     SseEvent::NodeCreated { client_id, .. } => client_id,
                     SseEvent::NodeUpdated { client_id, .. } => client_id,
@@ -649,12 +649,11 @@ async fn sse_handler(
                     SseEvent::EdgeDeleted { client_id, .. } => client_id,
                 };
 
-                // Skip if this event came from the same client
-                if let (Some(this_client), Some(event_client)) = (&client_id, event_client_id) {
-                    if this_client == event_client {
+                // Skip if event came from dev-proxy (browser operations)
+                if let Some(event_client) = event_client_id {
+                    if event_client == "dev-proxy" {
                         tracing::debug!(
-                            "Filtering out SSE event from same client: {:?}",
-                            event_client
+                            "Filtering out SSE event from dev-proxy (browser operation)"
                         );
                         return None;
                     }
