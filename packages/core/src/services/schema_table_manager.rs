@@ -650,15 +650,19 @@ where
     fn generate_edge_table_ddl(
         &self,
         edge_table: &str,
-        source_type: &str,
+        _source_type: &str,
         relationship: &SchemaRelationship,
     ) -> Result<Vec<String>, NodeServiceError> {
+        let _ = relationship; // Silence unused warning - kept for future type validation
+
         let mut statements = Vec::new();
 
         // 1. Define edge table with RELATION type
+        // Note: All nodes are stored in the universal 'node' table (hub-and-spoke architecture)
+        // so IN and OUT must reference 'node', not the schema type names
         statements.push(format!(
-            "DEFINE TABLE IF NOT EXISTS {} SCHEMAFULL TYPE RELATION IN {} OUT {};",
-            edge_table, source_type, relationship.target_type
+            "DEFINE TABLE IF NOT EXISTS {} SCHEMAFULL TYPE RELATION IN node OUT node;",
+            edge_table
         ));
 
         // 2. Core tracking fields (always generated)
