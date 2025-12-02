@@ -277,6 +277,10 @@ pub struct TaskNode {
     /// Unique identifier (matches hub node ID)
     pub id: String,
 
+    /// Node type (always "task" for TaskNode)
+    #[serde(rename = "nodeType")]
+    pub node_type: String,
+
     /// Primary content/text of the task
     pub content: String,
 
@@ -289,6 +293,11 @@ pub struct TaskNode {
 
     /// Last modification timestamp
     pub modified_at: DateTime<Utc>,
+
+    /// Properties object (for schema-driven UI compatibility)
+    /// Contains spoke fields duplicated for generic Node consumers
+    #[serde(default)]
+    pub properties: serde_json::Value,
 
     // ========================================================================
     // Spoke fields (direct from task table)
@@ -349,7 +358,7 @@ impl TaskNode {
         let props = task_props.as_ref().unwrap_or(&node.properties);
 
         // Extract status from properties
-        let status = props
+        let status: TaskStatus = props
             .get("status")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
@@ -378,12 +387,28 @@ impl TaskNode {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // Build properties object with spoke fields for schema-driven UI compatibility
+        let mut props = serde_json::Map::new();
+        props.insert("status".to_string(), json!(status.as_str()));
+        if let Some(ref p) = priority {
+            props.insert("priority".to_string(), json!(p.as_str()));
+        }
+        if let Some(ref d) = due_date {
+            props.insert("due_date".to_string(), json!(d.to_rfc3339()));
+        }
+        if let Some(ref a) = assignee {
+            props.insert("assignee".to_string(), json!(a));
+        }
+        props.insert("_schema_version".to_string(), json!(1));
+
         Ok(Self {
             id: node.id,
+            node_type: "task".to_string(),
             content: node.content,
             version: node.version,
             created_at: node.created_at,
             modified_at: node.modified_at,
+            properties: json!(props),
             status,
             priority,
             due_date,
@@ -539,13 +564,31 @@ impl TaskNodeBuilder {
         let now = Utc::now();
         let id = uuid::Uuid::new_v4().to_string();
 
+        let status = self.status.unwrap_or_default();
+
+        // Build properties object with spoke fields for schema-driven UI compatibility
+        let mut props = serde_json::Map::new();
+        props.insert("status".to_string(), json!(status.as_str()));
+        if let Some(p) = &self.priority {
+            props.insert("priority".to_string(), json!(p.as_str()));
+        }
+        if let Some(d) = &self.due_date {
+            props.insert("due_date".to_string(), json!(d.to_rfc3339()));
+        }
+        if let Some(a) = &self.assignee {
+            props.insert("assignee".to_string(), json!(a));
+        }
+        props.insert("_schema_version".to_string(), json!(1));
+
         TaskNode {
             id,
+            node_type: "task".to_string(),
             content: self.content,
             version: 1,
             created_at: now,
             modified_at: now,
-            status: self.status.unwrap_or_default(),
+            properties: json!(props),
+            status,
             priority: self.priority,
             due_date: self.due_date,
             assignee: self.assignee,

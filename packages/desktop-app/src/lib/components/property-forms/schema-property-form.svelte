@@ -38,6 +38,9 @@
     nodeType: string;
   } = $props();
 
+  // DEBUG: Log component initialization
+  console.log('[SchemaPropertyForm] Component initialized with:', { nodeId, nodeType });
+
   // State
   let schema = $state<SchemaNode | null>(null);
   let isOpen = $state(false); // Collapsed by default
@@ -93,6 +96,10 @@
         const schemaNode = await backendAdapter.getSchema(nodeType);
         if (isSchemaNode(schemaNode)) {
           schema = schemaNode;
+          console.log('[SchemaPropertyForm] Loaded schema for', nodeType, ':', {
+            fieldCount: schemaNode.fields?.length || 0,
+            fieldNames: schemaNode.fields?.map(f => f.name) || []
+          });
         } else {
           schemaError = `Invalid schema node for type: ${nodeType}`;
           schema = null;
@@ -110,14 +117,32 @@
   /**
    * Get property value with backward compatibility (Issue #397)
    *
-   * Supports both formats:
+   * Supports multiple formats:
+   * - Strongly-typed nodes: top-level spoke fields (e.g., task.status)
    * - New nested: properties.task.status
    * - Old flat: properties.status
    */
   function getPropertyValue(fieldName: string): unknown {
     if (!node) return undefined;
 
-    // Try new nested format first: properties[nodeType][fieldName]
+    // DEBUG: Log node structure to understand the issue
+    if (fieldName === 'status') {
+      console.log('[SchemaPropertyForm] Getting status for node:', {
+        nodeId: node.id,
+        nodeType: node.nodeType,
+        topLevelStatus: (node as unknown as Record<string, unknown>)[fieldName],
+        properties: node.properties,
+        fieldInNode: fieldName in node
+      });
+    }
+
+    // For strongly-typed nodes (TaskNode, etc.), check top-level fields first
+    // Spoke fields like status, priority, dueDate are at the top level
+    if (fieldName in node && (node as unknown as Record<string, unknown>)[fieldName] !== undefined) {
+      return (node as unknown as Record<string, unknown>)[fieldName];
+    }
+
+    // Try new nested format: properties[nodeType][fieldName]
     const typeNamespace = node.properties?.[nodeType];
     if (typeNamespace && typeof typeNamespace === 'object' && fieldName in typeNamespace) {
       return (typeNamespace as Record<string, unknown>)[fieldName];

@@ -863,7 +863,9 @@ export class SharedNodeStore {
                 if (shouldLogDatabaseErrors()) {
                   console.error(
                     `[SharedNodeStore] Database write failed for node ${nodeId}:`,
-                    error
+                    error,
+                    '\nFull error object:',
+                    JSON.stringify(dbError, null, 2)
                   );
                 }
 
