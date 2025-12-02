@@ -647,14 +647,18 @@ where
     }
 
     /// Generate DDL for a single edge table
+    ///
+    /// # Parameters
+    /// - `edge_table`: Name of the edge table to create
+    /// - `_source_type`: Reserved for future type-specific validation (e.g., enforcing
+    ///   that only nodes of the source type can be the `in` side of relationships)
+    /// - `relationship`: Schema relationship definition with edge fields and constraints
     fn generate_edge_table_ddl(
         &self,
         edge_table: &str,
         _source_type: &str,
         relationship: &SchemaRelationship,
     ) -> Result<Vec<String>, NodeServiceError> {
-        let _ = relationship; // Silence unused warning - kept for future type validation
-
         let mut statements = Vec::new();
 
         // 1. Define edge table with RELATION type
