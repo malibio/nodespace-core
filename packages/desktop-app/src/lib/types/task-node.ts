@@ -81,6 +81,8 @@ export interface TaskNode {
   priority?: TaskPriority;
   dueDate?: string | null;
   assignee?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 /**
@@ -228,6 +230,12 @@ export interface TaskNodeUpdate {
   /** Update assignee (spoke field) - null to clear */
   assignee?: string | null;
 
+  /** Update started_at date (spoke field) - null to clear */
+  startedAt?: string | null;
+
+  /** Update completed_at date (spoke field) - null to clear */
+  completedAt?: string | null;
+
   /** Update content (hub field) */
   content?: string;
 }
@@ -254,13 +262,16 @@ export function nodeToTaskNode(node: Node): TaskNode {
   }
 
   // Extract from properties (try nested task.* first, then flat)
+  // Per naming conventions: API returns camelCase (dueDate, startedAt, completedAt)
   const props = node.properties as Record<string, unknown> | undefined;
   const taskProps = (props?.task as Record<string, unknown>) ?? props ?? {};
 
   const status = (taskProps.status as TaskStatus) ?? 'open';
   const priority = taskProps.priority as TaskPriority | undefined;
-  const dueDate = (taskProps.dueDate as string | null) ?? (taskProps.due_date as string | null);
+  const dueDate = taskProps.dueDate as string | null | undefined;
   const assignee = taskProps.assignee as string | null | undefined;
+  const startedAt = taskProps.startedAt as string | null | undefined;
+  const completedAt = taskProps.completedAt as string | null | undefined;
 
   return {
     id: node.id,
@@ -272,7 +283,9 @@ export function nodeToTaskNode(node: Node): TaskNode {
     status,
     priority,
     dueDate: dueDate ?? null,
-    assignee: assignee ?? null
+    assignee: assignee ?? null,
+    startedAt: startedAt ?? null,
+    completedAt: completedAt ?? null
   };
 }
 

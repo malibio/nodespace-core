@@ -725,7 +725,9 @@ export class SharedNodeStore {
           ('status' in changes ||
             'priority' in changes ||
             'dueDate' in changes ||
-            'assignee' in changes);
+            'assignee' in changes ||
+            'startedAt' in changes ||
+            'completedAt' in changes);
         const shouldPersist =
           source.type !== 'viewer' ||
           isStructuralChange ||

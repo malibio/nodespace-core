@@ -586,9 +586,7 @@ async fn domain_event_to_sse_bridge(
                     } => {
                         // Filter out events from dev-proxy (browser operations)
                         if source_client_id.as_deref() == Some("dev-proxy") {
-                            tracing::debug!(
-                                "Filtering out EdgeCreated event from dev-proxy"
-                            );
+                            tracing::debug!("Filtering out EdgeCreated event from dev-proxy");
                             continue;
                         }
 

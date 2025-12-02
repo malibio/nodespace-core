@@ -3719,6 +3719,7 @@ where
             r#"
             SELECT
                 record::id(id) AS id,
+                node.node_type AS nodeType,
                 status,
                 priority,
                 due_date AS dueDate,
@@ -3829,6 +3830,23 @@ where
                     spoke_set_clauses.push(format!("assignee = '{}'", a.replace('\'', "\\'")))
                 }
                 None => spoke_set_clauses.push("assignee = NONE".to_string()),
+            }
+        }
+
+        if let Some(ref started_at_opt) = update.started_at {
+            match started_at_opt {
+                Some(dt) => {
+                    spoke_set_clauses.push(format!("started_at = <datetime>'{}'", dt.to_rfc3339()))
+                }
+                None => spoke_set_clauses.push("started_at = NONE".to_string()),
+            }
+        }
+
+        if let Some(ref completed_at_opt) = update.completed_at {
+            match completed_at_opt {
+                Some(dt) => spoke_set_clauses
+                    .push(format!("completed_at = <datetime>'{}'", dt.to_rfc3339())),
+                None => spoke_set_clauses.push("completed_at = NONE".to_string()),
             }
         }
 
