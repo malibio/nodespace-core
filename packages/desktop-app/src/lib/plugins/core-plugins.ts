@@ -403,6 +403,26 @@ export const userNodePlugin: PluginDefinition = {
   }
 };
 
+export const queryNodePlugin: PluginDefinition = {
+  id: 'query',
+  name: 'Query Node',
+  description: 'Saved query definition for filtering and searching nodes',
+  version: '1.0.0',
+  config: {
+    slashCommands: [], // Query nodes are created by AI/MCP, not slash commands
+    canHaveChildren: false, // Query nodes are leaf nodes
+    canBeChild: true
+  },
+  node: {
+    lazyLoad: () => import('../components/query-node.svelte'),
+    priority: 1
+  },
+  reference: {
+    component: BaseNodeReference as NodeReferenceComponent,
+    priority: 1
+  }
+};
+
 export const documentNodePlugin: PluginDefinition = {
   id: 'document',
   name: 'Document Reference',
@@ -430,7 +450,8 @@ export const corePlugins = [
   dateNodePlugin,
   codeBlockNodePlugin,
   quoteBlockNodePlugin,
-  orderedListNodePlugin
+  orderedListNodePlugin,
+  queryNodePlugin
   // Note: userNodePlugin and documentNodePlugin are defined but not registered
   // They will be added when user/document reference system is implemented
 ];

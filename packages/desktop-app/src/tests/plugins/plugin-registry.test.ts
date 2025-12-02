@@ -941,4 +941,34 @@ describe('PluginRegistry - Core Functionality', () => {
       expect(updater2).toBeNull();
     });
   });
+
+  describe('Query Node Plugin', () => {
+    it('should register query plugin correctly', () => {
+      const plugin: PluginDefinition = {
+        id: 'query',
+        name: 'Query Node',
+        description: 'Saved query definition',
+        version: '1.0.0',
+        config: {
+          slashCommands: [], // Query nodes are created by AI/MCP, not slash commands
+          canHaveChildren: false, // Query nodes are leaf nodes
+          canBeChild: true
+        },
+        node: {
+          lazyLoad: vi.fn().mockResolvedValue({ default: MockViewerComponent })
+        },
+        reference: {
+          component: MockReferenceComponent,
+          priority: 1
+        }
+      };
+
+      registry.register(plugin);
+
+      expect(registry.hasPlugin('query')).toBe(true);
+      expect(registry.canHaveChildren('query')).toBe(false);
+      expect(registry.getAllSlashCommands()).toHaveLength(0); // No slash commands
+      expect(registry.getReferenceComponent('query')).toBe(MockReferenceComponent);
+    });
+  });
 });
