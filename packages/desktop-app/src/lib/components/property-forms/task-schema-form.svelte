@@ -24,6 +24,7 @@
     isSchemaNode
   } from '$lib/types/schema-node';
   import type { TaskNode, TaskStatus } from '$lib/types/task-node';
+  import { nodeToTaskNode } from '$lib/types/task-node';
   import { parseDate, type DateValue } from '@internationalized/date';
 
   // Props - only nodeId needed since we know it's a task
@@ -43,13 +44,27 @@
       return;
     }
 
-    // Initial load - assert as TaskNode (validated by parent component)
+    // Initial load - convert Node to TaskNode (extracts spoke fields from properties)
     const rawNode = sharedNodeStore.getNode(nodeId);
-    node = rawNode?.nodeType === 'task' ? (rawNode as unknown as TaskNode) : null;
+    node = rawNode?.nodeType === 'task' ? nodeToTaskNode(rawNode) : null;
+
+    // Debug: Check if status field exists
+    console.log('[TaskSchemaForm] Loaded task node:', {
+      id: node?.id,
+      status: node?.status,
+      hasStatus: 'status' in (node || {}),
+      nodeType: rawNode?.nodeType,
+      rawProperties: rawNode?.properties
+    });
 
     // Subscribe to updates
     const unsubscribe = sharedNodeStore.subscribe(nodeId, (updatedNode) => {
-      node = updatedNode?.nodeType === 'task' ? (updatedNode as unknown as TaskNode) : null;
+      node = updatedNode?.nodeType === 'task' ? nodeToTaskNode(updatedNode) : null;
+      console.log('[TaskSchemaForm] Task node updated:', {
+        id: node?.id,
+        status: node?.status,
+        hasStatus: 'status' in (node || {})
+      });
     });
 
     return () => {
