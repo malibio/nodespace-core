@@ -74,10 +74,6 @@
 
   const nodeManager = services.nodeManager;
 
-  // Editable header state (for default header when no custom snippet provided)
-  // Use local $state so input binding works and we can update tab title immediately
-  let headerContent = $state('');
-
   // Cancellation flag to prevent database writes after component unmounts
   let isDestroyed = false;
 
@@ -284,21 +280,20 @@
           return;
         }
 
-        // After loading completes, initialize header content and update tab title
-        const node = sharedNodeStore.getNode(nodeId);
-        headerContent = node?.content || '';
         // Issue #679: No longer need viewedNodeCache workaround
         // sharedNodeStore.nodes is now $state, so currentViewedNode $derived updates automatically
+        // Header content derived from currentViewedNode - no manual assignment needed
 
         // Issue #709: Preload type-specific schema form for viewed node if available
         // This triggers lazy loading of TaskSchemaForm, DateSchemaForm, etc.
+        const node = sharedNodeStore.getNode(nodeId);
         if (node?.nodeType) {
           loadSchemaFormComponent(node.nodeType);
         }
 
         // Update tab title after node is loaded
-        if (!shouldDisableTitleUpdates) {
-          updateTabTitle(headerContent);
+        if (!shouldDisableTitleUpdates && node) {
+          updateTabTitle(node.content);
         }
       } catch (error) {
         console.error('[BaseNodeViewer] Failed to load children:', error);
@@ -329,9 +324,6 @@
    * Updates local state, tab title, and persists to database
    */
   function handleHeaderInput(newValue: string) {
-    // Update local state (since we use one-way binding)
-    headerContent = newValue;
-
     // Update tab title immediately
     updateTabTitle(newValue);
 
@@ -1233,7 +1225,7 @@
       <input
         type="text"
         class="header-input"
-        value={headerContent}
+        value={currentViewedNode?.content || ''}
         oninput={(e) => handleHeaderInput(e.currentTarget.value)}
         placeholder="Untitled"
         aria-label="Page title"
