@@ -584,6 +584,14 @@ async fn domain_event_to_sse_bridge(
                         relationship,
                         source_client_id,
                     } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out EdgeCreated event from dev-proxy"
+                            );
+                            continue;
+                        }
+
                         // Only convert hierarchy edges to SSE (mentions handled differently)
                         if let EdgeRelationship::Hierarchy(h) = relationship {
                             let _ = sse_tx.send(SseEvent::EdgeCreated {
@@ -597,6 +605,15 @@ async fn domain_event_to_sse_bridge(
                         id,
                         source_client_id,
                     } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out EdgeDeleted event from dev-proxy for edge {}",
+                                id
+                            );
+                            continue;
+                        }
+
                         // EdgeDeleted uses edge ID format "parent_id:child_id"
                         // Parse and convert to SSE format
                         if let Some((parent_id, child_id)) = id.split_once(':') {
@@ -723,15 +740,8 @@ async fn init_database() -> Json<serde_json::Value> {
 
 async fn create_node(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
     Json(req): Json<CreateNodeRequest>,
 ) -> ApiResult<String> {
-    // Extract client ID for SSE filtering
-    let client_id = headers
-        .get("x-client-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
     // Use NodeService directly to handle node creation and edge creation
     // (Issue #676: NodeOperations merged into NodeService)
     tracing::debug!(
@@ -750,7 +760,6 @@ async fn create_node(
         properties: req.properties,
     };
 
-    let parent_id_clone = params.parent_id.clone();
     let id = state
         .node_service
         .create_node_with_parent(params)
@@ -762,26 +771,9 @@ async fn create_node(
             )
         })?;
 
-    // Broadcast SSE event for the created node
-    // Fetch the full node data for the event payload
-    if let Ok(Some(node)) = state.node_service.get_node(&id).await {
-        let _ = state.event_tx.send(SseEvent::NodeCreated {
-            node_id: id.clone(),
-            node_data: node,
-            client_id: client_id.clone(),
-        });
-        tracing::debug!("SSE: NodeCreated event sent for node {}", id);
-
-        // If node has a parent, also broadcast edge created event
-        if let Some(parent_id) = parent_id_clone {
-            let _ = state.event_tx.send(SseEvent::EdgeCreated {
-                parent_id,
-                child_id: id.clone(),
-                client_id: client_id.clone(),
-            });
-            tracing::debug!("SSE: EdgeCreated event sent for node {}", id);
-        }
-    }
+    // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
+    // which is converted to SSE by the domain_event_to_sse_bridge
+    // This prevents duplicate events and enables proper client filtering
 
     Ok(Json(id))
 }
@@ -813,16 +805,9 @@ async fn get_node(
 
 async fn update_node(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<UpdateNodeRequest>,
 ) -> ApiResult<serde_json::Value> {
-    // Extract client ID for SSE filtering
-    let client_id = headers
-        .get("x-client-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
     // Use optimistic concurrency control via version check
     let rows_affected = state
         .node_service
@@ -861,13 +846,9 @@ async fn update_node(
             )
         })?;
 
-    // Broadcast SSE event for the updated node
-    let _ = state.event_tx.send(SseEvent::NodeUpdated {
-        node_id: id.clone(),
-        node_data: updated_node.clone(),
-        client_id,
-    });
-    tracing::debug!("SSE: NodeUpdated event sent for node {}", id);
+    // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
+    // which is converted to SSE by the domain_event_to_sse_bridge
+    // This prevents duplicate events and enables proper client filtering
 
     let typed = node_to_typed_value(updated_node)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(e)))?;
@@ -903,16 +884,9 @@ async fn update_node(
 /// - `500 INTERNAL SERVER ERROR`: Database error
 async fn update_task_node(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<UpdateTaskNodeRequest>,
 ) -> ApiResult<TaskNode> {
-    // Extract client ID for SSE filtering
-    let client_id = headers
-        .get("x-client-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
     tracing::debug!(
         "update_task_node: id={}, version={}, update={:?}",
         id,
@@ -927,31 +901,18 @@ async fn update_task_node(
         .await
         .map_err(map_node_service_error)?;
 
-    // Broadcast SSE event for the updated node
-    // Convert TaskNode to Node for the SSE event
-    let node_for_event = updated_task.clone().into_node();
-    let _ = state.event_tx.send(SseEvent::NodeUpdated {
-        node_id: id.clone(),
-        node_data: node_for_event,
-        client_id,
-    });
-    tracing::debug!("SSE: NodeUpdated event sent for task node {}", id);
+    // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
+    // which is converted to SSE by the domain_event_to_sse_bridge
+    // This prevents duplicate events and enables proper client filtering
 
     Ok(Json(updated_task))
 }
 
 async fn delete_node(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<DeleteNodeRequest>,
 ) -> ApiStatusResult {
-    // Extract client ID for SSE filtering
-    let client_id = headers
-        .get("x-client-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
     // Use optimistic concurrency control via version check
     let rows_affected = state
         .node_service
@@ -990,12 +951,9 @@ async fn delete_node(
         }
     }
 
-    // Broadcast SSE event for the deleted node
-    let _ = state.event_tx.send(SseEvent::NodeDeleted {
-        node_id: id.clone(),
-        client_id,
-    });
-    tracing::debug!("SSE: NodeDeleted event sent for node {}", id);
+    // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
+    // which is converted to SSE by the domain_event_to_sse_bridge
+    // This prevents duplicate events and enables proper client filtering
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1012,25 +970,9 @@ struct SetParentRequest {
 
 async fn set_parent(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
     Path(node_id): Path<String>,
     Json(request): Json<SetParentRequest>,
 ) -> ApiStatusResult {
-    // Extract client ID for SSE filtering
-    let client_id = headers
-        .get("x-client-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    // Get current parent before moving (for edge deleted event)
-    let old_parent_id = state
-        .node_service
-        .get_parent(&node_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|n| n.id);
-
     state
         .node_service
         .move_node(
@@ -1041,26 +983,9 @@ async fn set_parent(
         .await
         .map_err(map_node_service_error)?;
 
-    // Broadcast SSE edge events
-    // If node had an old parent, send edge deleted event
-    if let Some(old_parent) = old_parent_id {
-        let _ = state.event_tx.send(SseEvent::EdgeDeleted {
-            parent_id: old_parent,
-            child_id: node_id.clone(),
-            client_id: client_id.clone(),
-        });
-        tracing::debug!("SSE: EdgeDeleted event sent for node {}", node_id);
-    }
-
-    // If node has a new parent, send edge created event
-    if let Some(ref new_parent) = request.parent_id {
-        let _ = state.event_tx.send(SseEvent::EdgeCreated {
-            parent_id: new_parent.clone(),
-            child_id: node_id.clone(),
-            client_id: client_id.clone(),
-        });
-        tracing::debug!("SSE: EdgeCreated event sent for node {}", node_id);
-    }
+    // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
+    // (EdgeCreated/EdgeDeleted) which is converted to SSE by the domain_event_to_sse_bridge
+    // This prevents duplicate events and enables proper client filtering
 
     Ok(StatusCode::NO_CONTENT)
 }
