@@ -1241,12 +1241,11 @@
     </div>
   {/if}
 
-  <!-- Scrollable Node Content Area (children structure) -->
-  <div class="node-content-area" bind:this={scrollContainer}>
-    <!-- Schema-Driven Properties Panel - appears after header, before children -->
-    <!-- Issue #709: Type-specific schema forms use plugin registry for smart dispatch -->
-    <!-- Core types (task, date) use hardcoded forms; user-defined types use generic SchemaPropertyForm -->
-    {#if currentViewedNode && nodeId}
+  <!-- Schema-Driven Properties Panel - fixed between header and content area -->
+  <!-- Issue #709: Type-specific schema forms use plugin registry for smart dispatch -->
+  <!-- Core types (task, date) use hardcoded forms; user-defined types use generic SchemaPropertyForm -->
+  {#if currentViewedNode && nodeId}
+    <div class="schema-form-container">
       {#if currentViewedNode.nodeType in loadedSchemaForms && loadedSchemaForms[currentViewedNode.nodeType]}
         <!-- Type-specific schema form (TaskSchemaForm, etc.) -->
         {@const TypedSchemaForm = loadedSchemaForms[currentViewedNode.nodeType] as SchemaFormComponent}
@@ -1255,8 +1254,11 @@
         <!-- Generic schema form for user-defined types -->
         <SchemaPropertyForm {nodeId} nodeType={currentViewedNode.nodeType} />
       {/if}
-    {/if}
+    </div>
+  {/if}
 
+  <!-- Scrollable Node Content Area (children structure) -->
+  <div class="node-content-area" bind:this={scrollContainer}>
     {#each nodesToRender() as node (node.id)}
       {@const relativeDepth = (node.depth || 0) - minDepth()}
       <div
@@ -1703,11 +1705,12 @@
       </div>
     {/each}
 
-    <!-- Backlinks Panel - fixed at bottom of this viewer -->
-    {#if nodeId}
-      <BacklinksPanel {nodeId} />
-    {/if}
   </div>
+
+  <!-- Backlinks Panel - outside scroll area, fixed at bottom of viewer -->
+  {#if nodeId}
+    <BacklinksPanel {nodeId} />
+  {/if}
 </div>
 
 <!-- Template structure fixed -->
@@ -1751,6 +1754,13 @@
     flex-shrink: 0;
     padding: 1rem;
     border-bottom: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+  }
+
+  /* Schema form container - fixed between header and content, doesn't scroll */
+  .schema-form-container {
+    flex-shrink: 0;
+    padding: 0 var(--viewer-padding-horizontal);
     background: hsl(var(--background));
   }
 
@@ -1907,11 +1917,7 @@
     transition: fill 0.15s ease;
   }
 
-  .chevron-icon:focus {
-    outline: 2px solid hsl(var(--ring));
-    outline-offset: 2px;
-    opacity: 1; /* Always visible when focused */
-  }
+  /* Focus styling removed - Tab key used for indent/outdent, not UI navigation */
 
   .chevron-icon:hover svg {
     fill: hsl(var(--node-text) / 0.5);
