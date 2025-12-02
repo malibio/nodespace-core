@@ -1232,8 +1232,12 @@ where
         if let Some(parent_id) = params.parent_id {
             // Pass insert_after_node_id directly without translation
             // None means "insert at beginning" (store.move_node semantics)
-            self.create_parent_edge(&created_id, &parent_id, params.insert_after_node_id.as_deref())
-                .await?;
+            self.create_parent_edge(
+                &created_id,
+                &parent_id,
+                params.insert_after_node_id.as_deref(),
+            )
+            .await?;
         }
 
         Ok(created_id)

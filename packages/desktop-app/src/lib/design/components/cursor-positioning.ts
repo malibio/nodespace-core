@@ -77,9 +77,11 @@ export function findCharacterFromClick(
   if (bestMatchSpan) {
     const bestRect = bestMatchSpan.getBoundingClientRect();
     const bestCenterX = bestRect.left - mockRect.left + bestRect.width / 2;
+    const maxIndex = mockElement.textContent?.length ?? 0;
 
     // If click is to the right of the character's center, position cursor after it
-    if (relativeX > bestCenterX) {
+    // but ensure we don't exceed content bounds
+    if (relativeX > bestCenterX && bestMatch.index < maxIndex) {
       bestMatch.index += 1;
     }
   }
@@ -186,9 +188,11 @@ export function findCharacterFromClickFast(
   if (bestMatchSpan) {
     const bestRect = bestMatchSpan.getBoundingClientRect();
     const bestCenterX = bestRect.left - mockRect.left + bestRect.width / 2;
+    const maxIndex = mockElement.textContent?.length ?? 0;
 
     // If click is to the right of the character's center, position cursor after it
-    if (relativeX > bestCenterX) {
+    // but ensure we don't exceed content bounds
+    if (relativeX > bestCenterX && bestMatch.index < maxIndex) {
       bestMatch.index += 1;
     }
   }
