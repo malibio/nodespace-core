@@ -34,10 +34,14 @@
   let isOpen = $state(false); // Collapsed by default
   let schema = $state<SchemaNode | null>(null);
 
-  // Typed node state - TaskNode (not generic Node)
-  let node = $state<TaskNode | null>(null);
+  // Reactive node data - initialize outside effect (same pattern as schema-property-form)
+  // This prevents the reactive loop that was causing effect_update_depth_exceeded
+  const rawNodeInitial = nodeId ? sharedNodeStore.getNode(nodeId) : null;
+  let node = $state<TaskNode | null>(
+    rawNodeInitial?.nodeType === 'task' ? nodeToTaskNode(rawNodeInitial) : null
+  );
 
-  // Subscribe to node changes with type assertion
+  // Subscribe to node changes
   $effect(() => {
     if (!nodeId) {
       node = null;
@@ -48,23 +52,9 @@
     const rawNode = sharedNodeStore.getNode(nodeId);
     node = rawNode?.nodeType === 'task' ? nodeToTaskNode(rawNode) : null;
 
-    // Debug: Check if status field exists
-    console.log('[TaskSchemaForm] Loaded task node:', {
-      id: node?.id,
-      status: node?.status,
-      hasStatus: 'status' in (node || {}),
-      nodeType: rawNode?.nodeType,
-      rawProperties: rawNode?.properties
-    });
-
     // Subscribe to updates
     const unsubscribe = sharedNodeStore.subscribe(nodeId, (updatedNode) => {
       node = updatedNode?.nodeType === 'task' ? nodeToTaskNode(updatedNode) : null;
-      console.log('[TaskSchemaForm] Task node updated:', {
-        id: node?.id,
-        status: node?.status,
-        hasStatus: 'status' in (node || {})
-      });
     });
 
     return () => {

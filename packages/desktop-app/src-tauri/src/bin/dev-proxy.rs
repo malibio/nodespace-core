@@ -521,6 +521,15 @@ async fn domain_event_to_sse_bridge(
                         node,
                         source_client_id,
                     } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out NodeCreated event from dev-proxy for node {}",
+                                node.id
+                            );
+                            continue;
+                        }
+
                         let _ = sse_tx.send(SseEvent::NodeCreated {
                             node_id: node.id.clone(),
                             node_data: node,
@@ -531,6 +540,16 @@ async fn domain_event_to_sse_bridge(
                         node,
                         source_client_id,
                     } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        // Don't send browser's own changes back to it
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out NodeUpdated event from dev-proxy for node {}",
+                                node.id
+                            );
+                            continue;
+                        }
+
                         tracing::info!(
                             "📤 Broadcasting NodeUpdated SSE event for node {} (source_client_id: {:?})",
                             node.id,
@@ -547,6 +566,15 @@ async fn domain_event_to_sse_bridge(
                         id,
                         source_client_id,
                     } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out NodeDeleted event from dev-proxy for node {}",
+                                id
+                            );
+                            continue;
+                        }
+
                         let _ = sse_tx.send(SseEvent::NodeDeleted {
                             node_id: id,
                             client_id: source_client_id,

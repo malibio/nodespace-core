@@ -38,9 +38,6 @@
     nodeType: string;
   } = $props();
 
-  // DEBUG: Log component initialization
-  console.log('[SchemaPropertyForm] Component initialized with:', { nodeId, nodeType });
-
   // State
   let schema = $state<SchemaNode | null>(null);
   let isOpen = $state(false); // Collapsed by default
@@ -96,10 +93,6 @@
         const schemaNode = await backendAdapter.getSchema(nodeType);
         if (isSchemaNode(schemaNode)) {
           schema = schemaNode;
-          console.log('[SchemaPropertyForm] Loaded schema for', nodeType, ':', {
-            fieldCount: schemaNode.fields?.length || 0,
-            fieldNames: schemaNode.fields?.map(f => f.name) || []
-          });
         } else {
           schemaError = `Invalid schema node for type: ${nodeType}`;
           schema = null;
@@ -125,17 +118,6 @@
   function getPropertyValue(fieldName: string): unknown {
     if (!node) return undefined;
 
-    // DEBUG: Log node structure to understand the issue
-    if (fieldName === 'status') {
-      console.log('[SchemaPropertyForm] Getting status for node:', {
-        nodeId: node.id,
-        nodeType: node.nodeType,
-        topLevelStatus: (node as unknown as Record<string, unknown>)[fieldName],
-        properties: node.properties,
-        fieldInNode: fieldName in node
-      });
-    }
-
     // For strongly-typed nodes (TaskNode, etc.), check top-level fields first
     // Spoke fields like status, priority, dueDate are at the top level
     if (fieldName in node && (node as unknown as Record<string, unknown>)[fieldName] !== undefined) {
@@ -153,7 +135,7 @@
   }
 
   // Get schema fields directly from typed field (no helper needed)
-  const schemaFields = $derived(() => (schema ? schema.fields : []));
+  const schemaFields = $derived(schema ? schema.fields : []);
 
   // Calculate field completion stats
   const fieldStats = $derived(() => {
@@ -162,7 +144,7 @@
     }
 
     // Count all fields (core, user, and system)
-    const allFields = schemaFields();
+    const allFields = schemaFields;
     const total = allFields.length;
 
     // Count filled fields (non-null, non-undefined, non-empty)
@@ -183,7 +165,7 @@
     if (!schema || !node) return null;
 
     // Find status field (enum type, common in task schemas)
-    const statusField = schemaFields().find((f) => f.name === 'status' && f.type === 'enum');
+    const statusField = schemaFields.find((f) => f.name === 'status' && f.type === 'enum');
     // Use current value or default value from schema
     const statusValue = statusField
       ? getPropertyValue(statusField.name) || statusField.default || null
@@ -206,7 +188,7 @@
     }
 
     // Find due date field
-    const dueDateField = schemaFields().find((f) => f.name === 'dueDate' || f.name === 'due_date');
+    const dueDateField = schemaFields.find((f) => f.name === 'dueDate' || f.name === 'due_date');
     const dueDate = dueDateField ? getPropertyValue(dueDateField.name) : null;
 
     return { status, statusLabel, dueDate };
@@ -226,7 +208,7 @@
 
     if (isOldFormat) {
       // Migrate all schema fields from old flat format to new nested format
-      schemaFields().forEach((field) => {
+      schemaFields.forEach((field) => {
         // Type guard: node is guaranteed non-null due to early return above
         if (!node) return;
         const oldValue = node.properties?.[field.name];
@@ -250,7 +232,7 @@
 
     // If we migrated from old format, remove the old flat properties
     if (isOldFormat) {
-      schemaFields().forEach((field) => {
+      schemaFields.forEach((field) => {
         // Type guard: node is guaranteed non-null due to early return above
         if (!node) return;
         delete updatedProperties[field.name];
@@ -389,7 +371,7 @@
       <Collapsible.Content class="pb-4">
         <!-- Property Grid (2 columns) -->
         <div class="grid grid-cols-2 gap-4">
-          {#each schemaFields() as field (field.name)}
+          {#each schemaFields as field (field.name)}
             {@const fieldId = `property-${nodeId}-${field.name}`}
             <div class="space-y-2">
               <label for={fieldId} class="text-sm font-medium">
