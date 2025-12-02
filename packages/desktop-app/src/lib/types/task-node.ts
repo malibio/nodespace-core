@@ -233,6 +233,50 @@ export interface TaskNodeUpdate {
 }
 
 /**
+ * Convert a generic Node to a TaskNode by extracting spoke fields from properties
+ *
+ * SSE events send generic Node objects where task-specific fields are stored in
+ * `properties.status`, `properties.priority`, etc. This function normalizes them
+ * to the flat TaskNode structure expected by the frontend.
+ *
+ * Handles both formats:
+ * - Nested: `properties.task.status` (legacy)
+ * - Flat: `properties.status` (current)
+ * - Already flat: `node.status` (already a TaskNode)
+ *
+ * @param node - Generic Node with task data in properties
+ * @returns TaskNode with flat spoke fields
+ */
+export function nodeToTaskNode(node: Node): TaskNode {
+  // If already has flat status, it's already a TaskNode
+  if ('status' in node && typeof (node as TaskNode).status === 'string') {
+    return node as TaskNode;
+  }
+
+  // Extract from properties (try nested task.* first, then flat)
+  const props = node.properties as Record<string, unknown> | undefined;
+  const taskProps = (props?.task as Record<string, unknown>) ?? props ?? {};
+
+  const status = (taskProps.status as TaskStatus) ?? 'open';
+  const priority = taskProps.priority as TaskPriority | undefined;
+  const dueDate = (taskProps.dueDate as string | null) ?? (taskProps.due_date as string | null);
+  const assignee = taskProps.assignee as string | null | undefined;
+
+  return {
+    id: node.id,
+    nodeType: 'task',
+    content: node.content,
+    version: node.version,
+    createdAt: node.createdAt,
+    modifiedAt: node.modifiedAt,
+    status,
+    priority,
+    dueDate: dueDate ?? null,
+    assignee: assignee ?? null
+  };
+}
+
+/**
  * Helper namespace for task node operations
  */
 export const TaskNodeHelpers = {
@@ -245,6 +289,7 @@ export const TaskNodeHelpers = {
   setTaskDueDate,
   getTaskAssignee,
   setTaskAssignee,
+  nodeToTaskNode,
 
   /**
    * Check if task is completed (done or cancelled)

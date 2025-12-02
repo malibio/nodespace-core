@@ -21,6 +21,8 @@ import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { getClientId } from './client-id';
 import type { SseEvent } from '$lib/types/sse-events';
+import type { Node } from '$lib/types/node';
+import { nodeToTaskNode } from '$lib/types/task-node';
 
 /**
  * Connection state for the SSE client
@@ -185,23 +187,47 @@ class BrowserSyncService {
   }
 
   /**
+   * Normalize node data from SSE events to type-specific format
+   *
+   * SSE events send generic Node objects where type-specific fields (like task status)
+   * are stored in `properties`. This function converts them to the flat format
+   * expected by the frontend stores and components.
+   *
+   * @param nodeData - Raw node data from SSE event
+   * @returns Normalized node with flat spoke fields for typed nodes
+   */
+  private normalizeNodeData(nodeData: Node): Node {
+    if (nodeData.nodeType === 'task') {
+      return nodeToTaskNode(nodeData) as unknown as Node;
+    }
+    // Add other type-specific conversions here as needed (e.g., SchemaNode)
+    return nodeData;
+  }
+
+  /**
    * Handle parsed SSE event
    *
    * Routes events to appropriate store/tree handlers to update UI.
    */
   private handleEvent(event: SseEvent): void {
     switch (event.type) {
-      case 'nodeCreated':
+      case 'nodeCreated': {
         console.log('[BrowserSyncService] Node created:', event.nodeId);
+        // Normalize node data to type-specific format (e.g., TaskNode with flat status)
+        const normalizedNode = this.normalizeNodeData(event.nodeData);
         // Use database source with sse-sync reason to indicate external change via SSE
-        sharedNodeStore.setNode(event.nodeData, { type: 'database', reason: 'sse-sync' }, true);
+        sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'sse-sync' }, true);
         break;
+      }
 
-      case 'nodeUpdated':
+      case 'nodeUpdated': {
         console.log('[BrowserSyncService] Node updated:', event.nodeId);
+        // Normalize node data to type-specific format (e.g., TaskNode with flat status)
+        const normalizedNode = this.normalizeNodeData(event.nodeData);
         // Use setNode for full replacement (event contains complete node data)
-        sharedNodeStore.setNode(event.nodeData, { type: 'database', reason: 'sse-sync' }, true);
+        sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'sse-sync' }, true);
         break;
+      }
 
       case 'nodeDeleted':
         console.log('[BrowserSyncService] Node deleted:', event.nodeId);

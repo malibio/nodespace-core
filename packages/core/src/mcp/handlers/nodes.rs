@@ -220,6 +220,7 @@ where
 
     // Create node via NodeService (enforces all business rules)
     // Note: root_id is auto-derived from parent chain by backend
+    let parent_id = mcp_params.parent_id.clone();
     let node_id = node_service
         .create_node_with_parent(crate::services::CreateNodeParams {
             id: None, // MCP generates IDs server-side
@@ -232,10 +233,21 @@ where
         .await
         .map_err(|e| MCPError::node_creation_failed(format!("Failed to create node: {}", e)))?;
 
+    // Fetch the created node for response (includes version, timestamps, etc.)
+    let created_node = node_service
+        .get_node(&node_id)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to fetch created node: {}", e)))?
+        .ok_or_else(|| MCPError::internal_error("Created node not found".to_string()))?;
+
+    let node_data = node_to_typed_value(created_node)?;
+
     Ok(json!({
         "node_id": node_id,
         "node_type": mcp_params.node_type,
-        "success": true
+        "parent_id": parent_id,
+        "success": true,
+        "node_data": node_data
     }))
 }
 
@@ -341,10 +353,16 @@ where
         Err(e) => return Err(service_error_to_mcp(e)),
     };
 
+    // Include full node data in response for:
+    // 1. SSE broadcasting (callback can extract node_data)
+    // 2. Client convenience (no need for separate fetch)
+    let node_data = node_to_typed_value(updated_node)?;
+
     Ok(json!({
         "node_id": params.node_id,
-        "version": updated_node.version,
-        "success": true
+        "version": node_data.get("version").and_then(|v| v.as_i64()).unwrap_or(0),
+        "success": true,
+        "node_data": node_data
     }))
 }
 
