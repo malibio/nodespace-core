@@ -1,10 +1,39 @@
-# How to Add a New Node Type
+# How to Add a New Node Type in NodeSpace
 
-## Overview
+This guide provides a **complete checklist** for adding a new node type to NodeSpace. NodeSpace uses a hybrid architecture with both hardcoded behaviors and schema-driven extensions.
 
-This guide provides a **complete checklist** for adding a new node type to NodeSpace. It's based on lessons learned from implementing HeaderNode (#275) and CodeBlockNode (#276), where we discovered missing steps that caused issues.
+## Architecture Overview
 
-**Use this checklist for EVERY new node type to ensure nothing is missed.**
+NodeSpace's node type system consists of several interconnected components:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          NODE TYPE ARCHITECTURE                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │                     BACKEND (Rust)                                │   │
+│  │                                                                   │   │
+│  │  1. NodeBehavior Trait    - Validation, capabilities, processing │   │
+│  │  2. Core Schema           - Database-queryable fields (optional) │   │
+│  │  3. Spoke Table           - Type-specific indexed data (auto)    │   │
+│  │  4. Hub Table (node)      - Universal metadata (always exists)   │   │
+│  │                                                                   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│                                    ▼                                     │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │                    FRONTEND (TypeScript/Svelte)                   │   │
+│  │                                                                   │   │
+│  │  1. PluginDefinition      - Slash commands, pattern detection    │   │
+│  │  2. Node Component        - Individual node rendering (*Node)    │   │
+│  │  3. Viewer Component      - Page-level display (*NodeViewer)     │   │
+│  │  4. Icon Registration     - Visual representation                │   │
+│  │                                                                   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Schema Management Note
 
@@ -14,383 +43,317 @@ When creating schemas for new node types, follow the [Schema Management Implemen
 - **Versioning schemas** starting at version 1
 - Documenting **migration strategy** upfront for future schema changes
 
-This ensures your node type's schema can evolve safely over time.
+---
+
+## Decision Tree: What Do You Need?
+
+Before implementing, determine your requirements:
+
+```
+Is this a CORE node type that ships with NodeSpace?
+├─ YES → Full implementation (behavior + schema + frontend + tests)
+│        Examples: text, task, date, header, code-block
+│
+└─ NO → Is it a user-defined custom type?
+        ├─ YES → Schema-only (no behavior modification needed)
+        │        Users create via schema system
+        │
+        └─ Plugin/Extension type?
+            └─ Plugin + behavior + optional spoke table
+               Examples: whiteboard, image, query
+```
 
 ---
 
 ## Complete Implementation Checklist
 
-### 1. Backend (Rust) - Behavior System
+### Step 1: Backend - Add NodeBehavior (Required)
 
 **File:** `packages/core/src/behaviors/mod.rs`
 
 #### 1.1 Define Node Behavior Struct
 
 ```rust
-/// Behavior for [YourNodeType] nodes
+/// Built-in behavior for [your-type] nodes
+///
+/// [Description of what this node type represents and how it's used]
 ///
 /// # Characteristics
 /// - Can have children: [true/false]
 /// - Supports markdown: [true/false]
-/// - [Other characteristics]
-///
-/// # Validation Rules
-/// - [Rule 1]
-/// - [Rule 2]
-pub struct YourNodeTypeBehavior;
-```
+pub struct YourTypeNodeBehavior;
 
-#### 1.2 Implement NodeBehavior Trait
+impl NodeBehavior for YourTypeNodeBehavior {
+    fn type_name(&self) -> &'static str {
+        "your-type"  // kebab-case identifier
+    }
 
-```rust
-impl NodeBehavior for YourNodeTypeBehavior {
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        // Add validation logic
+        // - Check required fields
+        // - Validate field formats
+        // - Type-specific constraints
+        //
+        // Note: Per Issue #479, blank nodes are generally allowed
+        // Only add validation if this type has specific requirements
+        Ok(())
+    }
+
     fn can_have_children(&self) -> bool {
-        // true for parent nodes (text, header, task, date)
-        // false for leaf nodes (code-block)
-        true
+        true  // Can this node contain child nodes?
     }
 
     fn supports_markdown(&self) -> bool {
-        // true for text-based content
-        // false for structured content (tasks, dates, code-blocks)
-        true
+        false  // Does content support markdown formatting?
     }
 
     fn default_metadata(&self) -> serde_json::Value {
-        // IMPORTANT: Use type-namespaced properties (Issue #397)
-        // Properties must be nested under type name to preserve data during type conversions
-        json!({
-            "your-node-type": {
-                // Add any default metadata fields here
-                // Example for code-block: "language": "plaintext"
-                // Example for task: "status": "pending", "priority": 2
+        // Default properties for new nodes of this type
+        // Use type-namespaced properties (Issue #397)
+        serde_json::json!({
+            "your-type": {
+                "your_field": "default_value"
             }
         })
     }
 
-    fn validate(&self, node: &Node) -> Result<(), String> {
-        // Add validation logic
-        // Example: Check content format, required metadata, etc.
-
+    // Optional: Override for embedding behavior (Issue #573)
+    fn get_embeddable_content(&self, node: &Node) -> Option<String> {
+        // Return content to embed, or None to skip embedding
+        // Tasks and dates return None (not embedded as standalone)
         if node.content.trim().is_empty() {
-            return Err("Content cannot be empty".to_string());
+            None
+        } else {
+            Some(node.content.clone())
         }
+    }
 
-        Ok(())
+    fn get_parent_contribution(&self, node: &Node) -> Option<String> {
+        // Return content that contributes to parent's embedding
+        // Tasks return None (don't pollute parent embeddings)
+        if node.content.trim().is_empty() {
+            None
+        } else {
+            Some(node.content.clone())
+        }
     }
 }
 ```
 
-#### 1.3 Register in NodeBehaviorRegistry
+#### 1.2 Register in NodeBehaviorRegistry
 
 ```rust
 impl NodeBehaviorRegistry {
     pub fn new() -> Self {
-        let mut registry = HashMap::new();
+        let mut registry = Self {
+            behaviors: HashMap::new(),
+        };
 
         // ... existing registrations ...
+        registry.register(Arc::new(YourTypeNodeBehavior));  // Add this
 
-        registry.insert(
-            "your-node-type".to_string(),
-            Box::new(YourNodeTypeBehavior) as Box<dyn NodeBehavior>
-        );
-
-        Self { registry }
+        registry
     }
 }
 ```
 
-#### 1.4 Add Tests
+#### 1.3 Add Backend Tests
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[test]
+fn test_your_type_node_behavior_validation() {
+    let behavior = YourTypeNodeBehavior;
 
-    #[test]
-    fn test_your_node_type_can_have_children() {
-        let behavior = YourNodeTypeBehavior;
-        assert_eq!(behavior.can_have_children(), true); // or false
-    }
+    let valid_node = Node::new(
+        "your-type".to_string(),
+        "Content".to_string(),
+        json!({}),
+    );
+    assert!(behavior.validate(&valid_node).is_ok());
 
-    #[test]
-    fn test_your_node_type_supports_markdown() {
-        let behavior = YourNodeTypeBehavior;
-        assert_eq!(behavior.supports_markdown(), true); // or false
-    }
+    // Add edge case tests
+}
 
-    #[test]
-    fn test_your_node_type_default_metadata() {
-        let behavior = YourNodeTypeBehavior;
-        let metadata = behavior.default_metadata();
+#[test]
+fn test_your_type_node_behavior_capabilities() {
+    let behavior = YourTypeNodeBehavior;
 
-        // Assert expected metadata structure
-        assert!(metadata.is_object());
-    }
-
-    #[test]
-    fn test_your_node_type_validation() {
-        let behavior = YourNodeTypeBehavior;
-
-        // Test valid node
-        let valid_node = Node::new(
-            "your-node-type".to_string(),
-            "Valid content".to_string(),
-            None,
-            json!({})
-        );
-        assert!(behavior.validate(&valid_node).is_ok());
-
-        // Test invalid node
-        let invalid_node = Node::new(
-            "your-node-type".to_string(),
-            "".to_string(), // Invalid: empty
-            None,
-            json!({})
-        );
-        assert!(behavior.validate(&invalid_node).is_err());
-    }
+    assert_eq!(behavior.type_name(), "your-type");
+    assert!(behavior.can_have_children());  // or assert!(!...)
+    assert!(!behavior.supports_markdown());  // or assert!(...)
 }
 ```
 
 ---
 
-### 2. Backend - Constants
+### Step 2: Backend - Add Core Schema (Required for Core Types)
 
-**File:** `packages/desktop-app/src-tauri/src/constants.rs`
+**File:** `packages/core/src/models/core_schemas.rs`
 
-#### 2.1 Add to ALLOWED_NODE_TYPES
+Add to the `get_core_schemas()` function:
 
 ```rust
-/// Valid node types supported by the system
-///
-/// - "text": Basic text nodes
-/// - "header": Markdown headers (h1-h6)
-/// - "task": Task/todo nodes with completion status
-/// - "date": Date-based nodes for daily notes
-/// - "code-block": Code blocks with language selection
-/// - "your-node-type": [Description]  // ← ADD THIS
-pub const ALLOWED_NODE_TYPES: &[&str] = &[
-    "text",
-    "header",
-    "task",
-    "date",
-    "code-block",
-    "your-node-type"  // ← ADD THIS
+SchemaNode {
+    id: "your-type".to_string(),
+    content: "Your Type".to_string(),  // Display name
+    version: 1,
+    created_at: now,
+    modified_at: now,
+    is_core: true,
+    schema_version: 1,
+    description: "Description of this node type".to_string(),
+    fields: vec![
+        // Only add fields if the type needs queryable properties
+        // Simple types like text, date, header have empty fields: vec![]
+        SchemaField {
+            name: "your_field".to_string(),
+            field_type: "text".to_string(),  // text, enum, date, number, boolean
+            protection: SchemaProtectionLevel::Core,  // or User
+            indexed: true,  // true = creates spoke table column
+            required: Some(false),
+            // ... other field options
+            ..Default::default()
+        },
+    ],
+    relationships: vec![],
+}
+```
+
+**Important Notes:**
+- **Spoke tables are auto-generated**: The `SchemaTableManager` automatically generates spoke tables for types with indexed fields. You do NOT need to manually edit `schema.surql` (Issue #691).
+- **Simple types have no fields**: Types like `text`, `header`, `code-block` have `fields: vec![]` and store data in the hub table's `properties` field.
+- **Complex types have indexed fields**: Types like `task` have indexed fields that create spoke table columns for efficient querying.
+
+---
+
+### Step 3: Frontend - Create Plugin Definition
+
+**File:** `packages/desktop-app/src/lib/plugins/core-plugins.ts`
+
+```typescript
+export const yourTypeNodePlugin: PluginDefinition = {
+  id: 'your-type',
+  name: 'Your Type Node',
+  description: 'Description shown in slash command menu',
+  version: '1.0.0',
+
+  // Optional: Pattern detection for auto-conversion (Issue #667)
+  pattern: {
+    detect: /^your-pattern/,       // Regex to detect in content
+    canRevert: true,               // Can revert to text when deleted?
+    revert: /^your-revert$/,       // Pattern that triggers reversion
+    onEnter: 'inherit',            // 'inherit' | 'text' | 'none'
+    prefixToInherit: 'prefix ',    // Or function: (content) => prefix
+    splittingStrategy: 'prefix-inheritance',  // or 'simple-split'
+    cursorPlacement: 'after-prefix',  // 'start' | 'after-prefix' | 'end'
+    extractMetadata: (match) => ({
+      // Extract metadata from regex match
+    })
+  },
+
+  config: {
+    slashCommands: [
+      {
+        id: 'your-type',
+        name: 'Your Type',
+        description: 'Create a your-type node',
+        shortcut: 'yt',              // Optional keyboard shortcut
+        contentTemplate: '',         // Default content
+        nodeType: 'your-type',
+        desiredCursorPosition: 0     // Optional cursor position
+      }
+    ],
+    canHaveChildren: true,
+    canBeChild: true
+  },
+
+  // Node component (renders individual node in tree)
+  node: {
+    lazyLoad: () => import('../design/components/your-type-node.svelte'),
+    priority: 1
+  },
+
+  // Optional: Viewer component (page-level display)
+  // Only needed for custom page rendering (most use BaseNodeViewer)
+  // viewer: {
+  //   lazyLoad: () => import('../components/viewers/your-type-node-viewer.svelte'),
+  //   priority: 1
+  // },
+
+  // Reference component (how node appears when referenced)
+  reference: {
+    component: BaseNodeReference as NodeReferenceComponent,
+    priority: 1
+  },
+
+  // Optional: Custom metadata extraction (Issue #698)
+  extractMetadata: (node) => {
+    const props = node.properties?.[node.nodeType] || {};
+    return { ...props };
+  },
+
+  // Optional: Protect structured content from merges
+  acceptsContentMerge: true  // Set false for code-block, quote-block, etc.
+};
+```
+
+Add to `corePlugins` array:
+
+```typescript
+export const corePlugins = [
+  // ... existing plugins ...
+  yourTypeNodePlugin
 ];
 ```
 
-**⚠️ CRITICAL:** Forgetting this step causes HTTP 400 errors when creating nodes!
-
 ---
 
-### 3. Frontend - Icon Component
+### Step 4: Frontend - Create Node Component
 
-**File:** `packages/desktop-app/src/lib/design/icons/components/your-node-type-icon.svelte`
-
-#### 3.1 Create Icon Component
+**File:** `packages/desktop-app/src/lib/design/components/your-type-node.svelte`
 
 ```svelte
 <!--
-  YourNodeTypeIcon - Icon for Your Node Type
-
-  Design System Reference: docs/design-system/components.html → [Section]
--->
-
-<script lang="ts">
-  let {
-    size = 20,
-    hasChildren = false,
-    className = ''
-  }: {
-    size?: number;
-    hasChildren?: boolean;
-    className?: string;
-  } = $props();
-</script>
-
-<div
-  class="ns-icon your-node-type-icon {className}"
-  class:your-node-type-icon-with-ring={hasChildren}
-  style="--icon-size: {size}px"
-  role="img"
-  aria-label="Your node type icon"
->
-  {#if hasChildren}
-    <div class="node-ring"></div>
-  {/if}
-
-  <!-- Your icon SVG/CSS here -->
-  <div class="icon-content">
-    <!-- Icon implementation -->
-  </div>
-</div>
-
-<style>
-  .ns-icon {
-    width: var(--icon-size, 20px);
-    height: var(--icon-size, 20px);
-    position: relative;
-    display: block;
-    flex-shrink: 0;
-  }
-
-  .your-node-type-icon-with-ring {
-    width: calc(var(--icon-size, 20px) + 4px);
-    height: calc(var(--icon-size, 20px) + 4px);
-  }
-
-  .icon-content {
-    /* Your icon styling */
-  }
-
-  /* Parent node ring (optional - only if canHaveChildren: true) */
-  .node-ring {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    border: 2px solid hsl(var(--node-text) / 0.5);
-    box-sizing: border-box;
-    position: absolute;
-    top: 0;
-    left: 0;
-  }
-</style>
-```
-
----
-
-### 4. Frontend - Icon Registry
-
-**File:** `packages/desktop-app/src/lib/design/icons/registry.ts`
-
-#### 4.1 Import Icon Component
-
-```typescript
-import YourNodeTypeIcon from './components/your-node-type-icon.svelte';
-```
-
-#### 4.2 Register Icon
-
-```typescript
-class IconRegistry {
-  constructor() {
-    // ... existing registrations ...
-
-    // Your node type - [brief description]
-    this.register('your-node-type', {
-      component: YourNodeTypeIcon,
-      semanticClass: 'node-icon',
-      colorVar: 'hsl(var(--node-text, 200 40% 45%))',
-      hasState: false, // true for task nodes with completion states
-      hasRingEffect: true // false for leaf nodes (cannot have children)
-    });
-  }
-}
-```
-
-**Key decisions:**
-- `hasState: true` → Node has multiple visual states (like task: pending/inProgress/completed)
-- `hasRingEffect: true` → Node can have children (shows ring when it does)
-- `hasRingEffect: false` → Leaf node, cannot have children
-
----
-
-### 5. Frontend - Node Component
-
-**File:** `packages/desktop-app/src/lib/design/components/your-node-type-node.svelte`
-
-#### 5.1 Create Node Component
-
-```svelte
-<!--
-  YourNodeTypeNode - Wraps BaseNode with [specific functionality]
+  YourTypeNode - Wraps BaseNode for [specific functionality]
 
   Responsibilities:
   - [Feature 1]
   - [Feature 2]
-  - [Feature 3]
-
-  Integration:
-  - Uses icon registry for proper icon rendering
-  - Maintains compatibility with BaseNode API
-  - Works seamlessly in node tree structure
-
-  Design System Reference: docs/design-system/components.html → [Section]
 -->
 
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import type { NodeComponentProps } from '../../types/node-viewers';
   import BaseNode from './base-node.svelte';
 
-  // Props using Svelte 5 runes mode - same interface as BaseNode
   let {
-    nodeId,
-    nodeType = 'your-node-type',
-    autoFocus = false,
-    content = '',
-    children = []
-  }: {
-    nodeId: string;
-    nodeType?: string;
-    autoFocus?: boolean;
-    content?: string;
-    children?: string[];
-  } = $props();
+    node,
+    isEditing = false,
+    depth = 0,
+    metadata = {},
+    onUpdate,
+    onDelete,
+    onNavigate
+  }: NodeComponentProps = $props();
 
-  const dispatch = createEventDispatcher();
-
-  // Node-specific state and logic here
-
-  // Configure editable behavior
-  const editableConfig = {
-    allowMultiline: false // true for multiline editing (Shift+Enter)
-  };
-
-  // Create metadata object (if needed)
-  let nodeMetadata = $derived({
-    // Add metadata fields
-    // Example: disableMarkdown: true for code blocks
+  // Optional: Component-specific derived state
+  let customMetadata = $derived({
+    ...metadata,
+    // Add custom metadata transformations
   });
-
-  /**
-   * Event forwarding helper
-   */
-  function forwardEvent<T>(eventName: string) {
-    return (event: CustomEvent<T>) => dispatch(eventName, event.detail);
-  }
 </script>
 
-<!-- Custom UI elements if needed -->
-{#if customUINeeded}
-  <div class="custom-controls">
-    <!-- Custom controls here -->
-  </div>
-{/if}
-
-<!-- Wrapped BaseNode -->
 <BaseNode
-  {nodeId}
-  {nodeType}
-  {autoFocus}
-  {content}
-  {children}
-  {editableConfig}
-  metadata={nodeMetadata}
-  on:createNewNode={forwardEvent('createNewNode')}
-  on:contentChanged={forwardEvent('contentChanged')}
-  on:indentNode={forwardEvent('indentNode')}
-  on:outdentNode={forwardEvent('outdentNode')}
-  on:navigateArrow={forwardEvent('navigateArrow')}
-  on:combineWithPrevious={forwardEvent('combineWithPrevious')}
-  on:deleteNode={forwardEvent('deleteNode')}
-  on:focus={forwardEvent('focus')}
-  on:blur={forwardEvent('blur')}
-  on:nodeReferenceSelected={forwardEvent('nodeReferenceSelected')}
-  on:slashCommandSelected={forwardEvent('slashCommandSelected')}
-  on:nodeTypeChanged={forwardEvent('nodeTypeChanged')}
-  on:iconClick={forwardEvent('iconClick')}
-/>
+  {node}
+  {isEditing}
+  {depth}
+  metadata={customMetadata}
+  {onUpdate}
+  {onDelete}
+  {onNavigate}
+>
+  <!-- Optional: Custom content in slots -->
+  <!-- Most types just use BaseNode's defaults -->
+</BaseNode>
 
 <style>
   /* Component-specific styling */
@@ -399,118 +362,53 @@ class IconRegistry {
 
 ---
 
-### 6. Frontend - Plugin System
+### Step 5: Frontend - Register Icon
 
-**File:** `packages/desktop-app/src/lib/plugins/core-plugins.ts`
+**File:** `packages/desktop-app/src/lib/design/icons/registry.ts`
 
-#### 6.1 Define Plugin
-
-```typescript
-export const yourNodeTypePlugin: PluginDefinition = {
-  id: 'your-node-type',
-  name: 'Your Node Type',
-  description: 'Brief description of functionality',
-  version: '1.0.0',
-  config: {
-    slashCommands: [
-      {
-        id: 'your-command',
-        name: 'Your Command',
-        description: 'Create a [node type]',
-        shortcut: '/shortcut', // Optional keyboard shortcut
-        contentTemplate: '', // Default content when created via slash command
-        nodeType: 'your-node-type'
-      }
-    ],
-    // Optional: Pattern detection for auto-conversion
-    // See: docs/architecture/development/pattern-detection-and-templates.md
-    patternDetection: [
-      {
-        pattern: /^your-pattern-regex/,
-        targetNodeType: 'your-node-type',
-
-        // Choose ONE content handling strategy:
-        contentTemplate: '',          // Option 1: Apply template (e.g., '```\n\n```' for code blocks)
-        // cleanContent: true,         // Option 2: Remove pattern from content
-        // cleanContent: false,        // Option 3: Keep pattern in content (default)
-
-        extractMetadata: (match: RegExpMatchArray) => ({
-          // Extract metadata from pattern match
-        }),
-        desiredCursorPosition: 0,     // Optional: Cursor position after conversion
-        priority: 10
-      }
-    ],
-    canHaveChildren: true, // false for leaf nodes
-    canBeChild: true
-  },
-  node: {
-    lazyLoad: () => import('../design/components/your-node-type-node.svelte'),
-    priority: 1
-  },
-  reference: {
-    component: BaseNodeReference as NodeReferenceComponent,
-    priority: 1
-  }
-};
-```
-
-#### 6.2 Export in corePlugins Array
+#### 5.1 Import Icon Component (if creating custom)
 
 ```typescript
-export const corePlugins = [
-  textNodePlugin,
-  headerNodePlugin,
-  taskNodePlugin,
-  aiChatNodePlugin,
-  dateNodePlugin,
-  codeBlockNodePlugin,
-  yourNodeTypePlugin // ← ADD THIS
-];
+import YourTypeIcon from './components/your-type-icon.svelte';
 ```
+
+#### 5.2 Register in `registerCoreConfigs()`
+
+```typescript
+// Your type nodes - [brief description]
+this.register('your-type', {
+  component: CircleIcon,  // Or YourTypeIcon if custom
+  semanticClass: 'node-icon',
+  colorVar: 'hsl(var(--node-your-type, 200 40% 45%))',
+  hasState: false,    // true for nodes with state variations (like task)
+  hasRingEffect: true // true if node can have children
+});
+```
+
+**Key decisions:**
+- `hasState: true` → Node has visual states (like task: pending/inProgress/completed)
+- `hasRingEffect: true` → Node can have children (shows ring when it does)
+- `hasRingEffect: false` → Leaf node, cannot have children
 
 ---
 
-### 7. Frontend - Tests
+### Step 6: Frontend - Add Tests
 
-**File:** `packages/desktop-app/src/tests/plugins/your-node-type-plugin.test.ts`
-
-#### 7.1 Create Plugin Tests
+**File:** `packages/desktop-app/src/tests/plugins/your-type-plugin.test.ts`
 
 ```typescript
-/**
- * YourNodeType Tests
- *
- * Tests for [node type] plugin functionality including:
- * - Pattern detection
- * - Plugin registration
- * - Slash command configuration
- */
-
 import { describe, it, expect } from 'vitest';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 
-describe('YourNodeType Plugin', () => {
-  describe('Pattern Detection', () => {
-    it('should detect pattern and extract metadata', () => {
-      const content = 'your pattern here';
-      const detection = pluginRegistry.detectPatternInContent(content);
-
-      expect(detection).not.toBeNull();
-      expect(detection?.config.targetNodeType).toBe('your-node-type');
-      // Assert extracted metadata
-    });
-  });
-
+describe('YourType Plugin', () => {
   describe('Plugin Registration', () => {
     it('should have plugin registered', () => {
-      expect(pluginRegistry.hasPlugin('your-node-type')).toBe(true);
+      expect(pluginRegistry.hasPlugin('your-type')).toBe(true);
     });
 
     it('should have correct configuration', () => {
-      const plugin = pluginRegistry.getPlugin('your-node-type');
-
-      expect(plugin?.config.canHaveChildren).toBe(true); // or false
+      const plugin = pluginRegistry.getPlugin('your-type');
+      expect(plugin?.config.canHaveChildren).toBe(true);
       expect(plugin?.config.canBeChild).toBe(true);
     });
   });
@@ -518,10 +416,19 @@ describe('YourNodeType Plugin', () => {
   describe('Slash Command', () => {
     it('should register slash command', () => {
       const commands = pluginRegistry.getAllSlashCommands();
-      const command = commands.find(c => c.nodeType === 'your-node-type');
-
+      const command = commands.find(c => c.nodeType === 'your-type');
       expect(command).toBeDefined();
-      expect(command?.id).toBe('your-command');
+      expect(command?.id).toBe('your-type');
+    });
+  });
+
+  // Add pattern detection tests if applicable
+  describe('Pattern Detection', () => {
+    it('should detect pattern and extract metadata', () => {
+      const content = 'your pattern here';
+      const detection = pluginRegistry.detectPatternInContent(content);
+      expect(detection).not.toBeNull();
+      expect(detection?.config.targetNodeType).toBe('your-type');
     });
   });
 });
@@ -529,46 +436,140 @@ describe('YourNodeType Plugin', () => {
 
 ---
 
-### 8. Documentation
+## Database Architecture
 
-#### 8.1 Update Component Architecture Guide
+### Hub-and-Spoke Pattern
 
-**File:** `docs/architecture/components/component-architecture-guide.md`
+NodeSpace uses a hub-and-spoke database architecture (Issue #511):
 
-Add to "Current Implementations" section:
-
-```markdown
-- **YourNodeTypeNode** (`src/lib/design/components/your-node-type-node.svelte`)
-  - [Feature 1]
-  - [Feature 2]
-  - [Specific characteristics]
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    HUB TABLE: node                               │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ id, content, node_type, version, created_at, modified_at  │  │
+│  │ data → record<spoke_table>  (Record Link to spoke)        │  │
+│  │ properties (for types without spoke tables)               │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│               ┌──────────────┼──────────────┐                   │
+│               ▼              ▼              ▼                   │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐   │
+│  │  SPOKE: task    │ │  SPOKE: schema  │ │  (auto-gen)     │   │
+│  │                 │ │                 │ │                 │   │
+│  │ status, priority│ │ is_core, fields │ │ indexed fields  │   │
+│  │ due_date, etc.  │ │ relationships   │ │ from schema     │   │
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘   │
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              GRAPH EDGES: has_child, mentions              │  │
+│  │  Parent-child hierarchy and node references                │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-If this is a complex node with unique patterns, add to "Advanced Patterns" section.
+### When Do You Need a Spoke Table?
 
-#### 8.2 Update CLAUDE.md (Optional)
+**Spoke tables are automatically generated** by `SchemaTableManager` when your schema has indexed fields. You need indexed fields when:
 
-If this node type introduces new architectural patterns, document them in `CLAUDE.md`.
+- You want to query nodes by a specific field (e.g., "find all tasks with status=done")
+- You need to sort/filter by the field
+- The field is used frequently in searches
+
+**Types WITHOUT spoke tables** (simple types):
+- `text`, `header`, `code-block`, `quote-block`, `ordered-list`, `date`
+- Properties stored in hub table's `properties` field
+
+**Types WITH spoke tables** (complex types with indexed fields):
+- `task` - has indexed status, priority, due_date fields
+- `schema` - structural table for type definitions (hardcoded in schema.surql)
+- Future: `query`, `person`, etc.
+
+---
+
+## Component Naming Conventions
+
+```
+*Node       = Individual node component that wraps BaseNode
+*NodeViewer = Page-level viewer that wraps BaseNodeViewer
+```
+
+**Examples:**
+- `TaskNode` - Renders a single task in the tree
+- `DateNodeViewer` - Page view when navigating to a date
+
+Most node types only need a `*Node` component. The `*NodeViewer` is only needed for types with custom page-level rendering (like `DateNodeViewer` for calendar views).
+
+---
+
+## Common Patterns
+
+### Pattern Detection (Auto-Conversion)
+
+When users type certain patterns, automatically convert to the node type:
+
+```typescript
+pattern: {
+  detect: /^>\s/,      // Detect "> " at start
+  canRevert: true,
+  revert: /^>$/,       // Revert when just ">" remains
+  onEnter: 'inherit',
+  prefixToInherit: '> ',
+  splittingStrategy: 'prefix-inheritance',
+  cursorPlacement: 'after-prefix'
+}
+```
+
+### State-Based Icons (like Task)
+
+For nodes with visual state variations:
+
+```typescript
+// In icon registry
+this.register('task', {
+  component: TaskIcon,
+  semanticClass: 'task-icon',
+  colorVar: 'hsl(var(--node-task, 200 40% 45%))',
+  hasState: true,  // Enables pending/inProgress/completed states
+  hasRingEffect: true
+});
+
+// In plugin extractMetadata
+extractMetadata: (node) => {
+  const status = node.properties?.task?.status;
+  let taskState = 'pending';
+  if (status === 'in_progress') taskState = 'inProgress';
+  if (status === 'done') taskState = 'completed';
+  return { taskState };
+}
+```
+
+### Protected Structured Content
+
+For nodes with syntax that shouldn't be merged (code blocks, quotes):
+
+```typescript
+acceptsContentMerge: false  // Prevents backspace from merging content
+```
 
 ---
 
 ## Common Pitfalls & Lessons Learned
 
-### ❌ Missing ALLOWED_NODE_TYPES Entry
-**Symptom:** HTTP 400 Bad Request when creating nodes via API
-**Fix:** Add to `packages/desktop-app/src-tauri/src/constants.rs`
+### ❌ Behavior Not Registered
+**Symptom:** Backend validation fails, default metadata not initialized
+**Fix:** Register in `NodeBehaviorRegistry::new()` in `packages/core/src/behaviors/mod.rs`
+
+### ❌ Schema Not Added
+**Symptom:** Node type not recognized, spoke table not created
+**Fix:** Add to `get_core_schemas()` in `packages/core/src/models/core_schemas.rs`
 
 ### ❌ Icon Not Registered
-**Symptom:** Default icon appears instead of custom icon
-**Fix:** Import and register in `packages/desktop-app/src/lib/design/icons/registry.ts`
+**Symptom:** Default circle icon appears instead of custom icon
+**Fix:** Register in `packages/desktop-app/src/lib/design/icons/registry.ts`
 
 ### ❌ Plugin Not Exported
 **Symptom:** Slash commands don't appear, pattern detection doesn't work
 **Fix:** Add to `corePlugins` array in `packages/desktop-app/src/lib/plugins/core-plugins.ts`
-
-### ❌ Behavior Not Registered
-**Symptom:** Backend validation fails, metadata not initialized
-**Fix:** Register in `NodeBehaviorRegistry::new()` in `packages/core/src/behaviors/mod.rs`
 
 ### ❌ Wrong hasRingEffect Setting
 **Symptom:** Ring appears on leaf nodes or missing on parent nodes
@@ -584,21 +585,29 @@ If this node type introduces new architectural patterns, document them in `CLAUD
 
 Before considering the node type implementation complete:
 
-- [ ] Backend behavior implemented and registered
+### Backend
+- [ ] `*NodeBehavior` struct implemented with all trait methods
+- [ ] Behavior registered in `NodeBehaviorRegistry::new()`
+- [ ] Schema added to `get_core_schemas()` (for core types)
 - [ ] Backend tests passing
-- [ ] ALLOWED_NODE_TYPES updated
-- [ ] Icon component created
-- [ ] Icon registered in registry
-- [ ] Node component created (wraps BaseNode)
-- [ ] Plugin defined and exported
+
+### Frontend
+- [ ] Plugin defined in `core-plugins.ts`
+- [ ] Plugin added to `corePlugins` array
+- [ ] Node component created (`*-node.svelte`)
+- [ ] Icon registered in `registry.ts`
 - [ ] Frontend tests created and passing
-- [ ] Documentation updated
-- [ ] Manual testing: Create node via slash command
-- [ ] Manual testing: Create node via pattern detection (if applicable)
-- [ ] Manual testing: Indent/outdent operations work correctly
-- [ ] Manual testing: Icon displays correctly (with ring if applicable)
+
+### Integration
+- [ ] Manual test: Create node via slash command
+- [ ] Manual test: Create node via pattern detection (if applicable)
+- [ ] Manual test: Indent/outdent operations work correctly
+- [ ] Manual test: Icon displays correctly (with ring if applicable)
+- [ ] Manual test: Node persists and loads from database
+
+### Quality
+- [ ] All tests passing (`bun run test:all`)
 - [ ] Quality checks passing (`bun run quality:fix`)
-- [ ] All tests passing (`bun run test`)
 
 ---
 
@@ -606,19 +615,18 @@ Before considering the node type implementation complete:
 
 For reference implementations, see:
 
-- **HeaderNode** (Issue #275) - Text node with header levels
-- **CodeBlockNode** (Issue #276) - Leaf node with language selection
-- **TaskNode** - Node with state management (pending/inProgress/completed)
+- **TextNode** - Simplest implementation, no extra fields
+- **HeaderNode** - Pattern detection with metadata extraction (headerLevel)
+- **TaskNode** - State management, spoke table with indexed fields
+- **CodeBlockNode** - Leaf node with `acceptsContentMerge: false`
+- **QuoteBlockNode** - Pattern inheritance on Enter key
 
 ---
 
-## Questions or Issues?
+## Related Documentation
 
-If you encounter problems not covered by this guide:
-
-1. Check existing node type implementations for patterns
-2. Review recent issues for similar problems
-3. Consult these guides:
-   - `docs/architecture/components/component-architecture-guide.md`
-   - `docs/architecture/development/pattern-detection-and-templates.md` (for pattern detection issues)
-4. Create a GitHub issue with the `documentation` label
+- [Node Behavior System](../business-logic/node-behavior-system.md) - Detailed behavior architecture
+- [Schema Management Guide](./schema-management-implementation-guide.md) - Schema system details
+- [Component Architecture Guide](../components/component-architecture-guide.md) - Frontend patterns
+- [SurrealDB Schema Design](../data/surrealdb-schema-design.md) - Database architecture
+- [Persistence Architecture](../persistence-architecture.md) - Data flow overview
