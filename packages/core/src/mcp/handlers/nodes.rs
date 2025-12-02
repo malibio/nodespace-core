@@ -82,10 +82,11 @@ pub struct GetNodeParams {
 #[derive(Debug, Deserialize)]
 pub struct UpdateNodeParams {
     pub node_id: String,
-    /// Expected version for optimistic concurrency control (REQUIRED)
-    /// This prevents race conditions and silent data loss from concurrent updates.
-    /// Always fetch the node first to get its current version before updating.
-    pub version: i64,
+    /// Expected version for optimistic concurrency control (optional for MCP)
+    /// If provided, enables OCC to prevent race conditions.
+    /// If omitted, fetches current version automatically (convenient for AI agents).
+    #[serde(default)]
+    pub version: Option<i64>,
     #[serde(default)]
     pub node_type: Option<String>,
     #[serde(default)]
@@ -299,9 +300,22 @@ where
         embedding_vector: None, // Don't change embeddings via MCP update (auto-generated)
     };
 
-    // Version is now mandatory - no auto-fetch to prevent TOCTOU race conditions
+    // If version not provided, fetch current version (convenient for AI agents)
+    // If version provided, use OCC for concurrent update protection
+    let version = match params.version {
+        Some(v) => v,
+        None => {
+            let node = node_service
+                .get_node(&params.node_id)
+                .await
+                .map_err(|e| MCPError::internal_error(format!("Failed to get node: {}", e)))?
+                .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+            node.version
+        }
+    };
+
     let updated_node = match node_service
-        .update_node_with_occ(&params.node_id, params.version, update)
+        .update_node_with_occ(&params.node_id, version, update)
         .await
     {
         Ok(node) => node,

@@ -856,10 +856,11 @@ where
         }
     }
 
-    // Return result
+    // Return result with version for easy OCC reference
     Ok(json!({
         "markdown": markdown,
         "root_node_id": params.node_id,
+        "version": root_node.version,
         "node_count": count_nodes_in_markdown(&markdown)
     }))
 }
