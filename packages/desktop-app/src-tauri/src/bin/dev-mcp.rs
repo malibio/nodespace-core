@@ -78,7 +78,9 @@ async fn main() -> anyhow::Result<()> {
     let node_service: Arc<HttpNodeService> = match NodeService::new(&mut store).await {
         Ok(s) => {
             println!("✅ NodeService initialized");
-            Arc::new(s)
+            // Set client ID for MCP server so domain events have source_client_id (Issue #715)
+            // This allows browser frontend to filter out MCP-originated events
+            Arc::new(s.with_client("mcp-server"))
         }
         Err(e) => {
             eprintln!("❌ Failed to initialize NodeService: {}", e);

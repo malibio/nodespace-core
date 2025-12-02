@@ -144,7 +144,11 @@ export const taskNodePlugin: PluginDefinition = {
     lazyLoad: () => import('../design/components/task-node.svelte'),
     priority: 1
   },
-  // No viewer - task nodes use BaseNodeViewer (default) for page-level display
+  // TaskNodeViewer for task-specific UI (Issue #715)
+  viewer: {
+    lazyLoad: () => import('../components/viewers/task-node-viewer.svelte'),
+    priority: 1
+  },
   reference: {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
