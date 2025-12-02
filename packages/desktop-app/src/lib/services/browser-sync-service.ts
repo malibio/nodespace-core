@@ -208,8 +208,18 @@ class BrowserSyncService {
    * Handle parsed SSE event
    *
    * Routes events to appropriate store/tree handlers to update UI.
+   * Filters out events that originated from this browser client (Issue #715).
    */
   private handleEvent(event: SseEvent): void {
+    // Filter out events from this client (prevent feedback loop - Issue #715)
+    // When this browser makes changes, it receives SSE events back.
+    // Skip processing those to avoid overwriting optimistic updates.
+    const clientId = getClientId();
+    if ('clientId' in event && event.clientId === clientId) {
+      console.log('[BrowserSyncService] Filtering out event from same client:', event.type);
+      return;
+    }
+
     switch (event.type) {
       case 'nodeCreated': {
         console.log('[BrowserSyncService] Node created:', event.nodeId);
