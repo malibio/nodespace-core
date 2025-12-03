@@ -35,6 +35,6 @@ pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
 pub use mcp_server_service::{default_mcp_port, McpResponseCallback, McpServerService};
 pub use migration_registry::{MigrationRegistry, MigrationTransform};
-pub use node_service::{CreateNodeParams, NodeService};
+pub use node_service::{CreateNodeParams, NodeService, SubtreeData};
 pub use relationship_cache::{CacheStats, InboundRelationship, InboundRelationshipCache};
 pub use schema_table_manager::SchemaTableManager;

@@ -32,7 +32,7 @@
 //! ```
 
 use crate::mcp::types::MCPError;
-use crate::models::Node;
+use crate::models::{Node, TaskNode, TaskStatus};
 use crate::services::{CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -537,26 +537,49 @@ where
         };
 
         // Detect node type and extract content with inline markdown preserved
-        let (node_type, content, heading_level, is_multiline) =
+        // Tuple: (node_type, content, heading_level, is_multiline, properties)
+        let (node_type, content, heading_level, is_multiline, properties) =
             if let Some(level) = detect_heading(content_line) {
-                ("header", content_line.to_string(), Some(level), false)
+                ("header", content_line.to_string(), Some(level), false, None)
             } else if is_task_line(content_line) {
-                // Task node
-                ("task", content_line.to_string(), None, false)
+                // Task node - extract content and status from "- [ ] " or "- [x] " prefix
+                // Status values follow TaskStatus enum: "open", "done" (not "completed")
+                let (task_content, task_status) = if content_line.starts_with("- [x] ") {
+                    (
+                        content_line.strip_prefix("- [x] ").unwrap_or(content_line),
+                        "done", // TaskStatus::Done
+                    )
+                } else if content_line.starts_with("- [ ] ") {
+                    (
+                        content_line.strip_prefix("- [ ] ").unwrap_or(content_line),
+                        "open", // TaskStatus::Open
+                    )
+                } else {
+                    (content_line, "open")
+                };
+                (
+                    "task",
+                    task_content.to_string(),
+                    None,
+                    false,
+                    Some(json!({"status": task_status})),
+                )
             } else if content_line.starts_with("```") {
                 // Code block - collect until closing ```
+                // IMPORTANT: Preserve original whitespace inside code blocks (don't trim_start)
                 let mut code_lines = vec![content_line];
                 i += 1;
                 while i < lines.len() {
                     let code_line = lines[i];
-                    code_lines.push(code_line.trim_start());
+                    // Keep the original line content to preserve indentation
+                    code_lines.push(code_line);
                     if code_line.trim_start().starts_with("```") {
                         break;
                     }
                     i += 1;
                 }
                 let code_content = code_lines.join("\n");
-                ("code-block", code_content, None, true)
+                ("code-block", code_content, None, true, None)
             } else if content_line.starts_with("> ") {
                 // Quote block - collect consecutive quote lines
                 let mut quote_lines = vec![content_line];
@@ -565,7 +588,7 @@ where
                     quote_lines.push(lines[i].trim_start());
                 }
                 let quote_content = quote_lines.join("\n");
-                ("quote-block", quote_content, None, true)
+                ("quote-block", quote_content, None, true, None)
             } else if let Some(num_end) = detect_ordered_list(content_line) {
                 // Collect consecutive numbered items into single ordered-list node
                 // Each line should start with "1. " as per requirement
@@ -589,7 +612,7 @@ where
                     }
                 }
                 let list_content = list_items.join("\n");
-                ("ordered-list", list_content, None, true)
+                ("ordered-list", list_content, None, true, None)
             } else {
                 // Text paragraph - collect consecutive lines with NO empty lines between them
                 let mut text_lines = vec![content_line];
@@ -633,7 +656,7 @@ where
                 }
 
                 let text_content = text_lines.join("\n");
-                ("text", text_content, None, text_lines.len() > 1)
+                ("text", text_content, None, text_lines.len() > 1, None)
             };
 
         // Pop indent stack for items at same or lower indentation
@@ -710,6 +733,7 @@ where
             parent_id.clone(),
             context.root_id.clone(),
             insert_after, // Insert after last sibling to maintain document order
+            properties,   // Custom properties (e.g., task status)
         )
         .await?;
 
@@ -760,6 +784,7 @@ async fn create_node<C>(
     parent_id: Option<String>,
     _root_node_id: Option<String>, // Deprecated - kept for backward compat but ignored (root auto-derived from parent)
     insert_after_node_id: Option<String>, // Insert after this sibling (None = insert at beginning)
+    custom_properties: Option<Value>, // Custom properties from markdown parsing (e.g., task status)
 ) -> Result<String, MCPError>
 where
     C: surrealdb::Connection,
@@ -768,14 +793,18 @@ where
     // Note: container/root is now auto-derived from parent chain by backend
     // Note: sibling ordering uses insert_after_node_id to maintain document order
 
-    // Provide required properties based on node type
-    let properties = match node_type {
-        "task" => {
-            // Task nodes require status field per schema
-            // Default to "open" (schema default, Issue #670)
-            json!({"status": "open"})
+    // Use custom properties if provided, otherwise use defaults based on node type
+    let properties = if let Some(props) = custom_properties {
+        props
+    } else {
+        match node_type {
+            "task" => {
+                // Task nodes require status field per schema
+                // Default to "open" (schema default, Issue #670)
+                json!({"status": "open"})
+            }
+            _ => json!({}),
         }
-        _ => json!({}),
     };
 
     node_service
@@ -862,30 +891,19 @@ where
     let params: GetMarkdownParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
-    // Fetch the root node first to validate it exists
-    let root_node = node_service
-        .get_node(&params.node_id)
+    // Use shared get_subtree_data for efficient bulk fetch (same as frontend uses)
+    // This performs exactly 3 database queries regardless of tree depth or node count:
+    // 1. Fetch root node
+    // 2. Fetch all descendant nodes in subtree
+    // 3. Fetch all edges in subtree
+    let (root_node, node_map, adjacency_list) = node_service
+        .get_subtree_data(&params.node_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get node: {}", e)))?
-        .ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+        .map_err(|e| MCPError::internal_error(format!("Failed to get subtree data: {}", e)))?;
 
-    // Bulk fetch all descendant nodes using graph traversal
-    // In graph-native architecture, we traverse the hierarchy recursively
-    let all_nodes = node_service
-        .get_descendants(&root_node.id)
-        .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to query container nodes: {}", e)))?;
+    let root_node = root_node.ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
 
-    // Build a lookup map for efficient hierarchy reconstruction
-    // Include the root node in the map for complete hierarchy
-    use std::collections::HashMap;
-    let mut nodes_map: HashMap<String, Node> =
-        all_nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
-
-    // Add root node to the map
-    nodes_map.insert(root_node.id.clone(), root_node.clone());
-
-    // Build markdown by traversing hierarchy in memory
+    // Build markdown by traversing hierarchy in memory (no database calls)
     let mut markdown = String::new();
 
     // Export the container node itself with version for OCC
@@ -898,25 +916,22 @@ where
 
     // Export children if requested
     if params.include_children {
-        // Get direct children using graph relationships
-        // In graph-native architecture, get_children returns nodes already sorted
-        // by the `order` field on has_child edges (fractional ordering)
-        let children = node_service
-            .get_children(&root_node.id)
-            .await
-            .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
-
-        // Export each child and its descendants (children are already in correct order)
-        for child in &children {
-            export_node_hierarchy(
-                node_service,
-                child,
-                &mut markdown,
-                1, // Start at depth 1 (container is depth 0)
-                params.max_depth,
-                true, // Always include children when recursing
-            )
-            .await?;
+        // Get direct children from adjacency list (already sorted by order)
+        if let Some(child_ids) = adjacency_list.get(&root_node.id) {
+            // Export each child and its descendants (children are already in correct order)
+            for child_id in child_ids {
+                if let Some(child) = node_map.get(child_id) {
+                    export_node_hierarchy(
+                        child,
+                        &node_map,
+                        &adjacency_list,
+                        &mut markdown,
+                        1, // Start at depth 1 (container is depth 0)
+                        params.max_depth,
+                        true, // Always include children when recursing
+                    );
+                }
+            }
         }
     }
 
@@ -931,78 +946,85 @@ where
 
 /// Recursively export node hierarchy to markdown
 ///
-/// Uses graph traversal via NodeService to get children in correct order.
+/// Uses pre-fetched data from get_subtree_data for efficient in-memory traversal.
 /// Automatically adds bullet formatting for text nodes under headers when appropriate.
-fn export_node_hierarchy<'a, C>(
-    node_service: &'a Arc<NodeService<C>>,
+fn export_node_hierarchy(
     node: &Node,
-    output: &'a mut String,
+    node_map: &std::collections::HashMap<String, Node>,
+    adjacency_list: &std::collections::HashMap<String, Vec<String>>,
+    output: &mut String,
     current_depth: usize,
     max_depth: usize,
     include_children: bool,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), MCPError>> + Send + 'a>>
-where
-    C: surrealdb::Connection + 'a,
-{
-    let node_id = node.id.clone();
-    let node_version = node.version;
-    let node_content = node.content.clone();
-    let node_type = node.node_type.clone();
+) {
+    // Prevent infinite recursion
+    if current_depth >= max_depth {
+        let content_preview: String = node.content.chars().take(50).collect();
+        tracing::warn!(
+            "Max depth {} reached at node {} (content: {}{})",
+            max_depth,
+            node.id,
+            content_preview,
+            if node.content.len() > 50 { "..." } else { "" }
+        );
+        return;
+    }
 
-    Box::pin(async move {
-        // Prevent infinite recursion
-        if current_depth >= max_depth {
-            let content_preview: String = node_content.chars().take(50).collect();
-            tracing::warn!(
-                "Max depth {} reached at node {} (content: {}{})",
-                max_depth,
-                node_id,
-                content_preview,
-                if node_content.len() > 50 { "..." } else { "" }
-            );
-            return Ok(());
-        }
+    // Get children from adjacency list (already sorted by order)
+    let child_ids = if include_children {
+        adjacency_list
+            .get(&node.id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    } else {
+        &[]
+    };
 
-        // Get children to check conditions for bullet formatting
-        let children = if include_children {
-            node_service
-                .get_children(&node_id)
-                .await
-                .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?
+    // Add minimal metadata comment with ID and version for OCC
+    output.push_str(&format!("<!-- {} v{} -->\n", node.id, node.version));
+
+    // Handle task nodes specially - render with checkbox syntax
+    if node.node_type == "task" {
+        // Use TaskNode::from_node for strongly-typed status extraction
+        let checkbox = if let Ok(task) = TaskNode::from_node(node.clone()) {
+            match task.status() {
+                TaskStatus::Done => "- [x] ",
+                _ => "- [ ] ", // Open, InProgress, Cancelled all render as unchecked
+            }
         } else {
-            Vec::new()
+            "- [ ] " // Default to unchecked if conversion fails
+        };
+        output.push_str(checkbox);
+        output.push_str(&node.content);
+        output.push_str("\n\n");
+    } else {
+        // Add content with proper formatting
+        output.push_str(&node.content);
+        output.push_str("\n\n");
+    }
+
+    // Export children with parent context for bullet formatting
+    if include_children && !child_ids.is_empty() {
+        let export_ctx = ExportContext {
+            parent_type: &node.node_type,
+            sibling_count: child_ids.len(),
         };
 
-        // Add minimal metadata comment with ID and version for OCC
-        output.push_str(&format!("<!-- {} v{} -->\n", node_id, node_version));
-
-        // Add content with proper formatting
-        output.push_str(&node_content);
-        output.push_str("\n\n");
-
-        // Export children with parent context for bullet formatting
-        if include_children && !children.is_empty() {
-            let export_ctx = ExportContext {
-                parent_type: &node_type,
-                sibling_count: children.len(),
-            };
-
-            for child in &children {
+        for child_id in child_ids {
+            if let Some(child) = node_map.get(child_id) {
                 export_node_with_context(
-                    node_service,
                     child,
+                    node_map,
+                    adjacency_list,
                     output,
                     current_depth + 1,
                     max_depth,
                     include_children,
                     export_ctx,
-                )
-                .await?;
+                );
             }
         }
-
-        Ok(())
-    })
+    }
 }
 
 /// Context for exporting nodes with bullet formatting
@@ -1014,92 +1036,101 @@ struct ExportContext<'a> {
 
 /// Export node with parent context for bullet formatting
 ///
+/// Uses pre-fetched data from get_subtree_data for efficient in-memory traversal.
 /// Adds "- " prefix to text nodes when:
 /// 1. Node is a text node
 /// 2. Parent is a header node
 /// 3. Parent has 2+ children (indicates a list, not single descriptive text)
 /// 4. Node has no children itself
-fn export_node_with_context<'a, C>(
-    node_service: &'a Arc<NodeService<C>>,
+#[allow(clippy::too_many_arguments)]
+fn export_node_with_context(
     node: &Node,
-    output: &'a mut String,
+    node_map: &std::collections::HashMap<String, Node>,
+    adjacency_list: &std::collections::HashMap<String, Vec<String>>,
+    output: &mut String,
     current_depth: usize,
     max_depth: usize,
     include_children: bool,
-    context: ExportContext<'a>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), MCPError>> + Send + 'a>>
-where
-    C: surrealdb::Connection + 'a,
-{
-    let node_id = node.id.clone();
-    let node_version = node.version;
-    let node_content = node.content.clone();
-    let node_type = node.node_type.clone();
+    context: ExportContext<'_>,
+) {
+    // Prevent infinite recursion
+    if current_depth >= max_depth {
+        let content_preview: String = node.content.chars().take(50).collect();
+        tracing::warn!(
+            "Max depth {} reached at node {} (content: {}{})",
+            max_depth,
+            node.id,
+            content_preview,
+            if node.content.len() > 50 { "..." } else { "" }
+        );
+        return;
+    }
 
-    Box::pin(async move {
-        // Prevent infinite recursion
-        if current_depth >= max_depth {
-            let content_preview: String = node_content.chars().take(50).collect();
-            tracing::warn!(
-                "Max depth {} reached at node {} (content: {}{})",
-                max_depth,
-                node_id,
-                content_preview,
-                if node_content.len() > 50 { "..." } else { "" }
-            );
-            return Ok(());
-        }
+    // Get children from adjacency list (already sorted by order)
+    let child_ids = adjacency_list
+        .get(&node.id)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+    let has_children = !child_ids.is_empty();
 
-        // Get children to check conditions
-        let children = node_service
-            .get_children(&node_id)
-            .await
-            .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
+    // Determine if this node should be rendered as a bullet item
+    // Rules: text node + (header OR text) parent + 2+ siblings + no children
+    // This covers both direct header children and label→list patterns
+    let should_render_as_bullet = node.node_type == "text"
+        && node.content.len() < 100  // Short text likely a bullet item
+        && (context.parent_type == "header" || context.parent_type == "text")
+        && context.sibling_count >= 2
+        && !has_children;
 
-        let has_children = !children.is_empty();
+    // Add minimal metadata comment with ID and version for OCC
+    output.push_str(&format!("<!-- {} v{} -->\n", node.id, node.version));
 
-        // Determine if this node should be rendered as a bullet item
-        // Rules: text node + (header OR text) parent + 2+ siblings + no children
-        // This covers both direct header children and label→list patterns
-        let should_render_as_bullet = node_type == "text"
-            && node_content.len() < 100  // Short text likely a bullet item
-            && (context.parent_type == "header" || context.parent_type == "text")
-            && context.sibling_count >= 2
-            && !has_children;
-
-        // Add minimal metadata comment with ID and version for OCC
-        output.push_str(&format!("<!-- {} v{} -->\n", node_id, node_version));
-
-        // Add content with bullet prefix if applicable
-        if should_render_as_bullet {
-            output.push_str("- ");
-        }
-        output.push_str(&node_content);
+    // Handle task nodes specially - render with checkbox syntax
+    if node.node_type == "task" {
+        // Use TaskNode::from_node for strongly-typed status extraction
+        let checkbox = if let Ok(task) = TaskNode::from_node(node.clone()) {
+            match task.status() {
+                TaskStatus::Done => "- [x] ",
+                _ => "- [ ] ", // Open, InProgress, Cancelled all render as unchecked
+            }
+        } else {
+            "- [ ] " // Default to unchecked if conversion fails
+        };
+        output.push_str(checkbox);
+        output.push_str(&node.content);
         output.push_str("\n\n");
+    } else if should_render_as_bullet {
+        // Add content with bullet prefix if applicable
+        output.push_str("- ");
+        output.push_str(&node.content);
+        output.push_str("\n\n");
+    } else {
+        output.push_str(&node.content);
+        output.push_str("\n\n");
+    }
 
-        // Recursively export children with context
-        if include_children && !children.is_empty() {
-            let child_ctx = ExportContext {
-                parent_type: &node_type,
-                sibling_count: children.len(),
-            };
+    // Recursively export children with context
+    if include_children && !child_ids.is_empty() {
+        let child_ctx = ExportContext {
+            parent_type: &node.node_type,
+            sibling_count: child_ids.len(),
+        };
 
-            for child in &children {
+        for child_id in child_ids {
+            if let Some(child) = node_map.get(child_id) {
                 export_node_with_context(
-                    node_service,
                     child,
+                    node_map,
+                    adjacency_list,
                     output,
                     current_depth + 1,
                     max_depth,
                     include_children,
                     child_ctx,
-                )
-                .await?;
+                );
             }
         }
-
-        Ok(())
-    })
+    }
 }
 
 // NOTE: sort_by_sibling_chain removed - sibling ordering is now handled via

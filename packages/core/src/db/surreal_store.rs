@@ -2064,8 +2064,8 @@ where
                 .search_nodes_by_content(search_query, query.limit.map(|l| l as i64))
                 .await?;
 
-            // Note: include_containers_and_tasks filter not applicable for content search
-            // (would require additional graph query to check hierarchy)
+            // Note: Filtering by root/task status is done at the Tauri command layer
+            // (mention_autocomplete), not here, since it requires graph traversal
 
             return Ok(nodes);
         }
@@ -2077,7 +2077,7 @@ where
             conditions.push("node_type = $node_type".to_string());
         }
 
-        // Note: include_containers_and_tasks field removed - use graph edges and separate queries instead
+        // Note: Filtering for mentionable nodes (roots + tasks) is done in mention_autocomplete command
 
         // Build SQL query
         let where_clause = if !conditions.is_empty() {

@@ -327,8 +327,14 @@ code block
                     assert!(node.content.starts_with("##"));
                 }
                 "task" => {
-                    // Should have - [ ] format
-                    assert!(node.content.starts_with("- [ ]"));
+                    // Task content should be clean (no "- [ ]" prefix)
+                    // The checkbox state is stored in the `completed` property
+                    assert!(
+                        !node.content.starts_with("- [ ]") && !node.content.starts_with("- [x]"),
+                        "Task content should not have checkbox prefix, got: {}",
+                        node.content
+                    );
+                    assert_eq!(node.content, "Task item");
                 }
                 "code-block" => {
                     // Should have ``` fence
@@ -388,13 +394,13 @@ code block
         // Container from title + 3 tasks
         assert_eq!(result["nodes_created"], 4);
 
-        // Verify task content (checkboxes in content, no properties)
+        // Verify task content - content is clean, completed state is in properties
         let node_ids = result["node_ids"].as_array().unwrap();
 
-        let mut checked_count = 0;
-        let mut unchecked_count = 0;
+        let mut completed_count = 0;
+        let mut not_completed_count = 0;
 
-        // Skip the first node (container from title)
+        // Skip the first node (root from title)
         for node_id in node_ids.iter().skip(1) {
             let node = node_service
                 .get_node(node_id.as_str().unwrap())
@@ -403,16 +409,36 @@ code block
                 .unwrap();
 
             if node.node_type == "task" {
-                if node.content.contains("[x]") {
-                    checked_count += 1;
-                } else if node.content.contains("[ ]") {
-                    unchecked_count += 1;
+                // Content should be clean (no checkbox prefix)
+                assert!(
+                    !node.content.starts_with("- [ ]") && !node.content.starts_with("- [x]"),
+                    "Task content should not have checkbox prefix, got: {}",
+                    node.content
+                );
+
+                // Check the status property (status: "done" means completed)
+                let status = node
+                    .properties
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("open");
+
+                if status == "done" {
+                    completed_count += 1;
+                } else {
+                    not_completed_count += 1;
                 }
             }
         }
 
-        assert_eq!(checked_count, 1);
-        assert_eq!(unchecked_count, 2);
+        assert_eq!(
+            completed_count, 1,
+            "Should have 1 completed task (status: done)"
+        );
+        assert_eq!(
+            not_completed_count, 2,
+            "Should have 2 uncompleted tasks (status: open)"
+        );
     }
 
     #[tokio::test]
