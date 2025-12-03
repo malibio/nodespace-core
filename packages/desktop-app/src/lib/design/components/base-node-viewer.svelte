@@ -233,6 +233,17 @@
   // ============================================================================
 
   onMount(() => {
+    // CRITICAL FIX: Populate loadedNodes from registry's cache immediately
+    // This prevents race condition where template renders before async loadNodeComponent completes
+    // The registry maintains a persistent cache that survives component remounts
+    const types = ['text', 'header', 'task', 'date', 'code-block', 'quote-block', 'ordered-list'];
+    for (const type of types) {
+      const component = pluginRegistry.getLoadedNodeComponent(type);
+      if (component) {
+        loadedNodes[type] = component;
+      }
+    }
+
     // Set up scroll position management
     // Restore scroll position when viewer becomes active
     let scrollCleanup: (() => void) | null = null;
