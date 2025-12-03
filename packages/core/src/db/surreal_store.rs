@@ -87,6 +87,48 @@ pub struct EdgeRecord {
     pub order: f64,
 }
 
+/// Store operation types for automatic notification (Issue #718)
+///
+/// Used by the store-level notification system to indicate what type
+/// of mutation occurred, enabling automatic event emission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreOperation {
+    /// A new node was created
+    Created,
+    /// An existing node was updated
+    Updated,
+    /// A node was deleted
+    Deleted,
+}
+
+/// Represents a store-level change notification (Issue #718)
+///
+/// Emitted automatically by store mutation methods when a registered
+/// notifier is present. Contains all information needed for NodeService
+/// to construct and broadcast domain events.
+///
+/// # Design Notes
+///
+/// - `source` is passed per-operation (not stored in SurrealStore) because
+///   NodeService is a shared singleton - different clients pass their ID per-request
+/// - For deleted nodes, `node` contains the node state before deletion
+#[derive(Debug, Clone)]
+pub struct StoreChange {
+    /// The type of operation that occurred
+    pub operation: StoreOperation,
+    /// The node that was affected (for deletes, this is the pre-deletion state)
+    pub node: Node,
+    /// Optional client identifier for filtering events
+    pub source: Option<String>,
+}
+
+/// Type alias for the store change notifier callback
+///
+/// This is a synchronous callback that runs immediately after store mutations.
+/// The callback should be lightweight - heavy processing should be offloaded
+/// to async tasks via channels.
+pub type StoreNotifier = Arc<dyn Fn(StoreChange) + Send + Sync>;
+
 // REMOVED: TYPES_WITH_SPOKE_TABLES constant (Issue #691)
 // REMOVED: VALID_NODE_TYPES constant and validate_node_type() function (Issue #691)
 //
@@ -353,6 +395,14 @@ where
     ///
     /// Replaces the hardcoded VALID_NODE_TYPES constant (Issue #691).
     valid_node_types: std::collections::HashSet<String>,
+    /// Optional notifier callback for store-level change notifications (Issue #718)
+    ///
+    /// When registered, this callback is invoked synchronously after every store
+    /// mutation (create, update, delete). The notifier enables automatic domain
+    /// event emission without manual emit calls in NodeService methods.
+    ///
+    /// Set via `set_notifier()` after construction.
+    notifier: Option<StoreNotifier>,
 }
 
 /// Type alias for embedded RocksDB store
@@ -419,6 +469,7 @@ impl SurrealStore<Db> {
             event_tx,
             types_with_spoke_tables,
             valid_node_types,
+            notifier: None,
         })
     }
 }
@@ -503,6 +554,7 @@ impl SurrealStore<Client> {
             event_tx,
             types_with_spoke_tables,
             valid_node_types,
+            notifier: None,
         })
     }
 }
@@ -511,6 +563,38 @@ impl<C> SurrealStore<C>
 where
     C: surrealdb::Connection,
 {
+    /// Set the store change notifier callback (Issue #718)
+    ///
+    /// Registers a callback that will be invoked synchronously after every store
+    /// mutation. This enables automatic domain event emission from NodeService
+    /// without manual emit calls in each method.
+    ///
+    /// # Arguments
+    ///
+    /// * `notifier` - Callback function that receives `StoreChange` on mutations
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let store = SurrealStore::new(db_path).await?;
+    /// store.set_notifier(Arc::new(|change| {
+    ///     println!("Store change: {:?}", change.operation);
+    /// }));
+    /// ```
+    pub fn set_notifier(&mut self, notifier: StoreNotifier) {
+        self.notifier = Some(notifier);
+    }
+
+    /// Notify registered callback of a store change (Issue #718)
+    ///
+    /// Called internally by mutation methods after successful operations.
+    /// Does nothing if no notifier is registered.
+    fn notify(&self, change: StoreChange) {
+        if let Some(notifier) = &self.notifier {
+            notifier(change);
+        }
+    }
+
     /// Get the underlying database connection
     ///
     /// This is used by services (like SchemaService) that need direct database access
@@ -748,7 +832,7 @@ impl<C> SurrealStore<C>
 where
     C: surrealdb::Connection,
 {
-    pub async fn create_node(&self, node: Node) -> Result<Node> {
+    pub async fn create_node(&self, node: Node, source: Option<String>) -> Result<Node> {
         // Note: embedding_vector is not stored in hub-and-spoke architecture
         // Embeddings are managed separately for optimization
 
@@ -883,7 +967,13 @@ where
 
         // Note: Parent-child relationships are now established separately via move_node()
         // This allows cleaner separation of node creation from hierarchy management
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Created,
+            node: node.clone(),
+            source,
+        });
 
         // Return the created node directly
         Ok(node)
@@ -920,6 +1010,7 @@ where
     ///     "text",
     ///     "Child content",
     ///     json!({}),
+    ///     None,
     /// ).await?;
     /// # Ok(())
     /// # }
@@ -930,6 +1021,7 @@ where
         node_type: &str,
         content: &str,
         properties: Value,
+        source: Option<String>,
     ) -> Result<Node> {
         use uuid::Uuid;
 
@@ -1113,7 +1205,12 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found after creation for '{}'", node_id))?;
 
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Created,
+            node: node.clone(),
+            source,
+        });
 
         Ok(node)
     }
@@ -1226,7 +1323,12 @@ where
         }))
     }
 
-    pub async fn update_node(&self, id: &str, update: NodeUpdate) -> Result<Node> {
+    pub async fn update_node(
+        &self,
+        id: &str,
+        update: NodeUpdate,
+        source: Option<String>,
+    ) -> Result<Node> {
         // Fetch current node
         let current = self
             .get_node(id)
@@ -1335,7 +1437,12 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
 
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: updated_node.clone(),
+            source,
+        });
 
         Ok(updated_node)
     }
@@ -1374,7 +1481,7 @@ where
     ///     "DEFINE FIELD IF NOT EXISTS name ON person TYPE string;".to_string(),
     /// ];
     /// let update = NodeUpdate::new().with_properties(serde_json::json!({"schema": "..."}));
-    /// store.update_schema_node_atomic("person", update, ddl).await?;
+    /// store.update_schema_node_atomic("person", update, ddl, None).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1382,6 +1489,7 @@ where
         &self,
         node: Node,
         ddl_statements: Vec<String>,
+        source: Option<String>,
     ) -> Result<Node> {
         // Validate this is a schema node
         if node.node_type != "schema" {
@@ -1480,6 +1588,13 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Schema node not found after creation"))?;
 
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Created,
+            node: created_node.clone(),
+            source,
+        });
+
         Ok(created_node)
     }
 
@@ -1488,6 +1603,7 @@ where
         id: &str,
         update: NodeUpdate,
         ddl_statements: Vec<String>,
+        source: Option<String>,
     ) -> Result<Node> {
         // Fetch current node to verify it exists and get current state
         let current = self
@@ -1570,6 +1686,13 @@ where
             transaction_parts.len() - 3 // Exclude BEGIN, UPDATE, COMMIT
         );
 
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: updated_node.clone(),
+            source,
+        });
+
         Ok(updated_node)
     }
 
@@ -1618,6 +1741,7 @@ where
     ///     "node-uuid",
     ///     "task",
     ///     json!({"status": "TODO", "priority": "HIGH"}),
+    ///     None,
     /// ).await?;
     /// # Ok(())
     /// # }
@@ -1627,6 +1751,7 @@ where
         node_id: &str,
         new_type: &str,
         new_properties: Value,
+        source: Option<String>,
     ) -> Result<Node> {
         // Validate new_type to prevent SQL injection
         self.validate_node_type(new_type)?;
@@ -1739,7 +1864,12 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found after type switch for '{}'", node_id))?;
 
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: node.clone(),
+            source,
+        });
 
         Ok(node)
     }
@@ -1776,7 +1906,7 @@ where
     ///     ..Default::default()
     /// };
     ///
-    /// match store.update_node_with_version_check("node-id", 5, update).await? {
+    /// match store.update_node_with_version_check("node-id", 5, update, None).await? {
     ///     Some(node) => println!("Updated to version {}", node.version),
     ///     None => println!("Version mismatch - node was modified by another process"),
     /// }
@@ -1788,6 +1918,7 @@ where
         id: &str,
         expected_version: i64,
         update: NodeUpdate,
+        source: Option<String>,
     ) -> Result<Option<Node>> {
         // Fetch current node to build update values
         let current = self
@@ -1871,12 +2002,17 @@ where
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
 
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+        // Notify registered callback of the store change (Issue #718)
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: node.clone(),
+            source,
+        });
 
         Ok(Some(node))
     }
 
-    pub async fn delete_node(&self, id: &str) -> Result<DeleteResult> {
+    pub async fn delete_node(&self, id: &str, source: Option<String>) -> Result<DeleteResult> {
         // Get node to determine type for Record ID
         let node = match self.get_node(id).await? {
             Some(n) => n,
@@ -1901,7 +2037,13 @@ where
             .await
             .context("Failed to delete node and relations")?;
 
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+        // Notify registered callback of the store change (Issue #718)
+        // For deletes, we include the pre-deletion node state
+        self.notify(StoreChange {
+            operation: StoreOperation::Deleted,
+            node,
+            source,
+        });
 
         Ok(DeleteResult { existed: true })
     }
@@ -1933,12 +2075,16 @@ where
     /// ```rust,no_run
     /// # use nodespace_core::db::SurrealStore;
     /// # async fn example(store: &SurrealStore) -> anyhow::Result<()> {
-    /// let result = store.delete_node_cascade_atomic("node-uuid").await?;
+    /// let result = store.delete_node_cascade_atomic("node-uuid", None).await?;
     /// assert!(result.existed);
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn delete_node_cascade_atomic(&self, node_id: &str) -> Result<DeleteResult> {
+    pub async fn delete_node_cascade_atomic(
+        &self,
+        node_id: &str,
+        source: Option<String>,
+    ) -> Result<DeleteResult> {
         // Get node to determine type for Record ID
         let node = match self.get_node(node_id).await? {
             Some(n) => n,
@@ -1948,7 +2094,7 @@ where
         // Build atomic cascade delete transaction using Thing parameters
         // This ensures ALL related data is deleted or NOTHING is deleted
         let node_type = node.node_type.clone();
-        let node_id = node.id.clone();
+        let node_id_str = node.id.clone();
 
         let transaction_query = r#"
             BEGIN TRANSACTION;
@@ -1970,8 +2116,8 @@ where
         .to_string();
 
         // Construct Thing objects for Record IDs
-        let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id.clone()));
-        let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id.clone()));
+        let node_thing = surrealdb::sql::Thing::from(("node".to_string(), node_id_str.clone()));
+        let type_thing = surrealdb::sql::Thing::from((node_type.clone(), node_id_str.clone()));
 
         // Execute transaction (we don't care about the return value, just the side effects)
         self.db
@@ -1982,10 +2128,16 @@ where
             .map(|_| ())
             .context(format!(
                 "Failed to delete node '{}' (type: {}) with cascade",
-                node_id, node_type
+                node_id_str, node_type
             ))?;
 
-        // Note: Domain events are now emitted at NodeService layer for client filtering
+        // Notify registered callback of the store change (Issue #718)
+        // For deletes, we include the pre-deletion node state
+        self.notify(StoreChange {
+            operation: StoreOperation::Deleted,
+            node,
+            source,
+        });
 
         Ok(DeleteResult { existed: true })
     }
@@ -1998,6 +2150,7 @@ where
         &self,
         id: &str,
         expected_version: i64,
+        source: Option<String>,
     ) -> Result<usize> {
         // First get the node to check version
         let node = match self.get_node(id).await? {
@@ -2011,7 +2164,8 @@ where
         }
 
         // Version matches, proceed with deletion
-        let result = self.delete_node(id).await?;
+        // Note: delete_node handles the notification
+        let result = self.delete_node(id, source).await?;
         Ok(if result.existed { 1 } else { 0 })
     }
 
@@ -3352,7 +3506,7 @@ where
                 properties: Some(schema.clone()),
                 ..Default::default()
             };
-            self.update_node(&schema_id, update).await?;
+            self.update_node(&schema_id, update, None).await?;
         } else {
             // Create new schema node with deterministic ID
             let node = Node::new_with_id(
@@ -3361,7 +3515,7 @@ where
                 node_type.to_string(),
                 schema.clone(),
             );
-            self.create_node(node).await?;
+            self.create_node(node, None).await?;
         }
 
         Ok(())
@@ -3716,7 +3870,7 @@ where
         let mut created_nodes = Vec::new();
 
         for node in nodes {
-            let created = self.create_node(node).await?;
+            let created = self.create_node(node, None).await?;
             created_nodes.push(created);
         }
 
@@ -4168,7 +4322,7 @@ mod tests {
 
         let node = Node::new("text".to_string(), "Test content".to_string(), json!({}));
 
-        let created = store.create_node(node.clone()).await?;
+        let created = store.create_node(node.clone(), None).await?;
         assert_eq!(created.id, node.id);
         assert_eq!(created.content, "Test content");
 
@@ -4189,14 +4343,14 @@ mod tests {
             json!({}),
         );
 
-        let created = store.create_node(node.clone()).await?;
+        let created = store.create_node(node.clone(), None).await?;
 
         let update = NodeUpdate {
             content: Some("Updated content".to_string()),
             ..Default::default()
         };
 
-        let updated = store.update_node(&created.id, update).await?;
+        let updated = store.update_node(&created.id, update, None).await?;
         assert_eq!(updated.content, "Updated content");
 
         Ok(())
@@ -4208,9 +4362,9 @@ mod tests {
 
         let node = Node::new("text".to_string(), "Test content".to_string(), json!({}));
 
-        let created = store.create_node(node.clone()).await?;
+        let created = store.create_node(node.clone(), None).await?;
 
-        let result = store.delete_node(&created.id).await?;
+        let result = store.delete_node(&created.id, None).await?;
         assert!(result.existed);
 
         let fetched = store.get_node(&created.id).await?;
@@ -4301,7 +4455,7 @@ mod tests {
 
         // Create nodes
         let node1 = Node::new("text".to_string(), "Base content".to_string(), json!({}));
-        let mut created1 = store.create_node(node1).await?;
+        let mut created1 = store.create_node(node1, None).await?;
         store
             .update_embedding(&created1.id, &similar_vector)
             .await?;
@@ -4312,7 +4466,7 @@ mod tests {
             "Dissimilar content".to_string(),
             json!({}),
         );
-        let mut created2 = store.create_node(node2).await?;
+        let mut created2 = store.create_node(node2, None).await?;
         store
             .update_embedding(&created2.id, &dissimilar_vector)
             .await?;
@@ -4347,7 +4501,7 @@ mod tests {
         let similar_vector = vec![0.99f32; 384];
 
         let node = Node::new("text".to_string(), "Test content".to_string(), json!({}));
-        let created = store.create_node(node).await?;
+        let created = store.create_node(node, None).await?;
         store.update_embedding(&created.id, &similar_vector).await?;
 
         // Search with high threshold (0.99) - should find the node
@@ -4381,7 +4535,7 @@ mod tests {
 
         for i in 0..5 {
             let node = Node::new("text".to_string(), format!("Content {}", i), json!({}));
-            let created = store.create_node(node).await?;
+            let created = store.create_node(node, None).await?;
             store.update_embedding(&created.id, &base_vector).await?;
         }
 
@@ -4419,7 +4573,7 @@ mod tests {
                 format!("Performance test content {}", i),
                 json!({}),
             );
-            let created = store.create_node(node).await?;
+            let created = store.create_node(node, None).await?;
             store.update_embedding(&created.id, &base_vector).await?;
 
             if i % 100 == 0 {
@@ -4479,17 +4633,17 @@ mod tests {
 
         // Create nodes
         let node1 = Node::new("text".to_string(), similar_text_1.to_string(), json!({}));
-        let mut created1 = store.create_node(node1).await?;
+        let mut created1 = store.create_node(node1, None).await?;
         store.update_embedding(&created1.id, &emb1).await?;
         created1.embedding_vector = Some(emb1.clone());
 
         let node2 = Node::new("text".to_string(), similar_text_2.to_string(), json!({}));
-        let mut created2 = store.create_node(node2).await?;
+        let mut created2 = store.create_node(node2, None).await?;
         store.update_embedding(&created2.id, &emb2).await?;
         created2.embedding_vector = Some(emb2.clone());
 
         let node3 = Node::new("text".to_string(), dissimilar_text.to_string(), json!({}));
-        let mut created3 = store.create_node(node3).await?;
+        let mut created3 = store.create_node(node3, None).await?;
         store.update_embedding(&created3.id, &emb3).await?;
         created3.embedding_vector = Some(emb3);
 
@@ -4564,7 +4718,7 @@ mod tests {
                 format!("Performance test content {}", i),
                 json!({}),
             );
-            let created = store.create_node(node).await?;
+            let created = store.create_node(node, None).await?;
             store.update_embedding(&created.id, &base_vector).await?;
 
             if i % 1000 == 0 {
@@ -4609,11 +4763,11 @@ mod tests {
 
         // Create parent node
         let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
-        let parent = store.create_node(parent).await?;
+        let parent = store.create_node(parent, None).await?;
 
         // Create child atomically
         let child = store
-            .create_child_node_atomic(&parent.id, "text", "Child content", json!({}))
+            .create_child_node_atomic(&parent.id, "text", "Child content", json!({}), None)
             .await?;
 
         // Verify child was created
@@ -4634,7 +4788,7 @@ mod tests {
 
         // Create parent
         let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
-        let parent = store.create_node(parent).await?;
+        let parent = store.create_node(parent, None).await?;
 
         // Create task child atomically with properties
         let properties = json!({
@@ -4643,7 +4797,7 @@ mod tests {
         });
 
         let child = store
-            .create_child_node_atomic(&parent.id, "task", "Task content", properties)
+            .create_child_node_atomic(&parent.id, "task", "Task content", properties, None)
             .await?;
 
         // Verify properties were set
@@ -4664,7 +4818,7 @@ mod tests {
 
         // Try to create child with non-existent parent (should fail)
         let result = store
-            .create_child_node_atomic("non-existent-parent", "text", "Child", json!({}))
+            .create_child_node_atomic("non-existent-parent", "text", "Child", json!({}), None)
             .await;
 
         assert!(result.is_err());
@@ -4688,21 +4842,19 @@ mod tests {
 
         // Create parent1, parent2, and child
         let parent1 = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Parent 1".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Parent 1".to_string(), json!({})),
+                None,
+            )
             .await?;
         let parent2 = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Parent 2".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Parent 2".to_string(), json!({})),
+                None,
+            )
             .await?;
         let child = store
-            .create_child_node_atomic(&parent1.id, "text", "Child", json!({}))
+            .create_child_node_atomic(&parent1.id, "text", "Child", json!({}), None)
             .await?;
 
         // Verify child is under parent1
@@ -4729,14 +4881,13 @@ mod tests {
 
         // Create parent and child
         let parent = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Parent".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Parent".to_string(), json!({})),
+                None,
+            )
             .await?;
         let child = store
-            .create_child_node_atomic(&parent.id, "text", "Child", json!({}))
+            .create_child_node_atomic(&parent.id, "text", "Child", json!({}), None)
             .await?;
 
         // Move child to root
@@ -4758,14 +4909,13 @@ mod tests {
 
         // Create parent and child
         let parent = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Parent".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Parent".to_string(), json!({})),
+                None,
+            )
             .await?;
         let child = store
-            .create_child_node_atomic(&parent.id, "text", "Child", json!({}))
+            .create_child_node_atomic(&parent.id, "text", "Child", json!({}), None)
             .await?;
 
         // Try to move parent under child (would create cycle)
@@ -4785,18 +4935,17 @@ mod tests {
 
         // Create parent and child
         let parent = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Parent".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Parent".to_string(), json!({})),
+                None,
+            )
             .await?;
         let child = store
-            .create_child_node_atomic(&parent.id, "text", "Child", json!({}))
+            .create_child_node_atomic(&parent.id, "text", "Child", json!({}), None)
             .await?;
 
         // Delete parent (should cascade delete edges)
-        let result = store.delete_node_cascade_atomic(&parent.id).await?;
+        let result = store.delete_node_cascade_atomic(&parent.id, None).await?;
         assert!(result.existed);
 
         // Verify parent was deleted
@@ -4819,7 +4968,9 @@ mod tests {
         let (store, _temp_dir) = create_test_store().await?;
 
         // Delete non-existent node (should succeed idempotently)
-        let result = store.delete_node_cascade_atomic("non-existent-id").await?;
+        let result = store
+            .delete_node_cascade_atomic("non-existent-id", None)
+            .await?;
         assert!(!result.existed);
 
         Ok(())
@@ -4835,10 +4986,10 @@ mod tests {
             "Task content".to_string(),
             json!({"status": "TODO"}),
         );
-        let task = store.create_node(task).await?;
+        let task = store.create_node(task, None).await?;
 
         // Delete task (should delete both node and task-specific record)
-        let result = store.delete_node_cascade_atomic(&task.id).await?;
+        let result = store.delete_node_cascade_atomic(&task.id, None).await?;
         assert!(result.existed);
 
         // Verify complete deletion
@@ -4854,11 +5005,10 @@ mod tests {
 
         // Create text node
         let node = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Original text".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Original text".to_string(), json!({})),
+                None,
+            )
             .await?;
 
         // Switch to task type atomically
@@ -4867,6 +5017,7 @@ mod tests {
                 &node.id,
                 "task",
                 json!({"status": "TODO", "priority": "HIGH"}),
+                None,
             )
             .await?;
 
@@ -4887,16 +5038,19 @@ mod tests {
 
         // Create task node
         let task = store
-            .create_node(Node::new(
-                "task".to_string(),
-                "Task content".to_string(),
-                json!({"status": "done"}),
-            ))
+            .create_node(
+                Node::new(
+                    "task".to_string(),
+                    "Task content".to_string(),
+                    json!({"status": "done"}),
+                ),
+                None,
+            )
             .await?;
 
         // Switch to text type atomically
         let updated = store
-            .switch_node_type_atomic(&task.id, "text", json!({}))
+            .switch_node_type_atomic(&task.id, "text", json!({}), None)
             .await?;
 
         // Verify type switch
@@ -4914,21 +5068,20 @@ mod tests {
 
         // Create text node
         let node = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Content".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Content".to_string(), json!({})),
+                None,
+            )
             .await?;
 
         // Switch to task
         store
-            .switch_node_type_atomic(&node.id, "task", json!({"status": "TODO"}))
+            .switch_node_type_atomic(&node.id, "task", json!({"status": "TODO"}), None)
             .await?;
 
         // Switch back to text
         let _final_node = store
-            .switch_node_type_atomic(&node.id, "text", json!({}))
+            .switch_node_type_atomic(&node.id, "text", json!({}), None)
             .await?;
 
         // Fetch with properties to check variants map
@@ -4946,11 +5099,10 @@ mod tests {
 
         // Create parent
         let parent = store
-            .create_node(Node::new(
-                "text".to_string(),
-                "Parent".to_string(),
-                json!({}),
-            ))
+            .create_node(
+                Node::new("text".to_string(), "Parent".to_string(), json!({})),
+                None,
+            )
             .await?;
 
         // Measure create_child_node_atomic performance with multiple iterations
@@ -4961,7 +5113,13 @@ mod tests {
         for i in 0..ITERATIONS {
             let start = std::time::Instant::now();
             let _child = store
-                .create_child_node_atomic(&parent.id, "text", &format!("Child{}", i), json!({}))
+                .create_child_node_atomic(
+                    &parent.id,
+                    "text",
+                    &format!("Child{}", i),
+                    json!({}),
+                    None,
+                )
                 .await?;
             measurements.push(start.elapsed());
         }
@@ -5000,9 +5158,9 @@ mod tests {
         let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
         let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
 
-        store.create_node(root.clone()).await?;
-        store.create_node(child.clone()).await?;
-        store.create_node(grandchild.clone()).await?;
+        store.create_node(root.clone(), None).await?;
+        store.create_node(child.clone(), None).await?;
+        store.create_node(grandchild.clone(), None).await?;
 
         // Create edges: root -> child -> grandchild
         store.move_node(&child.id, Some(&root.id), None).await?;
@@ -5031,7 +5189,7 @@ mod tests {
 
         // Create a leaf node with no children
         let leaf = Node::new("text".to_string(), "Leaf".to_string(), json!({}));
-        store.create_node(leaf.clone()).await?;
+        store.create_node(leaf.clone(), None).await?;
 
         // Get nodes in subtree of leaf - should return empty vec
         let subtree_nodes = store.get_nodes_in_subtree(&leaf.id).await?;
@@ -5053,9 +5211,9 @@ mod tests {
         let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
         let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
 
-        store.create_node(root.clone()).await?;
-        store.create_node(child.clone()).await?;
-        store.create_node(grandchild.clone()).await?;
+        store.create_node(root.clone(), None).await?;
+        store.create_node(child.clone(), None).await?;
+        store.create_node(grandchild.clone(), None).await?;
 
         // Create edges: root -> child -> grandchild
         store.move_node(&child.id, Some(&root.id), None).await?;
