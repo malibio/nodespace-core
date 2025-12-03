@@ -14,9 +14,16 @@
 //! use nodespace_core::mcp::handlers::markdown::handle_create_nodes_from_markdown;
 //!
 //! async fn example(node_service: Arc<NodeService>) -> Result<(), Box<dyn std::error::Error>> {
+//!     // With explicit title
 //!     let params = json!({
-//!         "markdown_content": "# My Document\n\n- Task 1\n- Task 2",
-//!         "container_title": "Imported Notes"
+//!         "markdown_content": "- Task 1\n- Task 2",
+//!         "title": "# My Document"
+//!     });
+//!     let result = handle_create_nodes_from_markdown(&node_service, params).await?;
+//!
+//!     // Or let first line become the title automatically
+//!     let params = json!({
+//!         "markdown_content": "# My Document\n\n- Task 1\n- Task 2"
 //!     });
 //!     let result = handle_create_nodes_from_markdown(&node_service, params).await?;
 //!     println!("Created {} nodes", result["nodes_created"]);
@@ -44,39 +51,39 @@ const MAX_NODES_PER_IMPORT: usize = 1000;
 /// Parameters for create_nodes_from_markdown method
 #[derive(Debug, Deserialize)]
 pub struct CreateNodesFromMarkdownParams {
-    /// Markdown content to parse into child nodes.
+    /// Markdown content to parse into nodes.
     ///
-    /// IMPORTANT: Do NOT include the container_title text in markdown_content
-    /// to avoid creating duplicate nodes. The container_title creates a separate
-    /// container node, and all markdown_content nodes become children of it.
+    /// If `title` is provided, all nodes from markdown_content become children of the title node.
+    /// If `title` is NOT provided, the first line of markdown_content becomes the root node,
+    /// and remaining content becomes children of that root.
     ///
-    /// Example:
+    /// Example with title:
     /// ```text
-    /// // CORRECT
-    /// container_title: "# Project Alpha"
+    /// title: "# Project Alpha"
     /// markdown_content: "## Task 1\nDescription here"
-    /// // Creates: "# Project Alpha" (container) -> "## Task 1" (child) -> "Description" (child)
+    /// // Creates: "# Project Alpha" (root) -> "## Task 1" (child) -> "Description" (child)
+    /// ```
     ///
-    /// // INCORRECT
-    /// container_title: "# Project Alpha"
-    /// markdown_content: "# Project Alpha\n## Task 1\nDescription"
-    /// // Creates: "# Project Alpha" (container) -> "# Project Alpha" (duplicate child!) -> ...
+    /// Example without title (auto-extract first line):
+    /// ```text
+    /// markdown_content: "# Project Alpha\n## Task 1\nDescription here"
+    /// // Creates: "# Project Alpha" (root) -> "## Task 1" (child) -> "Description" (child)
     /// ```
     pub markdown_content: String,
 
-    /// Title for the root node (REQUIRED).
+    /// Optional title for the root node.
     ///
-    /// This creates a separate root node that all markdown_content nodes
+    /// If provided, creates a separate root node that all markdown_content nodes
     /// will be children of. Can be:
     /// - A date string (YYYY-MM-DD) to use/create a date root
     /// - Markdown text (e.g., "# My Document" or "Project Notes") to create a text/header root
     ///
+    /// If NOT provided, the first line of markdown_content is used as the root node title.
+    ///
     /// The parsed root type must be text, header, or date.
     /// Multi-line types (code-block, quote-block, ordered-list) cannot be roots.
-    ///
-    /// NOTE: Field name kept as `container_title` for MCP API backward compatibility.
-    /// Internally, this represents the "root" node in the graph-native architecture.
-    pub container_title: String,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Metadata for a created node (id + type)
@@ -242,13 +249,41 @@ where
         )));
     }
 
-    // Determine container strategy based on container_title
-    let container_strategy = if is_date_format(&params.container_title) {
-        // container_title is a date → use date as container
-        ContainerStrategy::DateContainer(params.container_title.clone())
+    // Determine title and remaining content
+    // If title is provided, use it; otherwise extract first line from markdown_content
+    let (title, remaining_content) = if let Some(ref title) = params.title {
+        // Title provided explicitly - use markdown_content as children
+        (title.clone(), params.markdown_content.clone())
     } else {
-        // container_title is markdown → parse it to create the container node
-        ContainerStrategy::TitleAsContainer(params.container_title.clone())
+        // No title - extract first non-empty line from markdown_content
+        let lines: Vec<&str> = params.markdown_content.lines().collect();
+        let first_line = lines
+            .iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                MCPError::invalid_params(
+                    "markdown_content is empty and no title provided".to_string(),
+                )
+            })?;
+
+        // Find where the first non-empty line is and take everything after it
+        let first_line_idx = lines
+            .iter()
+            .position(|line| !line.trim().is_empty())
+            .unwrap_or(0);
+        let remaining = lines[first_line_idx + 1..].join("\n");
+
+        (first_line, remaining)
+    };
+
+    // Determine container strategy based on title
+    let container_strategy = if is_date_format(&title) {
+        // title is a date → use date as container
+        ContainerStrategy::DateContainer(title.clone())
+    } else {
+        // title is markdown → parse it to create the container node
+        ContainerStrategy::TitleAsContainer(title.clone())
     };
 
     let mut context = ParserContext::new_with_strategy(container_strategy.clone());
@@ -287,8 +322,8 @@ where
         context.first_node_created = true;
     }
 
-    // Parse the main markdown content
-    parse_markdown(&params.markdown_content, node_service, &mut context).await?;
+    // Parse the remaining markdown content (children of the root node)
+    parse_markdown(&remaining_content, node_service, &mut context).await?;
 
     // Validate we didn't exceed max nodes
     if context.nodes.len() > MAX_NODES_PER_IMPORT {
