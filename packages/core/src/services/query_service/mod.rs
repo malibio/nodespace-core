@@ -187,7 +187,79 @@ impl QueryService {
             }
         }
 
+        // Re-apply sorting in Rust to guarantee sort order
+        // This is necessary because spoke queries with record links may not preserve
+        // ORDER BY semantics through the fetch cycle
+        if let Some(sorting) = &query.sorting {
+            self.sort_nodes(&mut nodes, sorting);
+        }
+
         Ok(nodes)
+    }
+
+    /// Sort nodes in-place according to the sort configuration
+    fn sort_nodes(&self, nodes: &mut [Node], sorting: &[SortConfig]) {
+        if sorting.is_empty() {
+            return;
+        }
+
+        nodes.sort_by(|a, b| {
+            for sort_config in sorting {
+                let ordering = self.compare_nodes_by_field(a, b, &sort_config.field);
+                let ordering = match sort_config.direction {
+                    SortDirection::Ascending => ordering,
+                    SortDirection::Descending => ordering.reverse(),
+                };
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+    }
+
+    /// Compare two nodes by a specific field
+    fn compare_nodes_by_field(&self, a: &Node, b: &Node, field: &str) -> std::cmp::Ordering {
+        match field {
+            // Metadata fields
+            "created_at" => a.created_at.cmp(&b.created_at),
+            "modified_at" => a.modified_at.cmp(&b.modified_at),
+            "content" => a.content.cmp(&b.content),
+            "node_type" => a.node_type.cmp(&b.node_type),
+            // Type-specific properties (accessed via properties JSON)
+            _ => {
+                let val_a = a.properties.get(field);
+                let val_b = b.properties.get(field);
+                self.compare_json_values(val_a, val_b)
+            }
+        }
+    }
+
+    /// Compare two JSON values for sorting
+    fn compare_json_values(
+        &self,
+        a: Option<&serde_json::Value>,
+        b: Option<&serde_json::Value>,
+    ) -> std::cmp::Ordering {
+        match (a, b) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(va), Some(vb)) => {
+                // Compare based on JSON value type
+                match (va, vb) {
+                    (serde_json::Value::String(sa), serde_json::Value::String(sb)) => sa.cmp(sb),
+                    (serde_json::Value::Number(na), serde_json::Value::Number(nb)) => {
+                        let fa = na.as_f64().unwrap_or(0.0);
+                        let fb = nb.as_f64().unwrap_or(0.0);
+                        fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                    (serde_json::Value::Bool(ba), serde_json::Value::Bool(bb)) => ba.cmp(bb),
+                    // For mixed types or arrays/objects, convert to string and compare
+                    _ => va.to_string().cmp(&vb.to_string()),
+                }
+            }
+        }
     }
 
     /// Execute query and return matching node IDs
@@ -203,7 +275,6 @@ impl QueryService {
             .context("Failed to execute ID query")?;
 
         // Extract records with Thing IDs
-        use serde::{Deserialize, Serialize};
         use surrealdb::sql::Thing;
 
         #[derive(Debug, Serialize, Deserialize)]
@@ -253,7 +324,10 @@ impl QueryService {
 
     /// Build spoke-centric query for types with spoke tables
     ///
-    /// Query pattern: SELECT * FROM task WHERE status = 'open' AND node.created_at >= ...
+    /// Query pattern: SELECT * FROM task WHERE status = 'open' AND node.created_at >= ... FETCH node
+    ///
+    /// Note: FETCH node is required to resolve the hub record link before sorting/filtering
+    /// on hub fields like content, created_at, etc.
     fn build_spoke_query(&self, query: &QueryDefinition) -> Result<String> {
         let mut sql = format!("SELECT * FROM {}", query.target_type);
         let mut conditions = Vec::new();
@@ -299,7 +373,9 @@ impl QueryService {
             sql.push_str(&format!(" LIMIT {}", limit));
         }
 
-        sql.push(';');
+        // FETCH node to resolve the hub record link for proper sorting/filtering
+        // This is required because ORDER BY node.content needs the node link resolved
+        sql.push_str(" FETCH node;");
         Ok(sql)
     }
 
