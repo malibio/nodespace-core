@@ -495,6 +495,10 @@ where
     // Track the last text paragraph for bullet/ordered-list hierarchy
     let mut last_text_node: Option<(String, usize)> = None; // (node_id, indent_level)
 
+    // Track the last content node (header or text) for code-block/quote-block hierarchy
+    // Code blocks and quote blocks should be children of the immediately preceding content
+    let mut last_content_node: Option<String> = None; // node_id
+
     // Track last sibling created per parent to maintain document order
     // Key: parent_id (or empty string for root-level nodes)
     // Value: last sibling node_id created under that parent
@@ -642,7 +646,11 @@ where
         }
 
         // Determine parent based on bullet/ordered-list rules, heading hierarchy, and indentation
-        let parent_id = if is_bullet && !is_multiline {
+        let parent_id = if node_type == "code-block" || node_type == "quote-block" {
+            // Code blocks and quote blocks - children of immediately preceding content node
+            // This creates semantic grouping: "Description text" → code example
+            last_content_node.clone().or_else(|| context.current_parent_id())
+        } else if is_bullet && !is_multiline {
             // Bullets - should be children of preceding text paragraph OR indented under previous bullet
             // Check indent_stack first for indented bullets (child of previous bullet)
             // Then check last_text_node for bullets at base level (child of text paragraph)
@@ -718,6 +726,12 @@ where
         } else if node_type != "text" {
             // Non-text node breaks the text context for bullets/lists
             last_text_node = None;
+        }
+
+        // Track last content node (header or text) for code-block/quote-block hierarchy
+        // Code-blocks and quote-blocks become children of the immediately preceding content
+        if node_type == "header" || (node_type == "text" && !is_bullet) {
+            last_content_node = Some(node_id.clone());
         }
 
         // Push to indent stack if this line had indentation OR is a bullet (for nested bullets)
@@ -915,7 +929,8 @@ where
 
 /// Recursively export node hierarchy to markdown
 ///
-/// Uses graph traversal via NodeService to get children in correct order
+/// Uses graph traversal via NodeService to get children in correct order.
+/// Automatically adds bullet formatting for text nodes under headers when appropriate.
 fn export_node_hierarchy<'a, C>(
     node_service: &'a Arc<NodeService<C>>,
     node: &Node,
@@ -930,6 +945,7 @@ where
     let node_id = node.id.clone();
     let node_version = node.version;
     let node_content = node.content.clone();
+    let node_type = node.node_type.clone();
 
     Box::pin(async move {
         // Prevent infinite recursion
@@ -945,6 +961,16 @@ where
             return Ok(());
         }
 
+        // Get children to check conditions for bullet formatting
+        let children = if include_children {
+            node_service
+                .get_children(&node_id)
+                .await
+                .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?
+        } else {
+            Vec::new()
+        };
+
         // Add minimal metadata comment with ID and version for OCC
         output.push_str(&format!("<!-- {} v{} -->\n", node_id, node_version));
 
@@ -952,22 +978,117 @@ where
         output.push_str(&node_content);
         output.push_str("\n\n");
 
-        // Recursively export children (if enabled)
-        if include_children {
-            // Get children using graph traversal (already sorted by edge order)
-            let children = node_service
-                .get_children(&node_id)
-                .await
-                .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
+        // Export children with parent context for bullet formatting
+        if include_children && !children.is_empty() {
+            let export_ctx = ExportContext {
+                parent_type: &node_type,
+                sibling_count: children.len(),
+            };
 
             for child in &children {
-                export_node_hierarchy(
+                export_node_with_context(
                     node_service,
                     child,
                     output,
                     current_depth + 1,
                     max_depth,
                     include_children,
+                    export_ctx,
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    })
+}
+
+/// Context for exporting nodes with bullet formatting
+#[derive(Clone, Copy)]
+struct ExportContext<'a> {
+    parent_type: &'a str,
+    sibling_count: usize,
+}
+
+/// Export node with parent context for bullet formatting
+///
+/// Adds "- " prefix to text nodes when:
+/// 1. Node is a text node
+/// 2. Parent is a header node
+/// 3. Parent has 2+ children (indicates a list, not single descriptive text)
+/// 4. Node has no children itself
+fn export_node_with_context<'a, C>(
+    node_service: &'a Arc<NodeService<C>>,
+    node: &Node,
+    output: &'a mut String,
+    current_depth: usize,
+    max_depth: usize,
+    include_children: bool,
+    context: ExportContext<'a>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), MCPError>> + Send + 'a>>
+where
+    C: surrealdb::Connection + 'a,
+{
+    let node_id = node.id.clone();
+    let node_version = node.version;
+    let node_content = node.content.clone();
+    let node_type = node.node_type.clone();
+
+    Box::pin(async move {
+        // Prevent infinite recursion
+        if current_depth >= max_depth {
+            let content_preview: String = node_content.chars().take(50).collect();
+            tracing::warn!(
+                "Max depth {} reached at node {} (content: {}{})",
+                max_depth,
+                node_id,
+                content_preview,
+                if node_content.len() > 50 { "..." } else { "" }
+            );
+            return Ok(());
+        }
+
+        // Get children to check conditions
+        let children = node_service
+            .get_children(&node_id)
+            .await
+            .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
+
+        let has_children = !children.is_empty();
+
+        // Determine if this node should be rendered as a bullet item
+        // Rules: text node + header parent + 2+ siblings + no children
+        let should_render_as_bullet = node_type == "text"
+            && context.parent_type == "header"
+            && context.sibling_count >= 2
+            && !has_children;
+
+        // Add minimal metadata comment with ID and version for OCC
+        output.push_str(&format!("<!-- {} v{} -->\n", node_id, node_version));
+
+        // Add content with bullet prefix if applicable
+        if should_render_as_bullet {
+            output.push_str("- ");
+        }
+        output.push_str(&node_content);
+        output.push_str("\n\n");
+
+        // Recursively export children with context
+        if include_children && !children.is_empty() {
+            let child_ctx = ExportContext {
+                parent_type: &node_type,
+                sibling_count: children.len(),
+            };
+
+            for child in &children {
+                export_node_with_context(
+                    node_service,
+                    child,
+                    output,
+                    current_depth + 1,
+                    max_depth,
+                    include_children,
+                    child_ctx,
                 )
                 .await?;
             }
