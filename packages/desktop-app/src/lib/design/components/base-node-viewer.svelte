@@ -1097,6 +1097,53 @@
     }
   }
 
+  /**
+   * Extract display content for fallback BaseNode rendering (when plugin component hasn't loaded yet)
+   * Strips syntax markers that would normally be stripped by the specialized component
+   *
+   * This addresses the race condition where lazy-loaded components haven't finished loading
+   * but we need to render content without raw syntax markers (like ``` for code-blocks)
+   */
+  function extractFallbackDisplayContent(content: string, nodeType: string): string | undefined {
+    switch (nodeType) {
+      case 'code-block': {
+        // Strip code fence markers for view mode (matches code-block-node.svelte logic)
+        // Replace ```language with empty, keep content, replace closing ``` with newline
+        const result = content.replace(/^```\w*/, '').replace(/```$/, '\n');
+        return result;
+      }
+
+      case 'header':
+        // Strip leading # symbols for header display (matches header node display)
+        return content.replace(/^#+\s*/, '');
+
+      case 'quote-block':
+        // Strip leading > for quote blocks
+        return content.replace(/^>\s*/, '');
+
+      default:
+        // No stripping needed for other types
+        return undefined;
+    }
+  }
+
+  /**
+   * Get fallback metadata for BaseNode when plugin component hasn't loaded yet
+   * Provides essential flags like disableMarkdown for code-blocks
+   */
+  function extractFallbackMetadata(nodeType: string, properties: Record<string, unknown> | undefined): Record<string, unknown> {
+    const base = properties || {};
+
+    switch (nodeType) {
+      case 'code-block':
+        // Code blocks should not process markdown
+        return { ...base, disableMarkdown: true };
+
+      default:
+        return base;
+    }
+  }
+
   // Issue #709: Type-specific schema forms loaded via plugin registry
   // Core types (task, date, entity) use hardcoded forms for compile-time type safety
   // User-defined types fall back to generic SchemaPropertyForm
@@ -1474,14 +1521,16 @@
             {/key}
           {:else}
             <!-- Final fallback to BaseNode with key for re-rendering -->
+            <!-- Fallback applies syntax stripping for known types (code-block, header, quote-block) -->
             {#key `${node.id}-${node.nodeType}`}
               <BaseNode
                 nodeId={node.id}
                 nodeType={node.nodeType}
                 autoFocus={node.autoFocus}
                 content={node.content}
+                displayContent={extractFallbackDisplayContent(node.content, node.nodeType)}
                 children={node.children}
-                metadata={node.properties || {}}
+                metadata={extractFallbackMetadata(node.nodeType, node.properties)}
                 editableConfig={{ allowMultiline: true }}
                 on:createNewNode={handleCreateNewNode}
                 on:indentNode={handleIndentNode}
