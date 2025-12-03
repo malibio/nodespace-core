@@ -151,6 +151,9 @@
   // Use $state for reactive Set mutations
   let autoFocusNodes = $state(new Set<string>());
 
+  // Track if the viewer header input is being edited (for view/edit mode display)
+  let isHeaderBeingEdited = $state(false);
+
   /**
    * Visible nodes derived from ReactiveStructureTree + ReactiveNodeData (Issue #555)
    *
@@ -318,6 +321,18 @@
       onTitleChange(formatTabTitle(content));
     }
   }
+
+  /**
+   * Compute header display value (view mode - strips markdown syntax)
+   * Similar to HeaderNode pattern: show clean title when not editing
+   */
+  let headerDisplayValue = $derived.by(() => {
+    const rawContent = currentViewedNode?.content || '';
+    if (!rawContent) return '';
+
+    // Strip markdown header syntax (same logic as formatTabTitle)
+    return rawContent.replace(/^#+\s*/, '');
+  });
 
   /**
    * Handle header content changes (for default editable header)
@@ -1272,8 +1287,10 @@
       <input
         type="text"
         class="header-input"
-        value={currentViewedNode?.content || ''}
+        value={isHeaderBeingEdited ? (currentViewedNode?.content || '') : headerDisplayValue}
         oninput={(e) => handleHeaderInput(e.currentTarget.value)}
+        onfocus={() => (isHeaderBeingEdited = true)}
+        onblur={() => (isHeaderBeingEdited = false)}
         placeholder="Untitled"
         aria-label="Page title"
       />
