@@ -729,9 +729,24 @@ Third paragraph"#;
         assert_eq!(second.content, "Second paragraph");
         assert_eq!(third.content, "Third paragraph");
 
-        // Note: Sibling ordering is now on has_child edge order field, not node.before_sibling_id
-        // Verify content nodes are children of the container via get_children ordering
-        // All content nodes should have the same parent (the container - verified via edges)
+        // Verify ordering via get_children - this is the key test!
+        // get_children returns nodes ordered by has_child edge order field (ORDER BY order ASC)
+        let children = node_service.get_children(&container.id).await.unwrap();
+        assert_eq!(children.len(), 3, "Expected 3 children");
+
+        // Verify document order is preserved (not reversed!)
+        assert_eq!(
+            children[0].content, "First paragraph",
+            "First child should be 'First paragraph'"
+        );
+        assert_eq!(
+            children[1].content, "Second paragraph",
+            "Second child should be 'Second paragraph'"
+        );
+        assert_eq!(
+            children[2].content, "Third paragraph",
+            "Third child should be 'Third paragraph'"
+        );
     }
 
     #[tokio::test]

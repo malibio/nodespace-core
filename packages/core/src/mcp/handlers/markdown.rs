@@ -36,6 +36,7 @@ use crate::models::Node;
 use crate::services::{CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Maximum markdown content size (1MB) to prevent resource exhaustion
@@ -494,6 +495,11 @@ where
     // Track the last text paragraph for bullet/ordered-list hierarchy
     let mut last_text_node: Option<(String, usize)> = None; // (node_id, indent_level)
 
+    // Track last sibling created per parent to maintain document order
+    // Key: parent_id (or empty string for root-level nodes)
+    // Value: last sibling node_id created under that parent
+    let mut last_sibling_per_parent: HashMap<String, String> = HashMap::new();
+
     // Process markdown line by line, collecting text paragraphs
     let lines: Vec<&str> = markdown.lines().collect();
     let mut i = 0;
@@ -682,16 +688,23 @@ where
                 .or_else(|| context.current_parent_id())
         };
 
-        // Create the node (always append to end with fractional ordering)
+        // Look up the last sibling created under this parent to maintain document order
+        let parent_key = parent_id.clone().unwrap_or_default();
+        let insert_after = last_sibling_per_parent.get(&parent_key).cloned();
+
+        // Create the node (insert after last sibling to preserve document order)
         let node_id = create_node(
             node_service,
             node_type,
             &content,
             parent_id.clone(),
             context.root_id.clone(),
-            None, // Fractional ordering handles positioning on edges
+            insert_after, // Insert after last sibling to maintain document order
         )
         .await?;
+
+        // Track this node as the last sibling for its parent
+        last_sibling_per_parent.insert(parent_key, node_id.clone());
 
         // Update heading stack if this was a header
         if let Some(h_level) = heading_level {
@@ -730,14 +743,14 @@ async fn create_node<C>(
     content: &str,
     parent_id: Option<String>,
     _root_node_id: Option<String>, // Deprecated - kept for backward compat but ignored (root auto-derived from parent)
-    _before_sibling_id: Option<String>, // Deprecated - sibling ordering now handled by edge order field
+    insert_after_node_id: Option<String>, // Insert after this sibling (None = insert at beginning)
 ) -> Result<String, MCPError>
 where
     C: surrealdb::Connection,
 {
     // Create node via NodeService (enforces all business rules)
     // Note: container/root is now auto-derived from parent chain by backend
-    // Note: sibling ordering is now handled via has_child edge order field
+    // Note: sibling ordering uses insert_after_node_id to maintain document order
 
     // Provide required properties based on node type
     let properties = match node_type {
@@ -755,7 +768,7 @@ where
             node_type: node_type.to_string(),
             content: content.to_string(),
             parent_id,
-            insert_after_node_id: None, // Ordering handled by edge order field
+            insert_after_node_id, // Insert after last sibling to preserve document order
             properties,
         })
         .await
