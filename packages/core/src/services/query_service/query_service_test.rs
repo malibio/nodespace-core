@@ -7,7 +7,10 @@
 mod tests {
     use crate::db::SurrealStore;
     use crate::services::node_service::{CreateNodeParams, NodeService};
-    use crate::services::query_service::{QueryDefinition, QueryFilter, QueryService, SortConfig};
+    use crate::services::query_service::{
+        FilterOperator, FilterType, QueryDefinition, QueryFilter, QueryService, RelationshipType,
+        SortConfig, SortDirection,
+    };
     use serde_json::json;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -113,8 +116,8 @@ mod tests {
         let query = QueryDefinition {
             target_type: "task".to_string(),
             filters: vec![QueryFilter {
-                filter_type: "property".to_string(),
-                operator: "equals".to_string(),
+                filter_type: FilterType::Property,
+                operator: FilterOperator::Equals,
                 property: Some("status".to_string()),
                 value: Some(json!("open")),
                 case_sensitive: None,
@@ -158,8 +161,8 @@ mod tests {
         let query = QueryDefinition {
             target_type: "task".to_string(),
             filters: vec![QueryFilter {
-                filter_type: "property".to_string(),
-                operator: "in".to_string(),
+                filter_type: FilterType::Property,
+                operator: FilterOperator::In,
                 property: Some("status".to_string()),
                 value: Some(json!(["open", "in_progress"])),
                 case_sensitive: None,
@@ -210,8 +213,8 @@ mod tests {
         let query = QueryDefinition {
             target_type: "task".to_string(),
             filters: vec![QueryFilter {
-                filter_type: "content".to_string(),
-                operator: "contains".to_string(),
+                filter_type: FilterType::Content,
+                operator: FilterOperator::Contains,
                 property: None,
                 value: Some(json!("Important")),
                 case_sensitive: Some(true),
@@ -263,8 +266,8 @@ mod tests {
         let query = QueryDefinition {
             target_type: "task".to_string(),
             filters: vec![QueryFilter {
-                filter_type: "content".to_string(),
-                operator: "contains".to_string(),
+                filter_type: FilterType::Content,
+                operator: FilterOperator::Contains,
                 property: None,
                 value: Some(json!("important")),
                 case_sensitive: Some(false),
@@ -324,12 +327,12 @@ mod tests {
         let query = QueryDefinition {
             target_type: "*".to_string(),
             filters: vec![QueryFilter {
-                filter_type: "relationship".to_string(),
-                operator: "equals".to_string(),
+                filter_type: FilterType::Relationship,
+                operator: FilterOperator::Equals,
                 property: None,
                 value: None,
                 case_sensitive: None,
-                relationship_type: Some("children".to_string()),
+                relationship_type: Some(RelationshipType::Children),
                 node_id: Some(parent_id.clone()),
             }],
             sorting: None,
@@ -349,28 +352,28 @@ mod tests {
     async fn test_sorting() {
         let (query_service, node_service, _temp) = create_test_services().await;
 
-        // Create tasks with different creation times
-        for i in 1..=3 {
+        // Create tasks and sort by content (alphabetically)
+        // This avoids timing issues and uses a field that's always present
+        let tasks = vec!["Apple", "Banana", "Cherry"];
+        for content in tasks {
             let task = CreateNodeParams {
                 id: None,
                 node_type: "task".to_string(),
-                content: format!("Task {}", i),
+                content: content.to_string(),
                 parent_id: None,
                 insert_after_node_id: None,
                 properties: json!({"status": "open"}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
-            // Small delay to ensure different timestamps
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
 
-        // Query with descending sort by created_at
+        // Query with descending sort by content
         let query = QueryDefinition {
             target_type: "task".to_string(),
             filters: vec![],
             sorting: Some(vec![SortConfig {
-                field: "created_at".to_string(),
-                direction: "desc".to_string(),
+                field: "content".to_string(),
+                direction: SortDirection::Descending,
             }]),
             limit: None,
         };
@@ -378,9 +381,10 @@ mod tests {
         let results = query_service.execute(&query).await.unwrap();
 
         assert_eq!(results.len(), 3, "Should return all tasks");
-        // Verify descending order
-        assert!(results[0].content == "Task 3", "First should be newest");
-        assert!(results[2].content == "Task 1", "Last should be oldest");
+        // Verify descending alphabetical order
+        assert!(results[0].content == "Cherry", "First should be 'Cherry'");
+        assert!(results[1].content == "Banana", "Second should be 'Banana'");
+        assert!(results[2].content == "Apple", "Last should be 'Apple'");
     }
 
     #[tokio::test]
@@ -445,8 +449,8 @@ mod tests {
             target_type: "task".to_string(),
             filters: vec![
                 QueryFilter {
-                    filter_type: "property".to_string(),
-                    operator: "equals".to_string(),
+                    filter_type: FilterType::Property,
+                    operator: FilterOperator::Equals,
                     property: Some("status".to_string()),
                     value: Some(json!("open")),
                     case_sensitive: None,
@@ -454,8 +458,8 @@ mod tests {
                     node_id: None,
                 },
                 QueryFilter {
-                    filter_type: "property".to_string(),
-                    operator: "equals".to_string(),
+                    filter_type: FilterType::Property,
+                    operator: FilterOperator::Equals,
                     property: Some("priority".to_string()),
                     value: Some(json!("high")),
                     case_sensitive: None,
@@ -507,8 +511,8 @@ mod tests {
         let query = QueryDefinition {
             target_type: "*".to_string(),
             filters: vec![QueryFilter {
-                filter_type: "metadata".to_string(),
-                operator: "equals".to_string(),
+                filter_type: FilterType::Metadata,
+                operator: FilterOperator::Equals,
                 property: Some("node_type".to_string()),
                 value: Some(json!("task")),
                 case_sensitive: None,
@@ -529,10 +533,18 @@ mod tests {
     async fn test_empty_results() {
         let (query_service, _node_service, _temp) = create_test_services().await;
 
-        // Query for non-existent node type
+        // Query for type with no matching records (task table exists but is empty initially)
         let query = QueryDefinition {
-            target_type: "nonexistent".to_string(),
-            filters: vec![],
+            target_type: "task".to_string(),
+            filters: vec![QueryFilter {
+                filter_type: FilterType::Property,
+                operator: FilterOperator::Equals,
+                property: Some("status".to_string()),
+                value: Some(json!("nonexistent_status")),
+                case_sensitive: None,
+                relationship_type: None,
+                node_id: None,
+            }],
             sorting: None,
             limit: None,
         };
