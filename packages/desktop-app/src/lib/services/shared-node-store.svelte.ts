@@ -413,6 +413,9 @@ export class SharedNodeStore {
   // Track pending tree loads to prevent duplicate concurrent loads from multiple tabs
   private pendingTreeLoads = new Map<string, Promise<Node[]>>();
 
+  // Track nodes currently being resynced to prevent concurrent resync operations
+  private resyncingNodes = new Set<string>();
+
   private constructor() {
     // Private constructor for singleton
   }
@@ -1830,10 +1833,25 @@ export class SharedNodeStore {
   /**
    * Resync node from server after OCC error
    *
-   * Fetches the current server state and replaces the local node entirely.
-   * This ensures the node is no longer stuck after a version conflict.
+   * Implements a "server-wins" conflict resolution strategy:
+   * - Fetches the current server state and replaces the local node entirely
+   * - User's pending edits are discarded in favor of server state
+   * - This ensures the node is no longer stuck after a version conflict
+   *
+   * Idempotent: Safe to call multiple times for the same node.
+   * Concurrent calls for the same node will be ignored.
+   *
+   * Future enhancement: Implement conflict merge UI (see #720 non-goals)
    */
   async resyncNodeFromServer(nodeId: string): Promise<void> {
+    // Idempotency guard: prevent concurrent resync operations on same node
+    if (this.resyncingNodes.has(nodeId)) {
+      console.debug(`[SharedNodeStore] Resync already in progress for node ${nodeId}`);
+      return;
+    }
+
+    this.resyncingNodes.add(nodeId);
+
     try {
       const serverNode = await tauriCommands.getNode(nodeId);
 
@@ -1871,6 +1889,9 @@ export class SharedNodeStore {
         error
       );
       throw error;
+    } finally {
+      // Always clean up tracking set, even on error
+      this.resyncingNodes.delete(nodeId);
     }
   }
 
