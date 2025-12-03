@@ -81,6 +81,8 @@
   let assigneeOpen = $state(false);
   let assigneeSearch = $state('');
   let dueDateOpen = $state(false);
+  let startedAtOpen = $state(false);
+  let completedAtOpen = $state(false);
 
   /**
    * Assignee options - currently empty placeholder
@@ -537,7 +539,7 @@
             {@const startedAtValue = parseDateFromBackend(node.startedAt)}
             <div class="space-y-2">
               <label for="task-started-at" class="text-sm font-medium">Started At</label>
-              <Popover.Root>
+              <Popover.Root bind:open={startedAtOpen}>
                 <Popover.Trigger
                   id="task-started-at"
                   class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
@@ -569,6 +571,7 @@
                     onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
                       const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
                       updateStartedAt(formatDateForStorage(singleValue));
+                      startedAtOpen = false;
                     }}
                     type="single"
                   />
@@ -582,7 +585,7 @@
             {@const completedAtValue = parseDateFromBackend(node.completedAt)}
             <div class="space-y-2">
               <label for="task-completed-at" class="text-sm font-medium">Completed At</label>
-              <Popover.Root>
+              <Popover.Root bind:open={completedAtOpen}>
                 <Popover.Trigger
                   id="task-completed-at"
                   class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
@@ -614,6 +617,7 @@
                     onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
                       const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
                       updateCompletedAt(formatDateForStorage(singleValue));
+                      completedAtOpen = false;
                     }}
                     type="single"
                   />

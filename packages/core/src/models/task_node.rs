@@ -66,6 +66,7 @@ mod flexible_date {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     /// Serialize DateTime<Utc> as ISO8601 string
+    #[allow(dead_code)]
     pub fn serialize<S>(
         date: &Option<Option<DateTime<Utc>>>,
         serializer: S,
@@ -81,6 +82,8 @@ mod flexible_date {
     }
 
     /// Deserialize from either "YYYY-MM-DD" or full ISO8601 format
+    /// Used with `#[serde(with = "flexible_date")]` - handles field present/absent via serde
+    #[allow(dead_code)]
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<DateTime<Utc>>>, D::Error>
     where
         D: Deserializer<'de>,
@@ -89,28 +92,50 @@ mod flexible_date {
         match opt {
             None => Ok(None),             // Field not present - don't change
             Some(None) => Ok(Some(None)), // Field is null - clear value
-            Some(Some(s)) => {
-                // Try full ISO8601 first
-                if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
-                    return Ok(Some(Some(dt.with_timezone(&Utc))));
-                }
-                // Try "YYYY-MM-DDTHH:MM:SSZ" format
-                if let Ok(dt) = s.parse::<DateTime<Utc>>() {
-                    return Ok(Some(Some(dt)));
-                }
-                // Try date-only "YYYY-MM-DD" format
-                if let Ok(date) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                    let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-                    return Ok(Some(Some(DateTime::from_naive_utc_and_offset(
-                        datetime, Utc,
-                    ))));
-                }
-                Err(serde::de::Error::custom(format!(
-                    "Invalid date format: '{}'. Expected YYYY-MM-DD or ISO8601",
-                    s
-                )))
-            }
+            Some(Some(s)) => parse_date_string(&s).map_err(serde::de::Error::custom),
         }
+    }
+
+    /// Deserialize with explicit null handling for `#[serde(deserialize_with = "...")]`
+    ///
+    /// When using `deserialize_with` with `default`, serde calls this function only when
+    /// the field is present. This function properly maps JSON `null` to `Some(None)`.
+    pub fn deserialize_with_null<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<Option<DateTime<Utc>>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // When using deserialize_with, we receive the raw value (null or string)
+        // wrapped in Option only once (not Option<Option<String>>)
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        match opt {
+            None => Ok(Some(None)), // Field is null - clear value (the key insight!)
+            Some(s) => parse_date_string(&s).map_err(serde::de::Error::custom),
+        }
+    }
+
+    /// Parse a date string into DateTime<Utc>
+    fn parse_date_string(s: &str) -> Result<Option<Option<DateTime<Utc>>>, String> {
+        // Try full ISO8601 first
+        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+            return Ok(Some(Some(dt.with_timezone(&Utc))));
+        }
+        // Try "YYYY-MM-DDTHH:MM:SSZ" format
+        if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+            return Ok(Some(Some(dt)));
+        }
+        // Try date-only "YYYY-MM-DD" format
+        if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+            return Ok(Some(Some(DateTime::from_naive_utc_and_offset(
+                datetime, Utc,
+            ))));
+        }
+        Err(format!(
+            "Invalid date format: '{}'. Expected YYYY-MM-DD or ISO8601",
+            s
+        ))
     }
 }
 
@@ -742,7 +767,7 @@ pub struct TaskNodeUpdate {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "flexible_date"
+        deserialize_with = "flexible_date::deserialize_with_null"
     )]
     pub due_date: Option<Option<DateTime<Utc>>>,
 
@@ -762,7 +787,7 @@ pub struct TaskNodeUpdate {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "flexible_date"
+        deserialize_with = "flexible_date::deserialize_with_null"
     )]
     pub started_at: Option<Option<DateTime<Utc>>>,
 
@@ -775,7 +800,7 @@ pub struct TaskNodeUpdate {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "flexible_date"
+        deserialize_with = "flexible_date::deserialize_with_null"
     )]
     pub completed_at: Option<Option<DateTime<Utc>>>,
 
@@ -844,5 +869,50 @@ impl TaskNodeUpdate {
     /// Check if this update contains hub fields (requires hub table update)
     pub fn has_hub_fields(&self) -> bool {
         self.content.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_node_update_null_started_at() {
+        // This is the JSON sent when user clicks to clear a date
+        let json = r#"{"startedAt": null}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+
+        // started_at should be Some(None) to indicate "clear this field"
+        // NOT None which means "don't change this field"
+        assert!(
+            update.started_at.is_some(),
+            "started_at should be Some(None) for null value, but got None"
+        );
+        assert!(
+            update.started_at.unwrap().is_none(),
+            "Inner value should be None (clear the field)"
+        );
+
+        // is_empty() should return false because we're explicitly clearing the field
+        assert!(
+            !update.is_empty(),
+            "Update should NOT be empty when clearing started_at"
+        );
+    }
+
+    #[test]
+    fn test_task_node_update_absent_started_at() {
+        // When field is absent, it should be None (don't change)
+        let json = r#"{}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+
+        assert!(
+            update.started_at.is_none(),
+            "started_at should be None when absent"
+        );
+        assert!(
+            update.is_empty(),
+            "Empty JSON should result in empty update"
+        );
     }
 }
