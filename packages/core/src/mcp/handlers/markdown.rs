@@ -649,7 +649,9 @@ where
         let parent_id = if node_type == "code-block" || node_type == "quote-block" {
             // Code blocks and quote blocks - children of immediately preceding content node
             // This creates semantic grouping: "Description text" → code example
-            last_content_node.clone().or_else(|| context.current_parent_id())
+            last_content_node
+                .clone()
+                .or_else(|| context.current_parent_id())
         } else if is_bullet && !is_multiline {
             // Bullets - should be children of preceding text paragraph OR indented under previous bullet
             // Check indent_stack first for indented bullets (child of previous bullet)
@@ -1057,9 +1059,11 @@ where
         let has_children = !children.is_empty();
 
         // Determine if this node should be rendered as a bullet item
-        // Rules: text node + header parent + 2+ siblings + no children
+        // Rules: text node + (header OR text) parent + 2+ siblings + no children
+        // This covers both direct header children and label→list patterns
         let should_render_as_bullet = node_type == "text"
-            && context.parent_type == "header"
+            && node_content.len() < 100  // Short text likely a bullet item
+            && (context.parent_type == "header" || context.parent_type == "text")
             && context.sibling_count >= 2
             && !has_children;
 

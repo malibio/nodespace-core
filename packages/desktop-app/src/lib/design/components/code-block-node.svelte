@@ -27,12 +27,14 @@
   // Alphabetically sorted with 'plaintext' as default first option
   const LANGUAGES = [
     'plaintext', // Default - always first
+    'bash',
     'cpp',
     'css',
     'go',
     'html',
     'java',
     'javascript',
+    'json',
     'kotlin',
     'markdown',
     'php',
@@ -42,7 +44,9 @@
     'shell',
     'sql',
     'swift',
-    'typescript'
+    'toml',
+    'typescript',
+    'yaml'
   ];
 
   /**
