@@ -1909,7 +1909,8 @@ mod tests {
         assert!(types.contains(&"ordered-list".to_string()));
         assert!(types.contains(&"date".to_string()));
         assert!(types.contains(&"schema".to_string()));
-        assert_eq!(types.len(), 8);
+        assert!(types.contains(&"query".to_string()));
+        assert_eq!(types.len(), 9);
     }
 
     #[test]

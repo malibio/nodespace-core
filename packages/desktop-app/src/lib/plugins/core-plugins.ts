@@ -427,6 +427,7 @@ export const queryNodePlugin: PluginDefinition = {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
   }
+  // viewer: QueryNodeViewer implemented in Issue #441
 };
 
 export const documentNodePlugin: PluginDefinition = {

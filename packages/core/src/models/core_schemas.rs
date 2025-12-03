@@ -449,8 +449,11 @@ mod tests {
         let schemas = get_core_schemas();
         let query = schemas.iter().find(|s| s.id == "query").unwrap();
 
-        assert_eq!(query.fields.len(), 5);
+        assert_eq!(query.fields.len(), 8);
         assert!(query.get_field("target_type").is_some());
+        assert!(query.get_field("filters").is_some());
+        assert!(query.get_field("sorting").is_some());
+        assert!(query.get_field("limit").is_some());
         assert!(query.get_field("generated_by").is_some());
         assert!(query.get_field("generator_context").is_some());
         assert!(query.get_field("execution_count").is_some());
