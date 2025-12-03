@@ -174,8 +174,8 @@ describe('Core Plugins Integration', () => {
 
       const stats = registry.getStats();
 
-      // text: 1, header: 3, task: 1, ai-chat: 1, code-block: 1, quote-block: 1, ordered-list: 1, date: 0 = 9 total
-      expect(stats.slashCommandsCount).toBe(9);
+      // text: 1, header: 3, task: 1, ai-chat: 1, code-block: 1, quote-block: 1, ordered-list: 1, query: 1, date: 0 = 10 total
+      expect(stats.slashCommandsCount).toBe(10);
     });
 
     it('should provide all slash commands with proper inheritance', () => {
@@ -183,7 +183,7 @@ describe('Core Plugins Integration', () => {
 
       const commands = registry.getAllSlashCommands();
 
-      expect(commands).toHaveLength(9); // text, header1-3, task, ai-chat, code, quote, ordered-list
+      expect(commands).toHaveLength(10); // text, header1-3, task, ai-chat, code, quote, ordered-list, query
 
       // Verify text node commands from BasicNodeTypeRegistry work
       const textCommands = commands.filter((cmd) =>
@@ -356,7 +356,7 @@ describe('Core Plugins Integration', () => {
       registerExternalPlugin(registry, externalPlugin);
 
       expect(registry.getAllPlugins()).toHaveLength(initialCount + 1);
-      expect(registry.getAllSlashCommands()).toHaveLength(10); // 9 core + 1 external
+      expect(registry.getAllSlashCommands()).toHaveLength(11); // 10 core + 1 external
     });
   });
 

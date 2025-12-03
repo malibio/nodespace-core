@@ -950,7 +950,15 @@ describe('PluginRegistry - Core Functionality', () => {
         description: 'Saved query definition',
         version: '1.0.0',
         config: {
-          slashCommands: [], // Query nodes are created by AI/MCP, not slash commands
+          slashCommands: [
+            {
+              id: 'query',
+              name: 'Query',
+              description: 'Create a saved query',
+              contentTemplate: '',
+              nodeType: 'query'
+            }
+          ],
           canHaveChildren: false, // Query nodes are leaf nodes
           canBeChild: true
         },
@@ -967,8 +975,12 @@ describe('PluginRegistry - Core Functionality', () => {
 
       expect(registry.hasPlugin('query')).toBe(true);
       expect(registry.canHaveChildren('query')).toBe(false);
-      expect(registry.getAllSlashCommands()).toHaveLength(0); // No slash commands
+      expect(registry.getAllSlashCommands()).toHaveLength(1); // Has /query command
       expect(registry.getReferenceComponent('query')).toBe(MockReferenceComponent);
+
+      const queryCommand = registry.getAllSlashCommands()[0];
+      expect(queryCommand.id).toBe('query');
+      expect(queryCommand.nodeType).toBe('query');
     });
   });
 });

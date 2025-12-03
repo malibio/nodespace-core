@@ -415,7 +415,15 @@ export const queryNodePlugin: PluginDefinition = {
   description: 'Saved query definition for filtering and searching nodes',
   version: '1.0.0',
   config: {
-    slashCommands: [], // Query nodes are created by AI/MCP, not slash commands
+    slashCommands: [
+      {
+        id: 'query',
+        name: 'Query',
+        description: 'Create a saved query for filtering nodes',
+        contentTemplate: '', // Empty - users will type query description
+        nodeType: 'query'
+      }
+    ],
     canHaveChildren: false, // Query nodes are leaf nodes
     canBeChild: true
   },
