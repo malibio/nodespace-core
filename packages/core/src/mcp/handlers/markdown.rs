@@ -892,13 +892,14 @@ where
 
         // Export each child and its descendants (children are already in correct order)
         for child in &children {
-            export_node_hierarchy(
+            export_node_with_context(
                 node_service,
                 child,
                 &mut markdown,
                 1, // Start at depth 1 (container is depth 0)
                 params.max_depth,
                 true, // Always include children when recursing
+                &root_node.node_type, // Pass root type for bullet formatting
             )
             .await?;
         }
@@ -913,16 +914,18 @@ where
     }))
 }
 
-/// Recursively export node hierarchy to markdown
+/// Export a node with parent context for proper bullet formatting
 ///
-/// Uses graph traversal via NodeService to get children in correct order
-fn export_node_hierarchy<'a, C>(
+/// Recursively exports node hierarchy with automatic bullet formatting for text nodes
+/// that are children of headers and have no children themselves.
+fn export_node_with_context<'a, C>(
     node_service: &'a Arc<NodeService<C>>,
     node: &Node,
     output: &'a mut String,
     current_depth: usize,
     max_depth: usize,
     include_children: bool,
+    parent_type: &'a str,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), MCPError>> + Send + 'a>>
 where
     C: surrealdb::Connection + 'a,
@@ -930,6 +933,7 @@ where
     let node_id = node.id.clone();
     let node_version = node.version;
     let node_content = node.content.clone();
+    let node_type = node.node_type.clone();
 
     Box::pin(async move {
         // Prevent infinite recursion
@@ -945,29 +949,41 @@ where
             return Ok(());
         }
 
+        // Get children count to determine if this node has children
+        let children = node_service
+            .get_children(&node_id)
+            .await
+            .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
+
+        let has_children = !children.is_empty();
+
+        // Determine if this node should be rendered as a bullet item
+        // Conditions: text node, parent is header, and has no children
+        let should_render_as_bullet = node_type == "text"
+            && parent_type == "header"
+            && !has_children;
+
         // Add minimal metadata comment with ID and version for OCC
         output.push_str(&format!("<!-- {} v{} -->\n", node_id, node_version));
 
-        // Add content with proper formatting
+        // Add content with bullet prefix if applicable
+        if should_render_as_bullet {
+            output.push_str("- ");
+        }
         output.push_str(&node_content);
         output.push_str("\n\n");
 
-        // Recursively export children (if enabled)
+        // Recursively export children (if enabled and they exist)
         if include_children {
-            // Get children using graph traversal (already sorted by edge order)
-            let children = node_service
-                .get_children(&node_id)
-                .await
-                .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
-
             for child in &children {
-                export_node_hierarchy(
+                export_node_with_context(
                     node_service,
                     child,
                     output,
                     current_depth + 1,
                     max_depth,
                     include_children,
+                    &node_type, // Pass current node type as parent type
                 )
                 .await?;
             }
