@@ -3500,6 +3500,9 @@ where
         let schema_id = node_type.to_string();
 
         // Check if schema node exists
+        // NOTE: Schema seeding uses None for source because it's internal infrastructure
+        // initialization, not a client-initiated operation. These events are filtered
+        // out by consumers (e.g., SSE bridge) that check source_client_id.
         if self.get_node(&schema_id).await?.is_some() {
             // Update existing schema
             let update = NodeUpdate {

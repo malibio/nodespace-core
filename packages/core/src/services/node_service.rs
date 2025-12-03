@@ -448,6 +448,8 @@ where
                         change.node.id,
                         e
                     );
+                    // SAFETY: Node derives Serialize, so to_value cannot fail.
+                    // This fallback ensures we always emit an event even if typed conversion fails.
                     serde_json::to_value(&change.node).unwrap()
                 });
 
