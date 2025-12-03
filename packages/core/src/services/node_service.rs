@@ -28,7 +28,7 @@ use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
 use crate::db::SurrealStore;
 use crate::models::schema::SchemaRelationship;
-use crate::models::{Node, NodeFilter, NodeUpdate};
+use crate::models::{node_to_typed_value, Node, NodeFilter, NodeUpdate};
 use crate::services::error::NodeServiceError;
 use crate::services::migration_registry::MigrationRegistry;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -644,6 +644,50 @@ where
         let _ = self.event_tx.send(event);
     }
 
+    /// Emit a NodeCreated event with type-specific data (Issue #718)
+    ///
+    /// Converts the node to its strongly-typed format (TaskNode, SchemaNode, etc.)
+    /// and emits a NodeCreated event. Falls back to generic Node if conversion fails.
+    fn emit_node_created(&self, node: Node) {
+        let node_id = node.id.clone();
+        let node_data = node_to_typed_value(node.clone()).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to convert node {} to typed value: {}, using generic Node",
+                node_id,
+                e
+            );
+            serde_json::to_value(&node).unwrap()
+        });
+
+        self.emit_event(DomainEvent::NodeCreated {
+            node_id,
+            node_data,
+            source_client_id: self.client_id.clone(),
+        });
+    }
+
+    /// Emit a NodeUpdated event with type-specific data (Issue #718)
+    ///
+    /// Converts the node to its strongly-typed format (TaskNode, SchemaNode, etc.)
+    /// and emits a NodeUpdated event. Falls back to generic Node if conversion fails.
+    fn emit_node_updated(&self, node: Node) {
+        let node_id = node.id.clone();
+        let node_data = node_to_typed_value(node.clone()).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to convert node {} to typed value: {}, using generic Node",
+                node_id,
+                e
+            );
+            serde_json::to_value(&node).unwrap()
+        });
+
+        self.emit_event(DomainEvent::NodeUpdated {
+            node_id,
+            node_data,
+            source_client_id: self.client_id.clone(),
+        });
+    }
+
     /// Create a new node
     ///
     /// Validates the node using the appropriate behavior (Text, Task, or Date),
@@ -1093,12 +1137,8 @@ where
             })?;
         }
 
-        // Emit NodeCreated event (Phase 2 of Issue #665)
-        // source_client_id will be added in Phase 3
-        self.emit_event(DomainEvent::NodeCreated {
-            node: node.clone(),
-            source_client_id: self.client_id.clone(),
-        });
+        // Emit NodeCreated event with type-specific data (Issue #718)
+        self.emit_node_created(node.clone());
 
         Ok(node.id)
     }
@@ -1869,11 +1909,8 @@ where
                 .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
         }
 
-        // Emit NodeUpdated event (Phase 2 of Issue #665)
-        self.emit_event(DomainEvent::NodeUpdated {
-            node: updated.clone(),
-            source_client_id: self.client_id.clone(),
-        });
+        // Emit NodeUpdated event with type-specific data (Issue #718)
+        self.emit_node_updated(updated.clone());
 
         // Sync mentions if content changed
         if content_changed {
@@ -2025,11 +2062,8 @@ where
             return Ok(0);
         }
 
-        // Emit NodeUpdated event (Phase 2 of Issue #665)
-        self.emit_event(DomainEvent::NodeUpdated {
-            node: updated.clone(),
-            source_client_id: self.client_id.clone(),
-        });
+        // Emit NodeUpdated event with type-specific data (Issue #718)
+        self.emit_node_updated(updated.clone());
 
         // Mark embedding as stale if content changed
         if content_changed {
@@ -3251,10 +3285,7 @@ where
             .get_node(node_id)
             .await?
             .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
-        self.emit_event(DomainEvent::NodeUpdated {
-            node: updated_node,
-            source_client_id: self.client_id.clone(),
-        });
+        self.emit_node_updated(updated_node);
 
         Ok(())
     }
@@ -3542,12 +3573,9 @@ where
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit NodeCreated event for each created node (Phase 2 of Issue #665)
+        // Emit NodeCreated event for each created node with type-specific data (Issue #718)
         for node in &created_nodes {
-            self.emit_event(DomainEvent::NodeCreated {
-                node: node.clone(),
-                source_client_id: self.client_id.clone(),
-            });
+            self.emit_node_created(node.clone());
         }
 
         // Extract IDs for return (maintaining backward compatibility)
@@ -3658,10 +3686,7 @@ where
         for (id, _update) in updates {
             // Fetch the updated node to get current state
             if let Ok(Some(updated_node)) = self.get_node(&id).await {
-                self.emit_event(DomainEvent::NodeUpdated {
-                    node: updated_node,
-                    source_client_id: self.client_id.clone(),
-                });
+                self.emit_node_updated(updated_node);
             }
         }
 
@@ -3770,11 +3795,8 @@ where
                     NodeServiceError::query_failed(format!("Failed to create parent node: {}", e))
                 })?;
 
-            // Emit NodeCreated event for parent (Phase 2 of Issue #665)
-            self.emit_event(DomainEvent::NodeCreated {
-                node: parent_node,
-                source_client_id: self.client_id.clone(),
-            });
+            // Emit NodeCreated event for parent with type-specific data (Issue #718)
+            self.emit_node_created(parent_node);
         }
 
         // Upsert the node (update if exists, create if not)
@@ -3794,13 +3816,10 @@ where
                     NodeServiceError::query_failed(format!("Failed to update node: {}", e))
                 })?;
 
-            // Emit NodeUpdated event (Phase 2 of Issue #665)
+            // Emit NodeUpdated event with type-specific data (Issue #718)
             // Fetch updated node to get current state
             if let Ok(Some(updated_node)) = self.get_node(node_id).await {
-                self.emit_event(DomainEvent::NodeUpdated {
-                    node: updated_node,
-                    source_client_id: self.client_id.clone(),
-                });
+                self.emit_node_updated(updated_node);
             }
 
             // Update parent relationship via edge (handles sibling ordering)
@@ -3843,11 +3862,8 @@ where
                 NodeServiceError::query_failed(format!("Failed to create node: {}", e))
             })?;
 
-            // Emit NodeCreated event (Phase 2 of Issue #665)
-            self.emit_event(DomainEvent::NodeCreated {
-                node: node.clone(),
-                source_client_id: self.client_id.clone(),
-            });
+            // Emit NodeCreated event with type-specific data (Issue #718)
+            self.emit_node_created(node.clone());
 
             // Create parent relationship via edge (handles sibling ordering)
             self.store
