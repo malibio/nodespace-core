@@ -227,7 +227,13 @@
       // Perform the drop operation
       if (sourcePaneId === currentPaneId) {
         // Within-pane reorder
-        reorderTab(tabId, targetIndex, currentPaneId);
+        // When dragging forward (left to right), we need to adjust the target index
+        // because removing the source shifts all subsequent indices down by 1
+        // The visual drop indicator shows "insert before target", so:
+        // - If dragging forward (source < target), final position is target - 1
+        // - If dragging backward (source > target), final position is target (no adjustment needed)
+        const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+        reorderTab(tabId, adjustedTargetIndex, currentPaneId);
       } else {
         // Cross-pane move
         moveTabBetweenPanes(tabId, sourcePaneId, currentPaneId, targetIndex);
