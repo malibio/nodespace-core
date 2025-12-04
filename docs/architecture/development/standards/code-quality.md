@@ -156,6 +156,86 @@ function handleData(data: DataType) {
 <MarkdownRenderer content={safeContent} />
 ```
 
+## 🔊 Logging Standards
+
+### ZERO CONSOLE.LOG POLICY
+
+**FUNDAMENTAL RULES:**
+- [ ] **NO raw `console.log/debug/info` in production code** - Use the Logger utility instead
+- [ ] **NO raw `console.warn/error` in production code** - Use the Logger utility instead
+- [ ] **Test files are exempt** - `console.log` is acceptable in test output
+- [ ] **DeveloperInspector is exempt** - Intentionally uses raw console for dev tools
+
+### Logger Utility Usage
+
+**Location:** `src/lib/utils/logger.ts`
+
+```typescript
+// ✅ CORRECT - Use createLogger with service/component name
+import { createLogger } from '$lib/utils/logger';
+
+const log = createLogger('MyService');
+
+log.debug('Operation started', { data });  // Hidden in production
+log.info('User action', { action });       // Hidden in production
+log.warn('Potential issue', { context });  // Visible in production
+log.error('Operation failed', error);      // Visible in production
+```
+
+```typescript
+// ❌ WRONG - Raw console calls
+console.log('[MyService] Operation started', data);
+console.error('[MyService] Operation failed:', error);
+```
+
+### Log Levels
+
+| Level | When to Use | Production Visibility |
+|-------|-------------|----------------------|
+| `debug` | Detailed debugging info, state changes | Hidden |
+| `info` | Operational info, user actions | Hidden |
+| `warn` | Warnings that don't block operation | **Visible** |
+| `error` | Actual errors, failures | **Visible** |
+
+### Environment Behavior
+
+- **Production**: Only `warn` and `error` logs are shown (clean console)
+- **Development**: All log levels shown (`debug` and above)
+- **Test**: All logs disabled (improves test performance)
+
+### Logger Features
+
+```typescript
+const log = createLogger('NavigationService');
+
+// Basic logging with optional data
+log.debug('Resolving node', { nodeId });
+log.error('Failed to navigate', error);
+
+// Timing operations
+const done = log.time('Loading data');
+await loadData();
+done(); // Logs: [NavigationService] Loading data: 123.45ms
+
+// Grouping related logs
+log.group('Complex operation');
+log.debug('Step 1');
+log.debug('Step 2');
+log.groupEnd();
+```
+
+### Migration from console.*
+
+When you encounter raw `console.*` calls:
+
+1. Import the logger: `import { createLogger } from '$lib/utils/logger';`
+2. Create a logger instance: `const log = createLogger('ComponentName');`
+3. Replace calls:
+   - `console.log` → `log.debug` or `log.info`
+   - `console.warn` → `log.warn`
+   - `console.error` → `log.error`
+4. Remove prefixes from messages (Logger adds `[ComponentName]` automatically)
+
 ## Quality Tools Configuration
 
 **ESLint Configuration:**
