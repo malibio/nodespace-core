@@ -42,10 +42,6 @@ const isTest =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITEST === 'true') ||
   (typeof process !== 'undefined' && process.env?.VITEST === 'true');
 
-const _isDev =
-  (typeof import.meta !== 'undefined' && import.meta.env?.DEV === true) ||
-  (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development');
-
 const isProd =
   (typeof import.meta !== 'undefined' && import.meta.env?.PROD === true) ||
   (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production');

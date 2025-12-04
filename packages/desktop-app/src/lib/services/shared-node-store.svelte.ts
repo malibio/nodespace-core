@@ -656,7 +656,7 @@ export class SharedNodeStore {
       // Get existing node
       const existingNode = this.nodes.get(nodeId);
       if (!existingNode) {
-        log.warn(` Cannot update non-existent node: ${nodeId}`);
+        log.warn(`Cannot update non-existent node: ${nodeId}`);
         return;
       }
 
@@ -698,7 +698,7 @@ export class SharedNodeStore {
       // Notify subscribers
       this.notifySubscribers(nodeId, updatedNode, source);
 
-      log.debug(` Node updated: ${nodeId}, type: ${this.determineUpdateType(changes)}`);
+      log.debug(`Node updated: ${nodeId}, type: ${this.determineUpdateType(changes)}`);
 
       // Update metrics
       this.metrics.updateCount++;
@@ -804,7 +804,7 @@ export class SharedNodeStore {
                     if (typeUpdater) {
                       // Type-specific path → spoke table update
                       // The plugin updater handles mapping changes to type-specific fields
-                      log.debug(` Using type-specific updater for ${nodeType}`);
+                      log.debug(`Using type-specific updater for ${nodeType}`);
                       updatedNodeFromBackend = await typeUpdater.update(
                         nodeId,
                         currentVersion,
@@ -922,7 +922,7 @@ export class SharedNodeStore {
         }
       }
     } catch (error) {
-      log.error(` Error updating node ${nodeId}:`, error);
+      log.error(`Error updating node ${nodeId}:`, error);
       throw error;
     } finally {
       const duration = performance.now() - startTime;
@@ -959,7 +959,7 @@ export class SharedNodeStore {
     this.notifySubscribers(node.id, node, source);
 
     if (isHierarchyChange) {
-      log.debug(` Hierarchy change for node: ${node.id}`);
+      log.debug(`Hierarchy change for node: ${node.id}`);
     }
 
     // Determine persistence behavior using new explicit API
@@ -1145,7 +1145,7 @@ export class SharedNodeStore {
 
     // Single hierarchy change log for entire batch
     if (hasHierarchyChanges) {
-      log.debug(` Batch hierarchy change: ${nodes.length} nodes added`);
+      log.debug(`Batch hierarchy change: ${nodes.length} nodes added`);
     }
 
     // Notify all subscribers once per node (but all in same microtask)
@@ -1183,7 +1183,7 @@ export class SharedNodeStore {
       this.persistedNodeIds.delete(nodeId); // Remove from tracking set
       this.notifySubscribers(nodeId, node, source);
 
-      log.debug(` Node deleted: ${nodeId}`);
+      log.debug(`Node deleted: ${nodeId}`);
 
       // Phase 2.4: Persist deletion to database
       const persistBehavior = this.determinePersistenceBehavior(source, { skipPersistence });
@@ -1257,12 +1257,12 @@ export class SharedNodeStore {
   ): void {
     const existingNode = this.nodes.get(nodeId);
     if (!existingNode) {
-      log.warn(` Cannot update non-existent task node: ${nodeId}`);
+      log.warn(`Cannot update non-existent task node: ${nodeId}`);
       return;
     }
 
     if (existingNode.nodeType !== 'task') {
-      log.warn(` updateTaskNode called on non-task node: ${nodeId} (type: ${existingNode.nodeType})`);
+      log.warn(`updateTaskNode called on non-task node: ${nodeId} (type: ${existingNode.nodeType})`);
       return;
     }
 
@@ -1399,7 +1399,7 @@ export class SharedNodeStore {
     } catch (error) {
       // Suppress expected errors in in-memory test mode
       if (shouldLogDatabaseErrors()) {
-        log.error(` Failed to load children for parent ${parentId}:`, error);
+        log.error(`Failed to load children for parent ${parentId}:`, error);
       }
 
       throw error;
@@ -1523,7 +1523,7 @@ export class SharedNodeStore {
     } catch (error) {
       // Suppress expected errors in in-memory test mode
       if (shouldLogDatabaseErrors()) {
-        log.error(` Failed to load children tree for parent ${parentId}:`, error);
+        log.error(`Failed to load children tree for parent ${parentId}:`, error);
       }
 
       throw error;
@@ -1756,7 +1756,7 @@ export class SharedNodeStore {
     this.nodes.set(conflict.nodeId, resolution.resolvedNode);
     this.versions.set(conflict.nodeId, this.getNextVersion(conflict.nodeId));
 
-    log.debug(` Conflict resolved for node: ${conflict.nodeId}, strategy: ${resolution.strategy}`);
+    log.debug(`Conflict resolved for node: ${conflict.nodeId}, strategy: ${resolution.strategy}`);
 
     // Notify subscribers
     this.notifySubscribers(conflict.nodeId, resolution.resolvedNode, conflict.remoteUpdate.source);
@@ -1815,7 +1815,7 @@ export class SharedNodeStore {
       this.notifySubscribers(nodeId, currentNode, updateToRollback.source);
     }
 
-    log.debug(` Update rolled back for node: ${nodeId}`);
+    log.debug(`Update rolled back for node: ${nodeId}`);
   }
 
   /**
@@ -1834,7 +1834,7 @@ export class SharedNodeStore {
   async resyncNodeFromServer(nodeId: string): Promise<void> {
     // Idempotency guard: prevent concurrent resync operations on same node
     if (this.resyncingNodes.has(nodeId)) {
-      log.debug(` Resync already in progress for node ${nodeId}`);
+      log.debug(`Resync already in progress for node ${nodeId}`);
       return;
     }
 
@@ -1964,7 +1964,7 @@ export class SharedNodeStore {
           sub.callback(node, source);
           sub.callCount++;
         } catch (error) {
-          log.error(` Subscription callback error:`, error);
+          log.error(`Subscription callback error:`, error);
         }
       }
     }
@@ -1975,7 +1975,7 @@ export class SharedNodeStore {
         sub.callback(node, source);
         sub.callCount++;
       } catch (error) {
-        log.error(` Wildcard subscription callback error:`, error);
+        log.error(`Wildcard subscription callback error:`, error);
       }
     }
   }
@@ -1992,7 +1992,7 @@ export class SharedNodeStore {
           try {
             sub.callback(node, { type: 'database', reason: 'store-cleared' });
           } catch (error) {
-            log.error(` Subscription callback error:`, error);
+            log.error(`Subscription callback error:`, error);
           }
         }
       }
@@ -2395,7 +2395,7 @@ export class SharedNodeStore {
 
           // Suppress expected errors in in-memory test mode
           if (shouldLogDatabaseErrors()) {
-            log.error(` Batch persistence failed for node ${nodeId}:`, error);
+            log.error(`Batch persistence failed for node ${nodeId}:`, error);
           }
 
           // Always track errors in test environment for verification
