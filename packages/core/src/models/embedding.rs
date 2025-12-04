@@ -14,16 +14,16 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Default embedding dimension for BAAI/bge-small-en-v1.5 model
+/// Default embedding dimension for BAAI/bge-small-en-v1.5 model (384 dimensions)
 pub const DEFAULT_EMBEDDING_DIMENSION: i32 = 384;
 
 /// Default model name
 pub const DEFAULT_MODEL_NAME: &str = "bge-small-en-v1.5";
 
-/// Maximum tokens per chunk (model limit)
+/// Maximum tokens per chunk - model context limit (tokens)
 pub const MAX_TOKENS_PER_CHUNK: usize = 512;
 
-/// Token overlap between chunks
+/// Token overlap between chunks - preserves context across boundaries (tokens)
 pub const OVERLAP_TOKENS: usize = 100;
 
 /// Embedding record stored in the `embedding` table

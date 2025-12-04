@@ -46,6 +46,9 @@ pub const EMBEDDING_DIMENSION: usize = 384;
 /// Default batch size for processing stale embeddings
 pub const DEFAULT_BATCH_SIZE: usize = 50;
 
+/// Maximum depth for parent chain traversal (safety limit to prevent infinite loops)
+pub const MAX_PARENT_CHAIN_DEPTH: usize = 100;
+
 /// Root-aggregate embedding service
 ///
 /// Manages semantic embeddings using the root-aggregate model where only
@@ -127,8 +130,7 @@ where
     pub async fn find_root_id(&self, node_id: &str) -> Result<String, NodeServiceError> {
         let mut current_id = node_id.to_string();
 
-        for _ in 0..100 {
-            // Safety limit to prevent infinite loops
+        for _ in 0..MAX_PARENT_CHAIN_DEPTH {
             let parent = self.store.get_parent(&current_id).await.map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to get parent: {}", e))
             })?;
@@ -143,9 +145,10 @@ where
             }
         }
 
-        Err(NodeServiceError::query_failed(
-            "Max parent chain depth exceeded",
-        ))
+        Err(NodeServiceError::query_failed(format!(
+            "Max parent chain depth ({}) exceeded",
+            MAX_PARENT_CHAIN_DEPTH
+        )))
     }
 
     /// Check if a root node should be embedded based on its type
@@ -642,6 +645,10 @@ where
     ///
     /// This method is for backward compatibility with existing Tauri commands.
     /// It now queues the node's root for embedding via the new system.
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use queue_for_embedding() instead. Root-aggregate model (Issue #729)."
+    )]
     pub async fn embed_container(&self, node: &Node) -> Result<(), NodeServiceError> {
         tracing::debug!(
             "Legacy embed_container called for node: {} (delegating to queue_for_embedding)",
