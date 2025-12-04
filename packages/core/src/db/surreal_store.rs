@@ -5387,6 +5387,16 @@ mod tests {
             "findable code".to_string(),
             json!({}),
         );
+        let root_quote = Node::new(
+            "quote-block".to_string(),
+            "findable quote root".to_string(),
+            json!({}),
+        );
+        let root_ordered = Node::new(
+            "ordered-list".to_string(),
+            "1. findable ordered".to_string(),
+            json!({}),
+        );
 
         // Create nested text nodes (have parent)
         let parent = Node::new("text".to_string(), "parent node".to_string(), json!({}));
@@ -5400,6 +5410,8 @@ mod tests {
         store.create_node(root_text.clone(), None).await?;
         store.create_node(root_header.clone(), None).await?;
         store.create_node(root_code.clone(), None).await?;
+        store.create_node(root_quote.clone(), None).await?;
+        store.create_node(root_ordered.clone(), None).await?;
         store.create_node(parent.clone(), None).await?;
         store.create_node(nested_text.clone(), None).await?;
         store.create_node(nested_quote.clone(), None).await?;
@@ -5429,6 +5441,14 @@ mod tests {
         assert!(
             result_ids.contains(&&root_code.id),
             "Should include root code-block node"
+        );
+        assert!(
+            result_ids.contains(&&root_quote.id),
+            "Should include root quote-block node"
+        );
+        assert!(
+            result_ids.contains(&&root_ordered.id),
+            "Should include root ordered-list node"
         );
 
         // Nested text-type nodes should NOT be included
