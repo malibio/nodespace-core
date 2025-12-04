@@ -509,20 +509,17 @@ When creating a node, insert into BOTH tables with the SAME ID:
 -- Generate ID on client
 LET $id = type::thing('task', rand::uuid());
 
--- Insert into universal table
-CREATE nodes CONTENT {
+-- Insert into hub table
+CREATE node CONTENT {
     id: $id,
     node_type: 'task',
     content: 'Finish migration',
-    parent_id: NONE,
-    root_id: NONE,
-    embedding_vector: NONE,
-    embedding_stale: true,
+    data: type::thing('task', $id),  -- Record Link to spoke
     version: 1,
     created_at: time::now(),
     modified_at: time::now()
 };
--- Note: Sibling ordering is on has_child edge `order` field (Issue #614)
+-- Note: Hierarchy lives in has_child edges, embeddings in separate embedding table
 
 -- Insert into type-specific table (same ID!)
 CREATE task CONTENT {
@@ -537,9 +534,9 @@ CREATE task CONTENT {
 
 **Option 1: Fast metadata only (no type-specific fields)**
 ```sql
--- Single query to nodes table
+-- Single query to node table
 SELECT * FROM $id;
--- Returns: content, parent_id, embedding_vector, etc.
+-- Returns: content, version, created_at, modified_at, data (spoke link)
 ```
 
 **Option 2: Full node with type-specific fields (Legacy JOIN)**
@@ -649,22 +646,27 @@ DELETE mentions WHERE in = $id OR out = $id;
 
 ## Common Query Patterns
 
-### 1. Vector Search (Fast Single-Table Scan)
+### 1. Vector Search (Semantic Search)
 
 ```sql
--- Search across ALL node types using embeddings
-SELECT id, content, node_type,
-       vector::similarity::cosine(embedding_vector, $query_vector) AS similarity
-FROM nodes
-WHERE embedding_vector IS NOT NONE
-ORDER BY similarity DESC
+-- Search via dedicated embedding table (root-aggregate model)
+-- See /docs/architecture/components/nlp-embedding-service.md for full details
+SELECT
+    node,
+    math::max(vector::similarity::cosine(vector, $query_vector)) AS best_similarity
+FROM embedding
+WHERE stale = false
+GROUP BY node
+HAVING best_similarity > $threshold
+ORDER BY best_similarity DESC
 LIMIT 10;
 ```
 
-**Why Fast:**
-- Single table scan (no JOINs)
-- 384-dimensional vectors indexed efficiently
-- Cosine similarity computed on GPU (if available)
+**Architecture:**
+- Embeddings stored in separate `embedding` table (not on node)
+- Only root nodes (no parent) of embeddable types get embedded
+- Large content chunked with overlap, search returns best chunk per node
+- See [NLP Embedding Service](../components/nlp-embedding-service.md) for details
 
 ### 2. Hierarchy Queries (Type-Agnostic)
 
@@ -806,104 +808,64 @@ async fn create_custom_type(
 
 ### Data Transformation
 
-**Turso Schema (Current):**
+**Legacy Turso Schema (Archived):**
 ```sql
+-- This schema is ARCHIVED - NodeSpace now uses SurrealDB exclusively
+-- See /docs/architecture/archived/ for historical Turso documentation
 CREATE TABLE nodes (
     id TEXT PRIMARY KEY,
     node_type TEXT NOT NULL,
     content TEXT NOT NULL,
     parent_id TEXT,
-    container_node_id TEXT,
     version INTEGER DEFAULT 1,
-    properties TEXT, -- JSON blob
-    embedding_vector BLOB,
-    embedding_stale INTEGER DEFAULT 1,
+    properties TEXT,
     created_at TEXT,
     modified_at TEXT
 );
--- Note: before_sibling_id removed - ordering is on has_child edges (Issue #614)
 ```
 
-**SurrealDB Schema (Target):**
+**SurrealDB Schema (Current):**
 ```sql
--- Universal table
-nodes { id, node_type, content, parent_id, ... }
+-- Hub table (universal metadata)
+node { id, node_type, content, data, version, created_at, modified_at }
 
--- Type tables
-task { id, status, priority, due_date, ... }
-text { id }
-project { id, budget, deadline, ... }
+-- Spoke tables (type-specific)
+task { id, node, status, priority, due_date, ... }
+schema { id, node, is_core, fields, ... }
+
+-- Embedding table (semantic search)
+embedding { node, vector, model_name, chunk_index, stale, ... }
+
+-- Graph edges
+has_child { in, out, order }
+mentions { in, out, context }
 ```
 
-### Migration Script
+### Migration Note
 
-```rust
-async fn migrate_turso_to_surrealdb(
-    turso: &SurrealStore,
-    surreal: &Surreal<Client>
-) -> Result<()> {
-    // 1. Fetch all nodes from Turso
-    let nodes = turso.query("SELECT * FROM nodes").await?;
+**Turso migration is complete.** NodeSpace now uses SurrealDB exclusively.
 
-    for node in nodes {
-        // 2. Parse properties JSON
-        let properties: HashMap<String, Value> =
-            serde_json::from_str(&node.properties)?;
-
-        // 3. Generate SurrealDB Record ID
-        let surreal_id = format!("{}:{}", node.node_type, node.id);
-
-        // 4. Insert into universal nodes table
-        surreal.query("
-            CREATE nodes CONTENT {
-                id: type::thing($table, $uuid),
-                node_type: $node_type,
-                content: $content,
-                parent_id: $parent_id,
-                root_id: $root_id,
-                embedding_vector: $embedding_vector,
-                embedding_stale: $embedding_stale,
-                created_at: $created_at,
-                modified_at: $modified_at
-            }
-        ")
-        .bind(("table", &node.node_type))
-        .bind(("uuid", &node.id))
-        // ... bind other fields
-        .await?;
-
-        // 5. Insert into type-specific table
-        if !properties.is_empty() {
-            surreal.query(format!("
-                CREATE {} CONTENT {{
-                    id: type::thing($table, $uuid),
-                    {}
-                }}
-            ", node.node_type, properties_to_fields(&properties)))
-            .bind(("table", &node.node_type))
-            .bind(("uuid", &node.id))
-            // ... bind property fields
-            .await?;
-        }
-    }
-
-    Ok(())
-}
-```
+The migration from Turso to SurrealDB was completed in PR #485 (Issue #470).
+See `/docs/architecture/archived/surrealdb-migration-guide.md` for historical details.
 
 ## Performance Characteristics
 
 ### Storage Overhead
 
 **Per Node:**
-- `nodes` table: ~200 bytes metadata + 1,536 bytes embedding = ~1.7 KB
-- Type table: ~50-200 bytes (type-specific fields)
-- **Total**: ~1.9 KB per node
+- `node` table: ~200 bytes metadata
+- Spoke table (if applicable): ~50-200 bytes (type-specific fields)
+- **Total per node**: ~200-400 bytes
+
+**Embeddings (separate table):**
+- Per embedding chunk: ~1,536 bytes (384 floats × 4 bytes)
+- Only root nodes of embeddable types have embeddings
+- Large documents may have multiple chunks
 
 **For 1 Million Nodes:**
-- `nodes` table: ~1.7 GB
-- Type tables combined: ~200 MB
-- **Total**: ~1.9 GB (acceptable for modern storage)
+- `node` table: ~200-400 MB
+- `embedding` table: Varies by content (embeddable roots only)
+- **Total**: Highly variable based on content types
 
 ### Query Performance
 
@@ -919,9 +881,9 @@ async fn migrate_turso_to_surrealdb(
 ### Why This Is Fast
 
 1. **Right table for the job** - Query only what you need
-2. **No unnecessary JOINs** - Hierarchy/embeddings don't need type tables
-3. **Indexed efficiently** - SurrealDB indexes both tables independently
-4. **Vector operations** - GPU-accelerated when available
+2. **No unnecessary JOINs** - Hierarchy queries don't need type tables
+3. **Indexed efficiently** - SurrealDB indexes tables independently
+4. **Separate embedding table** - Vector operations isolated from node queries
 5. **Graph traversals** - Native graph database operations
 
 ## Future Optimizations

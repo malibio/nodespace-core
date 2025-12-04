@@ -4356,6 +4356,268 @@ where
 
         Ok(schemas)
     }
+
+    // =========================================================================
+    // Root-Aggregate Embedding Methods (Issue #729)
+    // =========================================================================
+    //
+    // These methods work with the `embedding` table for root-aggregate semantic search.
+    // Unlike the old node.embedding_vector approach, these methods:
+    // - Store embeddings in a dedicated table with chunking support
+    // - Track staleness for re-embedding queue
+    // - Support multiple chunks per node for large content
+    // =========================================================================
+
+    /// Create or update embeddings for a root node
+    ///
+    /// Replaces all existing embeddings for the node with new ones.
+    /// Used after content aggregation and chunking.
+    ///
+    /// # Arguments
+    /// * `node_id` - The root node ID (without table prefix)
+    /// * `embeddings` - List of embeddings to store (one per chunk)
+    pub async fn upsert_embeddings(
+        &self,
+        node_id: &str,
+        embeddings: Vec<crate::models::NewEmbedding>,
+    ) -> Result<()> {
+        if embeddings.is_empty() {
+            return Ok(());
+        }
+
+        // Delete existing embeddings for this node
+        self.db
+            .query("DELETE embedding WHERE node = type::thing('node', $node_id);")
+            .bind(("node_id", node_id.to_string()))
+            .await
+            .context("Failed to delete existing embeddings")?;
+
+        // Insert new embeddings
+        for emb in embeddings {
+            let query = r#"
+                CREATE embedding CONTENT {
+                    node: type::thing('node', $node_id),
+                    vector: $vector,
+                    dimension: $dimension,
+                    model_name: $model_name,
+                    chunk_index: $chunk_index,
+                    chunk_start: $chunk_start,
+                    chunk_end: $chunk_end,
+                    total_chunks: $total_chunks,
+                    content_hash: $content_hash,
+                    token_count: $token_count,
+                    stale: false,
+                    error_count: 0,
+                    last_error: NONE,
+                    created_at: time::now(),
+                    modified_at: time::now()
+                };
+            "#;
+
+            let dimension = emb.vector.len() as i32;
+            self.db
+                .query(query)
+                .bind(("node_id", emb.node_id.clone()))
+                .bind(("vector", emb.vector))
+                .bind(("dimension", dimension))
+                .bind((
+                    "model_name",
+                    emb.model_name
+                        .unwrap_or_else(|| "bge-small-en-v1.5".to_string()),
+                ))
+                .bind(("chunk_index", emb.chunk_index))
+                .bind(("chunk_start", emb.chunk_start))
+                .bind(("chunk_end", emb.chunk_end))
+                .bind(("total_chunks", emb.total_chunks))
+                .bind(("content_hash", emb.content_hash))
+                .bind(("token_count", emb.token_count))
+                .await
+                .context("Failed to create embedding")?;
+        }
+
+        Ok(())
+    }
+
+    /// Mark all embeddings for a node as stale
+    ///
+    /// Called when node content changes to trigger re-embedding.
+    pub async fn mark_root_embedding_stale(&self, node_id: &str) -> Result<()> {
+        self.db
+            .query(
+                "UPDATE embedding SET stale = true, modified_at = time::now() WHERE node = type::thing('node', $node_id);",
+            )
+            .bind(("node_id", node_id.to_string()))
+            .await
+            .context("Failed to mark root embedding as stale")?;
+
+        Ok(())
+    }
+
+    /// Get all root node IDs with stale embeddings
+    ///
+    /// Returns node IDs that need re-embedding.
+    pub async fn get_stale_embedding_root_ids(&self, limit: Option<i64>) -> Result<Vec<String>> {
+        let sql = if limit.is_some() {
+            "SELECT DISTINCT record::id(node) AS node_id FROM embedding WHERE stale = true LIMIT $limit;"
+        } else {
+            "SELECT DISTINCT record::id(node) AS node_id FROM embedding WHERE stale = true;"
+        };
+
+        let mut query_builder = self.db.query(sql);
+
+        if let Some(lim) = limit {
+            query_builder = query_builder.bind(("limit", lim));
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct NodeIdResult {
+            node_id: String,
+        }
+
+        let mut response = query_builder
+            .await
+            .context("Failed to get stale embedding root IDs")?;
+
+        let results: Vec<NodeIdResult> = response
+            .take(0)
+            .context("Failed to extract stale root IDs")?;
+
+        Ok(results.into_iter().map(|r| r.node_id).collect())
+    }
+
+    /// Check if a node has any embeddings
+    pub async fn has_embeddings(&self, node_id: &str) -> Result<bool> {
+        #[derive(Debug, Deserialize)]
+        struct CountResult {
+            count: i64,
+        }
+
+        let mut response = self
+            .db
+            .query("SELECT count() AS count FROM embedding WHERE node = type::thing('node', $node_id) GROUP ALL;")
+            .bind(("node_id", node_id.to_string()))
+            .await
+            .context("Failed to check for embeddings")?;
+
+        let results: Vec<CountResult> = response.take(0).unwrap_or_default();
+
+        Ok(results.first().map(|r| r.count > 0).unwrap_or(false))
+    }
+
+    /// Delete all embeddings for a node
+    ///
+    /// Called when a node is deleted.
+    pub async fn delete_embeddings(&self, node_id: &str) -> Result<()> {
+        self.db
+            .query("DELETE embedding WHERE node = type::thing('node', $node_id);")
+            .bind(("node_id", node_id.to_string()))
+            .await
+            .context("Failed to delete embeddings")?;
+
+        Ok(())
+    }
+
+    /// Record an embedding error
+    ///
+    /// Increments error count and stores the error message.
+    pub async fn record_embedding_error(&self, node_id: &str, error: &str) -> Result<()> {
+        self.db
+            .query(
+                r#"
+                UPDATE embedding SET
+                    error_count = error_count + 1,
+                    last_error = $error,
+                    modified_at = time::now()
+                WHERE node = type::thing('node', $node_id);
+                "#,
+            )
+            .bind(("node_id", node_id.to_string()))
+            .bind(("error", error.to_string()))
+            .await
+            .context("Failed to record embedding error")?;
+
+        Ok(())
+    }
+
+    /// Search embeddings by vector similarity
+    ///
+    /// Returns the best-matching chunk per node, grouped by node.
+    /// Uses SurrealDB's native vector similarity functions.
+    ///
+    /// # Arguments
+    /// * `query_vector` - The query embedding vector
+    /// * `limit` - Maximum number of results
+    /// * `threshold` - Minimum similarity threshold (0.0-1.0)
+    pub async fn search_embeddings(
+        &self,
+        query_vector: &[f32],
+        limit: i64,
+        threshold: Option<f64>,
+    ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
+        let min_similarity = threshold.unwrap_or(0.5);
+
+        // Query to get best similarity per node across all chunks
+        let query = r#"
+            SELECT
+                record::id(node) AS node_id,
+                math::max(vector::similarity::cosine(vector, $query_vector)) AS similarity
+            FROM embedding
+            WHERE stale = false
+            GROUP BY node
+            HAVING similarity > $threshold
+            ORDER BY similarity DESC
+            LIMIT $limit;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("query_vector", query_vector.to_vec()))
+            .bind(("threshold", min_similarity))
+            .bind(("limit", limit))
+            .await
+            .context("Failed to execute embedding search")?;
+
+        let results: Vec<crate::models::EmbeddingSearchResult> = response
+            .take(0)
+            .context("Failed to extract embedding search results")?;
+
+        Ok(results)
+    }
+
+    /// Create a stale embedding marker for a new root node
+    ///
+    /// Creates an empty embedding record marked as stale to queue it for processing.
+    /// Used when a new root node is created that should be embedded.
+    pub async fn create_stale_embedding_marker(&self, node_id: &str) -> Result<()> {
+        let query = r#"
+            CREATE embedding CONTENT {
+                node: type::thing('node', $node_id),
+                vector: [],
+                dimension: 384,
+                model_name: 'bge-small-en-v1.5',
+                chunk_index: 0,
+                chunk_start: 0,
+                chunk_end: NONE,
+                total_chunks: 1,
+                content_hash: NONE,
+                token_count: NONE,
+                stale: true,
+                error_count: 0,
+                last_error: NONE,
+                created_at: time::now(),
+                modified_at: time::now()
+            };
+        "#;
+
+        self.db
+            .query(query)
+            .bind(("node_id", node_id.to_string()))
+            .await
+            .context("Failed to create stale embedding marker")?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
