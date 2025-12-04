@@ -715,7 +715,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * Returned by validateOutdent() to provide type-safe access to validated data.
    */
   type OutdentValidationResult = {
-    node: Node;
     oldParentId: string;
     newParentId: string | null;
     siblingsBelow: string[];
@@ -766,7 +765,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const newDepth = newParentId ? (_uiState[newParentId]?.depth || 0) + 1 : 0;
 
     return {
-      node,
       oldParentId,
       newParentId,
       siblingsBelow,
