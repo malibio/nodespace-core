@@ -1,492 +1,259 @@
-# NodeSpace NLP Engine
+# NodeSpace Embedding Architecture
 
-Unified vector embedding service using Candle + ONNX for semantic search across NodeSpace knowledge graphs and codebases.
+Vector embedding service for semantic search across NodeSpace knowledge graphs.
 
-## Features
+## Overview
 
-- **Local Model Bundling**: Models bundled with application, no network required
-- **Metal GPU Acceleration**: Optimized performance on macOS with automatic CPU fallback
-- **Efficient Caching**: LRU cache with automatic eviction for <5ms cache hits
-- **Batch Operations**: Efficient batch embedding generation
-- **SurrealDB Integration**: Native storage as Vec<f32> with binary blob external API
-- **Vector Similarity Search**: Semantic discovery using cosine similarity (0.0-1.0 scale)
+NodeSpace uses a **root-aggregate embedding model** where only root nodes (nodes without parents) of embeddable types get embedded. The embedding represents the semantic content of the entire subtree (root + all descendants).
+
+## Core Concepts
+
+### Root-Aggregate Model
+
+| Concept | Description |
+|---------|-------------|
+| **Root Node** | A node with no parent edge (top of a subtree) |
+| **Embeddable Types** | `text`, `header`, `code-block`, `schema` |
+| **NOT Embedded** | `task`, `date`, `person`, `ai-chat`, any child node |
+| **Embedding Content** | Root content + ALL descendant content aggregated |
+
+**Why root-aggregate?**
+- Child nodes often lack semantic meaning alone (a bullet point under a header)
+- Tasks are queryable via structured filters, not semantic search
+- Date nodes are containers for daily journal entries, not semantic content
+- The "document" is the root + its children as a unit
+
+### Chunking Strategy
+
+Large content is split into overlapping chunks (model limit is 512 tokens):
+
+| Content Size | Strategy |
+|--------------|----------|
+| < 512 tokens | Single embedding |
+| > 512 tokens | Multiple chunks with ~100 token overlap |
+
+Each chunk becomes a separate embedding record. Search returns the best-matching chunk per node.
+
+## Database Schema
+
+Embeddings are stored in a dedicated `embedding` table (not on the `node` table):
+
+```sql
+DEFINE TABLE embedding SCHEMAFULL;
+
+-- Link to root node (consistent with spoke pattern)
+DEFINE FIELD node ON embedding TYPE record<node>;
+
+-- Vector data
+DEFINE FIELD vector ON embedding TYPE array<float>;
+DEFINE FIELD dimension ON embedding TYPE int DEFAULT 384;
+
+-- Model info (future multi-model support)
+DEFINE FIELD model_name ON embedding TYPE string DEFAULT 'bge-small-en-v1.5';
+
+-- Chunking
+DEFINE FIELD chunk_index ON embedding TYPE int DEFAULT 0;
+DEFINE FIELD chunk_start ON embedding TYPE int DEFAULT 0;
+DEFINE FIELD chunk_end ON embedding TYPE int;
+DEFINE FIELD total_chunks ON embedding TYPE int DEFAULT 1;
+
+-- Content tracking
+DEFINE FIELD content_hash ON embedding TYPE string;
+DEFINE FIELD token_count ON embedding TYPE int;
+
+-- Staleness
+DEFINE FIELD stale ON embedding TYPE bool DEFAULT true;
+
+-- Error tracking
+DEFINE FIELD error_count ON embedding TYPE int DEFAULT 0;
+DEFINE FIELD last_error ON embedding TYPE string;
+
+-- Timestamps
+DEFINE FIELD created_at ON embedding TYPE datetime DEFAULT time::now();
+DEFINE FIELD modified_at ON embedding TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX idx_embedding_node ON embedding COLUMNS node;
+DEFINE INDEX idx_embedding_stale ON embedding COLUMNS stale;
+DEFINE INDEX idx_embedding_unique ON embedding COLUMNS node, model_name, chunk_index UNIQUE;
+```
 
 ## Architecture
 
-- **Model**: BAAI/bge-small-en-v1.5 (384 dimensions)
+### NLP Engine
+
+- **Model**: BAAI/bge-small-en-v1.5 (384 dimensions, 512 token limit)
 - **Runtime**: Candle + ONNX
 - **GPU Support**: Metal (macOS) with CPU fallback
-- **Cache**: LruCache with automatic LRU eviction
+- **Cache**: LRU cache for repeated queries
 
-## Performance Targets
+### Embedding Queue (Backend-Managed)
 
-- **Model Loading**: <30 seconds (ONNX format)
-- **Single Embedding**: <10ms (Metal GPU)
-- **Batch 100 Embeddings**: <500ms
-- **Cache Hit Latency**: <5ms
-- **Memory Footprint**: <500MB (model + cache)
+All embedding logic lives in `NodeService` - no frontend involvement.
 
-## Installation
+```rust
+struct EmbeddingQueue {
+    pending: HashMap<String, Instant>,  // root_id -> last_change_time
+    debounce_duration: Duration,        // 30 seconds default
+}
+```
 
-Add to your `Cargo.toml`:
+### Change Flow
 
-```toml
-[dependencies]
-nodespace-nlp-engine = { workspace = true }
+| Event | Action |
+|-------|--------|
+| New root node created (embeddable type) | Add root_id to queue, start debounce |
+| Root node edited | Add root_id to queue, reset debounce |
+| Child node created/edited/deleted | Find root via graph query, add root_id to queue, reset debounce |
+| Child node moved | Add old root + new root to queue |
+
+### Processing Flow
+
+When debounce timer expires (30s no changes):
+
+1. **Fetch fresh content** - Root node + all descendants via `get_descendants()`
+2. **Aggregate content** - Combine root + children content
+3. **Chunk if needed** - Split into 512-token chunks with overlap
+4. **Generate embeddings** - One per chunk via NLP engine
+5. **Store in database** - Insert/update embedding records
+6. **Clear stale flag** - Mark `stale = false`
+
+### Finding Root from Child
+
+Single graph query to traverse up to root:
+
+```sql
+-- Find ancestor with no incoming has_child edge
+SELECT VALUE in FROM has_child
+WHERE out = $child_id
+CONNECT BY out = in
+-- Filter to node with no parent
 ```
 
 ## Usage
-
-### Basic Example
-
-```rust
-use nodespace_nlp_engine::{EmbeddingService, EmbeddingConfig};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create service with default configuration
-    let config = EmbeddingConfig::default();
-    let mut service = EmbeddingService::new(config)?;
-
-    // Initialize (loads model from bundled path)
-    service.initialize()?;
-
-    // Generate single embedding
-    let embedding = service.generate_embedding("Hello, world!")?;
-    println!("Generated embedding with {} dimensions", embedding.len());
-
-    // Generate batch embeddings
-    let texts = vec!["First text", "Second text", "Third text"];
-    let embeddings = service.generate_batch(texts)?;
-    println!("Generated {} embeddings", embeddings.len());
-
-    Ok(())
-}
-```
-
-### Storage Integration (Turso)
-
-```rust
-use nodespace_nlp_engine::EmbeddingService;
-
-// Generate embedding
-let embedding = service.generate_embedding("search query")?;
-
-// Convert to F32_BLOB for Turso storage
-let blob = EmbeddingService::to_blob(&embedding);
-
-// Store in database
-// INSERT INTO embeddings (node_id, embedding_vector) VALUES (?, ?)
-
-// Retrieve from database and convert back
-let recovered = EmbeddingService::from_blob(&blob);
-```
-
-### Custom Configuration
-
-```rust
-use nodespace_nlp_engine::EmbeddingConfig;
-use std::path::PathBuf;
-
-let config = EmbeddingConfig {
-    model_name: "BAAI/bge-small-en-v1.5".to_string(),
-    model_path: Some(PathBuf::from("/custom/path/to/model")),
-    max_sequence_length: 512,
-    use_instruction_prefix: false,
-    cache_capacity: 10000,
-};
-
-let mut service = EmbeddingService::new(config)?;
-service.initialize()?;
-```
-
-## Model Bundling
-
-### Directory Structure
-
-Models are stored in the centralized NodeSpace data directory (same pattern as database):
-
-```
-~/.nodespace/
-├── database/
-│   └── nodespace.db          # Database location
-└── models/
-    └── BAAI-bge-small-en-v1.5/   # Model location
-        ├── model.onnx
-        └── tokenizer.json
-```
-
-### Downloading the Model
-
-1. **Install huggingface-hub CLI** (developers only):
-   ```bash
-   pip install huggingface-hub
-   ```
-
-2. **Download model files to ~/.nodespace/models/**:
-   ```bash
-   # Create directory
-   mkdir -p ~/.nodespace/models
-
-   # Download model
-   huggingface-cli download BAAI/bge-small-en-v1.5 --local-dir ~/.nodespace/models/BAAI-bge-small-en-v1.5
-   ```
-
-**Note for end users**: The model will be bundled with the application. Manual download is only needed for development.
-
-3. **Convert to ONNX** (if not already in ONNX format):
-   ```python
-   from optimum.onnxruntime import ORTModelForFeatureExtraction
-   from transformers import AutoTokenizer
-
-   model = ORTModelForFeatureExtraction.from_pretrained("BAAI/bge-small-en-v1.5", export=True)
-   tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-small-en-v1.5")
-
-   model.save_pretrained("packages/nlp-engine/models/bge-small-en-v1.5")
-   tokenizer.save_pretrained("packages/nlp-engine/models/bge-small-en-v1.5")
-   ```
-
-## Testing
-
-Run tests with the embedding service feature enabled:
-
-```bash
-cargo test --features embedding-service
-```
-
-Run tests without model (stub mode):
-
-```bash
-cargo test
-```
-
-## Feature Flags
-
-- `embedding-service` (default): Enable full embedding functionality with Candle + ONNX
-  - When disabled, provides stub implementation returning zero vectors
-
-## Device Support
-
-The service automatically detects and uses the best available device:
-
-1. **Metal GPU** (macOS) - Best performance
-2. **CPU Fallback** - Automatic fallback if GPU unavailable
-
-Check device being used:
-
-```rust
-println!("Using device: {}", service.device_info());
-```
-
-## Cache Management
-
-```rust
-// Get cache statistics
-let (size, capacity) = service.cache_stats();
-println!("Cache: {}/{} entries", size, capacity);
-
-// Clear cache
-service.clear_cache();
-```
-
-## Error Handling
-
-```rust
-use nodespace_nlp_engine::{EmbeddingService, EmbeddingError};
-
-match service.generate_embedding("text").await {
-    Ok(embedding) => println!("Success: {} dims", embedding.len()),
-    Err(EmbeddingError::NotInitialized) => println!("Service not initialized"),
-    Err(EmbeddingError::ModelNotFound(path)) => println!("Model not found at: {}", path),
-    Err(e) => println!("Error: {}", e),
-}
-```
-
-## Dependencies
-
-- `candle-core`: Core tensor operations
-- `candle-nn`: Neural network primitives
-- `candle-onnx`: ONNX model loading
-- `tokenizers`: Text tokenization
-- `lru`: LRU cache with automatic eviction
-- `tokio`: Async runtime
-
----
-
-# Topic Embedding Service
-
-The `TopicEmbeddingService` provides adaptive chunking and embedding generation for topic nodes, built on top of the NLP engine.
-
-## Features
-
-- **Adaptive Chunking**: Automatically adjusts embedding strategy based on content size
-- **Turso Native Vector Search**: Uses DiskANN algorithm for fast approximate nearest neighbor search
-- **Debounced Re-embedding**: Batches rapid content changes to avoid excessive embedding operations
-- **Metadata Tracking**: Stores embedding type, generation time, and token counts
-
-## Architecture
-
-### Chunking Strategies
-
-The service uses three strategies based on estimated token count:
-
-| Token Range | Strategy | Implementation |
-|------------|----------|----------------|
-| < 512 | **Complete Topic** | Single embedding for entire content |
-| 512-2048 | **Summary + Sections** | Summary embedding + top-level section embeddings |
-| > 2048 | **Hierarchical** | Summary embedding + recursive section embeddings |
-
-### Token Estimation
-
-Conservative approach to prevent underestimation:
-
-```rust
-fn estimate_tokens(content: &str) -> usize {
-    // 1 token ≈ 3.5 chars + 20% safety margin
-    ((content.len() as f32 / 3.5) * 1.2).ceil() as usize
-}
-```
-
-**Why conservative?**
-- Better to overestimate than truncate important content
-- Handles non-English and technical text more safely
-- Prevents choosing wrong chunking strategy
-
-## Usage
-
-### Basic Setup
-
-```rust
-use nodespace_core::services::TopicEmbeddingService;
-use nodespace_core::db::SurrealStore;
-use std::sync::Arc;
-
-// Initialize database and NLP engine
-let db = Arc::new(SurrealStore::new(db_path).await?);
-
-// Create embedding service with defaults
-let service = TopicEmbeddingService::new_with_defaults(db)?;
-```
-
-### Generate Embeddings
-
-```rust
-// Embed a single topic
-service.embed_topic("topic-node-id").await?;
-
-// The service automatically:
-// 1. Fetches topic and children from database
-// 2. Estimates total tokens
-// 3. Chooses appropriate chunking strategy
-// 4. Generates embeddings
-// 5. Stores in database with metadata
-```
 
 ### Semantic Search
 
 ```rust
-// Fast approximate search (uses DiskANN index)
-let results = service.search_topics(
-    "machine learning algorithms",
-    0.7,  // similarity threshold (lower = more similar)
-    20    // max results
-).await?;
+// Search returns best-matching chunk per node
+let results = embedding_service.search("authentication flow", 0.5, 20).await?;
 
-// Exact search (slower but more accurate)
-let exact_results = service.exact_search_topics(
-    "machine learning algorithms",
-    0.7,
-    20
-).await?;
-```
-
-### Content Change Handling
-
-```rust
-// Debounced re-embedding (waits 5 seconds of inactivity)
-service.schedule_update_topic_embedding("topic-id").await;
-
-// Immediate re-embedding (no debouncing)
-service.update_topic_embedding("topic-id").await?;
-```
-
-## Database Schema
-
-### Vector Storage
-
-```sql
-CREATE TABLE nodes (
-    id TEXT PRIMARY KEY,
-    -- ... other fields ...
-    embedding_vector F32_BLOB(384),  -- Native Turso vector type
-    properties JSON
-);
-
--- Vector index for fast ANN search
-CREATE INDEX idx_nodes_embedding_vector
-ON nodes(surrealdb_vector_idx(embedding_vector));
-```
-
-### Embedding Metadata
-
-Stored in `properties.embedding_metadata`:
-
-```json
-{
-  "embedding_metadata": {
-    "type": "complete_topic" | "topic_summary" | "topic_section",
-    "parent_topic": "topic-id",
-    "generated_at": "2025-10-10T12:00:00Z",
-    "token_count": 345,
-    "depth": 0
-  }
+for (node, similarity) in results {
+    println!("{}: {:.2}", node.id, similarity);
 }
 ```
 
-## Vector Search
-
-### Turso Native Functions
+### Search Query (SurrealDB)
 
 ```sql
--- Fast approximate search (uses DiskANN index)
-SELECT * FROM vector_top_k(
-    'idx_nodes_embedding_vector',
-    vector(?),  -- query embedding blob
-    20          -- limit
-) vt
-JOIN nodes n ON n.rowid = vt.rowid
-WHERE n.node_type = 'topic';
-
--- Exact cosine distance search
-SELECT *,
-    vector_distance_cosine(embedding_vector, vector(?)) as distance
-FROM nodes
-WHERE node_type = 'topic'
-  AND embedding_vector IS NOT NULL
-  AND distance < 0.7
-ORDER BY distance ASC
-LIMIT 20;
+SELECT
+    node,
+    math::max(vector::similarity::cosine(vector, $query_vector)) AS best_similarity
+FROM embedding
+WHERE stale = false
+GROUP BY node
+HAVING best_similarity > $threshold
+ORDER BY best_similarity DESC
+LIMIT $limit;
 ```
 
-## Performance
-
-### Targets
-
-- **Embedding Generation**: < 3 seconds (CPU), < 1 second (GPU)
-- **Vector Search**: < 100ms for 10k+ nodes (with DiskANN index)
-- **Cache Hit**: < 5ms (NLP engine cache)
-
-### Optimization Tips
-
-1. **Use approximate search** for interactive queries (faster)
-2. **Use exact search** for critical operations (more accurate)
-3. **Batch operations** when embedding multiple topics
-4. **Debounce content changes** to avoid excessive re-embedding
-
-## Tauri Commands
-
-Frontend integration via Tauri commands:
+### Tauri Commands
 
 ```typescript
-// Generate embedding
-await invoke('generate_topic_embedding', { topicId: 'id' });
-
-// Search topics
-const results = await invoke('search_topics', {
+// Search
+const results = await invoke('search_roots', {
     params: {
-        query: 'machine learning',
-        threshold: 0.7,
+        query: 'authentication',
+        threshold: 0.5,
         limit: 20
     }
 });
 
-// Batch operations
-const result = await invoke('batch_generate_embeddings', {
-    topicIds: ['id1', 'id2', 'id3']
-});
-
-console.log(`Success: ${result.successCount}`);
-console.log(`Errors:`, result.failedEmbeddings);
+// Manual re-index (development/debugging)
+await invoke('reindex_root', { rootId: 'node-id' });
 ```
+
+## NLP Engine Details
+
+### Model Bundling
+
+Models are stored in the centralized NodeSpace data directory:
+
+```
+~/.nodespace/
+├── database/
+│   └── nodespace.db
+└── models/
+    └── BAAI-bge-small-en-v1.5/
+        ├── model.onnx
+        └── tokenizer.json
+```
+
+### Downloading the Model (Development)
+
+```bash
+pip install huggingface-hub
+mkdir -p ~/.nodespace/models
+huggingface-cli download BAAI/bge-small-en-v1.5 --local-dir ~/.nodespace/models/BAAI-bge-small-en-v1.5
+```
+
+### Performance Targets
+
+| Operation | Target |
+|-----------|--------|
+| Model Loading | < 30 seconds |
+| Single Embedding | < 10ms (Metal GPU) |
+| Batch 100 Embeddings | < 500ms |
+| Cache Hit | < 5ms |
+| Memory Footprint | < 500MB |
+
+## Configuration
+
+```rust
+pub struct EmbeddingConfig {
+    pub debounce_duration: Duration,    // Default: 30 seconds
+    pub max_tokens_per_chunk: usize,    // Default: 512
+    pub overlap_tokens: usize,          // Default: 100
+    pub max_descendants: usize,         // Default: 1000
+    pub max_content_size: usize,        // Default: 10MB
+}
+```
+
+## Error Handling
+
+| Error | Behavior |
+|-------|----------|
+| Content too large | Truncate with warning, mark `truncated` flag |
+| NLP generation failed | Retry up to 3 times, then log error |
+| Circular reference | Detect via visited set, skip with warning |
+| Node not found | Skip (may have been deleted) |
+
+Errors are tracked in the embedding record:
+- `error_count` - Number of failed attempts
+- `last_error` - Most recent error message
 
 ## Testing
 
-### Unit Tests
-
-Run without NLP model:
-
 ```bash
+# Unit tests (no model required)
 cargo test --lib
-```
 
-### Integration Tests
-
-Requires NLP model files:
-
-```bash
+# Integration tests (requires model)
 cargo test --lib -- --ignored
+
+# With embedding service feature
+cargo test --features embedding-service
 ```
 
-### Performance Tests
+## Future Enhancements
 
-Creates 10k+ nodes:
-
-```bash
-cargo test --lib test_vector_search_performance -- --ignored --nocapture
-```
-
-## Troubleshooting
-
-### Model Not Found Error
-
-```
-ModelNotFound("Model file not found: ~/.nodespace/models/BAAI-bge-small-en-v1.5/model.onnx")
-```
-
-**Solution**: Download model files (see "Model Bundling" section above)
-
-### Slow Embedding Generation
-
-**Checklist**:
-1. Check if GPU acceleration is active: `service.device_info()`
-2. Verify cache is enabled and warm
-3. Check content size (> 2048 tokens will be slower)
-
-### Vector Search Returns No Results
-
-**Checklist**:
-1. Verify embeddings exist: `SELECT COUNT(*) FROM nodes WHERE embedding_vector IS NOT NULL`
-2. Check threshold value (lower = more strict, higher = more lenient)
-3. Verify vector index exists: `PRAGMA index_list('nodes')`
-
-## Migration Guide
-
-### From In-Memory Vector Search
-
-If migrating from an in-memory vector search implementation:
-
-1. **Remove in-memory logic** - Turso handles vector search natively
-2. **Update queries** - Use `vector_top_k()` instead of in-memory distance calculations
-3. **Add vector index** - Create `surrealdb_vector_idx` index for performance
-4. **Test performance** - Should be faster with DiskANN algorithm
-
-### Changing Embedding Model
-
-If upgrading to a different embedding model:
-
-1. **Update `EMBEDDING_DIMENSION` constant** in `embedding_service.rs`
-2. **Migrate database schema**: `F32_BLOB(384)` → `F32_BLOB(new_dimension)`
-3. **Re-generate all embeddings** with new model
-4. **Update documentation** with new model details
-
-## License
-
-MIT
+- **Multi-model support** - Schema already supports `model_name` field
+- **Node type plugin embeddability** - Let node types declare if/how they embed
+- **Vector index optimization** - HNSW/DiskANN for sub-linear search
+- **Adaptive debounce** - Shorter for small docs, longer for large
 
 ## References
 
 - [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)
 - [Candle ML Framework](https://github.com/huggingface/candle)
-- [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard)
-- [Turso Vector Search](https://turso.tech/vector)
-- [Issue #183: Implementation Details](https://github.com/malibio/nodespace-core/issues/183)
+- [SurrealDB Vector Functions](https://surrealdb.com/docs/surrealql/functions/vector)
