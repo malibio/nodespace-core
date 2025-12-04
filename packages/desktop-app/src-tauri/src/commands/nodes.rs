@@ -758,8 +758,11 @@ pub async fn mention_autocomplete(
     // - Root nodes (no parent): included if NOT date or schema type
     // - Other nested nodes: excluded (they should be accessed via their parent)
     //
-    // Root nodes are identified by having no incoming has_child edge (get_parent returns None)
-    let mut filtered_nodes = Vec::new();
+    // Root nodes are identified by having no incoming has_child edge (check_has_parent_batch)
+
+    // First pass: Collect task nodes and filter out date/schema nodes
+    let mut task_nodes = Vec::new();
+    let mut non_task_nodes = Vec::new();
 
     for node in nodes {
         // Exclude date and schema nodes always
@@ -767,30 +770,32 @@ pub async fn mention_autocomplete(
             continue;
         }
 
-        // Always include task nodes (regardless of being root or child)
+        // Separate task nodes (always included) from other nodes (need parent check)
         if node.node_type == "task" {
-            filtered_nodes.push(node);
-            if filtered_nodes.len() >= target_limit {
-                break;
-            }
-            continue;
-        }
-
-        // For other node types (text, header, code-block, quote-block, ordered-list, etc.):
-        // Only include if they are root nodes (no parent)
-        let has_parent = service
-            .get_parent(&node.id)
-            .await
-            .map_err(CommandError::from)?
-            .is_some();
-
-        if !has_parent {
-            filtered_nodes.push(node);
-            if filtered_nodes.len() >= target_limit {
-                break;
-            }
+            task_nodes.push(node);
+        } else {
+            non_task_nodes.push(node);
         }
     }
+
+    // Batch check parent status for non-task nodes (fixes N+1 query problem)
+    let node_ids: Vec<String> = non_task_nodes.iter().map(|n| n.id.clone()).collect();
+    let parent_map = service
+        .check_has_parent_batch(&node_ids)
+        .await
+        .map_err(CommandError::from)?;
+
+    // Second pass: Filter non-task nodes to only root nodes (no parent)
+    let mut filtered_nodes = task_nodes;
+    for node in non_task_nodes {
+        let has_parent = parent_map.get(&node.id).copied().unwrap_or(false);
+        if !has_parent {
+            filtered_nodes.push(node);
+        }
+    }
+
+    // Limit to requested number
+    filtered_nodes.truncate(target_limit);
 
     nodes_to_typed_values(filtered_nodes)
 }

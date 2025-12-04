@@ -49,6 +49,12 @@ const MAX_MARKDOWN_SIZE: usize = 1_000_000;
 /// Maximum number of nodes that can be created in a single import
 const MAX_NODES_PER_IMPORT: usize = 1000;
 
+/// Maximum content length (in characters) for a text node to be rendered as a bullet item
+///
+/// Text nodes longer than this are treated as standalone paragraphs, not bullet items.
+/// This helps distinguish between short list items and longer descriptive text.
+const MAX_BULLET_CONTENT_LENGTH: usize = 100;
+
 /// Parameters for create_nodes_from_markdown method
 #[derive(Debug, Deserialize)]
 pub struct CreateNodesFromMarkdownParams {
@@ -944,6 +950,21 @@ where
     }))
 }
 
+/// Format task node checkbox based on task status
+///
+/// Uses TaskNode::from_node for strongly-typed status extraction.
+/// Returns "- [x] " for Done tasks, "- [ ] " for all other states.
+fn format_task_checkbox(node: &Node) -> &'static str {
+    if let Ok(task) = TaskNode::from_node(node.clone()) {
+        match task.status() {
+            TaskStatus::Done => "- [x] ",
+            _ => "- [ ] ", // Open, InProgress, Cancelled all render as unchecked
+        }
+    } else {
+        "- [ ] " // Default to unchecked if conversion fails
+    }
+}
+
 /// Recursively export node hierarchy to markdown
 ///
 /// Uses pre-fetched data from get_subtree_data for efficient in-memory traversal.
@@ -985,16 +1006,7 @@ fn export_node_hierarchy(
 
     // Handle task nodes specially - render with checkbox syntax
     if node.node_type == "task" {
-        // Use TaskNode::from_node for strongly-typed status extraction
-        let checkbox = if let Ok(task) = TaskNode::from_node(node.clone()) {
-            match task.status() {
-                TaskStatus::Done => "- [x] ",
-                _ => "- [ ] ", // Open, InProgress, Cancelled all render as unchecked
-            }
-        } else {
-            "- [ ] " // Default to unchecked if conversion fails
-        };
-        output.push_str(checkbox);
+        output.push_str(format_task_checkbox(node));
         output.push_str(&node.content);
         output.push_str("\n\n");
     } else {
@@ -1077,7 +1089,7 @@ fn export_node_with_context(
     // Rules: text node + (header OR text) parent + 2+ siblings + no children
     // This covers both direct header children and label→list patterns
     let should_render_as_bullet = node.node_type == "text"
-        && node.content.len() < 100  // Short text likely a bullet item
+        && node.content.len() < MAX_BULLET_CONTENT_LENGTH
         && (context.parent_type == "header" || context.parent_type == "text")
         && context.sibling_count >= 2
         && !has_children;
@@ -1087,16 +1099,7 @@ fn export_node_with_context(
 
     // Handle task nodes specially - render with checkbox syntax
     if node.node_type == "task" {
-        // Use TaskNode::from_node for strongly-typed status extraction
-        let checkbox = if let Ok(task) = TaskNode::from_node(node.clone()) {
-            match task.status() {
-                TaskStatus::Done => "- [x] ",
-                _ => "- [ ] ", // Open, InProgress, Cancelled all render as unchecked
-            }
-        } else {
-            "- [ ] " // Default to unchecked if conversion fails
-        };
-        output.push_str(checkbox);
+        output.push_str(format_task_checkbox(node));
         output.push_str(&node.content);
         output.push_str("\n\n");
     } else if should_render_as_bullet {
