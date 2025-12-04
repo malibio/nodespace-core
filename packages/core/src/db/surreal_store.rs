@@ -2356,21 +2356,26 @@ where
             return Ok(HashMap::new());
         }
 
+        // Query all has_child edges where out matches any of our node IDs
+        // This gives us all parent-child relationships in a single query
+        // Then build the map of which nodes have parents
+
+        let mut parent_map = HashMap::new();
+
+        // First, initialize all nodes as having no parent
+        for node_id in node_ids {
+            parent_map.insert(node_id.clone(), false);
+        }
+
         // Build array of Things for the query
         let node_things: Vec<Thing> = node_ids
             .iter()
             .map(|id| Thing::from(("node".to_string(), id.clone())))
             .collect();
 
-        // Query: For each node, check if there's an incoming has_child edge
-        // Returns records with { id: node_id, has_parent: true/false }
-        let query = "
-            SELECT VALUE {
-                id: string::split(out.id, ':')[1],
-                has_parent: count((SELECT * FROM has_child WHERE out = $parent.out LIMIT 1)) > 0
-            }
-            FROM $nodes
-        ";
+        // Query: Get all has_child edges where 'out' (child) is in our list of nodes
+        // This efficiently checks which nodes are children (have parents) in one query
+        let query = "SELECT out FROM has_child WHERE out IN $nodes";
 
         let mut response = self
             .db
@@ -2380,18 +2385,19 @@ where
             .context("Failed to check parent status in batch")?;
 
         #[derive(serde::Deserialize)]
-        struct ParentCheck {
-            id: String,
-            has_parent: bool,
+        struct EdgeOut {
+            out: Thing,
         }
 
-        let results: Vec<ParentCheck> = response
-            .take(0)
-            .context("Failed to extract parent check results")?;
+        let edges: Vec<EdgeOut> = response.take(0).context("Failed to extract edge data")?;
 
-        let mut parent_map = HashMap::new();
-        for result in results {
-            parent_map.insert(result.id, result.has_parent);
+        // Mark all nodes that appear in 'out' as having a parent
+        for edge in edges {
+            // Extract node ID from Thing (format: "node:id")
+            let node_id = edge.out.id.to_string();
+            if let Some(has_parent) = parent_map.get_mut(&node_id) {
+                *has_parent = true;
+            }
         }
 
         Ok(parent_map)
