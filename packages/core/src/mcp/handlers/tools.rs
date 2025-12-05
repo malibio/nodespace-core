@@ -824,11 +824,6 @@ fn get_tool_schemas() -> Value {
                         "type": "number",
                         "description": "Maximum number of results (default: 20)",
                         "default": 20
-                    },
-                    "exact": {
-                        "type": "boolean",
-                        "description": "Use exact cosine distance instead of approximate DiskANN (default: false)",
-                        "default": false
                     }
                 },
                 "required": ["query"]

@@ -25,11 +25,6 @@ pub struct SearchSemanticParams {
     /// Default: 20
     #[serde(default)]
     pub limit: Option<usize>,
-
-    /// Use exact search instead of approximate (slower but more accurate)
-    /// Default: false (use DiskANN approximate search)
-    #[serde(default)]
-    pub exact: Option<bool>,
 }
 
 /// Search root nodes by semantic similarity
@@ -64,7 +59,6 @@ where
     // These values override any client-side defaults from the JSON schema
     let threshold = params.threshold.unwrap_or(0.7);
     let limit = params.limit.unwrap_or(20);
-    let exact = params.exact.unwrap_or(false);
 
     // Validate parameters
     if !(0.0..=1.0).contains(&threshold) {
@@ -131,8 +125,7 @@ where
         "nodes": nodes,
         "count": nodes.len(),
         "query": params.query,
-        "threshold": threshold,
-        "exact": exact
+        "threshold": threshold
     }))
 }
 
@@ -156,7 +149,6 @@ mod search_tests {
         assert_eq!(p.query, "machine learning");
         assert_eq!(p.threshold, None);
         assert_eq!(p.limit, None);
-        assert_eq!(p.exact, None);
     }
 
     #[tokio::test]
@@ -164,8 +156,7 @@ mod search_tests {
         let params = json!({
             "query": "project planning",
             "threshold": 0.6,
-            "limit": 5,
-            "exact": true
+            "limit": 5
         });
 
         let search_params: Result<SearchSemanticParams, _> = serde_json::from_value(params);
@@ -175,7 +166,6 @@ mod search_tests {
         assert_eq!(p.query, "project planning");
         assert_eq!(p.threshold, Some(0.6));
         assert_eq!(p.limit, Some(5));
-        assert_eq!(p.exact, Some(true));
     }
 
     #[tokio::test]
@@ -191,7 +181,6 @@ mod search_tests {
         assert_eq!(p.query, "test query");
         assert_eq!(p.threshold, None); // Will default to 0.7 in handler
         assert_eq!(p.limit, None); // Will default to 20 in handler
-        assert_eq!(p.exact, None); // Will default to false in handler
     }
 
     // Validation Tests
@@ -297,15 +286,14 @@ mod search_tests {
     fn test_search_response_structure() {
         // Test that response includes all expected metadata fields
         // This verifies the JSON structure without needing actual search results
-        let expected_fields = vec!["nodes", "count", "query", "threshold", "exact"];
+        let expected_fields = vec!["nodes", "count", "query", "threshold"];
 
         // Verify the fields are present in our response construction
         let mock_response = json!({
             "nodes": [],
             "count": 0,
             "query": "test",
-            "threshold": 0.7,
-            "exact": false
+            "threshold": 0.7
         });
 
         for field in expected_fields {
@@ -326,12 +314,10 @@ mod search_tests {
         // Apply defaults as the handler does
         let threshold = parsed.threshold.unwrap_or(0.7);
         let limit = parsed.limit.unwrap_or(20);
-        let exact = parsed.exact.unwrap_or(false);
 
-        // These should match the schema defaults in initialize.rs
+        // These should match the schema defaults in tools.rs
         assert_eq!(threshold, 0.7);
         assert_eq!(limit, 20);
-        assert!(!exact);
     }
 
     #[test]
@@ -341,9 +327,8 @@ mod search_tests {
             (json!({"query": "test"}), "minimal"),
             (json!({"query": "test", "threshold": 0.5}), "with threshold"),
             (json!({"query": "test", "limit": 10}), "with limit"),
-            (json!({"query": "test", "exact": true}), "exact mode"),
             (
-                json!({"query": "test", "threshold": 0.6, "limit": 15, "exact": true}),
+                json!({"query": "test", "threshold": 0.6, "limit": 15}),
                 "all params",
             ),
         ];
