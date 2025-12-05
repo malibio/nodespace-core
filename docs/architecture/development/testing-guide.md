@@ -562,9 +562,35 @@ export function renderWithStore(component: any, props = {}) {
 
 ## Coverage Requirements
 
-- **Rust Backend**: >80% line coverage
-- **Frontend Components**: >75% statement coverage  
-- **Critical Workflows**: 100% tested
+**Target: 95% for AI-First Engineering Excellence**
+
+As an AI-first team, we target **95% coverage** - higher than industry standard (70-80%) because:
+- AI assistance makes comprehensive testing fast and maintainable
+- Higher coverage enables confident refactoring
+- Tests serve as executable documentation for AI to understand the codebase
+- Pre-release is the ideal time to establish high standards
+- Knowledge management requires data integrity - bugs are costly
+
+| Category | Target | Current | Notes |
+|----------|--------|---------|-------|
+| **Core Services** (`lib/services`) | 95% | ~54% | Highest priority |
+| **Stores** (`lib/stores`) | 95% | ~76% | Close to target |
+| **Utilities** (`lib/utils`) | 95% | ~57% | Shared code |
+| **Patterns** (`lib/patterns`) | 95% | ~97% | ✅ Already exceeds |
+| **Commands** (`lib/commands`) | 95% | ~86% | Near target |
+| **Plugins** (`lib/plugins`) | 95% | ~85% | Near target |
+| **Design Components** | 95% | ~26% | Testable logic only |
+| **Rust Backend** | 95% | TBD | Core business logic |
+| **Critical Workflows** | 100% | - | Always fully tested |
+
+**Excluded from Coverage Targets:**
+- UI component wrappers (shadcn-svelte) - Third-party code
+- Generated SvelteKit files (`.svelte-kit/`) - Auto-generated
+- Config files (`*.config.ts`) - Build configuration
+- Type-only files (`*.d.ts`) - No runtime code
+- Route files (`src/routes/`) - Integration/E2E territory
+
+**Tracking Issue:** [#735 - Improve Frontend Test Coverage to 95% Target](https://github.com/malibio/nodespace-core/issues/735)
 
 ## Testing Commands
 
