@@ -66,8 +66,6 @@ impl EmbeddingWaker {
 /// Processes stale embeddings in the background using the root-aggregate model.
 /// Event-driven: sleeps until triggered, then processes until queue is empty.
 pub struct EmbeddingProcessor {
-    #[allow(dead_code)]
-    embedding_service: Arc<NodeEmbeddingService>,
     waker: EmbeddingWaker,
     _shutdown_tx: mpsc::Sender<()>,
 }
@@ -131,7 +129,6 @@ impl EmbeddingProcessor {
         let waker = EmbeddingWaker { trigger_tx };
 
         Ok(Self {
-            embedding_service,
             waker,
             _shutdown_tx: shutdown_tx,
         })
@@ -149,11 +146,13 @@ impl EmbeddingProcessor {
     ///
     /// Keeps processing batches until `process_stale_embeddings` returns 0.
     /// This ensures the queue is fully drained before returning to sleep.
+    /// Yields between batches to prevent starving other async tasks.
     async fn process_until_empty(service: &Arc<NodeEmbeddingService>) {
+        const BATCH_SIZE: usize = 10;
         let mut total_processed = 0;
 
         loop {
-            match service.process_stale_embeddings(Some(10)).await {
+            match service.process_stale_embeddings(Some(BATCH_SIZE)).await {
                 Ok(0) => {
                     // No more stale embeddings - done
                     if total_processed > 0 {
@@ -173,7 +172,8 @@ impl EmbeddingProcessor {
                         count,
                         total_processed
                     );
-                    // Continue processing next batch
+                    // Yield to allow other async tasks to run (backpressure)
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => {
                     tracing::error!(
@@ -216,5 +216,79 @@ impl EmbeddingProcessor {
         tracing::info!("Shutting down EmbeddingProcessor");
         // Channels will be dropped, signaling shutdown
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    /// Test that EmbeddingWaker sends a signal when woken
+    #[test]
+    fn test_waker_wake_sends_signal() {
+        let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(10);
+        let waker = EmbeddingWaker { trigger_tx };
+
+        // Wake should send signal
+        waker.wake();
+
+        // Verify signal was sent (non-blocking check)
+        assert!(
+            trigger_rx.try_recv().is_ok(),
+            "Wake should have sent a signal"
+        );
+    }
+
+    /// Test that multiple rapid wakes are coalesced (channel capacity behavior)
+    #[test]
+    fn test_waker_coalesces_multiple_wakes() {
+        let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(2); // Small capacity
+        let waker = EmbeddingWaker { trigger_tx };
+
+        // Send multiple wakes rapidly
+        waker.wake();
+        waker.wake();
+        waker.wake(); // Should be coalesced (channel full)
+
+        // Drain and count - should be at most 2 (channel capacity)
+        let mut count = 0;
+        while trigger_rx.try_recv().is_ok() {
+            count += 1;
+        }
+
+        assert!(
+            count <= 2,
+            "Excess wakes should be coalesced, got {} signals",
+            count
+        );
+    }
+
+    /// Test that waker handles closed channel gracefully
+    #[test]
+    fn test_waker_handles_closed_channel() {
+        let (trigger_tx, trigger_rx) = mpsc::channel::<()>(10);
+        let waker = EmbeddingWaker { trigger_tx };
+
+        // Close the receiver
+        drop(trigger_rx);
+
+        // Wake should not panic, just log warning
+        waker.wake(); // Should complete without panic
+    }
+
+    /// Test that waker is cloneable and all clones work
+    #[test]
+    fn test_waker_is_cloneable() {
+        let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(10);
+        let waker1 = EmbeddingWaker { trigger_tx };
+        let waker2 = waker1.clone();
+
+        waker1.wake();
+        waker2.wake();
+
+        // Both wakes should have sent signals
+        assert!(trigger_rx.try_recv().is_ok(), "First wake should send");
+        assert!(trigger_rx.try_recv().is_ok(), "Second wake should send");
     }
 }
