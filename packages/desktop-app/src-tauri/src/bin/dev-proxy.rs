@@ -354,13 +354,13 @@ async fn main() -> anyhow::Result<()> {
     // NodeService has ALL the logic (virtual dates, schema backfill, etc.)
     // NodeService::new() takes &mut Arc to enable cache updates during seeding (Issue #704)
     println!("🧠 Initializing NodeService...");
-    let node_service = match NodeService::new(&mut store).await {
+    let mut node_service = match NodeService::new(&mut store).await {
         Ok(s) => {
             println!("✅ NodeService initialized");
             // Set client_id for dev-proxy - represents all browser clients (Issue #715)
             // All browser operations emit events with source_client_id: "dev-proxy"
             // SSE filtering then prevents browsers from receiving their own changes
-            Arc::new(s.with_client("dev-proxy"))
+            s.with_client("dev-proxy")
         }
         Err(e) => {
             eprintln!("❌ Failed to initialize NodeService: {}", e);
@@ -371,23 +371,9 @@ async fn main() -> anyhow::Result<()> {
     // NOTE: NodeOperations layer was merged into NodeService (Issue #676)
     // NOTE: SchemaService removed (Issue #690) - schema operations use NodeService directly
 
-    // Subscribe to NodeService domain events for SSE broadcasting (Issue #715)
-    // This is the correct architecture: NodeService emits events for ALL mutations
-    // (whether from HTTP handlers or MCP), and we forward them to browser clients.
-    let domain_event_rx = node_service.subscribe_to_events();
-    println!("📡 Subscribed to NodeService domain events");
-
-    // Create broadcast channel for SSE events to browser clients
-    // This re-broadcasts domain events filtered by client_id
-    let (sse_tx, _) = broadcast::channel::<SseEvent>(100);
-    let sse_tx_for_domain = sse_tx.clone();
-
-    // Spawn task to convert DomainEvents → SseEvents for browser clients
-    tokio::spawn(async move {
-        domain_event_to_sse_bridge(domain_event_rx, sse_tx_for_domain).await;
-    });
-
     // Initialize NLP engine for embeddings (used by MCP semantic search)
+    // IMPORTANT: Initialize embedding components BEFORE wrapping NodeService in Arc
+    // so we can wire up the waker (Issue #729)
     println!("🧠 Initializing NLP engine for embeddings...");
     let mut nlp_engine = EmbeddingService::new(Default::default())
         .map_err(|e| anyhow::anyhow!("Failed to create NLP engine: {}", e))?;
@@ -408,6 +394,31 @@ async fn main() -> anyhow::Result<()> {
     println!("🔄 Starting embedding processor...");
     let embedding_processor = EmbeddingProcessor::new(embedding_service.clone())
         .map_err(|e| anyhow::anyhow!("Failed to initialize embedding processor: {}", e))?;
+
+    // Wire up NodeService to wake processor on embedding changes (Issue #729)
+    // This enables event-driven embedding processing without polling
+    // CRITICAL: Must be done BEFORE wrapping NodeService in Arc
+    node_service.set_embedding_waker(embedding_processor.waker());
+    println!("✅ EmbeddingProcessor waker connected to NodeService");
+
+    // NOW wrap NodeService in Arc after waker is configured
+    let node_service = Arc::new(node_service);
+
+    // Subscribe to NodeService domain events for SSE broadcasting (Issue #715)
+    // This is the correct architecture: NodeService emits events for ALL mutations
+    // (whether from HTTP handlers or MCP), and we forward them to browser clients.
+    let domain_event_rx = node_service.subscribe_to_events();
+    println!("📡 Subscribed to NodeService domain events");
+
+    // Create broadcast channel for SSE events to browser clients
+    // This re-broadcasts domain events filtered by client_id
+    let (sse_tx, _) = broadcast::channel::<SseEvent>(100);
+    let sse_tx_for_domain = sse_tx.clone();
+
+    // Spawn task to convert DomainEvents → SseEvents for browser clients
+    tokio::spawn(async move {
+        domain_event_to_sse_bridge(domain_event_rx, sse_tx_for_domain).await;
+    });
 
     // Trigger processing of any existing stale embeddings from previous sessions
     embedding_processor.wake();
