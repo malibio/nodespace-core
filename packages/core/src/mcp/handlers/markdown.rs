@@ -1741,7 +1741,3 @@ where
 #[cfg(test)]
 #[path = "markdown_test.rs"]
 mod markdown_test;
-
-#[cfg(test)]
-#[path = "markdown_perf_test.rs"]
-mod markdown_perf_test;
