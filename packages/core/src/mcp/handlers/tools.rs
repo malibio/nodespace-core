@@ -805,7 +805,7 @@ fn get_tool_schemas() -> Value {
         },
         {
             "name": "search_semantic",
-            "description": "Search all nodes using natural language semantic similarity (vector embeddings). Find relevant content across your knowledge base. Examples: 'Q4 planning documents', 'machine learning research notes', 'budget meeting notes'",
+            "description": "Search root nodes by semantic similarity using vector embeddings. Returns only root nodes (documents/pages) - use get_markdown_from_node_id with the returned node ID to retrieve the full document content. Examples: 'Q4 planning documents', 'machine learning research notes'",
             "inputSchema": {
                 "type": "object",
                 "properties": {
