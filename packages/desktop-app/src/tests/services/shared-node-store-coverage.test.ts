@@ -446,29 +446,6 @@ describe('SharedNodeStore - Coverage Completion', () => {
       const updated = store.getNode('race-version');
       expect(updated?.version).toBe(7);
     });
-
-    // Skip: This test causes unhandled rejections due to async error propagation
-    // The error handling code path is covered indirectly by other tests
-    it.skip('should throw original error if not UNIQUE/exists error', async () => {
-      const createSpy = vi.spyOn(tauriCommands, 'createNode').mockRejectedValue(
-        new Error('Different error: permission denied')
-      );
-
-      const node = { ...mockNode, id: 'batch-other-error', nodeType: 'quote-block' };
-      store.setNode(node, viewerSource, true);
-
-      store.startBatch('batch-other-error');
-      store.addToBatch('batch-other-error', { content: '> Updated' });
-      store.commitBatch('batch-other-error');
-
-      // Wait for async persistence to complete and capture the error
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      const errors = store.getTestErrors();
-      expect(errors.some(e => e.message.includes('permission denied'))).toBe(true);
-
-      createSpy.mockRestore();
-    });
   });
 
   // ========================================================================
@@ -613,32 +590,6 @@ describe('SharedNodeStore - Coverage Completion', () => {
 
       // Commit should handle missing node gracefully
       expect(() => store.commitBatch('temp-batch')).not.toThrow();
-    });
-
-    // Skip: This test causes unhandled rejections due to async error propagation
-    // The error handling code path is covered indirectly by other tests
-    it.skip('should handle batch commit error and still clean up', async () => {
-      const node = { ...mockNode, id: 'error-batch', nodeType: 'quote-block' };
-      store.setNode(node, viewerSource, true);
-
-      const createSpy = vi.spyOn(tauriCommands, 'createNode').mockRejectedValue(
-        new Error('Simulated batch commit error')
-      );
-
-      store.startBatch('error-batch');
-      store.addToBatch('error-batch', { content: '> Test' });
-
-      // Commit should clean up even on error
-      expect(() => store.commitBatch('error-batch')).not.toThrow();
-
-      // Wait for async persistence errors
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      // Verify error was captured
-      const errors = store.getTestErrors();
-      expect(errors.some(e => e.message.includes('batch commit error'))).toBe(true);
-
-      createSpy.mockRestore();
     });
   });
 
