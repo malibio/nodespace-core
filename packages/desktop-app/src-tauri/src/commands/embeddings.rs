@@ -284,54 +284,6 @@ pub async fn update_root_embedding(
     Ok(())
 }
 
-/// Schedule a debounced embedding update (DEPRECATED - Will be removed in v0.2.0)
-///
-/// **DEPRECATED**: This command will be removed in version 0.2.0.
-/// Use `on_root_closed` or `on_root_idle` smart triggers instead.
-///
-/// This is now a no-op. Content changes automatically mark topics as stale in the backend.
-/// The stale flag system replaces the old debounce approach.
-///
-/// # Migration Guide
-///
-/// Replace:
-/// ```typescript
-/// await invoke('schedule_root_embedding_update', { rootId });
-/// ```
-///
-/// With:
-/// ```typescript
-/// // When topic is closed/unfocused:
-/// await invoke('on_root_closed', { rootId });
-///
-/// // After 30 seconds of idle time:
-/// await invoke('on_root_idle', { rootId });
-/// ```
-///
-/// # Deprecation Timeline
-///
-/// - v0.1.x: Deprecated, logs warning, no-op
-/// - v0.2.0: Will be removed entirely
-#[tauri::command]
-#[deprecated(
-    since = "0.1.0",
-    note = "Use on_root_closed or on_root_idle smart triggers instead. Will be removed in v0.2.0."
-)]
-pub async fn schedule_root_embedding_update(
-    _state: State<'_, EmbeddingState>,
-    root_id: String,
-) -> Result<(), CommandError> {
-    // Log deprecation warning
-    tracing::warn!(
-        root_id = %root_id,
-        "DEPRECATED: schedule_root_embedding_update called. Use on_root_closed or on_root_idle instead. This command will be removed in v0.2.0."
-    );
-
-    // No-op for backward compatibility
-    // Content changes now mark topics as stale automatically in the backend
-    Ok(())
-}
-
 /// Smart trigger: Topic/root closed/unfocused
 ///
 /// Called when user closes or navigates away from a topic/root.
