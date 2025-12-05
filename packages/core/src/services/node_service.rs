@@ -2601,12 +2601,15 @@ where
     /// Fetch all data needed to traverse a subtree efficiently
     ///
     /// This is the core data-fetching method used by both `get_children_tree` (JSON output)
-    /// and MCP markdown export. It performs exactly 3 database queries regardless of tree
+    /// and MCP markdown export. It performs O(1) database round-trips regardless of tree
     /// depth or node count:
     ///
-    /// 1. Fetch root node
-    /// 2. Fetch all descendant nodes in subtree
-    /// 3. Fetch all edges in subtree
+    /// 1. Fetch root node (1 query)
+    /// 2. Fetch all descendant nodes using recursive collect (1 query)
+    /// 3. Fetch all edges using recursive collect (1 query)
+    ///
+    /// The recursive collect queries use SurrealDB's `{..+collect}` syntax to traverse
+    /// the entire hierarchy in a single database operation per call.
     ///
     /// Returns data structures optimized for in-memory traversal:
     /// - Node map for O(1) node lookup by ID

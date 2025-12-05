@@ -2574,90 +2574,45 @@ where
     ///
     /// # Returns
     ///
-    /// Vector of all descendant nodes (flat, in breadth-first order)
+    /// Vector of all descendant nodes (excludes root node itself)
     ///
     /// # Performance
     ///
-    /// O(depth) queries where depth is the tree depth. Each level is fetched in 2 queries
-    /// (one for edges, one for node data).
+    /// O(1) database queries using SurrealDB's recursive `{..+collect}` syntax.
+    /// This collects all descendant IDs in a single traversal, then fetches all
+    /// node data in one query. Total: 2 queries regardless of tree depth.
     pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
         use surrealdb::sql::Thing;
 
-        // Strategy: Iterative breadth-first traversal using edge queries
-        // This avoids SurrealDB's recursive syntax which has compatibility issues
-        let mut all_descendants = Vec::new();
-        let mut current_level = vec![root_id.to_string()];
+        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
 
-        // Maximum depth to prevent infinite loops (256 is SurrealDB's max recursion depth)
-        const MAX_DEPTH: usize = 256;
+        // Strategy: Use SurrealDB's recursive {..+collect} syntax to get all descendant IDs
+        // in a single query, then fetch all node data in a second query.
+        //
+        // The `{..+collect}` syntax performs unbounded recursive traversal and collects
+        // unique node IDs. This is the same pattern used in cycle detection (see move_node).
+        //
+        // Query structure:
+        // 1. LET $descendants = ... - Recursively collect all descendant node Things
+        // 2. SELECT * FROM node WHERE id IN $descendants - Fetch full node data
+        let query = "
+            LET $descendants = $root_thing.{..+collect}->has_child->node;
+            SELECT * FROM node WHERE id IN $descendants;
+        ";
 
-        for _ in 0..MAX_DEPTH {
-            if current_level.is_empty() {
-                break;
-            }
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("root_thing", root_thing))
+            .await
+            .context("Failed to query subtree descendants")?;
 
-            // Build query for all children of current level nodes
-            // Use type::thing() to properly construct record IDs
-            let parent_ids: Vec<String> = current_level
-                .iter()
-                .map(|id| format!("type::thing('node', '{}')", id))
-                .collect();
+        // The query has 2 statements (LET, SELECT), we want the SELECT result at index 1
+        let surreal_nodes: Vec<SurrealNode> = response
+            .take(1)
+            .context("Failed to extract descendant nodes")?;
 
-            let query = format!(
-                "SELECT VALUE out FROM has_child WHERE in IN [{}];",
-                parent_ids.join(", ")
-            );
-
-            let mut response = self
-                .db
-                .query(&query)
-                .await
-                .context("Failed to query children")?;
-
-            let child_things: Vec<Thing> =
-                response.take(0).context("Failed to extract child IDs")?;
-
-            if child_things.is_empty() {
-                break;
-            }
-
-            // Extract string IDs for next level
-            let child_ids: Vec<String> = child_things
-                .iter()
-                .map(|t| match &t.id {
-                    Id::String(s) => s.clone(),
-                    Id::Number(n) => n.to_string(),
-                    _ => t.id.to_string(),
-                })
-                .collect();
-
-            // Fetch full node data for these children
-            // Use type::thing() to properly construct record IDs (UUIDs need proper quoting)
-            let child_id_list: Vec<String> = child_ids
-                .iter()
-                .map(|id| format!("type::thing('node', '{}')", id))
-                .collect();
-
-            let nodes_query = format!(
-                "SELECT * FROM node WHERE id IN [{}] FETCH data;",
-                child_id_list.join(", ")
-            );
-
-            let mut nodes_response = self
-                .db
-                .query(&nodes_query)
-                .await
-                .context("Failed to fetch child nodes")?;
-
-            let surreal_nodes: Vec<SurrealNode> = nodes_response
-                .take(0)
-                .context("Failed to extract child nodes")?;
-
-            all_descendants.extend(surreal_nodes.into_iter().map(Into::into));
-
-            // Move to next level
-            current_level = child_ids;
-        }
+        let all_descendants: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
 
         // Enrich nodes with spoke data for types that have spoke tables
         // This follows the same pattern as get_node() which uses a two-query approach
@@ -2731,7 +2686,7 @@ where
         Ok(nodes)
     }
 
-    /// Get all edges in a subtree using adjacency list strategy
+    /// Get all edges in a subtree using recursive collect
     ///
     /// Fetches all parent-child relationships (has_child edges) within a subtree.
     /// Combined with `get_nodes_in_subtree()`, this enables building an in-memory adjacency list
@@ -2739,8 +2694,13 @@ where
     ///
     /// # Strategy
     ///
-    /// First gets all descendant node IDs using `get_nodes_in_subtree()`, then queries
-    /// all edges where the parent is either the root or a descendant.
+    /// Uses SurrealDB's recursive `{..+collect}` syntax to get all descendant IDs in a single
+    /// traversal, then queries all edges where the parent is root or a descendant.
+    ///
+    /// # Performance
+    ///
+    /// O(1) database queries - uses recursive collect to get all node IDs, then fetches
+    /// edges in a single query. Total: 2 queries regardless of tree depth.
     ///
     /// # Arguments
     ///
@@ -2754,39 +2714,23 @@ where
 
         let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
 
-        // Get all descendant nodes first
-        let descendants = self.get_nodes_in_subtree(root_id).await?;
-
-        // Build a list of all node IDs (root + descendants) for the WHERE clause
-        let all_node_ids: Vec<String> = descendants.iter().map(|n| n.id.clone()).collect();
-
-        // Query edges where parent is either root or a descendant
-        // If no descendants, just query edges from root
-        let query = if all_node_ids.is_empty() {
-            "SELECT id, in, out, order FROM has_child WHERE in = $root_thing ORDER BY order ASC;"
-                .to_string()
-        } else {
-            // Include root ID in the list
-            // Use type::thing() to properly construct record IDs (UUIDs need proper quoting)
-            let id_list = std::iter::once(format!("type::thing('node', '{}')", root_id))
-                .chain(
-                    all_node_ids
-                        .iter()
-                        .map(|id| format!("type::thing('node', '{}')", id)),
-                )
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            format!(
-                "SELECT id, in, out, order FROM has_child WHERE in IN [{}] ORDER BY order ASC;",
-                id_list
-            )
-        };
+        // Strategy: Use SurrealDB's recursive {..+collect} syntax to get all descendant IDs
+        // in a single traversal, then fetch all edges where parent is in that set.
+        //
+        // Query structure:
+        // 1. LET $descendants = ... - Recursively collect all descendant node Things
+        // 2. LET $all_parents = ... - Combine root + descendants
+        // 3. SELECT ... FROM has_child WHERE in IN $all_parents - Fetch edges
+        let query = "
+            LET $descendants = $root_thing.{..+collect}->has_child->node;
+            LET $all_parents = array::concat([$root_thing], $descendants);
+            SELECT id, in, out, order FROM has_child WHERE in IN $all_parents ORDER BY order ASC;
+        ";
 
         let mut response = self
             .db
-            .query(&query)
-            .bind(("root_thing", root_thing.clone()))
+            .query(query)
+            .bind(("root_thing", root_thing))
             .await
             .context("Failed to fetch subtree edges")?;
 
@@ -2801,8 +2745,9 @@ where
             order: f64,
         }
 
+        // The query has 3 statements (LET, LET, SELECT), we want the SELECT result at index 2
         let edges: Vec<EdgeRow> = response
-            .take(0)
+            .take(2)
             .context("Failed to extract subtree edges from response")?;
 
         // Extract string IDs from Thing types
