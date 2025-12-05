@@ -32,7 +32,6 @@ use crate::models::schema::SchemaRelationship;
 use crate::models::{Node, NodeFilter, NodeUpdate};
 use crate::services::error::NodeServiceError;
 use crate::services::migration_registry::MigrationRegistry;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -317,25 +316,6 @@ pub fn extract_mentions(content: &str) -> Vec<String> {
     }
 
     mentions.into_iter().collect()
-}
-
-/// Parse timestamp from database - handles both SurrealDB and RFC3339 formats
-#[allow(dead_code)]
-fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, String> {
-    // Try SurrealDB format first: "YYYY-MM-DD HH:MM:SS"
-    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(naive.and_utc());
-    }
-
-    // Try RFC3339 format (for old data): "YYYY-MM-DDTHH:MM:SSZ"
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-
-    Err(format!(
-        "Unable to parse timestamp '{}' as SurrealDB or RFC3339 format",
-        s
-    ))
 }
 
 /// Core service for node CRUD and hierarchy operations

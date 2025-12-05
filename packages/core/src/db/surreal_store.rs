@@ -752,27 +752,6 @@ where
         Ok(())
     }
 
-    /// Parse SurrealDB Record ID into (table, uuid) components
-    ///
-    /// # Arguments
-    ///
-    /// * `record_id` - SurrealDB Record ID (e.g., "task:uuid")
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (table_name, uuid_portion)
-    #[allow(dead_code)]
-    fn parse_record_id(record_id: &str) -> Result<(String, String)> {
-        let parts: Vec<&str> = record_id.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err(anyhow::anyhow!(
-                "Invalid Record ID format: {}. Expected 'table:uuid'",
-                record_id
-            ));
-        }
-        Ok((parts[0].to_string(), parts[1].to_string()))
-    }
-
     /// Add a node type to schema caches (called during schema seeding)
     ///
     /// When NodeService seeds schema records on first launch, it populates the caches
@@ -3552,27 +3531,6 @@ where
     // - upsert_embeddings() - store embeddings in embedding table
     // NodeService.queue_root_for_embedding() orchestrates the logic.
 
-    /// DEPRECATED: Search for nodes by embedding similarity
-    ///
-    /// This method is deprecated as of Issue #729. Embeddings are now stored in a
-    /// dedicated `embedding` table using the root-aggregate model.
-    ///
-    /// Use `search_embeddings()` instead for semantic search.
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use search_embeddings() instead. Embeddings are now stored in a dedicated table."
-    )]
-    #[allow(clippy::unused_async)]
-    pub async fn search_by_embedding(
-        &self,
-        _embedding: &[f32],
-        _limit: i64,
-        _threshold: Option<f64>,
-    ) -> Result<Vec<(Node, f64)>> {
-        tracing::warn!("search_by_embedding is deprecated. Use search_embeddings() instead.");
-        Ok(vec![])
-    }
-
     /// Atomic bulk update using SurrealDB transactions
     ///
     /// Updates multiple nodes in a single atomic transaction. Either all updates
@@ -4367,7 +4325,6 @@ where
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // Tests use deprecated search_by_embedding for backward compatibility testing
 mod tests {
     use super::*;
     use serde_json::json;
