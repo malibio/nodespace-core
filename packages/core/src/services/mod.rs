@@ -31,7 +31,7 @@ pub mod schema_table_manager;
 #[cfg(test)]
 mod node_service_root_test;
 
-pub use embedding_processor::EmbeddingProcessor;
+pub use embedding_processor::{EmbeddingProcessor, EmbeddingWaker};
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
 pub use mcp_server_service::{default_mcp_port, McpResponseCallback, McpServerService};

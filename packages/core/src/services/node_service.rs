@@ -389,6 +389,15 @@ where
     ///
     /// Use `with_client()` to create a new NodeService instance with client_id set.
     client_id: Option<String>,
+
+    /// Optional waker to trigger embedding processor (Issue #729)
+    ///
+    /// When set, `queue_root_for_embedding()` will wake the processor after
+    /// creating stale markers. This enables event-driven embedding processing
+    /// without polling.
+    ///
+    /// Use `set_embedding_waker()` to configure after processor is initialized.
+    embedding_waker: Option<crate::services::EmbeddingWaker>,
 }
 
 // Manual Clone implementation because C doesn't need to be Clone
@@ -404,6 +413,7 @@ where
             migration_registry: self.migration_registry.clone(),
             event_tx: self.event_tx.clone(),
             client_id: self.client_id.clone(),
+            embedding_waker: self.embedding_waker.clone(),
         }
     }
 }
@@ -497,9 +507,21 @@ where
             migration_registry: Arc::new(migration_registry),
             event_tx,
             client_id: None,
+            embedding_waker: None,
         };
 
         Ok(service)
+    }
+
+    /// Set the embedding waker for event-driven processing (Issue #729)
+    ///
+    /// Call this after `EmbeddingProcessor` is initialized to enable
+    /// automatic wake-on-change for embedding processing.
+    ///
+    /// # Arguments
+    /// * `waker` - The waker handle from `EmbeddingProcessor::waker()`
+    pub fn set_embedding_waker(&mut self, waker: crate::services::EmbeddingWaker) {
+        self.embedding_waker = Some(waker);
     }
 
     /// Seed core schema definitions if database is fresh
@@ -2908,6 +2930,11 @@ where
                 root_id,
                 node_id
             );
+
+            // Wake the embedding processor (fire-and-forget)
+            if let Some(ref waker) = self.embedding_waker {
+                waker.wake();
+            }
         }
     }
 

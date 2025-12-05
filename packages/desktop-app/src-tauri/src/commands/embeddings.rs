@@ -465,8 +465,8 @@ pub async fn on_root_idle(
 /// ```
 #[tauri::command]
 pub async fn sync_embeddings(state: State<'_, EmbeddingState>) -> Result<usize, CommandError> {
-    // Trigger batch embedding and wait for completion
-    state.processor.trigger_batch_embed().await.map_err(|e| {
+    // Trigger batch embedding (fire-and-forget, wakes the processor)
+    state.processor.trigger_batch_embed().map_err(|e| {
         command_error_with_details(
             format!("Failed to trigger sync: {}", e),
             "EMBEDDING_ERROR",
