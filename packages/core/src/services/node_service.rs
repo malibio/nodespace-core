@@ -6411,23 +6411,8 @@ mod tests {
                 assert_eq!(retrieved.properties["_schema_version"], 1);
             }
 
-            // TODO(#481): Re-enable after SurrealDB migration complete - requires direct SQL access
-            #[ignore = "Requires direct SQL access (Issue #481)"]
-            #[tokio::test]
-            async fn test_backfill_existing_nodes_without_version() {
-                // NOTE: Test temporarily disabled - requires direct SQL access to insert nodes without _schema_version
-                // This will be re-enabled after SurrealDB migration provides equivalent functionality
-                unimplemented!("Requires direct SQL access - deferred to Issue #481");
-            }
-
-            // TODO(#481): Re-enable after SurrealDB migration complete - requires direct SQL access
-            #[ignore = "Requires direct SQL access (Issue #481)"]
-            #[tokio::test]
-            async fn test_query_nodes_backfills_versions() {
-                // NOTE: Test temporarily disabled - requires direct SQL access to insert nodes without _schema_version
-                // This will be re-enabled after SurrealDB migration provides equivalent functionality
-                unimplemented!("Requires direct SQL access - deferred to Issue #481");
-            }
+            // NOTE: Backfill tests removed - no legacy data exists (pre-release project)
+            // All nodes created via NodeService automatically get _schema_version
 
             #[tokio::test]
             async fn test_auto_created_date_nodes_get_version() {
