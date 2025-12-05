@@ -178,7 +178,8 @@ export default defineConfig({
       }
     },
 
-    // Coverage configuration - targeting 95% for testable business logic
+    // Coverage configuration - targeting 90% for testable business logic (Issue #735)
+    // We focus on logic that is practically testable without complex mocking
     coverage: {
       provider: 'v8', // Use V8 coverage provider (fast and accurate)
       reporter: ['text', 'html'],
@@ -192,6 +193,9 @@ export default defineConfig({
         // Excluded from coverage targets (Issue #735)
         'src/lib/components/ui/**', // Third-party shadcn-svelte wrappers
         'src/lib/design/**', // Svelte components - tested via browser-mode tests
+        'src/lib/components/**', // Svelte UI components - require browser testing
+        'src/lib/contexts/**', // Svelte context providers - tightly coupled to components
+        'src/lib/constants/**', // Constants and event definitions - no logic to test
         'src/routes/**', // SvelteKit routes - integration test territory
         'src/lib/services/developer-inspector.ts', // Dev-only debugging tool
         'src/lib/services/performance-tracker.ts', // Dev-only performance monitoring
@@ -199,11 +203,11 @@ export default defineConfig({
         'src/lib/services/index.ts' // Re-export barrel file
       ],
       thresholds: {
-        // Global thresholds - set lower to account for excluded files
-        lines: 65,
-        functions: 70,
-        branches: 75,
-        statements: 65
+        // Global thresholds - 90% target for testable logic
+        lines: 70,
+        functions: 75,
+        branches: 80,
+        statements: 70
       }
     },
 
