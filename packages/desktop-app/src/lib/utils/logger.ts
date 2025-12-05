@@ -51,6 +51,25 @@ const isProd =
 // Development: show all logs including debug
 const DEFAULT_LEVEL: LogLevel = isProd ? 'warn' : 'debug';
 
+/**
+ * Logger class with environment-aware configuration.
+ *
+ * For typical usage, prefer the `createLogger()` factory function which
+ * provides sensible defaults with an optional service name prefix.
+ *
+ * Direct instantiation is available for advanced configuration or testing
+ * scenarios where you need explicit control over enabled state, log level,
+ * or other settings.
+ *
+ * @example
+ * // Recommended: Use factory function
+ * const log = createLogger('MyService');
+ * log.info('Hello world');
+ *
+ * @example
+ * // Advanced: Direct instantiation for testing
+ * const log = new Logger({ enabled: true, level: 'debug', prefix: 'Test' });
+ */
 export class Logger {
   private config: LoggerConfig;
 

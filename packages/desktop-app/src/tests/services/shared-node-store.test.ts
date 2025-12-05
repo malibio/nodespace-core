@@ -2046,13 +2046,11 @@ describe('SharedNodeStore', () => {
       it('should call loadChildrenTree and return array', async () => {
         // loadChildrenTree uses getChildrenForParent which is already mocked globally
         // Just test the method exists and returns expected type
-        try {
+        // Method may throw if tauri commands are not fully mocked, which is acceptable
+        await expect(async () => {
           const result = await store.loadChildrenTree('parent-id');
           expect(Array.isArray(result)).toBe(true);
-        } catch {
-          // Method may throw if tauri commands are not fully mocked
-          expect(true).toBe(true);
-        }
+        }).not.toThrow();
       });
     });
 

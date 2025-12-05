@@ -214,10 +214,9 @@ describe('NodeExpansionCoordinator', () => {
       service.initializeNodes([createMockNode('node-1', 'Node 1')]);
       NodeExpansionCoordinator.registerViewer(viewerId, service);
 
-      NodeExpansionCoordinator.restoreExpansionStates(viewerId, []);
-
-      // Should not throw error
-      expect(true).toBe(true);
+      expect(() => {
+        NodeExpansionCoordinator.restoreExpansionStates(viewerId, []);
+      }).not.toThrow();
     });
 
     it('should handle registering the same viewer twice', () => {

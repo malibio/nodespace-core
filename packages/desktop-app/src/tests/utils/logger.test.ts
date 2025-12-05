@@ -101,25 +101,23 @@ describe('logger utility', () => {
       // Enable logging by checking if we can trigger a log
       // Since logger is disabled in tests, we'll verify the format indirectly
       // by checking that the logger doesn't crash with various inputs
-      log.debug('test message');
-      log.info('test message');
-      log.warn('test message');
-      log.error('test message');
-
-      // Verify no crashes occurred (logger handles disabled state gracefully)
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+        log.info('test message');
+        log.warn('test message');
+        log.error('test message');
+      }).not.toThrow();
     });
 
     it('should format message with prefix', () => {
       const log = createLogger('MyService');
 
-      log.debug('test message');
-      log.info('test message');
-      log.warn('test message');
-      log.error('test message');
-
-      // Verify no crashes occurred with prefixed logger
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+        log.info('test message');
+        log.warn('test message');
+        log.error('test message');
+      }).not.toThrow();
     });
   });
 
@@ -368,51 +366,45 @@ describe('logger utility', () => {
   describe('prefix formatting', () => {
     it('should format messages with empty string prefix', () => {
       const log = createLogger('');
-      log.debug('test message');
-
-      // Should not crash with empty prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+      }).not.toThrow();
     });
 
     it('should format messages with whitespace prefix', () => {
       const log = createLogger('  ');
-      log.debug('test message');
-
-      // Should not crash with whitespace prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+      }).not.toThrow();
     });
 
     it('should format messages with special characters in prefix', () => {
       const log = createLogger('Service[1]<test>');
-      log.debug('test message');
-
-      // Should not crash with special characters
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+      }).not.toThrow();
     });
 
     it('should format messages with long prefix', () => {
       const longPrefix = 'A'.repeat(100);
       const log = createLogger(longPrefix);
-      log.debug('test message');
-
-      // Should not crash with long prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+      }).not.toThrow();
     });
 
     it('should format messages with unicode prefix', () => {
       const log = createLogger('日本語サービス');
-      log.debug('test message');
-
-      // Should not crash with unicode prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+      }).not.toThrow();
     });
 
     it('should format messages with emoji prefix', () => {
       const log = createLogger('🚀 RocketService');
-      log.debug('test message');
-
-      // Should not crash with emoji prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+      }).not.toThrow();
     });
   });
 
@@ -742,15 +734,14 @@ describe('logger utility', () => {
       const log = createLogger('MyPrefix');
 
       // Test that prefix is applied (through formatMessage)
-      log.debug('test message');
-      log.info('test message');
-      log.warn('test message');
-      log.error('test message');
-      log.group('test group');
-      log.groupEnd();
-
-      // Verify no crashes with prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+        log.info('test message');
+        log.warn('test message');
+        log.error('test message');
+        log.group('test group');
+        log.groupEnd();
+      }).not.toThrow();
     });
 
     it('should handle configuration without prefix', () => {
@@ -758,13 +749,12 @@ describe('logger utility', () => {
       const log = createLogger();
 
       // Test that no prefix works correctly
-      log.debug('test message');
-      log.info('test message');
-      log.warn('test message');
-      log.error('test message');
-
-      // Verify no crashes without prefix
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test message');
+        log.info('test message');
+        log.warn('test message');
+        log.error('test message');
+      }).not.toThrow();
     });
   });
 
@@ -773,28 +763,26 @@ describe('logger utility', () => {
       const log = createLogger();
 
       // These calls will exercise formatMessage with no prefix
-      log.debug('test');
-      log.info('test');
-      log.warn('test');
-      log.error('test');
-
-      // In test mode, nothing is logged, but formatMessage is still called internally
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test');
+        log.info('test');
+        log.warn('test');
+        log.error('test');
+      }).not.toThrow();
     });
 
     it('should format message with prefix correctly', () => {
       const log = createLogger('Service');
 
       // These calls will exercise formatMessage with prefix
-      log.debug('test');
-      log.info('test');
-      log.warn('test');
-      log.error('test');
-      log.group('group');
-      log.groupEnd();
-
-      // In test mode, nothing is logged, but formatMessage is still called internally
-      expect(true).toBe(true);
+      expect(() => {
+        log.debug('test');
+        log.info('test');
+        log.warn('test');
+        log.error('test');
+        log.group('group');
+        log.groupEnd();
+      }).not.toThrow();
     });
   });
 
@@ -808,11 +796,8 @@ describe('logger utility', () => {
       // Verify done is a function
       expect(typeof done).toBe('function');
 
-      // Call done to complete timing
-      done();
-
-      // In test environment, this won't log, but the timing logic is exercised
-      expect(true).toBe(true);
+      // Call done to complete timing - should not throw
+      expect(() => done()).not.toThrow();
     });
 
     it('should handle multiple concurrent time operations', () => {
@@ -828,24 +813,22 @@ describe('logger utility', () => {
       expect(typeof done2).toBe('function');
       expect(typeof done3).toBe('function');
 
-      // Complete in different order
-      done2();
-      done1();
-      done3();
-
-      // Verify no errors occurred
-      expect(true).toBe(true);
+      // Complete in different order - should not throw
+      expect(() => {
+        done2();
+        done1();
+        done3();
+      }).not.toThrow();
     });
 
     it('should format time labels with prefix', () => {
       const log = createLogger('ServiceName');
 
       // This will exercise formatMessage inside time()
-      const done = log.time('Long operation');
-      done();
-
-      // Verify execution completed
-      expect(true).toBe(true);
+      expect(() => {
+        const done = log.time('Long operation');
+        done();
+      }).not.toThrow();
     });
   });
 
@@ -854,39 +837,36 @@ describe('logger utility', () => {
       const log = createLogger('GroupTest');
 
       // These calls exercise formatMessage for group labels
-      log.group('Group 1');
-      log.debug('Message in group');
-      log.groupEnd();
-
-      // Verify no errors
-      expect(true).toBe(true);
+      expect(() => {
+        log.group('Group 1');
+        log.debug('Message in group');
+        log.groupEnd();
+      }).not.toThrow();
     });
 
     it('should handle deeply nested groups', () => {
       const log = createLogger('NestedTest');
 
       // Test nested groups
-      log.group('Level 1');
-      log.group('Level 2');
-      log.group('Level 3');
-      log.debug('Deep message');
-      log.groupEnd();
-      log.groupEnd();
-      log.groupEnd();
-
-      // Verify no errors
-      expect(true).toBe(true);
+      expect(() => {
+        log.group('Level 1');
+        log.group('Level 2');
+        log.group('Level 3');
+        log.debug('Deep message');
+        log.groupEnd();
+        log.groupEnd();
+        log.groupEnd();
+      }).not.toThrow();
     });
 
     it('should format group labels with prefix', () => {
       const log = createLogger('PrefixedGroup');
 
       // This exercises formatMessage with prefix for groups
-      log.group('My Group');
-      log.groupEnd();
-
-      // Verify no errors
-      expect(true).toBe(true);
+      expect(() => {
+        log.group('My Group');
+        log.groupEnd();
+      }).not.toThrow();
     });
   });
 
@@ -914,19 +894,18 @@ describe('logger utility', () => {
     it('should call shouldLog for all log methods', () => {
       const log = createLogger('FilterTest');
 
-      // These calls all invoke shouldLog internally
-      log.debug('test');
-      log.info('test');
-      log.warn('test');
-      log.error('test');
-      log.group('test');
-      log.groupEnd();
+      // These calls all invoke shouldLog internally - should not throw
+      expect(() => {
+        log.debug('test');
+        log.info('test');
+        log.warn('test');
+        log.error('test');
+        log.group('test');
+        log.groupEnd();
 
-      const done = log.time('test');
-      done();
-
-      // Verify execution completed (shouldLog was called for all)
-      expect(true).toBe(true);
+        const done = log.time('test');
+        done();
+      }).not.toThrow();
     });
   });
 
@@ -1064,27 +1043,25 @@ describe('logger utility', () => {
       const log2 = createLogger('Config2');
       const log3 = createLogger();
 
-      // Use all loggers to exercise configuration paths
-      log1.debug('test');
-      log2.info('test');
-      log3.warn('test');
-
-      // Verify no errors occurred
-      expect(true).toBe(true);
+      // Use all loggers to exercise configuration paths - should not throw
+      expect(() => {
+        log1.debug('test');
+        log2.info('test');
+        log3.warn('test');
+      }).not.toThrow();
     });
 
     it('should handle default log level configuration', () => {
       // This exercises the DEFAULT_LEVEL constant and config initialization
       const log = createLogger('DefaultLevel');
 
-      // Test all levels to ensure default level logic is exercised
-      log.debug('debug');
-      log.info('info');
-      log.warn('warn');
-      log.error('error');
-
-      // Verify execution completed
-      expect(true).toBe(true);
+      // Test all levels to ensure default level logic is exercised - should not throw
+      expect(() => {
+        log.debug('debug');
+        log.info('info');
+        log.warn('warn');
+        log.error('error');
+      }).not.toThrow();
     });
   });
 

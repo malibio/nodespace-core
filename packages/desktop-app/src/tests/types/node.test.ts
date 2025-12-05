@@ -319,11 +319,8 @@ describe('isNode type guard', () => {
         // Missing required fields
       };
 
-      if (isNode(notANode)) {
-        throw new Error('Should not be a valid node');
-      } else {
-        expect(true).toBe(true); // Correctly rejected
-      }
+      // Assert directly that invalid object is rejected
+      expect(isNode(notANode)).toBe(false);
     });
   });
 });

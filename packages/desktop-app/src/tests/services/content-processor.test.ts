@@ -386,15 +386,14 @@ describe('ContentProcessor', () => {
     it('should be memory efficient with repeated operations', async () => {
       const content = '# Test Header\n\nContent with **formatting**.';
 
-      // Simulate repeated operations
-      for (let i = 0; i < 100; i++) {
-        const ast = processor.parseMarkdown(content);
-        await processor.renderAST(ast);
-        processor.astToMarkdown(ast);
-      }
-
-      // Should complete without memory issues
-      expect(true).toBe(true);
+      // Simulate repeated operations - should complete without throwing
+      await expect(async () => {
+        for (let i = 0; i < 100; i++) {
+          const ast = processor.parseMarkdown(content);
+          await processor.renderAST(ast);
+          processor.astToMarkdown(ast);
+        }
+      }).not.toThrow();
     });
 
     it('should handle concurrent processing correctly', async () => {
@@ -559,10 +558,9 @@ describe('ContentProcessor', () => {
         createNodeReference: () => 'nodespace://test'
       };
 
-      processor.setNodeReferenceService(mockService);
-
-      // Service is set (no error thrown)
-      expect(true).toBe(true);
+      expect(() => {
+        processor.setNodeReferenceService(mockService);
+      }).not.toThrow();
     });
 
     it('should process content with event emission', () => {
@@ -616,11 +614,10 @@ describe('ContentProcessor', () => {
     it('should invalidate cache for specific node', () => {
       processor.clearReferenceCache();
 
-      // This method should run without errors
-      processor.invalidateReferenceCache('test-node-id');
-      processor.invalidateReferenceCache('another-node-id');
-
-      expect(true).toBe(true);
+      expect(() => {
+        processor.invalidateReferenceCache('test-node-id');
+        processor.invalidateReferenceCache('another-node-id');
+      }).not.toThrow();
     });
 
     it('should clear reference cache', () => {

@@ -364,12 +364,11 @@ describe('LayoutPersistenceService', () => {
     });
 
     it('can be called multiple times safely', () => {
-      LayoutPersistenceService.flush();
-      LayoutPersistenceService.flush();
-      LayoutPersistenceService.flush();
-
-      // Should not throw
-      expect(true).toBe(true);
+      expect(() => {
+        LayoutPersistenceService.flush();
+        LayoutPersistenceService.flush();
+        LayoutPersistenceService.flush();
+      }).not.toThrow();
     });
 
     it('does nothing when no pending state exists', () => {

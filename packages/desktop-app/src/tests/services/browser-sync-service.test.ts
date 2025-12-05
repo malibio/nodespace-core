@@ -1008,12 +1008,10 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       // Simply verify that the connection setup doesn't crash when an error occurs
       // This is sufficient for code coverage of the onerror handler
 
-      // Reset any existing state
-      browserSyncService.destroy();
-
-      // This test documents that the onerror handler exists and schedules reconnect
-      // Full integration testing of error scenarios is covered by other tests
-      expect(true).toBe(true);
+      // Reset any existing state - should not throw
+      expect(() => {
+        browserSyncService.destroy();
+      }).not.toThrow();
     });
 
     it('should cleanup reconnect timeout on destroy', () => {
