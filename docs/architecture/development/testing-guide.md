@@ -810,6 +810,66 @@ describe('NodeManager Performance Tests', () => {
 - **CI/CD optimization**: Run fast mode for PRs, full mode for releases
 - **Maintainability**: Centralized thresholds make performance tuning easier
 
+### Rust Performance Benchmarks
+
+**IMPORTANT: Performance benchmarks belong in `packages/core/benches/`, NOT in test files.**
+
+Performance tests with timing assertions are inherently flaky when run alongside other tests due to CPU contention. Use Criterion benchmarks instead for reliable performance measurement.
+
+**Running Benchmarks:**
+
+```bash
+# Run all benchmarks
+cargo bench -p nodespace-core
+
+# Run specific benchmark
+cargo bench -p nodespace-core -- atomic
+cargo bench -p nodespace-core -- markdown
+cargo bench -p nodespace-core -- occ
+```
+
+**Benchmark Location:**
+- `packages/core/benches/*.rs` - All Rust performance benchmarks
+
+**Current Benchmarks:**
+
+| Benchmark | What It Measures | Target |
+|-----------|------------------|--------|
+| `create_child_node_atomic` | Atomic node creation latency | P95 < 15ms |
+| `1000_nodes` markdown import | Markdown import throughput | > 1000 nodes/sec |
+| `occ_update_cycle` | OCC read-modify-write cycle | < 5ms avg |
+
+**Creating New Benchmarks:**
+
+```rust
+// packages/core/benches/my_benchmark.rs
+use criterion::{criterion_group, criterion_main, Criterion};
+
+fn bench_my_operation(c: &mut Criterion) {
+    c.bench_function("my_operation", |b| {
+        b.iter(|| {
+            // Operation to benchmark
+        });
+    });
+}
+
+criterion_group!(benches, bench_my_operation);
+criterion_main!(benches);
+```
+
+**Don't forget to add to Cargo.toml:**
+```toml
+[[bench]]
+name = "my_benchmark"
+harness = false
+```
+
+**Why Benchmarks Instead of Performance Tests?**
+- **Reliability**: Criterion runs iterations until statistically significant, immune to system load
+- **Isolation**: Benchmarks run separately from the test suite, no CPU contention
+- **Reporting**: Provides statistical analysis, confidence intervals, and regression detection
+- **History**: Tracks performance over time with `cargo bench -- --save-baseline`
+
 ### 8. Concurrency & Race Conditions
 Test thread safety and concurrent operations:
 
