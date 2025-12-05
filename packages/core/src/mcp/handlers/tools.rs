@@ -376,7 +376,7 @@ where
         "update_nodes_batch" => nodes::handle_update_nodes_batch(node_service, arguments).await,
 
         // Search
-        "search_semantic" => search::handle_search_semantic(embedding_service, arguments),
+        "search_semantic" => search::handle_search_semantic(embedding_service, arguments).await,
 
         // Discovery
         "search_tools" => handle_search_tools(arguments),
@@ -732,6 +732,11 @@ fn get_tool_schemas() -> Value {
                         "type": "number",
                         "description": "Maximum recursion depth (default: 20)",
                         "default": 20
+                    },
+                    "include_node_ids": {
+                        "type": "boolean",
+                        "description": "Include node ID comments in markdown output (default: true). When true, adds HTML comments with node IDs and versions for OCC. When false, produces clean markdown without metadata.",
+                        "default": true
                     }
                 },
                 "required": ["node_id"]

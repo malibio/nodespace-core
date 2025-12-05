@@ -35,8 +35,8 @@ use nodespace_core::{
     models,
     models::{Node, NodeFilter, NodeUpdate, SchemaNode, TaskNode, TaskNodeUpdate},
     services::{
-        default_mcp_port, CreateNodeParams, McpServerService, NodeEmbeddingService, NodeService,
-        NodeServiceError,
+        default_mcp_port, CreateNodeParams, EmbeddingProcessor, McpServerService,
+        NodeEmbeddingService, NodeService, NodeServiceError,
     },
 };
 use nodespace_nlp_engine::EmbeddingService;
@@ -389,14 +389,32 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize NLP engine for embeddings (used by MCP semantic search)
     println!("🧠 Initializing NLP engine for embeddings...");
-    let nlp_engine = EmbeddingService::new(Default::default())
+    let mut nlp_engine = EmbeddingService::new(Default::default())
         .map_err(|e| anyhow::anyhow!("Failed to create NLP engine: {}", e))?;
-    // Note: initialize() is called lazily on first use, no need to call explicitly
+
+    // Initialize the model (loads ONNX model and tokenizer)
+    nlp_engine
+        .initialize()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize NLP engine: {}", e))?;
+
     let nlp_engine_arc = Arc::new(nlp_engine);
     println!("✅ NLP engine initialized");
 
     // Initialize embedding service for MCP semantic search
     let embedding_service = Arc::new(NodeEmbeddingService::new(nlp_engine_arc, store.clone()));
+
+    // Initialize background embedding processor (event-driven, Issue #729)
+    // Processes stale embeddings in the background - no polling, wakes on demand
+    println!("🔄 Starting embedding processor...");
+    let embedding_processor = EmbeddingProcessor::new(embedding_service.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to initialize embedding processor: {}", e))?;
+
+    // Trigger processing of any existing stale embeddings from previous sessions
+    embedding_processor.wake();
+
+    // Keep processor alive for duration of server (dropped on shutdown)
+    let _embedding_processor = embedding_processor;
+    println!("✅ Embedding processor started");
 
     // Spawn MCP server in background task (shares NodeService for real-time sync)
     // MCP runs on port 3100 by default (configurable via MCP_PORT env var)

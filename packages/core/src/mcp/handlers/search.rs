@@ -45,11 +45,11 @@ pub struct SearchSemanticParams {
 ///     "threshold": 0.7,
 ///     "limit": 10
 /// });
-/// let result = handle_search_semantic(&embedding_service, params)?;
+/// let result = handle_search_semantic(&embedding_service, params).await?;
 /// // Returns top 10 most relevant root nodes
 /// ```
-pub fn handle_search_semantic<C>(
-    _service: &Arc<NodeEmbeddingService<C>>,
+pub async fn handle_search_semantic<C>(
+    service: &Arc<NodeEmbeddingService<C>>,
     params: Value,
 ) -> Result<Value, MCPError>
 where
@@ -84,29 +84,46 @@ where
         ));
     }
 
-    // Semantic search pending NLP integration (database tracking now complete)
-    // Returning empty results until full embedding generation is re-enabled
-    tracing::info!("Semantic search pending NLP integration - database tracking complete");
-    let results: Result<Vec<crate::models::Node>, crate::services::error::NodeServiceError> =
-        Ok(Vec::new());
+    tracing::info!("Semantic search for: '{}'", params.query);
 
-    // Map service errors to appropriate MCP errors with granular messages
-    let nodes = results.map_err(|e| {
-        let err_msg = e.to_string();
+    // Call the embedding service's semantic search
+    let results = service
+        .semantic_search_nodes(&params.query, limit, threshold)
+        .await
+        .map_err(|e| {
+            let err_msg = e.to_string();
 
-        // Check for specific error types to provide actionable feedback
-        if err_msg.contains("not initialized") || err_msg.contains("not available") {
-            MCPError::internal_error("Embedding service not ready".to_string())
-        } else if err_msg.contains("no embeddings") || err_msg.contains("not found") {
-            MCPError::invalid_params(
-                "No content available for semantic search. Try adding content first.".to_string(),
-            )
-        } else if err_msg.contains("database") || err_msg.contains("Database") {
-            MCPError::internal_error(format!("Database error during search: {}", e))
-        } else {
-            MCPError::internal_error(format!("Search failed: {}", e))
-        }
-    })?;
+            // Check for specific error types to provide actionable feedback
+            if err_msg.contains("not initialized") || err_msg.contains("not available") {
+                MCPError::internal_error("Embedding service not ready".to_string())
+            } else if err_msg.contains("no embeddings") || err_msg.contains("not found") {
+                MCPError::invalid_params(
+                    "No content available for semantic search. Try adding content first."
+                        .to_string(),
+                )
+            } else if err_msg.contains("database") || err_msg.contains("Database") {
+                MCPError::internal_error(format!("Database error during search: {}", e))
+            } else {
+                MCPError::internal_error(format!("Search failed: {}", e))
+            }
+        })?;
+
+    // Transform results into JSON-serializable format
+    let nodes: Vec<Value> = results
+        .iter()
+        .map(|(node, similarity)| {
+            json!({
+                "id": node.id,
+                "nodeType": node.node_type,
+                "content": node.content,
+                "version": node.version,
+                "createdAt": node.created_at,
+                "modifiedAt": node.modified_at,
+                "properties": node.properties,
+                "similarity": similarity
+            })
+        })
+        .collect();
 
     // Return results with metadata
     Ok(json!({
