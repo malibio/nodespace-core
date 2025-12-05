@@ -2582,149 +2582,64 @@ where
     /// This collects all descendant IDs in a single traversal, then fetches all
     /// node data in one query. Total: 2 queries regardless of tree depth.
     pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
-        use surrealdb::sql::Thing;
+        // Delegate to consolidated method, excluding root
+        let (all_nodes, _edges) = self.get_subtree_with_edges(root_id).await?;
 
-        let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
-
-        // Strategy: Use SurrealDB's recursive {..+collect} syntax to get all descendant IDs
-        // in a single query, then fetch all node data in a second query.
-        //
-        // The `{..+collect}` syntax performs unbounded recursive traversal and collects
-        // unique node IDs. This is the same pattern used in cycle detection (see move_node).
-        //
-        // Query structure:
-        // 1. LET $descendants = ... - Recursively collect all descendant node Things
-        // 2. SELECT * FROM node WHERE id IN $descendants - Fetch full node data
-        let query = "
-            LET $descendants = $root_thing.{..+collect}->has_child->node;
-            SELECT * FROM node WHERE id IN $descendants;
-        ";
-
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("root_thing", root_thing))
-            .await
-            .context("Failed to query subtree descendants")?;
-
-        // The query has 2 statements (LET, SELECT), we want the SELECT result at index 1
-        let surreal_nodes: Vec<SurrealNode> = response
-            .take(1)
-            .context("Failed to extract descendant nodes")?;
-
-        let all_descendants: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
-
-        // Enrich nodes with spoke data for types that have spoke tables
-        // This follows the same pattern as get_node() which uses a two-query approach
-        // to properly fetch spoke data for task/schema nodes
-        let enriched_nodes = self.enrich_nodes_with_spoke_data(all_descendants).await?;
-
-        Ok(enriched_nodes)
-    }
-
-    /// Enrich nodes with spoke table data for types that have dedicated spoke tables
-    ///
-    /// For node types like "task" and "schema" that store their type-specific data
-    /// in separate spoke tables, this function batch-fetches the spoke data and
-    /// merges it into the node's properties field.
-    ///
-    /// This is necessary because the FETCH data query doesn't properly populate
-    /// the data field due to SurrealDB's Thing type serialization issues.
-    async fn enrich_nodes_with_spoke_data(&self, mut nodes: Vec<Node>) -> Result<Vec<Node>> {
-        use std::collections::HashMap;
-
-        // Group task node IDs for batch fetching
-        let task_ids: Vec<&str> = nodes
-            .iter()
-            .filter(|n| n.node_type == "task")
-            .map(|n| n.id.as_str())
+        // Filter out root node (consolidated method includes it)
+        let descendants: Vec<Node> = all_nodes
+            .into_iter()
+            .filter(|n| n.id != root_id)
             .collect();
 
-        if task_ids.is_empty() {
-            return Ok(nodes);
-        }
-
-        // Batch fetch task spoke data
-        let task_id_list: Vec<String> = task_ids
-            .iter()
-            .map(|id| format!("type::thing('task', '{}')", id))
-            .collect();
-
-        let spoke_query = format!(
-            "SELECT * OMIT id, node FROM task WHERE id IN [{}];",
-            task_id_list.join(", ")
-        );
-
-        let mut spoke_response = self
-            .db
-            .query(&spoke_query)
-            .await
-            .context("Failed to fetch task spoke data")?;
-
-        let spoke_results: Vec<Value> = spoke_response.take(0).unwrap_or_default();
-
-        // Build a map of node_id -> spoke properties
-        // The spoke query returns records where we need to extract the node ID from context
-        // Since we used the same order, we can match by position
-        let mut spoke_map: HashMap<String, Value> = HashMap::new();
-        for (i, spoke_data) in spoke_results.into_iter().enumerate() {
-            if let Some(id) = task_ids.get(i) {
-                spoke_map.insert(id.to_string(), spoke_data);
-            }
-        }
-
-        // Merge spoke data into node properties
-        for node in nodes.iter_mut() {
-            if node.node_type == "task" {
-                if let Some(spoke_data) = spoke_map.remove(&node.id) {
-                    // Replace properties with spoke data (which contains status, priority, etc.)
-                    node.properties = spoke_data;
-                }
-            }
-        }
-
-        Ok(nodes)
+        Ok(descendants)
     }
 
-    /// Get all edges in a subtree using recursive collect
+    /// Get entire subtree (root + all descendants) with edges in a single optimized query
     ///
-    /// Fetches all parent-child relationships (has_child edges) within a subtree.
-    /// Combined with `get_nodes_in_subtree()`, this enables building an in-memory adjacency list
-    /// for efficient tree construction and navigation.
-    ///
-    /// # Strategy
-    ///
-    /// Uses SurrealDB's recursive `{..+collect}` syntax to get all descendant IDs in a single
-    /// traversal, then queries all edges where the parent is root or a descendant.
+    /// This is the most efficient way to fetch a complete subtree. It uses SurrealDB's
+    /// recursive `{..+collect}` syntax to traverse the entire hierarchy and fetch all
+    /// nodes and edges in a single database round-trip.
     ///
     /// # Performance
     ///
-    /// O(1) database queries - uses recursive collect to get all node IDs, then fetches
-    /// edges in a single query. Total: 2 queries regardless of tree depth.
+    /// Single database query regardless of tree depth or node count. The query:
+    /// 1. Recursively collects all descendant node IDs
+    /// 2. Fetches root + all descendants in one SELECT
+    /// 3. Fetches all edges in one SELECT
+    /// 4. Batch-fetches spoke data for task nodes (if any)
     ///
     /// # Arguments
     ///
-    /// * `root_id` - ID of the root node to fetch descendant edges for
+    /// * `root_id` - ID of the root node to fetch subtree for
     ///
     /// # Returns
     ///
-    /// Vector of all edges within the subtree (parent-child relationships)
-    pub async fn get_edges_in_subtree(&self, root_id: &str) -> Result<Vec<EdgeRecord>> {
+    /// Tuple of (all_nodes, edges) where:
+    /// - all_nodes: Vec<Node> - root node + all descendants with spoke data enriched
+    /// - edges: Vec<EdgeRecord> - all parent-child edges in the subtree
+    pub async fn get_subtree_with_edges(
+        &self,
+        root_id: &str,
+    ) -> Result<(Vec<Node>, Vec<EdgeRecord>)> {
         use surrealdb::sql::Thing;
 
         let root_thing = Thing::from(("node".to_string(), root_id.to_string()));
 
-        // Strategy: Use SurrealDB's recursive {..+collect} syntax to get all descendant IDs
-        // in a single traversal, then fetch all edges where parent is in that set.
+        // Single query batch to fetch everything:
+        // 1. All descendant node IDs (recursive collect)
+        // 2. Root + all descendant nodes
+        // 3. All edges in subtree
+        // 4. Task spoke data (status, priority, etc.) for task nodes in subtree
         //
-        // Query structure:
-        // 1. LET $descendants = ... - Recursively collect all descendant node Things
-        // 2. LET $all_parents = ... - Combine root + descendants
-        // 3. SELECT ... FROM has_child WHERE in IN $all_parents - Fetch edges
+        // The task spoke query uses string IDs matching node IDs since task records
+        // have the same ID as their parent node (e.g., task:uuid matches node:uuid)
         let query = "
             LET $descendants = $root_thing.{..+collect}->has_child->node;
-            LET $all_parents = array::concat([$root_thing], $descendants);
-            SELECT id, in, out, order FROM has_child WHERE in IN $all_parents ORDER BY order ASC;
+            LET $all_nodes = array::concat([$root_thing], $descendants);
+            SELECT * FROM node WHERE id IN $all_nodes;
+            SELECT id, in, out, order FROM has_child WHERE in IN $all_nodes ORDER BY order ASC;
+            LET $task_ids = (SELECT VALUE id FROM node WHERE id IN $all_nodes AND node_type = 'task');
+            SELECT * OMIT node FROM task WHERE id IN $task_ids;
         ";
 
         let mut response = self
@@ -2732,9 +2647,22 @@ where
             .query(query)
             .bind(("root_thing", root_thing))
             .await
-            .context("Failed to fetch subtree edges")?;
+            .context("Failed to query subtree")?;
 
-        // Use Thing type for SurrealDB record IDs
+        // Query has 6 statements:
+        // 0: LET $descendants
+        // 1: LET $all_nodes
+        // 2: SELECT nodes
+        // 3: SELECT edges
+        // 4: LET $task_ids
+        // 5: SELECT task spoke data
+        let surreal_nodes: Vec<SurrealNode> = response
+            .take(2)
+            .context("Failed to extract subtree nodes")?;
+
+        let mut all_nodes: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
+
+        // Parse edges (index 3)
         #[derive(serde::Deserialize)]
         struct EdgeRow {
             id: Thing,
@@ -2745,13 +2673,42 @@ where
             order: f64,
         }
 
-        // The query has 3 statements (LET, LET, SELECT), we want the SELECT result at index 2
-        let edges: Vec<EdgeRow> = response
-            .take(2)
-            .context("Failed to extract subtree edges from response")?;
+        let edge_rows: Vec<EdgeRow> = response
+            .take(3)
+            .context("Failed to extract subtree edges")?;
 
-        // Extract string IDs from Thing types
-        Ok(edges
+        // Parse task spoke data (index 5)
+        #[derive(serde::Deserialize)]
+        struct TaskSpokeRow {
+            id: Thing,
+            #[serde(flatten)]
+            properties: Value,
+        }
+
+        let task_spokes: Vec<TaskSpokeRow> = response.take(5).unwrap_or_default();
+
+        // Build map of task_id -> spoke properties
+        let mut spoke_map: std::collections::HashMap<String, Value> =
+            std::collections::HashMap::new();
+        for spoke in task_spokes {
+            let id_str = match &spoke.id.id {
+                Id::String(s) => s.clone(),
+                Id::Number(n) => n.to_string(),
+                _ => spoke.id.to_string(),
+            };
+            spoke_map.insert(id_str, spoke.properties);
+        }
+
+        // Merge spoke data into task nodes
+        for node in all_nodes.iter_mut() {
+            if node.node_type == "task" {
+                if let Some(spoke_data) = spoke_map.remove(&node.id) {
+                    node.properties = spoke_data;
+                }
+            }
+        }
+
+        let edges: Vec<EdgeRecord> = edge_rows
             .into_iter()
             .map(|e| {
                 let id_str = match &e.id.id {
@@ -2776,7 +2733,32 @@ where
                     order: e.order,
                 }
             })
-            .collect())
+            .collect();
+
+        Ok((all_nodes, edges))
+    }
+
+    /// Get all edges in a subtree using recursive collect
+    ///
+    /// Fetches all parent-child relationships (has_child edges) within a subtree.
+    /// Combined with `get_nodes_in_subtree()`, this enables building an in-memory adjacency list
+    /// for efficient tree construction and navigation.
+    ///
+    /// # Performance
+    ///
+    /// Delegates to `get_subtree_with_edges()` which fetches everything in a single query.
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - ID of the root node to fetch descendant edges for
+    ///
+    /// # Returns
+    ///
+    /// Vector of all edges within the subtree (parent-child relationships)
+    pub async fn get_edges_in_subtree(&self, root_id: &str) -> Result<Vec<EdgeRecord>> {
+        // Delegate to consolidated method, discarding nodes
+        let (_nodes, edges) = self.get_subtree_with_edges(root_id).await?;
+        Ok(edges)
     }
 
     pub async fn search_nodes_by_content(

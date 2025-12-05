@@ -2601,15 +2601,8 @@ where
     /// Fetch all data needed to traverse a subtree efficiently
     ///
     /// This is the core data-fetching method used by both `get_children_tree` (JSON output)
-    /// and MCP markdown export. It performs O(1) database round-trips regardless of tree
-    /// depth or node count:
-    ///
-    /// 1. Fetch root node (1 query)
-    /// 2. Fetch all descendant nodes using recursive collect (1 query)
-    /// 3. Fetch all edges using recursive collect (1 query)
-    ///
-    /// The recursive collect queries use SurrealDB's `{..+collect}` syntax to traverse
-    /// the entire hierarchy in a single database operation per call.
+    /// and MCP markdown export. It performs a **single database query** regardless of tree
+    /// depth or node count using SurrealDB's `{..+collect}` recursive syntax.
     ///
     /// Returns data structures optimized for in-memory traversal:
     /// - Node map for O(1) node lookup by ID
@@ -2628,37 +2621,22 @@ where
     pub async fn get_subtree_data(&self, root_id: &str) -> Result<SubtreeData, NodeServiceError> {
         use std::collections::HashMap;
 
-        // Fetch root node
-        let root_node = self.get_node(root_id).await.map_err(|e| {
-            NodeServiceError::query_failed(format!("Failed to fetch root node: {}", e))
-        })?;
-
-        // Fetch all nodes in subtree
-        let nodes = self
+        // Single consolidated query fetches root + all descendants + all edges
+        let (all_nodes, edges) = self
             .store
-            .get_nodes_in_subtree(root_id)
+            .get_subtree_with_edges(root_id)
             .await
             .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to fetch subtree nodes: {}", e))
+                NodeServiceError::query_failed(format!("Failed to fetch subtree: {}", e))
             })?;
 
-        // Fetch all edges in subtree
-        let edges = self
-            .store
-            .get_edges_in_subtree(root_id)
-            .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to fetch subtree edges: {}", e))
-            })?;
+        // Find root node from the results
+        let root_node = all_nodes.iter().find(|n| n.id == root_id).cloned();
 
         // Create a map of node_id → Node for O(1) lookup
         let mut node_map: HashMap<String, Node> = HashMap::new();
-        for node in nodes {
+        for node in all_nodes {
             node_map.insert(node.id.clone(), node);
-        }
-        // Include root node in the map
-        if let Some(ref root) = root_node {
-            node_map.insert(root.id.clone(), root.clone());
         }
 
         // Create adjacency list: parent_id → Vec of child_ids (sorted by order)
