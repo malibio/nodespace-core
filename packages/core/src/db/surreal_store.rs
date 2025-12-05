@@ -3578,39 +3578,11 @@ where
         Ok(())
     }
 
-    /// Mark a node's embedding as stale (needing regeneration)
-    ///
-    /// Called when node content changes, signaling that the embedding vector
-    /// needs to be regenerated. The embedding processor can then query for
-    /// stale nodes and regenerate embeddings in batches.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - UUID of the node to mark as stale
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # use nodespace_core::db::SurrealStore;
-    /// # use std::path::PathBuf;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let store = SurrealStore::new(PathBuf::from("./data/surreal.db")).await?;
-    /// // Mark embedding as stale after content change
-    /// store.mark_embedding_stale("node-id").await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn mark_embedding_stale(&self, node_id: &str) -> Result<()> {
-        // Update using record ID
-        self.db
-            .query("UPDATE type::thing('node', $id) SET embedding_stale = true;")
-            .bind(("id", node_id.to_string()))
-            .await
-            .context("Failed to mark embedding as stale")?;
-
-        Ok(())
-    }
+    // NOTE: mark_embedding_stale() on node table REMOVED (Issue #729)
+    // Root-aggregate model uses embedding table's stale flag via:
+    // - mark_root_embedding_stale() for existing embeddings
+    // - create_stale_embedding_marker() for new roots
+    // NodeService.queue_root_for_embedding() handles the logic
 
     /// Get nodes with stale embeddings
     ///

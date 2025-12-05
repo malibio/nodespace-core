@@ -27,6 +27,7 @@
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
 use crate::db::{StoreChange, StoreOperation, SurrealStore};
+use crate::models::embedding::is_embeddable_type;
 use crate::models::schema::SchemaRelationship;
 use crate::models::{Node, NodeFilter, NodeUpdate};
 use crate::services::error::NodeServiceError;
@@ -1264,6 +1265,8 @@ where
         };
 
         // Step 5: Create the node
+        // Save node_type before moving into Node (needed for embedding check)
+        let node_type = params.node_type.clone();
         let node = Node {
             id: node_id,
             node_type: params.node_type,
@@ -1288,6 +1291,24 @@ where
                 params.insert_after_node_id.as_deref(),
             )
             .await?;
+
+            // Step 7a: Child node created - queue root for embedding regeneration
+            // The new child's content should be included in the root's aggregate embedding
+            // (Issue #729 - root-aggregate model)
+            self.queue_root_for_embedding(&created_id).await;
+        } else {
+            // Step 7b: Root node created - queue for embedding if embeddable type
+            // (Issue #729 - root-aggregate model)
+            if is_embeddable_type(&node_type) {
+                if let Err(e) = self.store.create_stale_embedding_marker(&created_id).await {
+                    // Log warning but don't fail the creation - embedding will be regenerated later
+                    tracing::warn!(
+                        "Failed to create embedding marker for new root {}: {}",
+                        created_id,
+                        e
+                    );
+                }
+            }
         }
 
         Ok(created_id)
@@ -2059,12 +2080,9 @@ where
 
         // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
 
-        // Mark embedding as stale if content changed
+        // Queue root for embedding regeneration if content changed (Issue #729 - root-aggregate model)
         if content_changed {
-            if let Err(e) = self.store.mark_embedding_stale(id).await {
-                // Log warning but don't fail the update
-                tracing::warn!("Failed to mark embedding as stale for node {}: {}", id, e);
-            }
+            self.queue_root_for_embedding(id).await;
         }
 
         // Sync mentions if content changed
@@ -2412,6 +2430,10 @@ where
             }
         };
 
+        // 1b. Capture root ID BEFORE deletion (Issue #729 - root-aggregate model)
+        // After deletion, we can't traverse up to find the root
+        let root_id_for_embedding = self.get_root_id(node_id).await.ok();
+
         // 2. Cascade delete all children recursively
         let children = self.get_children(node_id).await?;
         for child in children {
@@ -2441,6 +2463,17 @@ where
                     return Ok(crate::models::DeleteResult { existed: false });
                 }
             }
+        }
+
+        // 5. Queue root for embedding regeneration (Issue #729 - root-aggregate model)
+        // Only queue if the deleted node was NOT the root itself (root deletion removes embedding)
+        if let Some(root_id) = root_id_for_embedding {
+            if root_id != node_id {
+                // Deleted a child node - root's aggregate embedding needs updating
+                self.queue_root_for_embedding(&root_id).await;
+            }
+            // If we deleted the root itself, no need to queue - embeddings will be orphaned
+            // and should be cleaned up by the embedding processor
         }
 
         Ok(crate::models::DeleteResult { existed: true })
@@ -2781,6 +2814,100 @@ where
                     return Ok(current_id);
                 }
             }
+        }
+    }
+
+    /// Queue a node's root for embedding regeneration
+    ///
+    /// Finds the root of the given node and marks its embedding as stale.
+    /// Used when any node in a tree is created, updated, or deleted to ensure
+    /// the root-aggregate embedding stays current.
+    ///
+    /// This is a non-blocking operation - errors are logged but don't fail the caller.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The node that changed (can be root or any descendant)
+    ///
+    /// # Root-Aggregate Model (Issue #729)
+    ///
+    /// Only root nodes of embeddable types get embedded. When any node in the tree
+    /// changes, we find the root and mark its embedding as stale. The background
+    /// `EmbeddingProcessor` will regenerate the embedding with updated content.
+    pub async fn queue_root_for_embedding(&self, node_id: &str) {
+        // Find the root of this node's tree
+        let root_id = match self.get_root_id(node_id).await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to find root for node {} (embedding not queued): {}",
+                    node_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Get root node to check if it's an embeddable type
+        let root = match self.get_node(&root_id).await {
+            Ok(Some(node)) => node,
+            Ok(None) => {
+                tracing::warn!("Root node {} not found (embedding not queued)", root_id);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get root node {} (embedding not queued): {}",
+                    root_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Only queue if root is an embeddable type
+        if !is_embeddable_type(&root.node_type) {
+            tracing::debug!(
+                "Root {} is not embeddable (type: {}), skipping embedding queue",
+                root_id,
+                root.node_type
+            );
+            return;
+        }
+
+        // Check if embedding exists for this root
+        let has_embedding = match self.store.has_embeddings(&root_id).await {
+            Ok(has) => has,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to check embeddings for root {} (assuming none exist): {}",
+                    root_id,
+                    e
+                );
+                false
+            }
+        };
+
+        // Mark existing embedding as stale or create new stale marker
+        let result = if has_embedding {
+            self.store.mark_root_embedding_stale(&root_id).await
+        } else {
+            self.store.create_stale_embedding_marker(&root_id).await
+        };
+
+        if let Err(e) = result {
+            tracing::warn!(
+                "Failed to queue root {} for embedding (via node {}): {}",
+                root_id,
+                node_id,
+                e
+            );
+        } else {
+            tracing::debug!(
+                "Queued root {} for embedding (triggered by node {})",
+                root_id,
+                node_id
+            );
         }
     }
 
