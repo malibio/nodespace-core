@@ -1172,6 +1172,73 @@ where
         Ok(node)
     }
 
+    /// Builds a Node from hub data and properties.
+    ///
+    /// This helper extracts the common node construction logic used by both
+    /// `get_node()` and `get_nodes_by_ids()`, ensuring consistent behavior
+    /// for timestamp parsing, mentions extraction, and fallback handling.
+    ///
+    /// # Arguments
+    /// * `node_id` - The node's ID string
+    /// * `node_type` - The node's type (text, task, date, etc.)
+    /// * `hub` - The hub table row as a JSON Value
+    /// * `properties` - The node's properties (from spoke table or hub.properties)
+    fn build_node_from_hub(
+        &self,
+        node_id: String,
+        node_type: String,
+        hub: &Value,
+        properties: Value,
+    ) -> Node {
+        let created_at = hub["created_at"]
+            .as_str()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|| {
+                warn!(node_id = %node_id, "Missing or invalid created_at timestamp, using current time");
+                Utc::now()
+            });
+
+        let modified_at = hub["modified_at"]
+            .as_str()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|| {
+                warn!(node_id = %node_id, "Missing or invalid modified_at timestamp, using current time");
+                Utc::now()
+            });
+
+        let mentions = hub["mentions"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mentioned_by = hub["mentioned_by"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Node {
+            id: node_id,
+            node_type,
+            content: hub["content"].as_str().unwrap_or("").to_string(),
+            version: hub["version"].as_i64().unwrap_or(1),
+            created_at,
+            modified_at,
+            properties,
+            mentions,
+            mentioned_by,
+        }
+    }
+
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         // Two-query approach: hub first, then spoke if needed
         //
@@ -1221,53 +1288,12 @@ where
                 .unwrap_or(serde_json::json!({}))
         };
 
-        let created_at = hub["created_at"]
-            .as_str()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|| {
-                warn!(node_id = %id, "Missing or invalid created_at timestamp, using current time");
-                Utc::now()
-            });
-
-        let modified_at = hub["modified_at"]
-            .as_str()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|| {
-                warn!(node_id = %id, "Missing or invalid modified_at timestamp, using current time");
-                Utc::now()
-            });
-
-        let mentions = hub["mentions"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let mentioned_by = hub["mentioned_by"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(Some(Node {
-            id: id.to_string(),
+        Ok(Some(self.build_node_from_hub(
+            id.to_string(),
             node_type,
-            content: hub["content"].as_str().unwrap_or("").to_string(),
-            version: hub["version"].as_i64().unwrap_or(1),
-            created_at,
-            modified_at,
+            &hub,
             properties,
-            mentions,
-            mentioned_by,
-        }))
+        )))
     }
 
     /// Batch-fetch multiple nodes by their IDs in a single query.
@@ -1357,7 +1383,7 @@ where
                 HashMap::new()
             };
 
-            // Convert hub + spoke data to Node structs
+            // Convert hub + spoke data to Node structs using the shared helper
             for (node_id, hub) in hubs {
                 let properties = if has_spoke {
                     spoke_data
@@ -1370,56 +1396,9 @@ where
                         .unwrap_or(serde_json::json!({}))
                 };
 
-                let created_at = hub["created_at"]
-                    .as_str()
-                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|| {
-                        warn!(node_id = %node_id, "Missing or invalid created_at timestamp, using current time");
-                        Utc::now()
-                    });
-
-                let modified_at = hub["modified_at"]
-                    .as_str()
-                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|| {
-                        warn!(node_id = %node_id, "Missing or invalid modified_at timestamp, using current time");
-                        Utc::now()
-                    });
-
-                let mentions = hub["mentions"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let mentioned_by = hub["mentioned_by"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                result_map.insert(
-                    node_id.clone(),
-                    Node {
-                        id: node_id,
-                        node_type: node_type.clone(),
-                        content: hub["content"].as_str().unwrap_or("").to_string(),
-                        version: hub["version"].as_i64().unwrap_or(1),
-                        created_at,
-                        modified_at,
-                        properties,
-                        mentions,
-                        mentioned_by,
-                    },
-                );
+                let node =
+                    self.build_node_from_hub(node_id.clone(), node_type.clone(), &hub, properties);
+                result_map.insert(node_id, node);
             }
         }
 
