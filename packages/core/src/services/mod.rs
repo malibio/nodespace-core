@@ -28,9 +28,6 @@ pub mod query_service;
 pub mod relationship_cache;
 pub mod schema_table_manager;
 
-#[cfg(test)]
-mod node_service_root_test;
-
 pub use embedding_processor::{EmbeddingProcessor, EmbeddingWaker};
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
