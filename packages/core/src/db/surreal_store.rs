@@ -4356,15 +4356,27 @@ where
     ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
         let min_similarity = threshold.unwrap_or(0.5);
 
+        // Intermediate struct for raw SurrealDB results
+        // Note: We select `node` directly instead of `record::id(node)` because
+        // SurrealDB 2.3 doesn't allow function calls in SELECT with GROUP BY
+        #[derive(Debug, serde::Deserialize)]
+        struct RawSearchResult {
+            node: surrealdb::sql::Thing,
+            similarity: f64,
+        }
+
         // Query to get best similarity per node across all chunks
+        // Note: SurrealDB doesn't support HAVING, so we use a subquery with WHERE
         let query = r#"
-            SELECT
-                record::id(node) AS node_id,
-                math::max(vector::similarity::cosine(vector, $query_vector)) AS similarity
-            FROM embedding
-            WHERE stale = false
-            GROUP BY node
-            HAVING similarity > $threshold
+            SELECT * FROM (
+                SELECT
+                    node,
+                    math::max(vector::similarity::cosine(vector, $query_vector)) AS similarity
+                FROM embedding
+                WHERE stale = false
+                GROUP BY node
+            )
+            WHERE similarity > $threshold
             ORDER BY similarity DESC
             LIMIT $limit;
         "#;
@@ -4378,9 +4390,18 @@ where
             .await
             .context("Failed to execute embedding search")?;
 
-        let results: Vec<crate::models::EmbeddingSearchResult> = response
+        let raw_results: Vec<RawSearchResult> = response
             .take(0)
             .context("Failed to extract embedding search results")?;
+
+        // Convert Thing to node_id string
+        let results = raw_results
+            .into_iter()
+            .map(|r| crate::models::EmbeddingSearchResult {
+                node_id: r.node.id.to_raw(),
+                similarity: r.similarity,
+            })
+            .collect();
 
         Ok(results)
     }
