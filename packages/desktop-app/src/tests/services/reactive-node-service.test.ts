@@ -1220,9 +1220,10 @@ describe('ReactiveNodeService', () => {
         ).mockRejectedValue(new Error('ECONNREFUSED'));
 
         // Use child-2 which has child-1 as previous sibling (can be indented)
-        // Store original depth for documentation (optimistic updates may change it)
-        const _originalDepth = service.getUIState('child-2')?.depth ?? 0;
-        expect(_originalDepth).toBeGreaterThanOrEqual(0); // Use value to satisfy lint
+        // Verify initial state - child-2 exists with valid depth
+        const initialUIState = service.getUIState('child-2');
+        expect(initialUIState).toBeDefined();
+        expect(initialUIState?.depth).toBeGreaterThanOrEqual(0);
 
         // Indent should succeed for UI (optimistic) even if backend fails
         const result = await service.indentNode('child-2');
@@ -1241,9 +1242,10 @@ describe('ReactiveNodeService', () => {
         ).mockRejectedValue(new Error('Database constraint violation'));
 
         // Use child-2 which has child-1 as previous sibling (can be indented)
-        // Store original depth for documentation (optimistic updates may change it)
-        const _originalDepth = service.getUIState('child-2')?.depth ?? 0;
-        expect(_originalDepth).toBeGreaterThanOrEqual(0); // Use value to satisfy lint
+        // Verify initial state - child-2 exists with valid depth
+        const initialUIState = service.getUIState('child-2');
+        expect(initialUIState).toBeDefined();
+        expect(initialUIState?.depth).toBeGreaterThanOrEqual(0);
 
         // Indent will succeed initially (optimistic)
         await service.indentNode('child-2');
@@ -1742,10 +1744,11 @@ describe('ReactiveNodeService', () => {
 
     describe('Subscription and destroy', () => {
       it('should handle multiple destroy calls (idempotent)', () => {
-        service.destroy();
-        service.destroy();
-        // Should not throw
-        expect(true).toBe(true);
+        // Calling destroy multiple times should not throw
+        expect(() => {
+          service.destroy();
+          service.destroy();
+        }).not.toThrow();
       });
     });
   });

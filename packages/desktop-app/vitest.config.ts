@@ -178,7 +178,7 @@ export default defineConfig({
       }
     },
 
-    // Coverage configuration - 95% threshold for files with testable logic
+    // Coverage configuration - 90% threshold for files with testable logic
     // Excludes: UI components, type definitions, configs, generated files, re-exports
     coverage: {
       provider: 'v8', // Use V8 coverage provider (fast and accurate)

@@ -101,9 +101,7 @@ describe('Multi-Tab/Pane Reactivity', () => {
       sharedNodeStore.setNode(node, { type: 'database', reason: 'test-setup' });
 
       const viewer1 = createReactiveNodeService(createMockEvents() as never);
-      const viewer2 = createReactiveNodeService(createMockEvents() as never);
       viewer1.initializeNodes([node]);
-      viewer2.initializeNodes([node]);
 
       // Act: Measure update propagation time
       const startTime = performance.now();
@@ -186,9 +184,12 @@ describe('Multi-Tab/Pane Reactivity', () => {
       const parentChildrenAfter = structureTree.getChildren('struct-parent');
       expect(parentChildrenAfter).not.toContain('struct-child-2');
 
-      // Both viewers should see hierarchy change via their event callbacks
-      expect(viewer1Events.hierarchyChanged).toBeDefined();
-      expect(viewer2Events.hierarchyChanged).toBeDefined();
+      // Both viewers have hierarchy changed callbacks registered
+      // Note: hierarchyChanged is called during initializeNodes when computing depths,
+      // which triggers the callback. The test verifies the callback mechanism exists
+      // and is wired up correctly to the service.
+      expect(viewer1Events.hierarchyChanged).toHaveBeenCalled();
+      expect(viewer2Events.hierarchyChanged).toHaveBeenCalled();
     });
 
     it('should show chevron/expand indicator in both viewers after indent', async () => {
@@ -278,9 +279,15 @@ describe('Multi-Tab/Pane Reactivity', () => {
       const rightUIState = rightPane.getUIState('expand-child');
 
       expect(leftUIState?.expanded).toBe(true);
-      // Right pane may have different default state (not expanded by default)
-      // The key assertion is that they can have independent states
-      expect(rightUIState).toBeDefined();
+      // Right pane has default expanded state (true by default in initializeNodes)
+      // The key assertion is that setExpanded on one viewer doesn't affect the other
+      // Both start expanded, but if we collapsed right, left would remain expanded
+      expect(rightUIState?.expanded).toBe(true);
+
+      // Now demonstrate independent state by collapsing right pane
+      rightPane.setExpanded('expand-child', false);
+      expect(leftPane.getUIState('expand-child')?.expanded).toBe(true);
+      expect(rightPane.getUIState('expand-child')?.expanded).toBe(false);
     });
   });
 
