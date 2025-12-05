@@ -188,8 +188,12 @@ export default defineConfig({
         'src/tests/',
         '**/*.d.ts',
         '**/*.config.ts',
+        '**/*.config.js',
         'build/',
         'dist/',
+        '.svelte-kit/**', // SvelteKit generated files
+        'scripts/**', // Build/dev scripts
+        'eslint-rules/**', // Custom eslint rules
         // Excluded from coverage targets (Issue #735)
         'src/lib/components/ui/**', // Third-party shadcn-svelte wrappers
         'src/lib/design/**', // Svelte components - tested via browser-mode tests
@@ -200,14 +204,24 @@ export default defineConfig({
         'src/lib/services/developer-inspector.ts', // Dev-only debugging tool
         'src/lib/services/performance-tracker.ts', // Dev-only performance monitoring
         'src/lib/services/app-initialization.ts', // Bootstrap code with Tauri dependencies
-        'src/lib/services/index.ts' // Re-export barrel file
+        'src/lib/services/index.ts', // Re-export barrel file
+        'src/lib/utils.ts', // SvelteKit generated utils
+        // Type-only files (no executable code)
+        'src/lib/types/sse-events.ts',
+        'src/lib/types/tree.ts',
+        'src/lib/types/update-protocol.ts',
+        'src/lib/types/navigation.ts',
+        'src/lib/types/node-viewers.ts',
+        'src/lib/types/query.ts',
+        'src/lib/types/event-types.ts',
+        'src/lib/types/content-decoration.ts'
       ],
       thresholds: {
         // Global thresholds - 90% target for testable logic
-        lines: 70,
-        functions: 75,
-        branches: 80,
-        statements: 70
+        lines: 90,
+        functions: 90,
+        branches: 85,
+        statements: 90
       }
     },
 
