@@ -2581,15 +2581,15 @@ where
     /// O(1) database queries using SurrealDB's recursive `{..+collect}` syntax.
     /// This collects all descendant IDs in a single traversal, then fetches all
     /// node data in one query. Total: 2 queries regardless of tree depth.
+    ///
+    /// **Note:** If you need both nodes AND edges, use [`get_subtree_with_edges`] directly
+    /// to avoid duplicate database queries.
     pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
         // Delegate to consolidated method, excluding root
         let (all_nodes, _edges) = self.get_subtree_with_edges(root_id).await?;
 
         // Filter out root node (consolidated method includes it)
-        let descendants: Vec<Node> = all_nodes
-            .into_iter()
-            .filter(|n| n.id != root_id)
-            .collect();
+        let descendants: Vec<Node> = all_nodes.into_iter().filter(|n| n.id != root_id).collect();
 
         Ok(descendants)
     }
@@ -2747,6 +2747,9 @@ where
     /// # Performance
     ///
     /// Delegates to `get_subtree_with_edges()` which fetches everything in a single query.
+    ///
+    /// **Note:** If you need both nodes AND edges, use [`get_subtree_with_edges`] directly
+    /// to avoid duplicate database queries.
     ///
     /// # Arguments
     ///
