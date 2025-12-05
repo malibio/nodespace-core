@@ -15,7 +15,8 @@ pub struct SearchSemanticParams {
     /// Natural language search query
     pub query: String,
 
-    /// Similarity threshold (0.0-1.0, lower = more similar)
+    /// Minimum similarity threshold (0.0-1.0, higher = stricter filter)
+    /// Results must have similarity > threshold to be included
     /// Default: 0.7
     #[serde(default)]
     pub threshold: Option<f32>,

@@ -815,7 +815,7 @@ fn get_tool_schemas() -> Value {
                     },
                     "threshold": {
                         "type": "number",
-                        "description": "Similarity threshold 0.0-1.0, lower = more similar (default: 0.7)",
+                        "description": "Minimum similarity threshold 0.0-1.0. Results must have similarity > this value. Higher = stricter (default: 0.7)",
                         "minimum": 0.0,
                         "maximum": 1.0,
                         "default": 0.7
