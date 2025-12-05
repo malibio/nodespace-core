@@ -51,7 +51,7 @@ const isProd =
 // Development: show all logs including debug
 const DEFAULT_LEVEL: LogLevel = isProd ? 'warn' : 'debug';
 
-class Logger {
+export class Logger {
   private config: LoggerConfig;
 
   constructor(config?: Partial<LoggerConfig>) {
