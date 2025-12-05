@@ -320,9 +320,9 @@ describe('LayoutPersistenceService', () => {
     });
 
     it('handles localStorage errors during clear', () => {
-      // Mock removeItem to throw error
-      const originalRemoveItem = window.localStorage.removeItem;
-      window.localStorage.removeItem = vi.fn(() => {
+      // Spy on removeItem and make it throw error
+      const spy = vi.spyOn(window.localStorage, 'removeItem');
+      spy.mockImplementationOnce(() => {
         throw new Error('Storage error');
       });
 
@@ -331,8 +331,11 @@ describe('LayoutPersistenceService', () => {
         LayoutPersistenceService.clear();
       }).not.toThrow();
 
-      // Restore original implementation
-      window.localStorage.removeItem = originalRemoveItem;
+      // Verify removeItem was called
+      expect(spy).toHaveBeenCalledWith('nodespace:layout-state');
+
+      // Restore spy
+      spy.mockRestore();
     });
   });
 

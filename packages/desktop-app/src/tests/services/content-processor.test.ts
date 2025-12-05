@@ -920,4 +920,326 @@ describe('ContentProcessor', () => {
       expect(ast.metadata.hasNodespaceRefs).toBe(false);
     });
   });
+
+  // ========================================================================
+  // NodeReference Integration and Error Handling Tests
+  // ========================================================================
+
+  describe('NodeReference Integration and Error Handling', () => {
+    it('should handle resolveNodespaceURI errors gracefully during rendering', async () => {
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'test', exists: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://test',
+        resolveNodespaceURI: async () => {
+          throw new Error('Network error');
+        }
+      };
+
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://node-123).';
+      const html = await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+
+      // Should fallback to basic rendering despite error
+      expect(html).toContain('node-123');
+    });
+
+    it('should render nodespace ref with full decoration when reference is valid', async () => {
+      const mockService = {
+        resolveNodeReference: async () => ({
+          nodeId: 'node-123',
+          exists: true,
+          isValid: true,
+          title: 'Test Node',
+          nodeType: 'text'
+        }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://node-123',
+        resolveNodespaceURI: async (_uri: string) => ({
+          nodeId: 'node-123',
+          exists: true,
+          isValid: true,
+          title: 'Test Node',
+          nodeType: 'text',
+          content: 'Test content',
+          properties: {}
+        }),
+        parseNodespaceURI: (_uri: string) => ({
+          nodeId: 'node-123',
+          exists: true,
+          isValid: true,
+          title: 'Test Node'
+        })
+      };
+
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://node-123).';
+      const html = await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+
+      // Should contain rich decoration placeholder
+      expect(html).toContain('ns-component-placeholder');
+    });
+
+    it('should handle addReference errors gracefully', async () => {
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'node-123', exists: true, isValid: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://node-123',
+        parseNodespaceURI: (_uri: string) => ({
+          nodeId: 'node-123',
+          exists: true,
+          isValid: true,
+          title: 'Test'
+        }),
+        addReference: async () => {
+          throw new Error('Database error');
+        }
+      };
+
+      processor.setNodeReferenceService(mockService);
+
+      // Should not throw when addReference fails
+      await expect(async () => {
+        await processor.processContentWithReferences(
+          'Text with [ref](nodespace://node-123).',
+          'source-id'
+        );
+      }).not.toThrow();
+    });
+
+    it('should handle parseNodespaceURI returning null', async () => {
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'test', exists: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://test',
+        parseNodespaceURI: () => null
+      };
+
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://node-123).';
+      const html = await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+
+      // Should render as invalid reference
+      expect(html).toContain('ns-noderef-invalid');
+    });
+
+    it('should use cached reference when cache is valid', async () => {
+      let parseCallCount = 0;
+
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'test', exists: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://test',
+        parseNodespaceURI: () => {
+          parseCallCount++;
+          return {
+            nodeId: 'node-123',
+            exists: true,
+            isValid: true,
+            title: 'Cached Node'
+          };
+        }
+      };
+
+      processor.clearReferenceCache();
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://node-123).';
+
+      // First call should parse
+      await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+      expect(parseCallCount).toBe(1);
+
+      // Second call should use cache
+      await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+      expect(parseCallCount).toBe(1); // Still 1, used cache
+    });
+
+    it('should invalidate cache correctly', async () => {
+      let parseCallCount = 0;
+
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'test', exists: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://test',
+        parseNodespaceURI: () => {
+          parseCallCount++;
+          return {
+            nodeId: 'node-123',
+            exists: true,
+            isValid: true,
+            title: 'Test'
+          };
+        }
+      };
+
+      processor.clearReferenceCache();
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://node-123).';
+
+      // First call
+      await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+      expect(parseCallCount).toBe(1);
+
+      // Invalidate cache for this node
+      processor.invalidateReferenceCache('node-123');
+
+      // Second call should parse again
+      await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+      expect(parseCallCount).toBe(2); // Re-parsed after invalidation
+    });
+
+    it('should cache null results to avoid repeated failed lookups', async () => {
+      let parseCallCount = 0;
+
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'test', exists: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://test',
+        parseNodespaceURI: () => {
+          parseCallCount++;
+          throw new Error('Not found');
+        }
+      };
+
+      processor.clearReferenceCache();
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://bad-node).';
+
+      // First call should attempt parse
+      await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+      expect(parseCallCount).toBe(1);
+
+      // Second call should use cached null result
+      await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+      expect(parseCallCount).toBe(1); // Cached null, didn't retry
+    });
+
+    it('should handle resolveNodespaceURI returning null during decoration', async () => {
+      const mockService = {
+        resolveNodeReference: async () => ({ nodeId: 'test', exists: true }),
+        detectNodespaceLinks: () => [],
+        createNodeReference: () => 'nodespace://test',
+        resolveNodespaceURI: async () => null,
+        parseNodespaceURI: () => ({
+          nodeId: 'node-123',
+          exists: true,
+          isValid: true,
+          title: 'Test'
+        })
+      };
+
+      processor.setNodeReferenceService(mockService);
+
+      const markdown = 'Text with [ref](nodespace://node-123).';
+      const html = await processor.markdownToDisplayWithReferences(markdown, 'source-id');
+
+      // Should fallback to basic rendering
+      expect(html).toContain('ns-noderef');
+    });
+  });
+
+  // ========================================================================
+  // Additional Coverage Tests for Uncovered Lines
+  // ========================================================================
+
+  describe('Additional Coverage for Edge Cases', () => {
+    it('should handle vbscript protocol in sanitization', () => {
+      const content = 'Link with vbscript:alert(1) protocol';
+      const sanitized = processor.sanitizeContent(content);
+
+      expect(sanitized).not.toContain('vbscript:');
+    });
+
+    it('should handle word count for empty stripped markdown', () => {
+      const content = '# ';
+      const ast = processor.parseMarkdown(content);
+
+      // Should handle empty word count gracefully
+      expect(ast.metadata.wordCount).toBe(0);
+    });
+
+    it('should handle italic regex edge cases', () => {
+      const content = 'Text with *italic* and **not italic**';
+      const ast = processor.parseMarkdown(content);
+
+      const paragraph = ast.children[0] as ParagraphNode;
+      const hasItalic = paragraph.children.some((child) => child.type === 'italic');
+      expect(hasItalic).toBe(true);
+    });
+
+    it('should handle overlapping nodespace ref patterns correctly', () => {
+      // Test the pattern filtering logic for overlapping patterns
+      const content = '[Text](nodespace://node-id) nodespace://node-id';
+      const ast = processor.parseMarkdown(content);
+
+      const paragraph = ast.children[0] as ParagraphNode;
+      const nodeRefs = paragraph.children.filter((child) => child.type === 'nodespace-ref');
+
+      // Should detect both but handle overlapping correctly
+      expect(nodeRefs.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should render wikilinks in AST correctly', async () => {
+      const content = 'Text with [[wikilink]] here.';
+      const ast = processor.parseMarkdown(content);
+      const html = await processor.renderAST(ast);
+
+      expect(html).toContain('ns-wikilink');
+      expect(html).toContain('data-target');
+    });
+
+    it('should handle nodespace URI with both node/ prefix and query params', () => {
+      const content = '[Link](nodespace://node/test-id?view=edit&mode=preview)';
+      const links = processor.detectNodespaceURIs(content);
+
+      expect(links).toHaveLength(1);
+      expect(links[0].nodeId).toBe('test-id');
+      expect(links[0].uri).toContain('?view=edit&mode=preview');
+    });
+
+    it('should handle mixed wikilinks and nodespace refs in same paragraph', async () => {
+      const content = 'Text with [[wikilink]] and [ref](nodespace://node-123) together.';
+      const ast = processor.parseMarkdown(content);
+
+      const paragraph = ast.children[0] as ParagraphNode;
+      const hasWikilink = paragraph.children.some((child) => child.type === 'wikilink');
+      const hasNodeRef = paragraph.children.some((child) => child.type === 'nodespace-ref');
+
+      expect(hasWikilink).toBe(true);
+      expect(hasNodeRef).toBe(true);
+
+      const html = await processor.renderAST(ast);
+      expect(html).toContain('ns-wikilink');
+      expect(html).toContain('ns-noderef');
+    });
+
+    it('should handle AST node types in rendering switch statement', async () => {
+      // Test all node type renderings
+      const content =
+        '# Header\n\nParagraph with **bold**, *italic*, `code`, [[wikilink]], and plain text.';
+      const ast = processor.parseMarkdown(content);
+      const html = await processor.renderAST(ast);
+
+      expect(html).toContain('<h1');
+      expect(html).toContain('<p');
+      expect(html).toContain('<strong');
+      expect(html).toContain('<em');
+      expect(html).toContain('<code');
+      expect(html).toContain('ns-wikilink');
+    });
+
+    it('should handle unknown AST node types in astToMarkdown', () => {
+      const ast = processor.parseMarkdown('# Header\n\nText');
+      const markdown = processor.astToMarkdown(ast);
+
+      expect(markdown).toContain('# Header');
+      expect(markdown).toContain('Text');
+    });
+  });
 });

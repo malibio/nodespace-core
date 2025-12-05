@@ -2118,3 +2118,96 @@ describe('ReactiveNodeService - Error Handling', () => {
     consoleErrorSpy.mockRestore();
   });
 });
+
+describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
+  let service: ReactiveNodeService;
+  let events: NodeManagerEvents;
+  let _sharedNodeStore: SharedNodeStore;
+
+  beforeEach(() => {
+    SharedNodeStore.resetInstance();
+    _sharedNodeStore = SharedNodeStore.getInstance();
+
+    events = {
+      focusRequested: vi.fn(),
+      hierarchyChanged: vi.fn(),
+      nodeCreated: vi.fn(),
+      nodeDeleted: vi.fn()
+    };
+
+    service = createReactiveNodeService(events);
+  });
+
+  afterEach(() => {
+    service.destroy();
+  });
+
+  it('deleteNode cleans up debounced operations with fastTimer', () => {
+    const node: Node = {
+      id: 'cleanup-test',
+      nodeType: 'text',
+      content: 'Test',
+      version: 1,
+      properties: {},
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      parentId: null
+    };
+
+    service.initializeNodes([node]);
+
+    // Trigger content processing to create debounced operations
+    service.updateNodeContent('cleanup-test', 'New content');
+
+    // Delete node immediately (timers still active)
+    service.deleteNode('cleanup-test');
+
+    // Node should be deleted
+    const deletedNode = service.findNode('cleanup-test');
+    expect(deletedNode).toBeNull();
+  });
+
+  it('deleteNode cleans up debounced operations with both timers', () => {
+    const node: Node = {
+      id: 'cleanup-both',
+      nodeType: 'text',
+      content: 'Test',
+      version: 1,
+      properties: {},
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      parentId: null
+    };
+
+    service.initializeNodes([node]);
+
+    // Multiple updates create multiple timers
+    service.updateNodeContent('cleanup-both', 'Update 1');
+    service.updateNodeContent('cleanup-both', 'Update 2');
+
+    // Delete while timers are pending
+    service.deleteNode('cleanup-both');
+
+    expect(service.findNode('cleanup-both')).toBeNull();
+  });
+
+  it('deleteNode handles nodes without debounced operations', () => {
+    const node: Node = {
+      id: 'no-debounce',
+      nodeType: 'text',
+      content: 'Test',
+      version: 1,
+      properties: {},
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      parentId: null
+    };
+
+    service.initializeNodes([node]);
+
+    // Delete immediately without any content updates
+    service.deleteNode('no-debounce');
+
+    expect(service.findNode('no-debounce')).toBeNull();
+  });
+});

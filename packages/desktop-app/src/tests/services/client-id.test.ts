@@ -395,6 +395,46 @@ describe('Client ID Service', () => {
       const clientId = getClientId();
       expect(window.sessionStorage.getItem('nodespace_client_id')).toBe(clientId);
     });
+
+    it('should return test-client in SSR/test environment when window is undefined', () => {
+      // Temporarily mock window as undefined to test SSR path
+      const originalWindow = globalThis.window;
+
+      // Delete window to simulate SSR environment
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (globalThis as any).window;
+
+      try {
+        const clientId = getClientId();
+
+        // Should return the test client ID
+        expect(clientId).toBe('test-client');
+      } finally {
+        // Restore window
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (globalThis as any).window = originalWindow;
+      }
+    });
+
+    it('should handle resetClientId gracefully when window is undefined', () => {
+      // Temporarily mock window as undefined to test SSR path
+      const originalWindow = globalThis.window;
+
+      // Delete window to simulate SSR environment
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (globalThis as any).window;
+
+      try {
+        // Should not throw
+        expect(() => {
+          resetClientId();
+        }).not.toThrow();
+      } finally {
+        // Restore window
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (globalThis as any).window = originalWindow;
+      }
+    });
   });
 
   describe('UUID Generation', () => {
