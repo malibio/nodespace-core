@@ -2856,7 +2856,7 @@ where
                 e
             );
         } else {
-            tracing::info!(
+            tracing::debug!(
                 "📥 Queued root {} for embedding (triggered by node {})",
                 root_id,
                 node_id
@@ -2864,7 +2864,7 @@ where
 
             // Wake the embedding processor (fire-and-forget)
             if let Some(ref waker) = self.embedding_waker {
-                tracing::info!("🔔 Waking embedding processor for root {}", root_id);
+                tracing::debug!("🔔 Waking embedding processor for root {}", root_id);
                 waker.wake();
             } else {
                 tracing::warn!(

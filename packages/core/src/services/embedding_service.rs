@@ -242,18 +242,18 @@ where
 
     /// Split content into chunks for embedding
     ///
-    /// Uses conservative token counting (3 chars ≈ 1 token) to ensure chunks
-    /// never exceed the model's token limit. Overlaps chunks by `overlap_tokens`
+    /// Uses conservative token counting to ensure chunks never exceed the
+    /// model's token limit. The `chars_per_token_estimate` config controls
+    /// the character-to-token ratio. Overlaps chunks by `overlap_tokens`
     /// to maintain context across boundaries.
     ///
     /// This function is UTF-8 safe - it never splits in the middle of a
     /// multi-byte character (like emojis).
     fn chunk_content(&self, content: &str) -> Vec<(i32, i32, String)> {
-        // Conservative token estimate: 3 chars ≈ 1 token
+        // Use configured chars_per_token estimate (default: 3)
         // BGE models typically tokenize at ~3-4 chars/token, but technical content
         // with code, markdown, and special characters can be closer to 2.5.
-        // Using 3 provides a safety margin to prevent exceeding 512 token limit.
-        let chars_per_token = 3;
+        let chars_per_token = self.config.chars_per_token_estimate;
         let max_chars = self.config.max_tokens_per_chunk * chars_per_token;
         let overlap_chars = self.config.overlap_tokens * chars_per_token;
 

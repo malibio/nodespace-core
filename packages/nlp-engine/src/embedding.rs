@@ -13,6 +13,9 @@ use std::num::NonZeroUsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 
+/// Embedding vector dimension for BAAI/bge-small-en-v1.5 model
+const EMBEDDING_DIMENSION: usize = 384;
+
 #[cfg(feature = "embedding-service")]
 use candle_core::{Device, Tensor};
 #[cfg(feature = "embedding-service")]
@@ -219,7 +222,7 @@ impl EmbeddingService {
         #[cfg(not(feature = "embedding-service"))]
         {
             // Stub: return zero vector with correct dimensions
-            Ok(vec![0.0; 384])
+            Ok(vec![0.0; EMBEDDING_DIMENSION])
         }
     }
 
@@ -272,7 +275,7 @@ impl EmbeddingService {
                 for (i, text) in texts.iter().enumerate() {
                     if text.is_empty() {
                         // Return zero vector for empty text entries
-                        results.push(Some(vec![0.0; 384]));
+                        results.push(Some(vec![0.0; EMBEDDING_DIMENSION]));
                     } else if let Some(cached) = cache.get(*text) {
                         results.push(Some(cached.clone()));
                     } else {
@@ -344,7 +347,7 @@ impl EmbeddingService {
                             "Missing embedding result at index {} - this should not happen",
                             i
                         );
-                        vec![0.0; 384] // Return zero vector instead of panicking
+                        vec![0.0; EMBEDDING_DIMENSION] // Return zero vector instead of panicking
                     })
                 })
                 .collect();
@@ -355,7 +358,7 @@ impl EmbeddingService {
         #[cfg(not(feature = "embedding-service"))]
         {
             // Stub: return zero vectors
-            Ok(vec![vec![0.0; 384]; texts.len()])
+            Ok(vec![vec![0.0; EMBEDDING_DIMENSION]; texts.len()])
         }
     }
 
