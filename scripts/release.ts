@@ -26,22 +26,6 @@ interface ReleaseConfig {
 }
 
 /**
- * Get GitHub token from gh CLI
- */
-function getGitHubToken(): string {
-  const result = Bun.spawnSync(["gh", "auth", "token"], {
-    stdout: "pipe",
-    stderr: "pipe"
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error("Failed to get GitHub token. Run: gh auth login");
-  }
-
-  return result.stdout.toString().trim();
-}
-
-/**
  * Get current version from tauri.conf.json
  */
 function getCurrentVersion(): string {
@@ -64,10 +48,14 @@ function updateVersion(newVersion: string): void {
   writeFileSync(tauriConfigPath, JSON.stringify(tauriConfig, null, 2) + "\n");
   console.log(`✅ Updated tauri.conf.json to ${version}`);
 
-  // Update Cargo.toml in src-tauri
+  // Update Cargo.toml in src-tauri (target version under [package] section)
   const cargoPath = path.join(process.cwd(), "packages/desktop-app/src-tauri/Cargo.toml");
   let cargoContent = readFileSync(cargoPath, "utf-8");
-  cargoContent = cargoContent.replace(/^version = ".*"/m, `version = "${version}"`);
+  // More robust regex: only replace version in [package] section, not dependency versions
+  cargoContent = cargoContent.replace(
+    /(\[package\][\s\S]*?)version = ".*?"/m,
+    `$1version = "${version}"`
+  );
   writeFileSync(cargoPath, cargoContent);
   console.log(`✅ Updated src-tauri/Cargo.toml to ${version}`);
 
@@ -368,7 +356,15 @@ async function main() {
           console.log("\n⚠️  There are uncommitted changes (version bump).");
           console.log("   Committing version update...\n");
 
-          Bun.spawnSync(["git", "add", "-A"], { stdout: "inherit" });
+          // Stage only the specific version files to avoid accidentally committing unrelated work
+          const versionFiles = [
+            "packages/desktop-app/src-tauri/tauri.conf.json",
+            "packages/desktop-app/src-tauri/Cargo.toml",
+            "package.json"
+          ];
+          for (const file of versionFiles) {
+            Bun.spawnSync(["git", "add", file], { stdout: "inherit" });
+          }
           Bun.spawnSync(["git", "commit", "-m", `Bump version to ${version}`], { stdout: "inherit" });
           Bun.spawnSync(["git", "push"], { stdout: "inherit" });
         }
@@ -377,8 +373,9 @@ async function main() {
         break;
       }
     }
-  } catch (error: any) {
-    console.error(`❌ Error: ${error.message}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`❌ Error: ${message}`);
     process.exit(1);
   }
 }

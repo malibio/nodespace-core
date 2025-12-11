@@ -49,7 +49,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.x"
 
       - name: Install frontend dependencies
         run: bun install
@@ -62,7 +62,8 @@ jobs:
           projectPath: packages/desktop-app
           tauriScript: bunx tauri
           args: ${{ matrix.args }}
-          releaseId: ${{ github.event.release.id }}
+          # Only set releaseId when triggered by release event (undefined for workflow_dispatch)
+          releaseId: ${{ github.event_name == 'release' && github.event.release.id || '' }}
 
       - name: Upload artifacts (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
