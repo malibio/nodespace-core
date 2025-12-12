@@ -254,49 +254,26 @@ type AIProvider =
 
 ### Authentication
 
-Dual-source credential system (inspired by Zed):
+**ACP providers handle their own authentication** - we don't manage API keys.
 
-1. **Environment variables** (takes precedence if set)
-2. **System keychain** (fallback, for keys entered via UI)
+| Provider | Auth Flow |
+|----------|-----------|
+| **Anthropic** | User authenticates via Anthropic's OAuth/account flow |
+| **Google** | User authenticates via Google account |
+| **OpenAI** | User authenticates via OpenAI account |
+| **Native** | No auth needed (local inference) |
 
-| Provider | Env Var | Keychain Fallback |
-|----------|---------|-------------------|
-| **Anthropic** | `ANTHROPIC_API_KEY` | Yes |
-| **Google** | `GOOGLE_API_KEY` | Yes |
-| **OpenAI** | `OPENAI_API_KEY` | Yes |
-| **Native** | N/A | No auth needed |
+When a user selects a cloud provider:
+1. User clicks "Connect to Claude" (or Gemini, GPT, etc.)
+2. Provider's auth flow opens (OAuth, account login)
+3. User authenticates with their existing provider account
+4. We receive an ACP session - no API keys to store
 
-```rust
-/// Credential storage abstraction
-#[async_trait]
-pub trait CredentialsProvider: Send + Sync {
-    async fn read_credentials(&self, url: &str) -> Result<Option<String>>;
-    async fn write_credentials(&self, url: &str, key: &str) -> Result<()>;
-    async fn delete_credentials(&self, url: &str) -> Result<()>;
-}
-
-/// Two implementations
-pub struct KeychainCredentialsProvider;  // Production: native keychain
-pub struct DevCredentialsProvider;        // Development: JSON file
-
-/// API key with source tracking
-pub struct ApiKey {
-    source: ApiKeySource,  // EnvVar or Keychain
-    key: Arc<str>,
-}
-
-pub enum ApiKeySource {
-    EnvVar(String),      // e.g., "ANTHROPIC_API_KEY"
-    Keychain,            // Stored in system keychain
-}
-```
-
-**Key features:**
-- Env vars take precedence (for power users, CI/CD)
-- Manual entry via settings UI stores in system keychain (macOS Keychain, Windows Credential Manager)
-- Keys are URL-associated (tied to specific API endpoints)
-- Source tracking prevents accidentally overwriting env var keys
-- "Reset Key" option to clear keychain entry
+**Benefits:**
+- No credential storage in NodeSpace
+- Users use their existing provider subscriptions
+- Provider handles billing, rate limits, account management
+- Simpler security model (no keys to leak)
 
 ## Session Management
 
@@ -431,7 +408,7 @@ pub struct ToolCallPolicy {
 **Cloud Providers:**
 - Conversations sent to provider (Anthropic, Google, OpenAI) per their privacy policies
 - Clear UI indicator when using cloud vs local
-- User configures API keys via standard provider mechanisms (env vars, SDK config)
+- User authenticates directly with provider (OAuth) - no credentials stored in NodeSpace
 - Provider selection persisted per-session
 
 **Data Residency (All Providers):**
@@ -477,8 +454,7 @@ nodespace-core/
 │       │       ├── components/
 │       │       │   └── chat/              # Chat UI components
 │       │       │       ├── chat-panel.svelte
-│       │       │       ├── provider-selector.svelte
-│       │       │       └── api-key-input.svelte
+│       │       │       └── provider-selector.svelte
 │       │       └── services/
 │       │           └── chat-service.ts    # Tauri IPC for chat
 │       │
@@ -489,13 +465,8 @@ nodespace-core/
 │               │   ├── tools.rs           # Tool definitions
 │               │   └── provider.rs        # LLMProvider trait
 │               │
-│               ├── credentials/           # Credential management
-│               │   ├── mod.rs             # CredentialsProvider trait
-│               │   ├── keychain.rs        # System keychain (prod)
-│               │   └── dev.rs             # JSON file (dev)
-│               │
 │               ├── providers/             # LLM provider implementations
-│               │   ├── mod.rs             # Provider registry
+│               │   ├── mod.rs             # Provider registry + ACP client
 │               │   ├── native.rs          # llama.cpp / Ministral 3
 │               │   ├── anthropic.rs       # Claude via ACP
 │               │   ├── gemini.rs          # Gemini via ACP
@@ -524,12 +495,11 @@ nodespace-core/
 - AIChatNode creation and management
 
 ### Phase 3: Cloud Providers (ACP)
-- Implement CredentialsProvider trait (keychain + dev file)
-- Implement AnthropicProvider (Claude)
-- Implement GeminiProvider
-- Implement OpenAIProvider
-- API key input UI with env var detection
-- Provider-specific error handling (missing API key, rate limits, etc.)
+- Implement ACP client for provider connections
+- Implement AnthropicProvider (Claude) with OAuth flow
+- Implement GeminiProvider with Google auth
+- Implement OpenAIProvider with OpenAI auth
+- Provider-specific error handling (auth failures, rate limits, etc.)
 
 ### Phase 4: Native Model & First Run
 - Model download UI (~4-5GB)
