@@ -2,12 +2,13 @@
 
 ## Executive Summary
 
-NodeSpace implements AI capabilities through two complementary paths:
+NodeSpace implements AI capabilities through three complementary paths:
 
 1. **External Agents (MCP)**: Developers use their existing AI tools (Claude Code, Cursor, etc.) which connect to NodeSpace via MCP
-2. **Embedded Agent (Native)**: A built-in AI assistant using local inference for non-technical users
+2. **Cloud Providers (ACP)**: NodeSpace connects to Anthropic, Gemini, OpenAI via Agent Client Protocol for powerful remote inference
+3. **Embedded Agent (Native)**: A built-in AI assistant using local inference (Ministral 3 via llama.cpp) for offline/privacy-focused users
 
-This architecture prioritizes simplicity: external agents handle their own complexity, while our native agent is built directly into the Tauri app with no protocol overhead.
+This architecture provides flexibility: use cloud providers for maximum capability, local inference for privacy/offline, or let developers use their own tools.
 
 ## What We Build vs What We Use
 
@@ -17,30 +18,33 @@ This architecture prioritizes simplicity: external agents handle their own compl
 |-----------|--------------|-------|
 | **Chat UI** | **Build** | Svelte components for conversation rendering |
 | **MCP Server** | **Build** (exists) | NodeSpace tools for external agents |
+| **ACP Client** | **Build** | Connect to Anthropic, Gemini, OpenAI |
 | **Native Agent** | **Build** | Rust, integrated into Tauri, uses Ministral 3 |
 | External agents | **Use as-is** | Claude Code, Cursor, etc. connect via MCP |
+| Cloud LLM APIs | **Use as-is** | Anthropic, Gemini, OpenAI via their APIs |
 
-**We are NOT building ACP adapters or managing external agent protocols.** External agents connect to NodeSpace the same way they connect to any MCP server.
+**Key distinction**: MCP is for external agents connecting TO us. ACP is for us connecting OUT to cloud providers.
 
 ## Architecture Philosophy
 
-### Two Communication Paths
+### Three Communication Paths
 
 | Path | Direction | Protocol | Purpose |
 |------|-----------|----------|---------|
 | **Outside → In** | External Agent → NodeSpace | MCP | Claude Code/Cursor accessing knowledge base |
-| **Inside** | User ↔ Native Agent | Direct Rust calls | Embedded AI assistant for non-developers |
+| **Inside → Out** | NodeSpace → Cloud Provider | ACP | Anthropic, Gemini, OpenAI as remote LLM |
+| **Inside (local)** | User ↔ Native Agent | Direct Rust | Ministral 3 via llama.cpp, no network |
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           NodeSpace                                  │
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │  Native Chat Panel (Svelte)                        [WE BUILD]  │ │
+│  │  Chat Panel (Svelte)                               [WE BUILD]  │ │
+│  │  - Provider selector: Native | Claude | Gemini | GPT-4         │ │
 │  │  - Conversation thread                                          │ │
 │  │  - Tool call visualization                                      │ │
 │  │  - Streaming response display                                   │ │
-│  │  - Node creation previews                                       │ │
 │  └────────────────────────────────────────────────────────────────┘ │
 │                          │                                           │
 │                    Tauri IPC                                         │
@@ -48,61 +52,69 @@ This architecture prioritizes simplicity: external agents handle their own compl
 │  ┌────────────────────────────────────────────────────────────────┐ │
 │  │  Tauri Backend (Rust)                              [WE BUILD]  │ │
 │  │                                                                 │ │
+│  │  ┌─────────────────────┐  ┌─────────────────────────────────┐  │ │
+│  │  │  Native Agent       │  │  ACP Client                      │  │ │
+│  │  │  - llama.cpp        │  │  - Anthropic adapter             │  │ │
+│  │  │  - Ministral 3 8B   │  │  - Gemini adapter                │  │ │
+│  │  │  - Direct Rust      │  │  - OpenAI adapter                │  │ │
+│  │  │  - Offline capable  │  │  - Streaming support             │  │ │
+│  │  └─────────────────────┘  └─────────────────────────────────┘  │ │
+│  │           │                            │                        │ │
+│  │           └────────────┬───────────────┘                        │ │
+│  │                        │                                        │ │
 │  │  ┌──────────────────────────────────────────────────────────┐  │ │
-│  │  │  Native Agent                                             │  │ │
-│  │  │  - Agentic loop (inspired by OpenCode)                    │  │ │
+│  │  │  Unified Agent Interface                                  │  │ │
+│  │  │  - Same agentic loop for all providers                    │  │ │
 │  │  │  - Tool definitions & execution                           │  │ │
-│  │  │  - Direct NodeService calls (no MCP/HTTP)                 │  │ │
-│  │  └──────────────────────────────────────────────────────────┘  │ │
-│  │                          │                                      │ │
-│  │  ┌──────────────────────────────────────────────────────────┐  │ │
-│  │  │  LlamaEngine (llama.cpp Rust bindings)                    │  │ │
-│  │  │  - Ministral 3 8B with native function calling            │  │ │
-│  │  │  - Metal/CUDA acceleration                                 │  │ │
-│  │  │  - Streaming token generation                              │  │ │
+│  │  │  - Direct NodeService calls                               │  │ │
 │  │  └──────────────────────────────────────────────────────────┘  │ │
 │  │                          │                                      │ │
 │  │  ┌──────────────────────────────────────────────────────────┐  │ │
 │  │  │  NodeService                                              │  │ │
 │  │  │  - Direct function calls from agent                       │  │ │
-│  │  │  - No protocol overhead                                    │  │ │
+│  │  │  - No protocol overhead for tool execution                │  │ │
+│  │  └──────────────────────────────────────────────────────────┘  │ │
+│  │                                                                 │ │
+│  │  ┌──────────────────────────────────────────────────────────┐  │ │
+│  │  │  MCP Server (for external agents)             [WE BUILD]  │  │ │
+│  │  │  - Exposes NodeSpace tools to Claude Code, Cursor, etc.   │  │ │
 │  │  └──────────────────────────────────────────────────────────┘  │ │
 │  └────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │  MCP Server                                        [WE BUILD]  │ │
-│  │  - Exposes NodeSpace tools to EXTERNAL agents                  │ │
-│  │  - Claude Code, Cursor, etc. connect here                      │ │
-│  └────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
-            │
-            │ MCP (External only)
-            ▼
-    Claude Code CLI, Cursor, etc.
-    (user's own install, connects via MCP)
+         │                              │
+         │ MCP                          │ ACP
+         ▼                              ▼
+   Claude Code, Cursor            Anthropic, Gemini, OpenAI
+   (connects TO NodeSpace)        (NodeSpace connects OUT)
 ```
 
 ### Key Design Decisions
 
-1. **No ACP for Native Agent**: We control both ends, so no need for protocol overhead. Direct Rust function calls.
+1. **ACP for Cloud Providers**: Standard protocol for connecting to Anthropic, Gemini, OpenAI - enables provider switching and consistent tool handling.
 
-2. **External Agents Use MCP Only**: Developers already have Claude Code, Cursor, etc. They connect via MCP like any other tool.
+2. **No ACP for Native Agent**: We control both ends (llama.cpp + NodeSpace), so no protocol overhead needed. Direct Rust function calls.
 
-3. **Single Binary**: The native agent is compiled into the Tauri app. No subprocess management, no separate runtime.
+3. **External Agents Use MCP Only**: Developers already have Claude Code, Cursor, etc. They connect via MCP like any other tool.
 
-4. **Inference at C++ Level**: Regardless of wrapper language (Rust, Python, TypeScript), actual LLM inference happens in llama.cpp (C++). Rust provides:
+4. **Unified Agentic Loop**: Same tool definitions, same execution logic, regardless of provider. Only the LLM call differs.
+
+5. **Single Binary**: The native agent is compiled into the Tauri app. No subprocess management, no separate runtime.
+
+6. **Inference at C++ Level**: For local inference, actual LLM processing happens in llama.cpp (C++). Rust provides:
    - Minimal overhead (~10ms vs ~100ms for HTTP-based solutions)
    - No runtime dependencies (no Python, no Node.js)
    - Direct integration with NodeService
 
-5. **Ministral 3 for Native Function Calling**: No prompt engineering for tool format - the model handles it natively.
+7. **Ministral 3 for Native Function Calling**: No prompt engineering for tool format - the model handles it natively.
 
 ## User Segmentation
 
 | User Type | AI Experience |
 |-----------|---------------|
 | **Developers** | Use their existing AI tools (Claude Code, Cursor) via MCP |
-| **Non-technical users** | Use the built-in native agent with local inference |
+| **Power users** | Use cloud providers (Claude, Gemini, GPT-4) via ACP for max capability |
+| **Privacy-focused users** | Use the built-in native agent with local inference (Ministral 3) |
+| **Offline users** | Native agent works without internet connection |
 
 ## Native Agent Architecture
 
@@ -180,6 +192,85 @@ No MCP for the native agent - direct function calls:
 | `get_children` | `node_service.get_children()` |
 | `create_from_markdown` | `node_service.create_nodes_from_markdown()` |
 
+## Cloud Providers via ACP
+
+### Why ACP for Cloud Providers?
+
+ACP (Agent Client Protocol) provides a standard interface for connecting to cloud LLM providers:
+
+| Benefit | Description |
+|---------|-------------|
+| **Provider abstraction** | Switch between Anthropic, Gemini, OpenAI without code changes |
+| **Consistent tool handling** | Same tool format across all providers |
+| **Streaming support** | Unified streaming interface |
+| **Auth management** | Standard API key handling |
+| **Error handling** | Consistent error types across providers |
+
+### Supported Providers
+
+| Provider | Model Examples | Strengths |
+|----------|---------------|-----------|
+| **Anthropic** | Claude 3.5 Sonnet, Claude 3 Opus | Best reasoning, safety |
+| **Google** | Gemini 1.5 Pro, Gemini 2.0 Flash | Multimodal, speed |
+| **OpenAI** | GPT-4o, o1 | Broad capabilities |
+
+### ACP Client Architecture
+
+```rust
+/// Unified interface for all LLM providers
+#[async_trait]
+pub trait LLMProvider: Send + Sync {
+    async fn generate(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+    ) -> Result<Response, ProviderError>;
+
+    async fn stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+    ) -> Result<impl Stream<Item = StreamEvent>, ProviderError>;
+}
+
+/// Provider implementations
+pub struct AnthropicProvider { api_key: String, model: String }
+pub struct GeminiProvider { api_key: String, model: String }
+pub struct OpenAIProvider { api_key: String, model: String }
+pub struct NativeProvider { engine: LlamaEngine }  // Local, no ACP
+```
+
+### Provider Selection
+
+Users select their provider in the chat UI:
+
+```typescript
+type AIProvider =
+  | { type: "native" }                              // Local Ministral 3
+  | { type: "anthropic"; model: string }            // Claude via ACP
+  | { type: "gemini"; model: string }               // Gemini via ACP
+  | { type: "openai"; model: string };              // GPT via ACP
+```
+
+### API Key Management
+
+```rust
+pub struct ProviderConfig {
+    /// Stored securely in system keychain (via Tauri plugin)
+    anthropic_key: Option<SecureString>,
+    gemini_key: Option<SecureString>,
+    openai_key: Option<SecureString>,
+
+    /// Default provider when user hasn't selected
+    default_provider: ProviderType,
+}
+```
+
+**Security:**
+- API keys stored in system keychain (macOS Keychain, Windows Credential Manager)
+- Never logged or sent to NodeSpace servers
+- User can revoke/rotate keys in settings
+
 ## Session Management
 
 ### AIChatNode as Session
@@ -188,14 +279,15 @@ Each chat session is an AIChatNode. The node ID is the session ID.
 
 | Stored in AIChatNode | Stored in Children |
 |---------------------|-------------------|
-| Provider (native/external) | User messages |
-| Title/label | Assistant messages |
-| Created/last active | Tool calls & results |
+| Provider (native/anthropic/gemini/openai) | User messages |
+| Model (e.g., "claude-3-5-sonnet") | Assistant messages |
+| Title/label | Tool calls & results |
+| Created/last active | |
 | Status (active/archived) | |
 
 ### Chat History Storage
 
-Unlike ACP where the agent owns history, our native agent stores everything in NodeSpace:
+All providers (native and cloud) store chat history in NodeSpace as nodes:
 
 ```
 AIChatNode (session)
@@ -303,20 +395,28 @@ pub struct ToolCallPolicy {
 
 ### Privacy Guarantees
 
-**Local-Only Inference:**
+**Native Agent (Local Inference):**
 - All inference happens on device via llama.cpp
 - No telemetry, no license checks, no network calls during inference
 - Model downloaded once from Hugging Face, verified by SHA256
+- Complete privacy - conversations never leave your machine
 
-**Data Residency:**
+**Cloud Providers:**
+- Conversations sent to provider (Anthropic, Google, OpenAI) per their privacy policies
+- Clear UI indicator when using cloud vs local
+- User explicitly opts in by providing API keys
+- Provider selection persisted per-session
+
+**Data Residency (All Providers):**
 - Chat history stored in local SurrealDB
-- No cloud sync for conversations
+- No NodeSpace cloud sync for conversations
 - User can export/delete all AI data
 
 **Auditability:**
 - Native agent code is part of open-source NodeSpace
 - llama.cpp is open-source (MIT license)
 - Ministral 3 is Apache 2.0 licensed
+- ACP client code is open-source
 
 ### Model Distribution
 
@@ -349,15 +449,25 @@ nodespace-core/
 │       │   └── lib/
 │       │       ├── components/
 │       │       │   └── chat/              # Chat UI components
+│       │       │       ├── chat-panel.svelte
+│       │       │       ├── provider-selector.svelte
+│       │       │       └── api-key-settings.svelte
 │       │       └── services/
 │       │           └── chat-service.ts    # Tauri IPC for chat
 │       │
 │       └── src-tauri/
 │           └── src/
-│               ├── agent/                 # Native agent
-│               │   ├── mod.rs             # Agentic loop
+│               ├── agent/                 # Unified agent system
+│               │   ├── mod.rs             # Agentic loop (shared)
 │               │   ├── tools.rs           # Tool definitions
-│               │   └── llama_engine.rs    # llama.cpp integration
+│               │   └── provider.rs        # LLMProvider trait
+│               │
+│               ├── providers/             # LLM provider implementations
+│               │   ├── mod.rs             # Provider registry
+│               │   ├── native.rs          # llama.cpp / Ministral 3
+│               │   ├── anthropic.rs       # Claude via ACP
+│               │   ├── gemini.rs          # Gemini via ACP
+│               │   └── openai.rs          # GPT via ACP
 │               │
 │               ├── node_service.rs        # Existing NodeService
 │               └── mcp_server.rs          # MCP for external agents
@@ -368,25 +478,33 @@ nodespace-core/
 
 ## Implementation Phases
 
-### Phase 1: Native Agent Core
+### Phase 1: Unified Agent Core
+- Define LLMProvider trait and tool definitions
 - Port LlamaEngine from `nodespace-experiment-nlp` to `src-tauri`
-- Implement basic agentic loop
-- Define core tools (create_node, query_nodes, search_semantic)
+- Implement basic agentic loop (provider-agnostic)
 - Wire up Tauri commands for frontend
 
 ### Phase 2: Chat UI
 - ChatPanel component with message rendering
+- Provider selector (Native | Claude | Gemini | GPT-4)
 - Streaming response display
 - Tool call visualization (collapsible)
 - AIChatNode creation and management
 
-### Phase 3: Model & First Run
+### Phase 3: Cloud Providers (ACP)
+- Implement AnthropicProvider (Claude)
+- Implement GeminiProvider
+- Implement OpenAIProvider
+- API key settings UI (secure keychain storage)
+- Provider-specific error handling
+
+### Phase 4: Native Model & First Run
 - Model download UI (~4-5GB)
 - Progress indicator
-- Model selection (if multiple)
-- First-run experience
+- Hardware capability detection
+- First-run experience with provider choice
 
-### Phase 4: Node Integration
+### Phase 5: Node Integration
 - Node reference parsing (`nodespace://`) in responses
 - Clickable node pills with type-aware decoration
 - @ mention autocomplete in prompt editor
@@ -405,3 +523,7 @@ nodespace-core/
 - [Ministral 3](https://docs.unsloth.ai/models/ministral-3) - Model documentation
 - [OpenCode](https://github.com/sst/opencode) - Agentic loop reference (MIT license)
 - [MCP Specification](https://modelcontextprotocol.io/) - For external agent integration
+- [ACP Specification](https://agentclientprotocol.com/) - For cloud provider integration
+- [Anthropic API](https://docs.anthropic.com/en/api) - Claude API documentation
+- [Gemini API](https://ai.google.dev/gemini-api/docs) - Google Gemini documentation
+- [OpenAI API](https://platform.openai.com/docs) - GPT API documentation

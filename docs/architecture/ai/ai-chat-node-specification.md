@@ -69,8 +69,8 @@ interface AIChatNode {
     last_active: string;         // ISO timestamp of last interaction
     message_count: number;       // Total messages in conversation
 
-    // Model info (for native agent)
-    model?: string;              // Model used (e.g., "ministral-3-8b")
+    // Model info
+    model?: string;              // Model used (e.g., "ministral-3-8b", "claude-3-5-sonnet", "gpt-4o")
 
     // Context management
     context_tokens?: number;     // Current token usage estimate
@@ -81,7 +81,10 @@ interface AIChatNode {
 }
 
 type AIProvider =
-  | "native"        // Built-in Ministral 3 via llama.cpp
+  | "native"        // Built-in Ministral 3 via llama.cpp (local, offline)
+  | "anthropic"     // Claude via ACP (cloud)
+  | "gemini"        // Gemini via ACP (cloud)
+  | "openai"        // GPT via ACP (cloud)
   | "mcp:external"; // External agent connected via MCP (future)
 
 type ChatSessionStatus =
