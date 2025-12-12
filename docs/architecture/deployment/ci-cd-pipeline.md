@@ -2,7 +2,7 @@
 
 ## Overview
 
-NodeSpace uses GitHub Actions for continuous integration and deployment. The pipeline builds desktop applications for macOS (with Windows support planned).
+NodeSpace uses GitHub Actions for continuous integration and deployment. The pipeline builds desktop applications for macOS and Windows.
 
 ## Workflows
 
@@ -14,7 +14,9 @@ NodeSpace uses GitHub Actions for continuous integration and deployment. The pip
 
 **Platforms:**
 - macOS ARM (Apple Silicon - M1/M2/M3): `aarch64-apple-darwin`
-- Windows (temporarily disabled): `windows-latest`
+- Windows: `windows-latest`
+
+> **Note:** Windows builds may be temporarily disabled during testing. Check the workflow file for current status.
 
 ### Build Steps
 
@@ -140,7 +142,6 @@ After a successful `workflow_dispatch` run:
 
 ## Future Improvements
 
-- [ ] Enable Windows builds
 - [ ] Add macOS Intel (x86_64) support
 - [ ] Add Linux (Ubuntu) support
 - [ ] Code signing for macOS notarization
