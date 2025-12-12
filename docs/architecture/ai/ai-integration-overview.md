@@ -254,16 +254,49 @@ type AIProvider =
 
 ### Authentication
 
-Each provider uses its standard authentication mechanism - we don't manage API keys:
+Dual-source credential system (inspired by Zed):
 
-| Provider | Auth Method |
-|----------|-------------|
-| **Anthropic** | `ANTHROPIC_API_KEY` env var or SDK config |
-| **Google** | `GOOGLE_API_KEY` env var or Google Cloud auth |
-| **OpenAI** | `OPENAI_API_KEY` env var or SDK config |
-| **Native** | No auth needed (local inference) |
+1. **Environment variables** (takes precedence if set)
+2. **System keychain** (fallback, for keys entered via UI)
 
-Users configure their keys via standard methods (environment variables, provider CLI tools, etc.). NodeSpace just uses the provider SDKs which handle auth automatically.
+| Provider | Env Var | Keychain Fallback |
+|----------|---------|-------------------|
+| **Anthropic** | `ANTHROPIC_API_KEY` | Yes |
+| **Google** | `GOOGLE_API_KEY` | Yes |
+| **OpenAI** | `OPENAI_API_KEY` | Yes |
+| **Native** | N/A | No auth needed |
+
+```rust
+/// Credential storage abstraction
+#[async_trait]
+pub trait CredentialsProvider: Send + Sync {
+    async fn read_credentials(&self, url: &str) -> Result<Option<String>>;
+    async fn write_credentials(&self, url: &str, key: &str) -> Result<()>;
+    async fn delete_credentials(&self, url: &str) -> Result<()>;
+}
+
+/// Two implementations
+pub struct KeychainCredentialsProvider;  // Production: native keychain
+pub struct DevCredentialsProvider;        // Development: JSON file
+
+/// API key with source tracking
+pub struct ApiKey {
+    source: ApiKeySource,  // EnvVar or Keychain
+    key: Arc<str>,
+}
+
+pub enum ApiKeySource {
+    EnvVar(String),      // e.g., "ANTHROPIC_API_KEY"
+    Keychain,            // Stored in system keychain
+}
+```
+
+**Key features:**
+- Env vars take precedence (for power users, CI/CD)
+- Manual entry via settings UI stores in system keychain (macOS Keychain, Windows Credential Manager)
+- Keys are URL-associated (tied to specific API endpoints)
+- Source tracking prevents accidentally overwriting env var keys
+- "Reset Key" option to clear keychain entry
 
 ## Session Management
 
@@ -444,7 +477,8 @@ nodespace-core/
 │       │       ├── components/
 │       │       │   └── chat/              # Chat UI components
 │       │       │       ├── chat-panel.svelte
-│       │       │       └── provider-selector.svelte
+│       │       │       ├── provider-selector.svelte
+│       │       │       └── api-key-input.svelte
 │       │       └── services/
 │       │           └── chat-service.ts    # Tauri IPC for chat
 │       │
@@ -454,6 +488,11 @@ nodespace-core/
 │               │   ├── mod.rs             # Agentic loop (shared)
 │               │   ├── tools.rs           # Tool definitions
 │               │   └── provider.rs        # LLMProvider trait
+│               │
+│               ├── credentials/           # Credential management
+│               │   ├── mod.rs             # CredentialsProvider trait
+│               │   ├── keychain.rs        # System keychain (prod)
+│               │   └── dev.rs             # JSON file (dev)
 │               │
 │               ├── providers/             # LLM provider implementations
 │               │   ├── mod.rs             # Provider registry
@@ -485,9 +524,11 @@ nodespace-core/
 - AIChatNode creation and management
 
 ### Phase 3: Cloud Providers (ACP)
+- Implement CredentialsProvider trait (keychain + dev file)
 - Implement AnthropicProvider (Claude)
 - Implement GeminiProvider
 - Implement OpenAIProvider
+- API key input UI with env var detection
 - Provider-specific error handling (missing API key, rate limits, etc.)
 
 ### Phase 4: Native Model & First Run
