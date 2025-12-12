@@ -252,24 +252,18 @@ type AIProvider =
   | { type: "openai"; model: string };              // GPT via ACP
 ```
 
-### API Key Management
+### Authentication
 
-```rust
-pub struct ProviderConfig {
-    /// Stored securely in system keychain (via Tauri plugin)
-    anthropic_key: Option<SecureString>,
-    gemini_key: Option<SecureString>,
-    openai_key: Option<SecureString>,
+Each provider uses its standard authentication mechanism - we don't manage API keys:
 
-    /// Default provider when user hasn't selected
-    default_provider: ProviderType,
-}
-```
+| Provider | Auth Method |
+|----------|-------------|
+| **Anthropic** | `ANTHROPIC_API_KEY` env var or SDK config |
+| **Google** | `GOOGLE_API_KEY` env var or Google Cloud auth |
+| **OpenAI** | `OPENAI_API_KEY` env var or SDK config |
+| **Native** | No auth needed (local inference) |
 
-**Security:**
-- API keys stored in system keychain (macOS Keychain, Windows Credential Manager)
-- Never logged or sent to NodeSpace servers
-- User can revoke/rotate keys in settings
+Users configure their keys via standard methods (environment variables, provider CLI tools, etc.). NodeSpace just uses the provider SDKs which handle auth automatically.
 
 ## Session Management
 
@@ -404,7 +398,7 @@ pub struct ToolCallPolicy {
 **Cloud Providers:**
 - Conversations sent to provider (Anthropic, Google, OpenAI) per their privacy policies
 - Clear UI indicator when using cloud vs local
-- User explicitly opts in by providing API keys
+- User configures API keys via standard provider mechanisms (env vars, SDK config)
 - Provider selection persisted per-session
 
 **Data Residency (All Providers):**
@@ -450,8 +444,7 @@ nodespace-core/
 │       │       ├── components/
 │       │       │   └── chat/              # Chat UI components
 │       │       │       ├── chat-panel.svelte
-│       │       │       ├── provider-selector.svelte
-│       │       │       └── api-key-settings.svelte
+│       │       │       └── provider-selector.svelte
 │       │       └── services/
 │       │           └── chat-service.ts    # Tauri IPC for chat
 │       │
@@ -495,8 +488,7 @@ nodespace-core/
 - Implement AnthropicProvider (Claude)
 - Implement GeminiProvider
 - Implement OpenAIProvider
-- API key settings UI (secure keychain storage)
-- Provider-specific error handling
+- Provider-specific error handling (missing API key, rate limits, etc.)
 
 ### Phase 4: Native Model & First Run
 - Model download UI (~4-5GB)
