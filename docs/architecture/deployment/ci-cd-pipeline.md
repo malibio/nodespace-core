@@ -16,8 +16,6 @@ NodeSpace uses GitHub Actions for continuous integration and deployment. The pip
 - macOS ARM (Apple Silicon - M1/M2/M3): `aarch64-apple-darwin`
 - Windows: `windows-latest`
 
-> **Note:** Windows builds may be temporarily disabled during testing. Check the workflow file for current status.
-
 ### Build Steps
 
 1. **Checkout repository**
