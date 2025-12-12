@@ -58,6 +58,36 @@ The migration was completed successfully with:
 - ✅ Massive code simplification (-87%)
 - ✅ Eliminated 2 layers of indirection
 
+### AI Agents Architecture (Superseded)
+
+**Date Archived**: 2025-12-11
+**Reason**: Transitioned to dual-path AI architecture (Native Agent + MCP)
+
+The original AI architecture explored multiple approaches that have been superseded:
+
+1. **Custom AI processors** - Complex internal agent architecture with intent classification
+2. **ACP (Agent Client Protocol)** - External agent spawning via ACP adapters
+3. **mistral.rs integration** - Custom Rust inference engine
+
+The **current architecture** instead uses:
+- **Native Agent**: Built-in Rust + llama.cpp + Ministral 3 8B for local inference
+- **External Agents via MCP**: Developers use their existing tools (Claude Code, Cursor) which connect to NodeSpace via MCP
+- **Direct integration**: No protocol overhead for native agent (direct Rust calls)
+- **Chat history as nodes**: Conversations stored in NodeSpace (not external agent state)
+
+**Archived Documents** (in `ai-agents/` subfolder):
+- `agentic-architecture-overview.md` - Custom workflow automation
+- `hybrid-llm-agent-architecture.md` - Local vs cloud LLM strategy
+- `local-ai-implementation.md` - mistral.rs integration plans
+- `implementation-guide.md` - Building custom AI processors
+- `natural-language-workflow-engine.md` - NL workflow creation
+- `creator-*.md` - Creator economy specific features
+- `personal-knowledge-agents.md` - Personal AI agent concepts
+- `training-data-evolution.md` - Model training strategies
+- `adapter-management-strategy.md` - Custom adapter patterns
+
+**Current AI Documentation**: See `docs/architecture/ai/`
+
 ## Related Issues
 
 - **#470**: Remove NodeStore abstraction, use SurrealDB directly
