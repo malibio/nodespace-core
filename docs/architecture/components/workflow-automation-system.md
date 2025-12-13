@@ -489,16 +489,31 @@ This template addresses the "stale Confluence page" problem - automated detectio
 >
 > Without lifecycle management, knowledge bases become graveyards of outdated, conflicting information that users stop trusting.
 
-**Schema Requirements:**
+**Core Property (Built-in):**
+
+`lifecycle_status` is a **core property on all nodes** (like `node_type`, `created_at`):
+
 ```javascript
-// Extend any node type with lifecycle properties
+// Every node has this - no schema extension needed
+{
+  lifecycle_status: 'active' | 'archived'  // Core property, not user-defined
+}
+```
+
+- **Semantic search** excludes `archived` nodes by default
+- Use `search_semantic({ ..., include_archived: true })` to include archived content
+- See [SurrealDB Schema](../data/surrealdb-schema-design.md#lifecycle-status-core-hub-property) for details
+
+**Optional Schema Extensions (User-Defined):**
+
+For advanced lifecycle workflows, users can add these properties via schema:
+
+```javascript
+// Optional user-defined properties for review workflows
 {
   fields: [
     { name: "content_owner", type: "reference", description: "Who's responsible for this content" },
     { name: "review_interval", type: "duration", description: "How often to review (e.g., '90 days', '6 months')" },
-    { name: "lifecycle_status", type: "enum",
-      values: ["active", "needs_review", "archived", "deprecated"],
-      default: "active" },
     { name: "last_reviewed_at", type: "datetime" },
     { name: "next_review_at", type: "datetime", calculated: true }  // Based on last_reviewed + interval
   ]
