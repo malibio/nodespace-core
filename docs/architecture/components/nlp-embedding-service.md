@@ -247,6 +247,7 @@ cargo test --features embedding-service
 
 ## Future Enhancements
 
+- **Semantic Code Search** - Index local code repositories via tree-sitter, embed humanized representations. See [Semantic Code Search Architecture](../features/semantic-code-search.md)
 - **Multi-model support** - Schema already supports `model_name` field
 - **Node type plugin embeddability** - Let node types declare if/how they embed
 - **Vector index optimization** - HNSW/DiskANN for sub-linear search
