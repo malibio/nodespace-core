@@ -56,12 +56,14 @@ DEFINE FIELD content ON TABLE node TYPE string DEFAULT "";
 DEFINE FIELD nodeType ON TABLE node TYPE string ASSERT $value != NONE;
 DEFINE FIELD data ON TABLE node TYPE option<record>;  -- Record Link to spoke (task, date, schema, or NULL)
 DEFINE FIELD version ON TABLE node TYPE int DEFAULT 1 ASSERT $value >= 1;
+DEFINE FIELD lifecycleStatus ON TABLE node TYPE string DEFAULT "active";  -- 'active' | 'archived' (controls search visibility)
 DEFINE FIELD createdAt ON TABLE node TYPE datetime DEFAULT time::now();
 DEFINE FIELD modifiedAt ON TABLE node TYPE datetime DEFAULT time::now();
 
 -- Indexes for performance
 DEFINE INDEX idx_node_type ON TABLE node COLUMNS nodeType;
 DEFINE INDEX idx_node_modified ON TABLE node COLUMNS modifiedAt;
+DEFINE INDEX idx_node_lifecycle ON TABLE node COLUMNS lifecycleStatus;  -- For filtering archived content
 
 -- NO beforeSiblingId - structure lives in has_child edges!
 -- NO parentId - hierarchy lives in has_child edges!
@@ -73,6 +75,55 @@ DEFINE INDEX idx_node_modified ON TABLE node COLUMNS modifiedAt;
 - ✅ Direct field access: `node.data.status`
 - ✅ NULL for simple nodes (text, header) - no spoke needed
 - ✅ Cleaner than graph traversal for composition
+
+### Lifecycle Status (Core Hub Property)
+
+The `lifecycleStatus` field controls search visibility and archival state:
+
+```sql
+DEFINE FIELD lifecycleStatus ON TABLE node TYPE string DEFAULT "active";
+```
+
+**Why a core hub property (not spoke)?**
+- **System-level concern**: Like `nodeType` or `createdAt`, applies to all nodes
+- **Search integration**: Semantic search excludes archived nodes by default
+- **Consistent behavior**: All nodes support archival regardless of type
+- **Industry standard**: Confluence, Notion, and soft-delete patterns use system-level flags
+
+**Allowed Values:**
+
+| Value | Description | Search Behavior |
+|-------|-------------|-----------------|
+| `active` | Default state | Included in semantic search |
+| `archived` | Manually or workflow-archived | Excluded from search by default |
+
+**Semantic Search Integration:**
+
+```sql
+-- Default: exclude archived nodes
+SELECT * FROM node
+WHERE vector::similarity::cosine(embedding, $query_vec) > $threshold
+  AND lifecycleStatus = 'active'
+ORDER BY similarity DESC
+LIMIT $limit;
+
+-- With include_archived: true
+SELECT * FROM node
+WHERE vector::similarity::cosine(embedding, $query_vec) > $threshold
+  -- No lifecycle filter
+ORDER BY similarity DESC
+LIMIT $limit;
+```
+
+**MCP Tool Parameter:**
+```javascript
+search_semantic({
+  query: "authentication",
+  include_archived: true  // Optional, defaults to false
+})
+```
+
+See #755 for implementation details and [Workflow Automation](../components/workflow-automation-system.md) for automated archival workflows.
 
 ### Spoke Tables (Type-Specific Data)
 

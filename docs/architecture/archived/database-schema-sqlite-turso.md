@@ -1,4 +1,8 @@
-# NodeSpace Database Schema Design
+# NodeSpace Database Schema Design (ARCHIVED)
+
+> **⚠️ ARCHIVED**: This document describes the SQLite/Turso schema approach that was considered but NOT implemented.
+> NodeSpace uses **SurrealDB** with a hub-and-spoke architecture.
+> See [SurrealDB Schema Design](../data/surrealdb-schema-design.md) for the current schema.
 
 ## Overview
 
@@ -19,6 +23,7 @@ CREATE TABLE nodes (
     content TEXT NOT NULL,                  -- Primary content/text
     parent_id TEXT,                         -- Hierarchy parent (NULL = root-level node)
     origin_node_id TEXT,                    -- Which viewer/page created this (for bulk fetch)
+    lifecycle_status TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'archived' (controls search visibility)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     properties JSON NOT NULL DEFAULT '{}',  -- ALL entity-specific fields (no complementary tables)
@@ -36,6 +41,7 @@ CREATE INDEX idx_nodes_parent ON nodes(parent_id);
 CREATE INDEX idx_nodes_origin ON nodes(origin_node_id);
 CREATE INDEX idx_nodes_modified ON nodes(modified_at);
 CREATE INDEX idx_nodes_content ON nodes(content); -- For text search
+CREATE INDEX idx_nodes_lifecycle ON nodes(lifecycle_status); -- For filtering archived content
 ```
 
 **Design Rationale:**
@@ -48,6 +54,39 @@ CREATE INDEX idx_nodes_content ON nodes(content); -- For text search
   - Sibling ordering: Stored on `has_child` edges with fractional `order` field (Issue #614)
 - **Bulk fetch optimization**: Single query fetches all nodes by `origin_node_id`, hierarchy built in-memory
 - **Dynamic indexes**: JSON path indexes created based on query frequency (rule-based)
+
+### Lifecycle Status (Core Property)
+
+The `lifecycle_status` field is a **core property** on all nodes that controls search visibility:
+
+```sql
+lifecycle_status TEXT NOT NULL DEFAULT 'active'  -- 'active' | 'archived'
+```
+
+**Why a core property (not schema-driven)?**
+- **System-level concern**: Like `node_type` or `created_at`, not user-defined metadata
+- **Search integration**: Semantic search excludes archived nodes by default
+- **Consistent behavior**: All nodes support archival regardless of type
+- **Industry standard**: Confluence, Notion, and soft-delete patterns use system-level flags
+
+**Allowed Values:**
+
+| Value | Description | Search Behavior |
+|-------|-------------|-----------------|
+| `active` | Default state | Included in semantic search |
+| `archived` | Manually or automatically archived | Excluded from search by default |
+
+**Operations:**
+- **Archive**: Set `lifecycle_status = 'archived'` (UI action or workflow trigger)
+- **Restore**: Set `lifecycle_status = 'active'`
+- **Search**: `search_semantic` excludes archived by default; use `include_archived: true` to include
+
+**Relationship to Collections:**
+- Collections provide **organization** (logical grouping)
+- `lifecycle_status` provides **visibility control** (search exclusion)
+- These are orthogonal: a node can be `archived` AND in a collection named "2024 Projects"
+
+See #755 for implementation details and [Workflow Automation](../components/workflow-automation-system.md) for automated archival workflows.
 
 ### Mentions Relation Table
 
