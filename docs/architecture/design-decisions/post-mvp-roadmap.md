@@ -1,595 +1,343 @@
-# Post-MVP Architecture Roadmap
+# Post-MVP Roadmap
 
-## Executive Summary
+## Overview
 
-NodeSpace's current architecture represents an exceptional foundation (9.5/10) for an AI-native knowledge management system. This roadmap outlines ambitious enhancements that will elevate the system to enterprise-grade capabilities (10/10) while maintaining the excellent architectural decisions already in place.
+NodeSpace's architecture is solid. This roadmap outlines planned enhancements that build incrementally on the existing foundation.
 
 **Current Strengths:**
-- Outstanding trait-based plugin architecture with service injection
-- Embedded mistral.rs AI integration with Gemma 3n-E4B-it 8B model
-- Real-time query system with intelligent dependency tracking
-- Comprehensive testing philosophy using real services
-- Desktop-first approach with all-in-one embedded capabilities
+- Trait-based plugin architecture with service injection
+- Three-path AI integration (MCP for external agents, ACP for cloud providers, Native with Ministral 3)
+- Schema-driven entity system with calculated fields
+- SurrealDB with embedded RocksDB backend
+- Desktop-first approach with Tauri
 
-**Enhancement Philosophy:**
-These enhancements build upon the solid foundation without requiring architectural rewrites. They represent evolutionary improvements that can be implemented incrementally as the product matures beyond MVP.
+**Philosophy:**
+- Evolutionary improvements, not architectural rewrites
+- Generic systems that support any user-defined workflow
+- Local-first: privacy, offline capability, no vendor lock-in
 
-## Enhancement Tiers
+## Priority Tiers
 
-### Tier 1: Critical Production Foundations (6-8 Months)
+### Tier 1: Core Value Proposition
 
-These enhancements are essential for production-scale deployment and represent the biggest impact on system reliability and maintainability.
+These features define what makes NodeSpace unique: a local-first replacement for Jira, Linear, Confluence, and development workflow tools.
 
-#### 1.1 Resilience & Recovery Systems
+#### 1.1 Workflow Automation System
 
-**Current Gap:** Limited error recovery and system resilience mechanisms.
+**Gap:** No event-driven automation for workflow progression.
 
-**Enhancement Goals:**
-- Automatic recovery from AI model crashes and memory issues
-- Data integrity validation and corruption prevention
-- Graceful degradation when components fail
-- Transaction rollback and consistency guarantees
+**Goals:**
+- Event-driven triggers based on property changes
+- Automated actions (create nodes, update properties, assign)
+- Phase-based workflow progression
+- Generic engine with no methodology-specific code
 
-**Implementation Approach:**
+**Key Design:**
 ```rust
-pub struct ResilienceManager {
-    health_monitors: Vec<Box<dyn HealthMonitor>>,
-    recovery_strategies: HashMap<ComponentType, RecoveryStrategy>,
-    circuit_breakers: HashMap<String, CircuitBreaker>,
-    data_validators: Vec<Box<dyn DataValidator>>,
+pub struct WorkflowEngine {
+    trigger_evaluator: TriggerEvaluator,
+    action_executor: ActionExecutor,
 }
 
-pub trait HealthMonitor: Send + Sync {
-    fn component_name(&self) -> &str;
-    fn check_health(&self) -> HealthStatus;
-    fn recovery_actions(&self) -> Vec<RecoveryAction>;
-}
+impl WorkflowEngine {
+    pub async fn on_node_changed(&self, event: NodeChangeEvent) -> Result<()> {
+        let triggers = self.trigger_evaluator
+            .find_matching_triggers(&event).await?;
 
-pub enum RecoveryAction {
-    RestartComponent(ComponentType),
-    ReloadAIModel { fallback: bool },
-    ValidateAndRepairData { scope: ValidationScope },
-    EnableGracefulDegradation { features: Vec<FeatureFlag> },
-}
-```
-
-**Specific Features:**
-- **AI Model Recovery**: Automatic model reloading when inference fails or memory errors occur
-- **Data Integrity Checks**: Startup validation of node relationships and calculated field consistency
-- **Circuit Breakers**: Prevent cascade failures when external services become unavailable
-- **Graceful Degradation**: System continues operating with reduced functionality when AI is unavailable
-
-**Success Metrics:**
-- 99.9% system uptime
-- <30 second recovery time from AI model failures
-- Zero data corruption incidents
-- <5% feature degradation during partial failures
-
-#### 1.2 Configuration Management Framework
-
-**Current Gap:** No centralized configuration system for different environments and runtime settings.
-
-**Enhancement Goals:**
-- Environment-specific configuration management
-- Runtime configuration updates without restarts
-- Feature flag system for gradual feature rollouts
-- Configuration validation and safety checks
-
-**Implementation Approach:**
-```rust
-pub struct ConfigurationManager {
-    environments: HashMap<String, EnvironmentConfig>,
-    feature_flags: Arc<RwLock<FeatureFlags>>,
-    runtime_settings: Arc<RwLock<RuntimeSettings>>,
-    config_watchers: Vec<Box<dyn ConfigWatcher>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvironmentConfig {
-    pub database: DatabaseConfig,
-    pub ai: AIConfig,
-    pub performance: PerformanceConfig,
-    pub logging: LoggingConfig,
-    pub security: SecurityConfig,
-}
-
-pub trait ConfigWatcher: Send + Sync {
-    fn on_config_change(&self, change: ConfigChange) -> Result<(), ConfigError>;
-}
-```
-
-**Specific Features:**
-- **Environment Profiles**: Development, staging, production configurations
-- **Hot Reloading**: Change AI models, database connections, and feature flags at runtime
-- **A/B Testing**: Feature flag system for testing new capabilities with subsets of users
-- **Configuration Validation**: Ensure settings are compatible and safe before applying
-
-**Success Metrics:**
-- Zero-downtime configuration updates
-- <1 second feature flag propagation
-- 100% configuration validation coverage
-- Support for 10+ different deployment environments
-
-#### 1.3 Observability & Monitoring Infrastructure
-
-**Current Gap:** Minimal telemetry and monitoring capabilities for production debugging.
-
-**Enhancement Goals:**
-- Comprehensive performance metrics and health monitoring
-- Real-time system diagnostics and alerting
-- Request tracing and debugging capabilities
-- Capacity planning and optimization insights
-
-**Implementation Approach:**
-```rust
-pub struct ObservabilityEngine {
-    metrics_collector: Arc<MetricsCollector>,
-    trace_processor: Arc<TraceProcessor>,
-    alerting_system: Arc<AlertingSystem>,
-    health_dashboard: Arc<HealthDashboard>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SystemMetrics {
-    pub performance: PerformanceMetrics,
-    pub ai_inference: AIMetrics,
-    pub database: DatabaseMetrics,
-    pub cache: CacheMetrics,
-    pub errors: ErrorMetrics,
-}
-
-pub trait MetricsCollector: Send + Sync {
-    fn record_operation(&self, operation: &str, duration: Duration, success: bool);
-    fn record_ai_inference(&self, model: &str, tokens: usize, latency: Duration);
-    fn record_cache_access(&self, hit: bool, key_type: &str);
-    fn record_error(&self, error_type: &str, severity: ErrorSeverity);
-}
-```
-
-**Specific Features:**
-- **Performance Dashboard**: Real-time visualization of system performance and bottlenecks
-- **AI Model Monitoring**: Track inference times, accuracy, and resource usage
-- **Distributed Tracing**: Follow requests across all system components
-- **Proactive Alerting**: Automated alerts for performance degradation and errors
-
-**Success Metrics:**
-- <100ms metric collection latency
-- 99.99% metric accuracy
-- Complete request tracing for debugging
-- <5 minute alert response times
-
-### Tier 2: Advanced Capabilities (8-12 Months)
-
-These enhancements provide significant performance improvements and advanced functionality that differentiate NodeSpace from competitors.
-
-#### 2.1 Advanced Caching & Performance Engine
-
-**Current Enhancement:** Build upon existing caching with sophisticated optimization strategies.
-
-**Enhancement Goals:**
-- Predictive cache warming based on user patterns
-- Intelligent cache hierarchies with optimal eviction policies
-- Cross-session result sharing and collaborative caching
-- Adaptive performance optimization based on usage analytics
-
-**Implementation Approach:**
-```rust
-pub struct AdvancedCacheEngine {
-    predictive_warmer: PredictiveCacheWarmer,
-    hierarchical_cache: HierarchicalCache,
-    collaborative_cache: CollaborativeCache,
-    performance_optimizer: PerformanceOptimizer,
-}
-
-pub struct PredictiveCacheWarmer {
-    usage_analytics: UsageAnalytics,
-    pattern_predictor: PatternPredictor,
-    warm_scheduler: WarmScheduler,
-}
-
-impl PredictiveCacheWarmer {
-    pub async fn predict_and_warm(&self, user_context: &UserContext) -> Result<(), CacheError> {
-        let predicted_queries = self.pattern_predictor
-            .predict_likely_queries(user_context, 10).await?;
-        
-        for query in predicted_queries {
-            self.warm_scheduler.schedule_warm(query, Priority::Background).await?;
+        for trigger in triggers {
+            self.action_executor
+                .execute_actions(&trigger.actions, &event).await?;
         }
-        
         Ok(())
     }
 }
 ```
 
-**Specific Features:**
-- **Machine Learning Cache Prediction**: Use ML to predict what users will query next
-- **Tiered Cache Architecture**: Memory, SSD, and network-based caching layers
-- **Collaborative Intelligence**: Share anonymized cache insights across installations
-- **Dynamic Resource Allocation**: Automatically adjust cache sizes based on available resources
+**Features:**
+- **Workflow-as-Data**: Workflows stored as nodes, not code
+- **Trigger Types**: property_change, node_created, node_deleted, condition_met, schedule
+- **Action Types**: create_node, set_property, assign, add_to_collection
+- **AI Agent Delegation**: Tasks can be delegated to AI with context assembly
 
-**Success Metrics:**
-- 90%+ cache hit rate for frequent operations
-- 50% reduction in AI inference requests through intelligent caching
-- <5ms cache lookup latency across all tiers
-- 75% improvement in cold-start performance
+**Validation Criteria:** The engine must support spec-driven, kanban, sprint-based, and custom workflows purely through user configuration - no special-case code for any methodology.
 
-#### 2.2 Data Migration & Versioning System
+**Metrics:**
+- <50ms trigger evaluation latency
+- Support for 100+ concurrent workflow instances
+- Zero missed trigger events
 
-**Current Gap:** No comprehensive strategy for handling schema evolution and data migrations.
+See [Workflow Automation System](../components/workflow-automation-system.md) for detailed specification.
 
-**Enhancement Goals:**
-- Zero-downtime schema migrations for all node types
-- Backward compatibility maintenance across versions
-- Data version control and rollback capabilities
-- Automated migration testing and validation
+#### 1.2 Collections System
 
-**Implementation Approach:**
+**Gap:** No logical organization for root nodes beyond semantic search.
+
+**Goals:**
+- Hierarchical organization without breaking root node concept
+- Multi-membership (nodes can belong to multiple collections)
+- Team-friendly shared organizational structures
+
+**Key Design:**
 ```rust
-pub struct MigrationEngine {
-    schema_registry: SchemaRegistry,
-    migration_planner: MigrationPlanner,
-    version_controller: VersionController,
-    rollback_manager: RollbackManager,
-}
-
-pub trait Migration: Send + Sync {
-    fn migration_id(&self) -> &str;
-    fn from_version(&self) -> u32;
-    fn to_version(&self) -> u32;
-    fn is_reversible(&self) -> bool;
-    fn estimate_duration(&self, data_size: usize) -> Duration;
-    
-    async fn apply(&self, context: &MigrationContext) -> Result<MigrationResult, MigrationError>;
-    async fn rollback(&self, context: &MigrationContext) -> Result<RollbackResult, MigrationError>;
-}
-
-pub struct MigrationPlanner {
-    compatibility_checker: CompatibilityChecker,
-    dependency_resolver: DependencyResolver,
-    safety_validator: SafetyValidator,
+// Collections use member_of edges, not parent-child
+// Nodes remain "root nodes" for querying purposes
+pub async fn add_to_collection(&self, node_id: &str, collection_id: &str) -> Result<()> {
+    self.edge_store.create_edge(Edge {
+        from: node_id.to_string(),
+        to: collection_id.to_string(),
+        edge_type: "member_of".to_string(),
+        properties: json!({ "added_at": Utc::now() }),
+    }).await
 }
 ```
 
-**Specific Features:**
-- **Automated Schema Evolution**: Automatically generate migrations from schema changes
-- **Multi-Version Support**: Run multiple node schema versions simultaneously during transitions
-- **Migration Testing**: Automated testing of migrations against production-like data
-- **Recovery Guarantees**: Rollback capability for any migration within 24 hours
+**Features:**
+- **Hierarchical Collections**: Nested like `hr/policy/vacation/berlin`
+- **Multi-membership**: Nodes can exist in multiple collections
+- **Root Preservation**: member_of edges don't affect root node status
 
-**Success Metrics:**
-- Zero data loss during migrations
-- <5 minute downtime for major schema changes
-- 100% automated migration testing coverage
-- Support for rollback of 100% of migrations
+**Metrics:**
+- <10ms collection membership queries
+- Support for 10,000+ nodes per collection
+- Hierarchies up to 10 levels deep
 
-#### 2.3 Multi-Model AI Architecture
+See [Collections System](../components/collections-system.md) for detailed specification.
 
-**Current Enhancement:** Expand beyond single Gemma model to support specialized AI models.
+#### 1.3 Query Service Enhancements
 
-**Enhancement Goals:**
-- Multiple specialized models for different tasks (coding, analysis, writing)
-- Dynamic model selection based on query type and context
-- Model performance comparison and automatic optimization
-- Support for both local and cloud-based models
+**Gap:** `query_nodes` doesn't expose full NodeFilter capabilities via MCP.
 
-**Implementation Approach:**
+**Goals:**
+- `is_root: true` filter for root node discovery
+- Property filters for any field value
+- Sort options (modified_desc, created_desc, alpha, type)
+- Collection membership filters
+
+**Features:**
+- Expose existing NodeFilter capabilities through MCP
+- Add collection-aware queries
+- Support for complex property filters (JSONPath)
+- Cursor-based pagination
+
+**Metrics:**
+- All NodeFilter capabilities accessible via MCP
+- <100ms for queries across 100,000+ nodes
+
+### Tier 2: Production Readiness
+
+These enhancements improve reliability and maintainability.
+
+#### 2.1 Node Version History
+
+**Gap:** No version tracking for node changes.
+
+**Goals:**
+- Track all changes to node content and properties
+- View history and restore previous versions
+- Diff between versions
+
+**Design:**
 ```rust
-pub struct MultiModelEngine {
-    model_registry: ModelRegistry,
-    model_selector: IntelligentModelSelector,
-    performance_tracker: ModelPerformanceTracker,
-    load_balancer: ModelLoadBalancer,
-}
-
-pub struct IntelligentModelSelector {
-    task_classifier: TaskClassifier,
-    performance_history: PerformanceHistory,
-    cost_optimizer: CostOptimizer,
-}
-
-impl IntelligentModelSelector {
-    pub async fn select_optimal_model(
-        &self,
-        query: &Query,
-        context: &QueryContext
-    ) -> Result<ModelSelection, SelectionError> {
-        let task_type = self.task_classifier.classify(query).await?;
-        let available_models = self.model_registry.get_capable_models(&task_type);
-        
-        let optimal_model = self.performance_history
-            .find_best_performing_model(&available_models, &task_type)?;
-        
-        Ok(ModelSelection {
-            model: optimal_model,
-            confidence: self.calculate_confidence(&task_type, &optimal_model),
-            fallback_models: self.get_fallback_options(&available_models),
-        })
-    }
+// Each node change creates a version entry
+pub struct NodeVersion {
+    version: u32,
+    content: String,
+    properties: JsonValue,
+    modified_at: DateTime<Utc>,
+    modified_by: Option<String>,
 }
 ```
 
-**Specific Features:**
-- **Task-Specialized Models**: Code completion, document analysis, creative writing models
-- **Intelligent Routing**: Automatically route queries to the most appropriate model
-- **Performance Learning**: Learn which models perform best for specific query types
-- **Hybrid Cloud/Local**: Seamlessly use local models for privacy, cloud for capability
+**Features:**
+- Linear version history (no branching)
+- Restore to any previous version
+- Diff view between versions
+- Audit trail for compliance
 
-**Success Metrics:**
-- 40% improvement in task-specific AI quality scores
-- <200ms model selection latency
-- 99.9% model availability across all specialized tasks
-- Cost optimization reducing AI inference costs by 30%
+**Metrics:**
+- <10ms version lookup
+- Configurable retention (default: unlimited)
 
-### Tier 3: Enterprise Polish (12-18 Months)
+#### 2.2 Resilience & Error Recovery
 
-These enhancements provide the final polish needed for large-scale enterprise deployment and advanced use cases.
+**Gap:** Limited error recovery mechanisms.
 
-#### 3.1 Advanced Security Model
+**Goals:**
+- Automatic recovery from component failures
+- Data integrity validation
+- Graceful degradation when AI is unavailable
 
-**Current Enhancement:** Build upon Tauri's security with application-level security controls.
+**Features:**
+- **AI Model Recovery**: Automatic model reloading on failure
+- **Data Integrity Checks**: Startup validation of relationships
+- **Graceful Degradation**: System works without AI (manual workflows only)
 
-**Enhancement Goals:**
-- Data encryption at rest with user-controlled keys
-- Fine-grained access control and permission systems
-- Security audit trails and compliance reporting
-- Zero-trust architecture for all component communications
+**Metrics:**
+- <30 second recovery from AI model failures
+- Zero data corruption incidents
 
-**Implementation Approach:**
-```rust
-pub struct SecurityFramework {
-    encryption_manager: EncryptionManager,
-    access_controller: AccessController,
-    audit_logger: SecurityAuditLogger,
-    compliance_manager: ComplianceManager,
-}
+#### 2.3 Observability
 
-pub struct AccessController {
-    policy_engine: PolicyEngine,
-    capability_manager: CapabilityManager,
-    permission_cache: PermissionCache,
-}
+**Gap:** Minimal telemetry for debugging.
 
-impl AccessController {
-    pub async fn authorize_operation(
-        &self,
-        user: &UserIdentity,
-        operation: &Operation,
-        resource: &Resource
-    ) -> Result<AuthorizationResult, SecurityError> {
-        let capabilities = self.capability_manager.get_user_capabilities(user).await?;
-        let required_permissions = operation.required_permissions();
-        
-        let decision = self.policy_engine.evaluate_access(
-            &capabilities,
-            &required_permissions,
-            resource
-        ).await?;
-        
-        // Log the authorization decision
-        self.audit_logger.log_authorization(user, operation, resource, &decision).await?;
-        
-        Ok(decision)
-    }
-}
-```
+**Goals:**
+- Performance metrics for key operations
+- Request tracing for debugging
+- Health status indicators
 
-**Specific Features:**
-- **End-to-End Encryption**: Encrypt sensitive content with user-managed keys
-- **Capability-Based Security**: Fine-grained permissions for different operations
-- **Compliance Automation**: Built-in GDPR, HIPAA, and enterprise compliance features
-- **Security Monitoring**: Real-time security threat detection and response
+**Features:**
+- Operation timing metrics
+- Error rate tracking
+- AI inference monitoring (latency, token usage)
+- Optional structured logging
 
-**Success Metrics:**
-- Zero security vulnerabilities in annual audits
-- <10ms authorization decision latency
-- 100% audit trail coverage for sensitive operations
-- Full compliance with major enterprise security standards
+**Metrics:**
+- <100ms metric collection overhead
+- Complete request tracing for debugging
 
-#### 3.2 Enhanced Testing Infrastructure
+### Tier 3: Advanced Features
 
-**Current Enhancement:** Expand upon "real services" testing philosophy with advanced capabilities.
+These provide differentiation and advanced use cases.
 
-**Enhancement Goals:**
-- Property-based testing for edge case discovery
-- Performance regression testing in CI/CD
-- Chaos engineering for resilience validation
-- Comprehensive integration test matrices
+#### 3.1 Data Migration System
 
-**Implementation Approach:**
-```rust
-pub struct AdvancedTestingFramework {
-    property_tester: PropertyBasedTester,
-    performance_regressor: PerformanceRegressionTester,
-    chaos_engineer: ChaosEngineer,
-    integration_matrix: IntegrationTestMatrix,
-}
+**Gap:** No strategy for schema evolution.
 
-pub struct PropertyBasedTester {
-    generators: Vec<Box<dyn PropertyGenerator>>,
-    invariant_checkers: Vec<Box<dyn InvariantChecker>>,
-    shrinking_engine: ShrinkingEngine,
-}
+**Goals:**
+- Zero-downtime schema migrations
+- Automated migration from schema changes
+- Rollback capability
 
-impl PropertyBasedTester {
-    pub async fn test_property<T: Arbitrary>(
-        &self,
-        property: &dyn Property<T>,
-        iterations: usize
-    ) -> PropertyTestResult {
-        for _ in 0..iterations {
-            let input = T::arbitrary(&mut self.rng);
-            
-            match property.test(&input).await {
-                PropertyResult::Success => continue,
-                PropertyResult::Failure(reason) => {
-                    let minimal_case = self.shrinking_engine.shrink(input, property).await;
-                    return PropertyTestResult::Failed {
-                        minimal_failing_case: minimal_case,
-                        reason,
-                    };
-                }
-            }
-        }
-        
-        PropertyTestResult::Success
-    }
-}
-```
+**Features:**
+- Automatic migration generation from schema diffs
+- Migration testing before apply
+- Rollback within configurable window
 
-**Specific Features:**
-- **Automated Edge Case Discovery**: Generate thousands of test cases automatically
-- **Performance Benchmarking**: Catch performance regressions before deployment
-- **Fault Injection Testing**: Test system behavior under various failure scenarios
-- **Comprehensive Test Coverage**: Test all AI backend combinations automatically
+#### 3.2 Multi-Model AI Routing
 
-**Success Metrics:**
-- 10x increase in edge cases tested automatically
-- Zero performance regressions in production deployments
-- 99.9% system reliability under chaos testing conditions
-- <5 minute full test suite execution time
+**Gap:** Single model selection per session.
 
-#### 3.3 Plugin Marketplace & External Developer Support
+**Goals:**
+- Route queries to optimal model based on task type
+- Support specialized models (coding, analysis, writing)
+- Learn which models perform best
 
-**Current Extension:** Evolve internal plugin system to support external developers.
+**Features:**
+- Task classification for model routing
+- Performance tracking per model/task combination
+- User override for model selection
 
-**Enhancement Goals:**
-- Secure plugin sandbox with capability-based security
-- Plugin marketplace with discovery and distribution
-- Plugin development SDK and comprehensive documentation
-- Revenue sharing and plugin monetization support
+#### 3.3 Advanced Security
 
-**Implementation Approach:**
-```rust
-pub struct PluginMarketplace {
-    sandbox_manager: PluginSandboxManager,
-    marketplace_api: MarketplaceAPI,
-    security_scanner: PluginSecurityScanner,
-    revenue_manager: RevenueManager,
-}
+**Gap:** Basic security model.
 
-pub struct PluginSandboxManager {
-    isolation_engine: IsolationEngine,
-    capability_broker: CapabilityBroker,
-    resource_limiter: ResourceLimiter,
-}
+**Goals:**
+- Data encryption at rest
+- Fine-grained access control (for team use)
+- Audit trails for sensitive operations
 
-impl PluginSandboxManager {
-    pub async fn create_sandbox(
-        &self,
-        plugin: &Plugin,
-        capabilities: &RequestedCapabilities
-    ) -> Result<PluginSandbox, SandboxError> {
-        // Validate requested capabilities against plugin manifest
-        let validated_caps = self.capability_broker
-            .validate_capabilities(plugin, capabilities).await?;
-        
-        // Create isolated execution environment
-        let sandbox = self.isolation_engine
-            .create_isolation_boundary(plugin, &validated_caps).await?;
-        
-        // Apply resource limits
-        self.resource_limiter.apply_limits(&sandbox, plugin.resource_requirements()).await?;
-        
-        Ok(sandbox)
-    }
-}
-```
+**Features:**
+- User-controlled encryption keys
+- Permission system for shared collections
+- Comprehensive audit logging
 
-**Specific Features:**
-- **Plugin Security Scanning**: Automated security analysis of all marketplace plugins
-- **Capability Declaration**: Plugins declare exactly what system resources they need
-- **Resource Isolation**: Prevent plugins from affecting core system performance
-- **Marketplace Integration**: Discovery, ratings, and automated updates
+#### 3.4 Team Collaboration
 
-**Success Metrics:**
-- 1000+ high-quality plugins in marketplace
-- <1% security incidents from third-party plugins
-- 99.9% plugin compatibility across NodeSpace versions
-- $1M+ annual revenue from plugin ecosystem
+**Gap:** Single-user only, no shared workspaces.
 
-## Implementation Timeline
+**Goals:**
+- Shared NodeSpace instances for teams
+- Real-time collaboration on documents
+- Sync between team members with offline support
 
-### Phase 1: Foundation (Months 1-8)
-**Priority:** Tier 1 enhancements for production readiness
-- Resilience & Recovery Systems (Months 1-3)
-- Configuration Management Framework (Months 2-4)
-- Observability & Monitoring Infrastructure (Months 4-8)
+**Key Features:**
+- **Dual-Mode Design**: Solo mode (local-first) with optional live collaboration mode
+- **CRDT-Based Sync**: Yjs for conflict-free real-time editing
+- **Presence Awareness**: See collaborator cursors, selections, and avatars
+- **Graceful Degradation**: Full offline capability, sync when reconnected
 
-### Phase 2: Advancement (Months 6-12)
-**Priority:** Tier 2 enhancements for competitive differentiation
-- Advanced Caching & Performance Engine (Months 6-9)
-- Data Migration & Versioning System (Months 8-11)
-- Multi-Model AI Architecture (Months 9-12)
+**Metrics:**
+- <500ms sync latency for changes
+- Conflict-free merging for concurrent edits
+- Full offline capability with eventual consistency
 
-### Phase 3: Enterprise (Months 12-18)
-**Priority:** Tier 3 enhancements for enterprise scale
-- Advanced Security Model (Months 12-15)
-- Enhanced Testing Infrastructure (Months 13-16)
-- Plugin Marketplace & External Developer Support (Months 15-18)
+See [Collaboration Strategy](../data/collaboration-strategy.md) and [Sync Protocol](../data/sync-protocol.md) for detailed specifications.
 
-## Success Metrics & KPIs
+#### 3.5 Codebase Semantic Search
 
-### System Reliability
-- **Uptime**: 99.99% system availability
-- **Recovery Time**: <30 seconds from any failure
-- **Data Integrity**: Zero data corruption incidents
-- **Performance**: <100ms response time for 95% of operations
+**Gap:** No integration with code repositories.
 
-### Developer Experience
-- **Build Time**: <30 seconds for incremental builds
-- **Test Suite**: <5 minutes for full test execution
-- **Documentation**: 100% API coverage with examples
-- **Onboarding**: New developers productive within 1 day
+**Goals:**
+- Index local git repositories with tree-sitter parsing
+- Semantic search across code using natural language
+- Connect code symbols to specs, plans, and tasks
 
-### Enterprise Readiness
-- **Security**: Zero critical vulnerabilities
-- **Compliance**: Full GDPR, HIPAA compliance
-- **Scalability**: Support 100,000+ nodes per instance
-- **Performance**: Linear scaling with hardware resources
+**Key Features:**
+- **Tree-sitter Integration**: Parse code into CodeRepository → CodeFile → CodeSymbol nodes
+- **Humanized Embeddings**: Transform code into natural language for better semantic matching
+- **MCP Tools**: `search_code`, `get_symbol`, `get_file_symbols` for AI agent access
+- **File Watching**: Automatic re-indexing on file changes
 
-### AI Capabilities
-- **Model Performance**: 40% improvement in task-specific accuracy
-- **Inference Speed**: <500ms for 95% of AI operations
-- **Resource Efficiency**: 50% reduction in AI compute costs
-- **Model Diversity**: Support 10+ specialized AI models
+**Value Proposition:**
+| Approach | Query | Result |
+|----------|-------|--------|
+| grep | `grep "auth"` | 847 matches, mostly noise |
+| Semantic | "where do we handle authentication?" | Top 3 relevant functions |
 
-## Investment Requirements
+**Metrics:**
+- <30 seconds for small repo indexing (~500 files)
+- <200ms semantic search across codebases
+- Support for 10,000+ files per workspace
 
-### Engineering Resources
-- **Team Size**: 8-12 engineers across specializations
-- **Timeline**: 18 months for complete implementation
-- **Expertise**: Rust systems programming, AI/ML, security, DevOps
+See [Semantic Code Search](../features/semantic-code-search.md) for detailed specification including tree-sitter queries, node schemas, and MCP tool definitions.
 
-### Infrastructure Costs
-- **Development**: $50K/month for development and testing infrastructure
-- **AI Models**: $25K for model licensing and specialized hardware
-- **Security**: $30K for security tools and compliance auditing
+## Implementation Priority
 
-### Total Investment: ~$2M over 18 months
+**Phase 1: Core Value (Current Focus)**
+1. Workflow Automation System
+2. Collections System
+3. Query Service Enhancements
 
-## Risk Mitigation
+**Phase 2: Production Readiness**
+4. Node Version History
+5. Resilience & Error Recovery
+6. Observability
 
-### Technical Risks
-- **AI Model Evolution**: Maintain configurable AI backend to adapt to new models
-- **Performance Degradation**: Implement comprehensive performance testing and monitoring
-- **Security Vulnerabilities**: Regular security audits and automated vulnerability scanning
+**Phase 3: Advanced**
+7. Data Migration System
+8. Multi-Model AI Routing
+9. Advanced Security
+10. Team Collaboration
+11. Codebase Semantic Search
 
-### Business Risks
-- **Feature Complexity**: Implement features incrementally with feature flags
-- **Resource Constraints**: Prioritize Tier 1 enhancements that provide maximum business value
-- **Competitive Pressure**: Focus on unique AI-native capabilities that competitors can't easily replicate
+## Success Metrics
 
-## Conclusion
+### Core Functionality
+- **Workflow Flexibility**: Any user-defined workflow works without code changes
+- **Organization**: Users can browse/discover documents effectively
+- **Query Power**: All filtering/sorting needs met via MCP
 
-This post-MVP roadmap transforms NodeSpace from an excellent foundation (9.5/10) into a best-in-class enterprise platform (10/10) while preserving the architectural excellence already achieved. The enhancements are designed to be:
+### Reliability
+- **Data Integrity**: Zero corruption incidents
+- **Availability**: System usable even when AI is unavailable
+- **Recovery**: Quick recovery from component failures
 
-- **Evolutionary**: Build upon existing strengths without requiring rewrites
-- **Incremental**: Implement in phases with clear value delivery at each stage
-- **Measurable**: Clear success metrics and KPIs for each enhancement
-- **Pragmatic**: Focus on enhancements that provide real business and user value
+### Performance
+- **Query Speed**: <100ms for typical queries
+- **Trigger Latency**: <50ms for workflow triggers
+- **Collection Queries**: <10ms for membership lookups
 
-The current architecture provides an exceptional foundation that makes these ambitious enhancements achievable through careful engineering rather than architectural pivots. This roadmap positions NodeSpace as a truly enterprise-grade, AI-native knowledge management platform that can compete with any solution in the market.
+### Collaboration (Future)
+- **Sync Latency**: <500ms for team sync
+- **Conflict Resolution**: Zero data loss from concurrent edits
+- **Code Search**: <200ms semantic search across codebases
+
+## Non-Goals (Explicitly Out of Scope)
+
+- **Methodology-specific code**: No Spec Kit, BMAD, OpenSpec specific implementations
+- **Cloud-hosted sync**: We provide sync protocol, not hosted infrastructure
+- **Plugin marketplace**: Focus on core before ecosystem
 
 ---
 
-**Next Steps**: Review and prioritize Tier 1 enhancements based on immediate business needs and available engineering resources. The foundation is solid – now we build the skyscraper.
+**Next Steps**: Focus on Tier 1 features - these define NodeSpace's unique value proposition.

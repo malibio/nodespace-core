@@ -1064,4 +1064,128 @@ mod tests {
 
 ---
 
+## Integration with Workflow Automation
+
+Entity changes can trigger workflow automation. When a field value changes, the Workflow Engine evaluates registered triggers:
+
+```rust
+// Example: Status change triggers workflow progression
+pub struct EntityChangeEvent {
+    pub entity_id: String,
+    pub entity_type: String,
+    pub field_name: String,
+    pub old_value: Option<EntityValue>,
+    pub new_value: EntityValue,
+    pub changed_by: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+impl EntityManager {
+    pub async fn update_entity_field_with_triggers(
+        &self,
+        entity_id: &str,
+        field_name: &str,
+        new_value: EntityValue
+    ) -> Result<EntityUpdateResult, Error> {
+        // 1. Perform the update
+        let result = self.update_entity_field(entity_id, field_name, new_value.clone()).await?;
+
+        // 2. Emit change event for workflow engine
+        let event = EntityChangeEvent {
+            entity_id: entity_id.to_string(),
+            entity_type: result.entity_type.clone(),
+            field_name: field_name.to_string(),
+            old_value: result.field_updates[0].old_value.clone(),
+            new_value,
+            changed_by: self.current_user().to_string(),
+            timestamp: Utc::now(),
+        };
+
+        self.workflow_engine.on_entity_changed(event).await?;
+
+        Ok(result)
+    }
+}
+```
+
+### Common Workflow Patterns with Entities
+
+**Status-based progression:**
+```javascript
+// When spec.status changes to "approved", create a plan
+{
+  trigger_type: "property_change",
+  watch_node_type: "spec",
+  condition: { field: "status", operator: "equals", value: "approved" },
+  actions: [
+    { type: "create_node", schema: "plan", link_to: "$trigger_node" }
+  ]
+}
+```
+
+**Due date reminders:**
+```javascript
+// When task.due_date is approaching
+{
+  trigger_type: "condition_met",
+  watch_node_type: "task",
+  condition: {
+    expression: "due_date < now() + 24h AND status != 'done'"
+  },
+  actions: [
+    { type: "set_property", target: "$trigger_node", field: "priority", value: "high" }
+  ]
+}
+```
+
+**Calculated field triggers:**
+```javascript
+// When all subtasks are done, mark parent complete
+{
+  trigger_type: "condition_met",
+  watch_node_type: "epic",
+  condition: {
+    calculated_field: "completion_percentage",
+    operator: "equals",
+    value: 100
+  },
+  actions: [
+    { type: "set_property", target: "$trigger_node", field: "status", value: "done" }
+  ]
+}
+```
+
+See [Workflow Automation System](./workflow-automation-system.md) for complete workflow documentation.
+
+## Integration with Collections
+
+Entities can be organized into Collections for logical grouping:
+
+```javascript
+// Add entity to collection on creation
+{
+  trigger_type: "node_created",
+  watch_node_type: "spec",
+  actions: [
+    {
+      type: "add_to_collection",
+      target: "$trigger_node",
+      collection: "projects/$trigger_node.project_name/specs"
+    }
+  ]
+}
+```
+
+See [Collections System](./collections-system.md) for collection documentation.
+
+---
+
+## Summary
+
 This Entity Management Specification provides a comprehensive foundation for structured data handling within NodeSpace, with sophisticated calculated field capabilities, AI integration, and real-world performance considerations. The system enables users to create custom entity types that behave like traditional database tables while integrating seamlessly with the hierarchical node interface and AI-native features.
+
+**Key integrations:**
+- **Workflow Automation** - Entity changes trigger workflow progression
+- **Collections** - Entities can be organized into logical groups
+- **Semantic Search** - Entity content is indexed for discovery
+- **AI Agents** - Can create and update entities via natural language
