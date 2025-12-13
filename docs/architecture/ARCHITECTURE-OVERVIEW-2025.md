@@ -511,11 +511,12 @@ bun run dev:browser
 
 ### Planned Features
 
-1. **Workflow Canvas System** - Visual AI workflow creation
-2. **Collaborative Sync** - Multi-user real-time collaboration via Turso
-3. **Playbook Marketplace** - Shareable methodology templates
-4. **Advanced AI Integration** - Local LLM inference via mistral.rs
-5. **Mobile Companion** - React Native or Capacitor mobile app
+1. **Semantic Code Search** - Index local repositories for natural language code search via tree-sitter parsing. See [Semantic Code Search Architecture](features/semantic-code-search.md)
+2. **Workflow Canvas System** - Visual AI workflow creation
+3. **Collaborative Sync** - Multi-user real-time collaboration via Turso
+4. **Playbook Marketplace** - Shareable methodology templates
+5. **Advanced AI Integration** - Local LLM inference
+6. **Mobile Companion** - React Native or Capacitor mobile app
 
 ### Migration Considerations
 
