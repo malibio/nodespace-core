@@ -4544,6 +4544,337 @@ where
         Ok(results)
     }
 
+    // ========================================================================
+    // Collection Membership Operations (member_of edges)
+    // ========================================================================
+
+    /// Add a node to a collection (create member_of edge)
+    ///
+    /// Creates a member_of edge from the member node to the collection node.
+    /// Direction: member -> collection (node X belongs to collection Y)
+    ///
+    /// This is idempotent - if the membership already exists, nothing happens.
+    ///
+    /// # Arguments
+    ///
+    /// * `member_id` - The ID of the node to add to the collection
+    /// * `collection_id` - The ID of the collection node
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Membership created or already exists
+    /// * `Err` - Database error
+    pub async fn add_to_collection(&self, member_id: &str, collection_id: &str) -> Result<()> {
+        let member_thing = Thing::from(("node".to_string(), member_id.to_string()));
+        let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
+
+        // Check if membership already exists (for idempotency)
+        let check_query =
+            "SELECT VALUE id FROM member_of WHERE in = $member AND out = $collection;";
+        let mut check_response = self
+            .db
+            .query(check_query)
+            .bind(("member", member_thing.clone()))
+            .bind(("collection", collection_thing.clone()))
+            .await
+            .context("Failed to check for existing membership")?;
+
+        let existing_membership_ids: Vec<Thing> = check_response
+            .take(0)
+            .context("Failed to extract membership check results")?;
+
+        // Only create membership if it doesn't exist
+        if existing_membership_ids.is_empty() {
+            let query = "RELATE $member->member_of->$collection;";
+
+            self.db
+                .query(query)
+                .bind(("member", member_thing))
+                .bind(("collection", collection_thing))
+                .await
+                .context("Failed to create membership")?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove a node from a collection (delete member_of edge)
+    ///
+    /// Deletes the member_of edge from the member node to the collection node.
+    ///
+    /// # Arguments
+    ///
+    /// * `member_id` - The ID of the node to remove from the collection
+    /// * `collection_id` - The ID of the collection node
+    pub async fn remove_from_collection(&self, member_id: &str, collection_id: &str) -> Result<()> {
+        let member_thing = Thing::from(("node".to_string(), member_id.to_string()));
+        let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
+
+        self.db
+            .query("DELETE FROM member_of WHERE in = $member AND out = $collection;")
+            .bind(("member", member_thing))
+            .bind(("collection", collection_thing))
+            .await
+            .context("Failed to delete membership")?;
+
+        Ok(())
+    }
+
+    /// Get all collections a node belongs to
+    ///
+    /// Returns the IDs of all collections the node is a member of.
+    /// Direction: node -> member_of -> collection
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The ID of the node
+    ///
+    /// # Returns
+    ///
+    /// Collection IDs the node belongs to
+    pub async fn get_node_memberships(&self, node_id: &str) -> Result<Vec<String>> {
+        let query =
+            "SELECT ->member_of->node.id AS collection_ids FROM type::thing('node', $node_id);";
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("node_id", node_id.to_string()))
+            .await
+            .context("Failed to get node memberships")?;
+
+        #[derive(Debug, Deserialize)]
+        struct MembershipResult {
+            collection_ids: Vec<Thing>,
+        }
+
+        let results: Vec<MembershipResult> = response
+            .take(0)
+            .context("Failed to extract memberships from response")?;
+
+        let collection_ids: Vec<String> = results
+            .into_iter()
+            .flat_map(|r| r.collection_ids)
+            .filter_map(|thing| {
+                if let Id::String(id_str) = &thing.id {
+                    Some(id_str.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(collection_ids)
+    }
+
+    /// Get all members of a collection
+    ///
+    /// Returns the IDs of all nodes that are members of the collection.
+    /// Direction: member -> member_of -> collection
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The ID of the collection node
+    ///
+    /// # Returns
+    ///
+    /// Member node IDs
+    pub async fn get_collection_members(&self, collection_id: &str) -> Result<Vec<String>> {
+        let query =
+            "SELECT <-member_of<-node.id AS member_ids FROM type::thing('node', $collection_id);";
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("collection_id", collection_id.to_string()))
+            .await
+            .context("Failed to get collection members")?;
+
+        #[derive(Debug, Deserialize)]
+        struct MemberResult {
+            member_ids: Vec<Thing>,
+        }
+
+        let results: Vec<MemberResult> = response
+            .take(0)
+            .context("Failed to extract members from response")?;
+
+        let member_ids: Vec<String> = results
+            .into_iter()
+            .flat_map(|r| r.member_ids)
+            .filter_map(|thing| {
+                if let Id::String(id_str) = &thing.id {
+                    Some(id_str.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(member_ids)
+    }
+
+    /// Get collection by name (case-insensitive lookup)
+    ///
+    /// Finds a collection node by its content field (collection name).
+    /// Uses case-insensitive matching.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The collection name to search for
+    ///
+    /// # Returns
+    ///
+    /// The collection node if found
+    pub async fn get_collection_by_name(&self, name: &str) -> Result<Option<Node>> {
+        let normalized_name = name.to_lowercase();
+
+        // Use string::lowercase for case-insensitive matching
+        // Return only the ID so we can use get_node for consistent handling
+        let query = r#"
+            SELECT VALUE record::id(id) FROM node
+            WHERE node_type = 'collection'
+            AND string::lowercase(content) = $name
+            LIMIT 1;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("name", normalized_name))
+            .await
+            .context("Failed to search for collection by name")?;
+
+        let results: Vec<String> = response
+            .take(0)
+            .context("Failed to extract collection search results")?;
+
+        if let Some(collection_id) = results.into_iter().next() {
+            // Use get_node for consistent node construction
+            self.get_node(&collection_id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if adding a parent would create a cycle in the collection hierarchy
+    ///
+    /// Collections form a DAG (Directed Acyclic Graph). This method checks if
+    /// making `potential_parent` a parent of `collection` would create a cycle.
+    ///
+    /// A cycle would occur if `collection` is already an ancestor of `potential_parent`.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection that would gain a new parent
+    /// * `potential_parent_id` - The potential parent collection
+    ///
+    /// # Returns
+    ///
+    /// `true` if adding this parent would create a cycle, `false` otherwise
+    pub async fn would_create_collection_cycle(
+        &self,
+        collection_id: &str,
+        potential_parent_id: &str,
+    ) -> Result<bool> {
+        // If they're the same, it's a self-reference cycle
+        if collection_id == potential_parent_id {
+            return Ok(true);
+        }
+
+        let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
+
+        // Check if potential_parent is in the descendants of collection
+        // Using recursive graph traversal: collection->has_child*->node
+        // If potential_parent appears in the descendants, adding it as parent creates a cycle
+        // Return count instead of records for simpler handling
+        let query = r#"
+            LET $descendants = $collection_thing.{..+collect}->has_child->node;
+            SELECT VALUE count() FROM type::thing('node', $potential_parent_id)
+            WHERE id IN $descendants
+            GROUP ALL;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("collection_thing", collection_thing))
+            .bind(("potential_parent_id", potential_parent_id.to_string()))
+            .await
+            .context("Failed to check for collection cycle")?;
+
+        let results: Vec<i64> = response
+            .take(1)
+            .context("Failed to extract cycle check results")?;
+
+        // If count > 0, the potential parent is a descendant of collection (cycle would occur)
+        Ok(results.first().copied().unwrap_or(0) > 0)
+    }
+
+    /// Get all members of a collection recursively (including members of child collections)
+    ///
+    /// This method returns members of the specified collection and all its
+    /// descendant collections in the hierarchy.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The ID of the root collection
+    ///
+    /// # Returns
+    ///
+    /// All member node IDs (deduplicated)
+    pub async fn get_collection_members_recursive(
+        &self,
+        collection_id: &str,
+    ) -> Result<Vec<String>> {
+        let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
+
+        // Get all collections in the subtree (collection + descendants)
+        // Then get all members of those collections
+        let query = r#"
+            LET $collection_subtree = array::concat(
+                [$collection_thing],
+                $collection_thing.{..+collect}->has_child->node
+            );
+            SELECT <-member_of<-node.id AS member_ids FROM node
+            WHERE id IN $collection_subtree;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("collection_thing", collection_thing))
+            .await
+            .context("Failed to get recursive collection members")?;
+
+        #[derive(Debug, Deserialize)]
+        struct MemberResult {
+            member_ids: Vec<Thing>,
+        }
+
+        let results: Vec<MemberResult> = response
+            .take(1) // Second statement result
+            .context("Failed to extract recursive members from response")?;
+
+        let mut member_ids: Vec<String> = results
+            .into_iter()
+            .flat_map(|r| r.member_ids)
+            .filter_map(|thing| {
+                if let Id::String(id_str) = &thing.id {
+                    Some(id_str.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Deduplicate (a node could be in multiple child collections)
+        member_ids.sort();
+        member_ids.dedup();
+
+        Ok(member_ids)
+    }
+
     /// Create a stale embedding marker for a new root node
     ///
     /// Creates an empty embedding record marked as stale to queue it for processing.
