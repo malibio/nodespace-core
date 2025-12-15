@@ -4784,11 +4784,13 @@ where
 
         let normalized_names: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
 
-        // Use array contains for batch lookup
+        // Use CONTAINS operator for batch lookup
+        // Return only IDs and content, then use get_node for consistent node construction
         let query = r#"
-            SELECT *, record::id(id) AS node_id FROM node
+            SELECT VALUE { id: record::id(id), content: content }
+            FROM node
             WHERE node_type = 'collection'
-            AND string::lowercase(content) IN $names;
+            AND $names CONTAINS string::lowercase(content);
         "#;
 
         let mut response = self
@@ -4798,28 +4800,23 @@ where
             .await
             .context("Failed to batch search for collections by names")?;
 
+        // Parse as objects with id and content fields
         let results: Vec<Value> = response.take(0).unwrap_or_default();
 
         let mut collections = HashMap::new();
-        for hub in results {
-            let node_id = hub["node_id"].as_str().unwrap_or("").to_string();
+        for row in results {
+            let node_id = row["id"].as_str().unwrap_or("").to_string();
+            let content = row["content"].as_str().unwrap_or("").to_string();
+
             if node_id.is_empty() {
                 continue;
             }
-            let node_type = hub["node_type"]
-                .as_str()
-                .unwrap_or("collection")
-                .to_string();
-            let content = hub["content"].as_str().unwrap_or("").to_string();
 
-            // Get normalized name for the map key
-            let normalized_content = content.to_lowercase();
-
-            // Collection nodes don't have spoke tables, so properties are empty
-            let properties = serde_json::json!({});
-
-            let node = self.build_node_from_hub(node_id, node_type, &hub, properties);
-            collections.insert(normalized_content, node);
+            // Use get_node for consistent node construction
+            if let Ok(Some(node)) = self.get_node(&node_id).await {
+                let normalized_content = content.to_lowercase();
+                collections.insert(normalized_content, node);
+            }
         }
 
         Ok(collections)
