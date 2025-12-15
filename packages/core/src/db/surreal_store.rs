@@ -333,6 +333,85 @@ async fn batch_fetch_properties<C: surrealdb::Connection>(
     Ok(result)
 }
 
+/// Batch fetch collection memberships for multiple nodes
+///
+/// **Purpose**: Avoid N+1 query pattern when populating member_of for multiple nodes.
+///
+/// **Performance**:
+/// - Old: 100 nodes = 100 individual queries
+/// - New: 100 nodes = 1 batch query
+///
+/// # Arguments
+///
+/// * `db` - SurrealDB connection
+/// * `node_ids` - Vector of node IDs to fetch memberships for
+///
+/// # Returns
+///
+/// HashMap mapping node ID to its collection membership IDs
+async fn batch_fetch_memberships<C: surrealdb::Connection>(
+    db: &Surreal<C>,
+    node_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    use surrealdb::sql::{Id, Thing};
+
+    if node_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    // Build Things for all node IDs
+    let node_things: Vec<Thing> = node_ids
+        .iter()
+        .map(|id| Thing::from(("node".to_string(), id.to_string())))
+        .collect();
+
+    // Query all membership edges in one batch
+    // Returns: [{ node_id: "xxx", collection_ids: [Thing, Thing] }, ...]
+    let query = r#"
+        SELECT
+            record::id(id) AS node_id,
+            ->member_of->node.id AS collection_ids
+        FROM node
+        WHERE id IN $node_ids;
+    "#;
+
+    let mut response = db
+        .query(query)
+        .bind(("node_ids", node_things))
+        .await
+        .context("Failed to batch fetch memberships")?;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct MembershipRow {
+        node_id: String,
+        #[serde(default)]
+        collection_ids: Vec<Thing>,
+    }
+
+    let rows: Vec<MembershipRow> = response
+        .take(0)
+        .context("Failed to extract membership results")?;
+
+    // Convert to HashMap<node_id, Vec<collection_id>>
+    let mut result = std::collections::HashMap::new();
+    for row in rows {
+        let collection_ids: Vec<String> = row
+            .collection_ids
+            .into_iter()
+            .filter_map(|thing| {
+                if let Id::String(id_str) = thing.id {
+                    Some(id_str)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        result.insert(row.node_id, collection_ids);
+    }
+
+    Ok(result)
+}
+
 /// SurrealStore implements NodeStore trait for SurrealDB backend
 ///
 /// Supports two connection modes:
@@ -1301,12 +1380,16 @@ where
                 .unwrap_or(serde_json::json!({}))
         };
 
-        Ok(Some(self.build_node_from_hub(
-            id.to_string(),
-            node_type,
-            &hub,
-            properties,
-        )))
+        let mut node = self.build_node_from_hub(id.to_string(), node_type, &hub, properties);
+
+        // Query 3: Get collection memberships
+        // Uses batch function with single ID for consistency
+        let memberships = batch_fetch_memberships(&self.db, &[id.to_string()]).await?;
+        if let Some(collections) = memberships.get(id) {
+            node.member_of = collections.clone();
+        }
+
+        Ok(Some(node))
     }
 
     /// Batch-fetch multiple nodes by their IDs in a single query.
@@ -1412,6 +1495,17 @@ where
                 let node =
                     self.build_node_from_hub(node_id.clone(), node_type.clone(), &hub, properties);
                 result_map.insert(node_id, node);
+            }
+        }
+
+        // Batch fetch collection memberships for all nodes
+        let all_node_ids: Vec<String> = result_map.keys().cloned().collect();
+        let memberships = batch_fetch_memberships(&self.db, &all_node_ids).await?;
+
+        // Hydrate member_of into nodes
+        for (node_id, node) in result_map.iter_mut() {
+            if let Some(collections) = memberships.get(node_id) {
+                node.member_of = collections.clone();
             }
         }
 
@@ -2388,6 +2482,21 @@ where
             }
         }
 
+        // Batch fetch collection memberships for all nodes
+        let all_node_ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
+        match batch_fetch_memberships(&self.db, &all_node_ids).await {
+            Ok(memberships) => {
+                for node in &mut nodes {
+                    if let Some(collections) = memberships.get(&node.id) {
+                        node.member_of = collections.clone();
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to batch fetch memberships: {}", e);
+            }
+        }
+
         Ok(nodes)
     }
 
@@ -2508,6 +2617,21 @@ where
         for node in &mut nodes {
             if let Some(props) = all_properties.get(&node.id) {
                 node.properties = props.clone();
+            }
+        }
+
+        // Batch fetch collection memberships for all nodes
+        let all_node_ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
+        match batch_fetch_memberships(&self.db, &all_node_ids).await {
+            Ok(memberships) => {
+                for node in &mut nodes {
+                    if let Some(collections) = memberships.get(&node.id) {
+                        node.member_of = collections.clone();
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to batch fetch memberships for children: {}", e);
             }
         }
 
@@ -4835,60 +4959,6 @@ where
         }
 
         Ok(collections)
-    }
-
-    /// Check if adding a parent would create a cycle in the collection hierarchy
-    ///
-    /// Collections form a DAG (Directed Acyclic Graph). This method checks if
-    /// making `potential_parent` a parent of `collection` would create a cycle.
-    ///
-    /// A cycle would occur if `collection` is already an ancestor of `potential_parent`.
-    ///
-    /// # Arguments
-    ///
-    /// * `collection_id` - The collection that would gain a new parent
-    /// * `potential_parent_id` - The potential parent collection
-    ///
-    /// # Returns
-    ///
-    /// `true` if adding this parent would create a cycle, `false` otherwise
-    pub async fn would_create_collection_cycle(
-        &self,
-        collection_id: &str,
-        potential_parent_id: &str,
-    ) -> Result<bool> {
-        // If they're the same, it's a self-reference cycle
-        if collection_id == potential_parent_id {
-            return Ok(true);
-        }
-
-        let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
-
-        // Check if potential_parent is in the descendants of collection
-        // Using recursive graph traversal: collection->has_child*->node
-        // If potential_parent appears in the descendants, adding it as parent creates a cycle
-        // Return count instead of records for simpler handling
-        let query = r#"
-            LET $descendants = $collection_thing.{..+collect}->has_child->node;
-            SELECT VALUE count() FROM type::thing('node', $potential_parent_id)
-            WHERE id IN $descendants
-            GROUP ALL;
-        "#;
-
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("collection_thing", collection_thing))
-            .bind(("potential_parent_id", potential_parent_id.to_string()))
-            .await
-            .context("Failed to check for collection cycle")?;
-
-        let results: Vec<i64> = response
-            .take(1)
-            .context("Failed to extract cycle check results")?;
-
-        // If count > 0, the potential parent is a descendant of collection (cycle would occur)
-        Ok(results.first().copied().unwrap_or(0) > 0)
     }
 
     /// Get all members of a collection recursively (including members of child collections)

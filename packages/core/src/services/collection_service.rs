@@ -629,21 +629,6 @@ where
             .map_err(|e| db_error(e, "Failed to get recursive collection members"))
     }
 
-    /// Check if adding a parent would create a cycle
-    ///
-    /// Collections form a DAG - this checks if adding potential_parent as a
-    /// parent of collection would create a cycle.
-    pub async fn would_create_cycle(
-        &self,
-        collection_id: &str,
-        potential_parent_id: &str,
-    ) -> Result<bool, NodeServiceError> {
-        self.store
-            .would_create_collection_cycle(collection_id, potential_parent_id)
-            .await
-            .map_err(|e| db_error(e, "Failed to check for collection cycle"))
-    }
-
     /// Get a collection by name (case-insensitive)
     pub async fn get_collection_by_name(
         &self,
