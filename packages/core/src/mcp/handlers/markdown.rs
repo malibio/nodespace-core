@@ -441,6 +441,15 @@ pub struct CreateNodesFromMarkdownParams {
     /// Multi-line types (code-block, quote-block, ordered-list) cannot be roots.
     #[serde(default)]
     pub title: Option<String>,
+
+    /// Enable async import mode for faster response (Issue #760).
+    ///
+    /// When true, returns immediately with just `root_id` and `async: true`.
+    /// Children are inserted in a background task.
+    ///
+    /// When false (default), waits for all nodes to be created before responding.
+    #[serde(default)]
+    pub async_import: bool,
 }
 
 /// Metadata for a created node (id + type)
@@ -716,7 +725,9 @@ where
         }
     }
 
-    // Phase 2: Prepare and batch-insert all children
+    // Phase 2: Prepare and insert children
+    // When async_import=true, spawn background task for faster response
+    // When async_import=false (default), insert synchronously for test compatibility
     if !remaining_content.trim().is_empty() {
         let prepared_children =
             prepare_nodes_from_markdown(&remaining_content, Some(root_id.clone()))?;
@@ -753,19 +764,61 @@ where
                 })
                 .collect();
 
-            // Batch insert all children in a single transaction
-            let created_ids = node_service
-                .bulk_create_hierarchy(nodes_for_bulk)
-                .await
-                .map_err(|e| MCPError::internal_error(format!("Bulk creation failed: {}", e)))?;
-
-            // Track all created nodes
-            for (i, child) in prepared_children.iter().enumerate() {
-                all_node_ids.push(created_ids[i].clone());
-                all_nodes.push(NodeMetadata {
-                    id: created_ids[i].clone(),
-                    node_type: child.node_type.clone(),
+            if params.async_import {
+                // Async mode (Issue #760): Spawn background task for faster response
+                let node_service = Arc::clone(node_service);
+                let root_id_for_log = root_id.clone();
+                tokio::spawn(async move {
+                    let insert_start = std::time::Instant::now();
+                    match node_service.bulk_create_hierarchy(nodes_for_bulk).await {
+                        Ok(created_ids) => {
+                            tracing::info!(
+                                root_id = %root_id_for_log,
+                                nodes_created = created_ids.len(),
+                                duration_ms = insert_start.elapsed().as_millis(),
+                                "Background markdown import completed"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                root_id = %root_id_for_log,
+                                error = %e,
+                                "Background markdown import failed"
+                            );
+                        }
+                    }
                 });
+
+                let duration_ms = start.elapsed().as_millis();
+                tracing::info!(
+                    duration_ms = duration_ms,
+                    root_id = %root_id,
+                    async_import = true,
+                    "Markdown import initiated (async)"
+                );
+
+                return Ok(json!({
+                    "success": true,
+                    "root_id": root_id,
+                    "async": true
+                }));
+            } else {
+                // Sync mode (default): Insert synchronously
+                let created_ids = node_service
+                    .bulk_create_hierarchy(nodes_for_bulk)
+                    .await
+                    .map_err(|e| {
+                        MCPError::internal_error(format!("Bulk creation failed: {}", e))
+                    })?;
+
+                // Track all created nodes
+                for (i, child) in prepared_children.iter().enumerate() {
+                    all_node_ids.push(created_ids[i].clone());
+                    all_nodes.push(NodeMetadata {
+                        id: created_ids[i].clone(),
+                        node_type: child.node_type.clone(),
+                    });
+                }
             }
         }
     }
@@ -774,7 +827,7 @@ where
     let nodes_per_sec = if duration_ms > 0 {
         (all_nodes.len() as u128 * 1000) / duration_ms
     } else {
-        all_nodes.len() as u128 * 1000 // Instant completion
+        all_nodes.len() as u128 * 1000
     };
 
     tracing::info!(
