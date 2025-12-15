@@ -2895,11 +2895,7 @@ mod tests {
         let behavior = CollectionNodeBehavior;
 
         // Name with colon should be rejected (colon is path delimiter)
-        let colon_node = Node::new(
-            "collection".to_string(),
-            "hr:policy".to_string(),
-            json!({}),
-        );
+        let colon_node = Node::new("collection".to_string(), "hr:policy".to_string(), json!({}));
         let result = behavior.validate(&colon_node);
         assert!(result.is_err());
         assert!(matches!(
