@@ -265,6 +265,7 @@ impl From<SurrealNode> for Node {
             properties,
             mentions: sn.mentions,
             mentioned_by: sn.mentioned_by,
+            member_of: Vec::new(),
         }
     }
 }
@@ -1236,6 +1237,7 @@ where
             properties,
             mentions,
             mentioned_by,
+            member_of: Vec::new(),
         }
     }
 
@@ -3861,6 +3863,7 @@ where
                 properties: properties.clone(),
                 mentions: vec![],
                 mentioned_by: vec![],
+                member_of: vec![],
             };
             self.notify(StoreChange {
                 operation: StoreOperation::Created,
@@ -4755,6 +4758,71 @@ where
         } else {
             Ok(None)
         }
+    }
+
+    /// Batch get collections by names (case-insensitive lookup)
+    ///
+    /// Finds collection nodes by their content fields in a single query.
+    /// Returns a map of normalized name -> Node for collections that exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `names` - The collection names to search for
+    ///
+    /// # Returns
+    ///
+    /// Map of normalized (lowercase) name to Node for each found collection
+    pub async fn get_collections_by_names(
+        &self,
+        names: &[String],
+    ) -> Result<std::collections::HashMap<String, Node>> {
+        use std::collections::HashMap;
+
+        if names.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let normalized_names: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
+
+        // Use array contains for batch lookup
+        let query = r#"
+            SELECT *, record::id(id) AS node_id FROM node
+            WHERE node_type = 'collection'
+            AND string::lowercase(content) IN $names;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("names", normalized_names))
+            .await
+            .context("Failed to batch search for collections by names")?;
+
+        let results: Vec<Value> = response.take(0).unwrap_or_default();
+
+        let mut collections = HashMap::new();
+        for hub in results {
+            let node_id = hub["node_id"].as_str().unwrap_or("").to_string();
+            if node_id.is_empty() {
+                continue;
+            }
+            let node_type = hub["node_type"]
+                .as_str()
+                .unwrap_or("collection")
+                .to_string();
+            let content = hub["content"].as_str().unwrap_or("").to_string();
+
+            // Get normalized name for the map key
+            let normalized_content = content.to_lowercase();
+
+            // Collection nodes don't have spoke tables, so properties are empty
+            let properties = serde_json::json!({});
+
+            let node = self.build_node_from_hub(node_id, node_type, &hub, properties);
+            collections.insert(normalized_content, node);
+        }
+
+        Ok(collections)
     }
 
     /// Check if adding a parent would create a cycle in the collection hierarchy

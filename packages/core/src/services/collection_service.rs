@@ -304,13 +304,19 @@ impl ResolvedPath {
 ///
 /// This service provides path resolution, membership management, and collection
 /// queries. It uses `SurrealStore` for database operations.
-pub struct CollectionService<'a> {
-    store: &'a Arc<SurrealStore>,
+pub struct CollectionService<'a, C = surrealdb::engine::local::Db>
+where
+    C: surrealdb::Connection,
+{
+    store: &'a Arc<SurrealStore<C>>,
 }
 
-impl<'a> CollectionService<'a> {
+impl<'a, C> CollectionService<'a, C>
+where
+    C: surrealdb::Connection,
+{
     /// Create a new CollectionService
-    pub fn new(store: &'a Arc<SurrealStore>) -> Self {
+    pub fn new(store: &'a Arc<SurrealStore<C>>) -> Self {
         Self { store }
     }
 
@@ -336,19 +342,22 @@ impl<'a> CollectionService<'a> {
     /// ```
     pub async fn resolve_path(&self, path: &str) -> Result<ResolvedPath, NodeServiceError> {
         let parsed = parse_collection_path(path)?;
+
+        // Batch fetch all existing collections in one query
+        let segment_names: Vec<String> = parsed.segments.iter().map(|s| s.name.clone()).collect();
+        let existing_collections = self
+            .store
+            .get_collections_by_names(&segment_names)
+            .await
+            .map_err(|e| db_error(e, "Failed to batch fetch collections"))?;
+
         let mut collections = Vec::with_capacity(parsed.segments.len());
         let mut parent_id: Option<String> = None;
 
         for segment in &parsed.segments {
-            // Try to find existing collection by name (case-insensitive)
-            let existing = self
-                .store
-                .get_collection_by_name(&segment.name)
-                .await
-                .map_err(|e| db_error(e, "Failed to find collection by name"))?;
-
-            let (node, created) = match existing {
-                Some(node) => (node, false),
+            // Check if this segment exists (case-insensitive via normalized name)
+            let (node, created) = match existing_collections.get(&segment.normalized_name) {
+                Some(existing) => (existing.clone(), false),
                 None => {
                     // Create new collection
                     let new_node = self
