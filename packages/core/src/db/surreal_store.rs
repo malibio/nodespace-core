@@ -796,6 +796,17 @@ where
         // Note: embedding_vector is not stored in hub-and-spoke architecture
         // Embeddings are managed separately for optimization
 
+        // Enforce globally unique names for collection nodes
+        if node.node_type == "collection" {
+            if let Some(existing) = self.get_collection_by_name(&node.content).await? {
+                anyhow::bail!(
+                    "Collection with name '{}' already exists (id: {})",
+                    node.content,
+                    existing.id
+                );
+            }
+        }
+
         // Check if we need to create a spoke record for properties
         let has_properties = !node
             .properties
@@ -4570,6 +4581,10 @@ where
     pub async fn add_to_collection(&self, member_id: &str, collection_id: &str) -> Result<()> {
         let member_thing = Thing::from(("node".to_string(), member_id.to_string()));
         let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
+
+        // Note: Validation that collection_id is actually a collection node
+        // is done in CollectionService.add_to_collection (service layer).
+        // Store layer focuses on data persistence only.
 
         // Check if membership already exists (for idempotency)
         let check_query =

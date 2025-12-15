@@ -263,10 +263,12 @@ pub fn build_path_string(segments: &[&str]) -> String {
 // CollectionService - High-level operations that integrate with the store
 // ============================================================================
 
+use crate::db::events::{CollectionMembership, DomainEvent};
 use crate::db::{DatabaseError, SurrealStore};
 use crate::models::Node;
 use serde_json::json;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 /// Helper to convert anyhow errors to NodeServiceError with database context
 fn db_error(e: anyhow::Error, context: &str) -> NodeServiceError {
@@ -304,20 +306,67 @@ impl ResolvedPath {
 ///
 /// This service provides path resolution, membership management, and collection
 /// queries. It uses `SurrealStore` for database operations.
+///
+/// # Event Emission
+///
+/// CollectionService emits domain events when collection membership changes:
+/// - `CollectionMemberAdded` - when a node is added to a collection
+/// - `CollectionMemberRemoved` - when a node is removed from a collection
+///
+/// Events include `source_client_id` for filtering (prevents feedback loops).
 pub struct CollectionService<'a, C = surrealdb::engine::local::Db>
 where
     C: surrealdb::Connection,
 {
     store: &'a Arc<SurrealStore<C>>,
+    /// Optional event sender for broadcasting domain events
+    event_tx: Option<broadcast::Sender<DomainEvent>>,
+    /// Optional client identifier for event source tracking
+    client_id: Option<String>,
 }
 
 impl<'a, C> CollectionService<'a, C>
 where
     C: surrealdb::Connection,
 {
-    /// Create a new CollectionService
+    /// Create a new CollectionService without event emission
+    ///
+    /// Use `with_events()` if you need to emit domain events for membership changes.
     pub fn new(store: &'a Arc<SurrealStore<C>>) -> Self {
-        Self { store }
+        Self {
+            store,
+            event_tx: None,
+            client_id: None,
+        }
+    }
+
+    /// Create a CollectionService with event emission support
+    ///
+    /// # Arguments
+    ///
+    /// * `store` - The database store
+    /// * `event_tx` - Broadcast sender for domain events
+    /// * `client_id` - Optional client ID for event source tracking
+    pub fn with_events(
+        store: &'a Arc<SurrealStore<C>>,
+        event_tx: broadcast::Sender<DomainEvent>,
+        client_id: Option<String>,
+    ) -> Self {
+        Self {
+            store,
+            event_tx: Some(event_tx),
+            client_id,
+        }
+    }
+
+    /// Emit a domain event to all subscribers
+    ///
+    /// Internal helper for emitting events after successful operations.
+    /// No-op if event_tx is not configured.
+    fn emit_event(&self, event: DomainEvent) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(event);
+        }
     }
 
     /// Resolve a collection path, creating collections as needed
@@ -352,28 +401,23 @@ where
             .map_err(|e| db_error(e, "Failed to batch fetch collections"))?;
 
         let mut collections = Vec::with_capacity(parsed.segments.len());
-        let mut parent_id: Option<String> = None;
 
+        // Collections are flat - paths are just naming conventions for navigation.
+        // Each segment is an independent collection with a globally unique name.
+        // No parent-child hierarchy between collections - a collection can be
+        // referenced via multiple paths (e.g., "hr:policy:vacation:berlin" and
+        // "engineering:office:berlin" both reference the same "berlin" collection).
         for segment in &parsed.segments {
             // Check if this segment exists (case-insensitive via normalized name)
             let (node, created) = match existing_collections.get(&segment.normalized_name) {
                 Some(existing) => (existing.clone(), false),
                 None => {
-                    // Create new collection
-                    let new_node = self
-                        .create_collection(&segment.name, parent_id.as_deref())
-                        .await?;
+                    // Create new collection (no parent - collections are flat)
+                    let new_node = self.create_collection(&segment.name, None).await?;
                     (new_node, true)
                 }
             };
 
-            // If there's a parent and the collection was just created, the parent-child
-            // relationship was established in create_collection. If the collection existed
-            // but doesn't have this parent, we need to add the relationship.
-            // For now, we'll rely on create_collection for new ones; existing ones
-            // might need path augmentation (multi-parent support) in the future.
-
-            parent_id = Some(node.id.clone());
             collections.push(ResolvedCollection { node, created });
         }
 
@@ -402,24 +446,22 @@ where
             .map_err(|e| db_error(e, "Failed to find collection by path"))
     }
 
-    /// Create a collection node with optional parent
+    /// Create a collection node
+    ///
+    /// Collections are flat (no hierarchy between them). Paths like "hr:policy:vacation"
+    /// are naming conventions for navigation, not structural relationships.
     ///
     /// # Arguments
     ///
-    /// * `name` - The collection name (will be validated)
-    /// * `parent_id` - Optional parent collection ID
+    /// * `name` - The collection name (will be validated, must be globally unique)
     async fn create_collection(
         &self,
         name: &str,
-        parent_id: Option<&str>,
+        _parent_id: Option<&str>,
     ) -> Result<Node, NodeServiceError> {
         let validated_name = validate_collection_name(name)?;
 
-        // Check for cycle if parent specified
-        // (would only matter if this collection somehow already exists as an ancestor)
-        // For new collections, this is always safe
-
-        // Create the collection node
+        // Create the collection node (no parent - collections are flat)
         let node = Node::new("collection".to_string(), validated_name, json!({}));
 
         // Create in database
@@ -428,16 +470,6 @@ where
             .create_node(node, None)
             .await
             .map_err(|e| db_error(e, "Failed to create collection node"))?;
-
-        // If there's a parent, create the parent-child relationship
-        if let Some(pid) = parent_id {
-            // Use the store's move_node to establish parent-child edge
-            // Third argument is insert_after_sibling_id (None = append at end)
-            self.store
-                .move_node(&created.id, Some(pid), None)
-                .await
-                .map_err(|e| db_error(e, "Failed to set collection parent"))?;
-        }
 
         Ok(created)
     }
@@ -463,6 +495,15 @@ where
             .await
             .map_err(|e| db_error(e, "Failed to add node to collection"))?;
 
+        // Emit CollectionMemberAdded event
+        self.emit_event(DomainEvent::CollectionMemberAdded {
+            membership: CollectionMembership {
+                member_id: node_id.to_string(),
+                collection_id: resolved.leaf.id.clone(),
+            },
+            source_client_id: self.client_id.clone(),
+        });
+
         Ok(resolved)
     }
 
@@ -472,15 +513,52 @@ where
     ///
     /// * `node_id` - The ID of the node to add
     /// * `collection_id` - The ID of the collection
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The collection node doesn't exist
+    /// - The target node is not a collection type
     pub async fn add_to_collection(
         &self,
         node_id: &str,
         collection_id: &str,
     ) -> Result<(), NodeServiceError> {
+        // Validate that the target is actually a collection node
+        let collection_node = self
+            .store
+            .get_node(collection_id)
+            .await
+            .map_err(|e| db_error(e, "Failed to fetch collection node"))?
+            .ok_or_else(|| {
+                NodeServiceError::CollectionNotFound(format!(
+                    "Collection not found: '{}'",
+                    collection_id
+                ))
+            })?;
+
+        if collection_node.node_type != "collection" {
+            return Err(NodeServiceError::InvalidCollectionPath(format!(
+                "Cannot add member to non-collection node: '{}' has type '{}'",
+                collection_id, collection_node.node_type
+            )));
+        }
+
         self.store
             .add_to_collection(node_id, collection_id)
             .await
-            .map_err(|e| db_error(e, "Failed to add node to collection"))
+            .map_err(|e| db_error(e, "Failed to add node to collection"))?;
+
+        // Emit CollectionMemberAdded event
+        self.emit_event(DomainEvent::CollectionMemberAdded {
+            membership: CollectionMembership {
+                member_id: node_id.to_string(),
+                collection_id: collection_id.to_string(),
+            },
+            source_client_id: self.client_id.clone(),
+        });
+
+        Ok(())
     }
 
     /// Remove a node from a collection
@@ -497,7 +575,18 @@ where
         self.store
             .remove_from_collection(node_id, collection_id)
             .await
-            .map_err(|e| db_error(e, "Failed to remove node from collection"))
+            .map_err(|e| db_error(e, "Failed to remove node from collection"))?;
+
+        // Emit CollectionMemberRemoved event
+        self.emit_event(DomainEvent::CollectionMemberRemoved {
+            membership: CollectionMembership {
+                member_id: node_id.to_string(),
+                collection_id: collection_id.to_string(),
+            },
+            source_client_id: self.client_id.clone(),
+        });
+
+        Ok(())
     }
 
     /// Get all collections a node belongs to
