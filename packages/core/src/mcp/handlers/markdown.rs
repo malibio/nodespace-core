@@ -594,6 +594,8 @@ pub async fn handle_create_nodes_from_markdown<C>(
 where
     C: surrealdb::Connection,
 {
+    let start = std::time::Instant::now();
+
     let params: CreateNodesFromMarkdownParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
@@ -768,12 +770,27 @@ where
         }
     }
 
+    let duration_ms = start.elapsed().as_millis();
+    let nodes_per_sec = if duration_ms > 0 {
+        (all_nodes.len() as u128 * 1000) / duration_ms
+    } else {
+        all_nodes.len() as u128 * 1000 // Instant completion
+    };
+
+    tracing::info!(
+        duration_ms = duration_ms,
+        nodes_created = all_nodes.len(),
+        nodes_per_sec = nodes_per_sec,
+        "Markdown import completed"
+    );
+
     Ok(json!({
         "success": true,
         "root_id": root_id,
         "nodes_created": all_nodes.len(),
         "node_ids": all_node_ids,
-        "nodes": all_nodes
+        "nodes": all_nodes,
+        "duration_ms": duration_ms
     }))
 }
 
