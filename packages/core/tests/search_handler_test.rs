@@ -306,3 +306,71 @@ fn test_search_defaults_applied_correctly() {
     assert_eq!(threshold, 0.7, "Default threshold should be 0.7");
     assert_eq!(limit, 20, "Default limit should be 20");
 }
+
+// =========================================================================
+// Malformed Input Tests
+// =========================================================================
+
+#[test]
+fn test_search_params_rejects_array_instead_of_object() {
+    // Pass an array instead of an object
+    let params = json!(["query", "test"]);
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject array input");
+}
+
+#[test]
+fn test_search_params_rejects_string_instead_of_object() {
+    // Pass a string instead of an object
+    let params = json!("just a string");
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject string input");
+}
+
+#[test]
+fn test_search_params_rejects_null() {
+    // Pass null
+    let params = json!(null);
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject null input");
+}
+
+#[test]
+fn test_search_params_rejects_number() {
+    // Pass a number instead of an object
+    let params = json!(42);
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject number input");
+}
+
+#[test]
+fn test_search_params_rejects_wrong_type_for_query() {
+    // Query should be a string, not a number
+    let params = json!({
+        "query": 12345
+    });
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject non-string query");
+}
+
+#[test]
+fn test_search_params_rejects_wrong_type_for_threshold() {
+    // Threshold should be a number, not a string
+    let params = json!({
+        "query": "valid query",
+        "threshold": "not a number"
+    });
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject non-numeric threshold");
+}
+
+#[test]
+fn test_search_params_rejects_wrong_type_for_limit() {
+    // Limit should be a number, not a string
+    let params = json!({
+        "query": "valid query",
+        "limit": "not a number"
+    });
+    let result: Result<SearchSemanticParams, _> = serde_json::from_value(params);
+    assert!(result.is_err(), "Should reject non-numeric limit");
+}
