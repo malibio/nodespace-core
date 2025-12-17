@@ -82,7 +82,7 @@ impl EmbeddingConfig {
         Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
-                "Model not found. Please download nomic-embed-vision GGUF to ~/.nodespace/models/. Tried: {:?}",
+                "Model not found. Please download nomic-embed-text GGUF to ~/.nodespace/models/. Tried: {:?}",
                 possible_names
             ),
         ))
