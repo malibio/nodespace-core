@@ -375,6 +375,10 @@ pub struct AIContext {
 3. **Federated Learning**: Train personalized models on user data
 4. **Real-Time Collaboration**: AI assistance in collaborative environments
 
+## Related Documentation
+
+- **[Semantic Codebase Search](./semantic-codebase-search.md)**: Architecture for code embeddings and semantic search using llama.cpp with nomic-embed-text-v1.5. Shares the inference stack with text generation.
+
 ## Conclusion
 
 The choice of embedded mistral.rs with Gemma 3n-E4B-it 8B provides NodeSpace with:
