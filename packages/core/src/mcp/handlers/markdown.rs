@@ -789,8 +789,8 @@ where
                 }
             } else {
                 // Default: Fire-and-forget async for fast MCP response
-                // Use tokio::task::spawn_local or Handle::current().spawn to ensure
-                // we're spawning on the current runtime
+                // Use Handle::try_current().spawn() to ensure we're spawning on
+                // the current runtime (works in both standalone tokio and Tauri)
                 let node_service = Arc::clone(node_service);
                 let root_id_for_log = root_id.clone();
 
