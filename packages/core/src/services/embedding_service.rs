@@ -40,8 +40,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Embedding vector dimension for BAAI/bge-small-en-v1.5 model
-pub const EMBEDDING_DIMENSION: usize = 384;
+/// Embedding vector dimension for nomic-embed-vision-v1.5 model
+pub const EMBEDDING_DIMENSION: usize = 768;
 
 /// Default batch size for processing stale embeddings
 pub const DEFAULT_BATCH_SIZE: usize = 50;
