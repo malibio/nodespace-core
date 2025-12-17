@@ -161,7 +161,7 @@ impl EmbeddingService {
         cache_key: &str,
     ) -> Result<Vec<f32>> {
         if cache_key.is_empty() {
-            return Err(EmbeddingError::TokenizationError(
+            return Err(EmbeddingError::InvalidInput(
                 "Cannot generate embedding for empty text".to_string(),
             ));
         }

@@ -2,6 +2,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Offload all model layers to GPU. This is the llama.cpp convention
+/// where any value >= total layers offloads everything.
+pub const GPU_OFFLOAD_ALL_LAYERS: u32 = 99;
+
 /// Configuration for llama.cpp embedding model
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -11,7 +15,7 @@ pub struct EmbeddingConfig {
     /// Local model path (GGUF file)
     pub model_path: Option<PathBuf>,
 
-    /// Number of GPU layers to offload (99 = all layers)
+    /// Number of GPU layers to offload. Use `GPU_OFFLOAD_ALL_LAYERS` (99) to offload all.
     pub n_gpu_layers: u32,
 
     /// Context size for embedding
@@ -29,7 +33,7 @@ impl Default for EmbeddingConfig {
         Self {
             model_name: "nomic-embed-vision-v1.5".to_string(),
             model_path: None,
-            n_gpu_layers: 99, // Offload all layers to GPU
+            n_gpu_layers: GPU_OFFLOAD_ALL_LAYERS,
             context_size: 8192,
             n_threads: std::thread::available_parallelism()
                 .map(|p| p.get() as i32)
@@ -121,7 +125,7 @@ mod tests {
     fn test_default_config() {
         let config = EmbeddingConfig::default();
         assert_eq!(config.model_name, "nomic-embed-vision-v1.5");
-        assert_eq!(config.n_gpu_layers, 99);
+        assert_eq!(config.n_gpu_layers, GPU_OFFLOAD_ALL_LAYERS);
         assert_eq!(config.context_size, 8192);
         assert_eq!(config.cache_capacity, 10000);
     }

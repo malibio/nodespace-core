@@ -18,6 +18,9 @@ pub enum EmbeddingError {
     #[error("Invalid configuration: {0}")]
     ConfigError(String),
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
