@@ -48,10 +48,13 @@ use llama_cpp_2::model::{AddBos, LlamaModel};
 /// requests, avoiding the Metal kernel compilation overhead that was causing ~95% CPU usage.
 #[cfg(feature = "embedding-service")]
 struct LlamaState {
+    // SAFETY: Field order matters for drop order! Rust drops fields in declaration order.
+    // `context` must be declared AFTER `backend` and `model` so it drops FIRST,
+    // before the resources it depends on. Do not reorder these fields.
     backend: LlamaBackend,
     model: LlamaModel,
     /// Persistent context for embedding generation.
-    /// Uses transmuted lifetime - safe because we control drop order.
+    /// Uses transmuted lifetime - safe because we control drop order (see above).
     context: Option<LlamaContext<'static>>,
     /// Current batch size of the context (needed to check if recreation is required)
     current_batch_size: u32,
@@ -86,7 +89,8 @@ impl LlamaState {
         let required_batch_size = std::cmp::max(required_tokens as u32, 512);
 
         // Check if we need to create/recreate the context
-        let needs_new_context = self.context.is_none() || required_batch_size > self.current_batch_size;
+        let needs_new_context =
+            self.context.is_none() || required_batch_size > self.current_batch_size;
 
         if needs_new_context {
             // Drop existing context first (if any)
@@ -134,7 +138,10 @@ impl LlamaState {
     }
 }
 
-// Safety: LlamaState is only accessed through Mutex, ensuring single-threaded access
+// SAFETY: LlamaState is wrapped in Option<Mutex<LlamaState>> in EmbeddingService,
+// ensuring all access is synchronized. The underlying llama.cpp resources (backend,
+// model, context) are not inherently thread-safe, but our Mutex wrapper provides
+// the required synchronization for safe cross-thread access.
 #[cfg(feature = "embedding-service")]
 unsafe impl Send for LlamaState {}
 #[cfg(feature = "embedding-service")]
