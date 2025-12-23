@@ -491,8 +491,8 @@ impl EmbeddingService {
 
         let total_time = total_start.elapsed();
 
-        tracing::info!(
-            "⏱️ EMBEDDING PROFILE: total={:?} | lock={:?} tokenize={:?} ctx={:?} batch={:?} encode={:?} extract={:?} normalize={:?} | tokens={}",
+        tracing::debug!(
+            "EMBEDDING PROFILE: total={:?} | lock={:?} tokenize={:?} ctx={:?} batch={:?} encode={:?} extract={:?} normalize={:?} | tokens={}",
             total_time, lock_time, tokenize_time, ctx_time, batch_time, encode_time, extract_time, normalize_time, tokens.len()
         );
 

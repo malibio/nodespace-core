@@ -11,6 +11,9 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// Maximum depth for markdown tree traversal (prevents stack overflow on deeply nested documents)
+const MARKDOWN_MAX_DEPTH: usize = 20;
+
 /// Recursively build markdown from a node tree
 /// This is a simplified version that produces clean markdown without node ID comments
 fn build_markdown_recursive(
@@ -302,8 +305,7 @@ where
 
     // Fetch markdown for top N results if requested
     // This saves AI agents from needing to call get_markdown_from_node_id separately
-    let mut markdown_contents: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut markdown_contents: HashMap<String, String> = HashMap::new();
 
     if include_markdown > 0 {
         for (node, _) in filtered_results.iter().take(include_markdown) {
@@ -326,7 +328,7 @@ where
                                 &adjacency_list,
                                 &mut markdown,
                                 0,
-                                20, // max_depth
+                                MARKDOWN_MAX_DEPTH,
                             );
                         }
                     }

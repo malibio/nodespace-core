@@ -642,8 +642,8 @@ where
 
         let total_time = total_start.elapsed();
 
-        tracing::info!(
-            "⏱️ SEMANTIC SEARCH PROFILE: total={:?} | embedding={:?} db_search={:?} | results={} query='{}'",
+        tracing::debug!(
+            "SEMANTIC SEARCH PROFILE: total={:?} | embedding={:?} db_search={:?} | results={} query='{}'",
             total_time, embed_time, search_time, results.len(), &query[..query.len().min(50)]
         );
 
@@ -675,8 +675,8 @@ where
             .collect();
 
         let total_time = total_start.elapsed();
-        tracing::info!(
-            "⏱️ SEMANTIC SEARCH NODES: total={:?} | nodes={} (inline fetch)",
+        tracing::debug!(
+            "SEMANTIC SEARCH NODES: total={:?} | nodes={} (inline fetch)",
             total_time,
             nodes_with_scores.len()
         );
