@@ -4847,6 +4847,8 @@ where
             .into_iter()
             .map(|r| {
                 // Calculate breadth factor: log10(chunks) gives 0 for 1 chunk, ~0.70 for 5, ~1.0 for 10
+                // Note: matching_chunks comes from SQL count() which always returns >= 1,
+                // but .max(1.0) guards against edge cases and prevents log10(0) = -inf
                 let breadth_factor =
                     1.0 + Self::BREADTH_BOOST * (r.matching_chunks as f64).max(1.0).log10();
                 let score = r.max_similarity * breadth_factor;
