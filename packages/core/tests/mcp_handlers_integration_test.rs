@@ -1240,7 +1240,8 @@ async fn test_handle_move_child_to_index() {
 
 #[tokio::test]
 async fn test_handle_initialize() {
-    let (node_service, embedding_service, _temp_dir) = create_test_env_with_embedding().await.unwrap();
+    let (node_service, embedding_service, _temp_dir) =
+        create_test_env_with_embedding().await.unwrap();
 
     let result = nodespace_core::mcp::handlers::initialize::handle_initialize(
         &node_service,

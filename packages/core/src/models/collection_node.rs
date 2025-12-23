@@ -150,7 +150,11 @@ mod tests {
 
     #[test]
     fn test_collection_node_from_wrong_type() {
-        let node = Node::new("text".to_string(), "not a collection".to_string(), json!({}));
+        let node = Node::new(
+            "text".to_string(),
+            "not a collection".to_string(),
+            json!({}),
+        );
         let result = CollectionNode::from_node(node);
         assert!(result.is_err());
     }

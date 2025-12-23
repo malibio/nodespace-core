@@ -36,7 +36,9 @@ async fn test_initialize_success() {
         }
     });
 
-    let result = handle_initialize(&node_service, &embedding_service, params).await.unwrap();
+    let result = handle_initialize(&node_service, &embedding_service, params)
+        .await
+        .unwrap();
 
     // Verify protocol version
     assert_eq!(result["protocolVersion"], "2024-11-05");
@@ -429,7 +431,9 @@ mod integration_tests {
             }
         });
 
-        let init_result = handle_initialize(&node_service, &embedding_service, init_params).await.unwrap();
+        let init_result = handle_initialize(&node_service, &embedding_service, init_params)
+            .await
+            .unwrap();
 
         // Verify initialize response structure
         assert_eq!(init_result["protocolVersion"], "2024-11-05");
@@ -551,7 +555,9 @@ mod integration_tests {
         state.mark_initialized();
 
         // Second initialize (should succeed - idempotent)
-        let result2 = handle_initialize(&node_service, &embedding_service, params).await.unwrap();
+        let result2 = handle_initialize(&node_service, &embedding_service, params)
+            .await
+            .unwrap();
 
         // Both should return same structure
         assert_eq!(result1["protocolVersion"], result2["protocolVersion"]);

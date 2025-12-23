@@ -4106,9 +4106,7 @@ where
             .await
             .context("Failed to create node (streaming)")?;
 
-        response
-            .check()
-            .context("Streaming node creation failed")?;
+        response.check().context("Streaming node creation failed")?;
 
         // Notify for reactive updates
         let node = Node {

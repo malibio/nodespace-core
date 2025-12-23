@@ -808,7 +808,9 @@ where
                         {
                             // Use streaming method - single SQL query, no validation overhead
                             match store
-                                .create_node_streaming(id, node_type, content, parent_id, order, properties)
+                                .create_node_streaming(
+                                    id, node_type, content, parent_id, order, properties,
+                                )
                                 .await
                             {
                                 Ok(_) => created_count += 1,

@@ -607,10 +607,7 @@ async fn test_knn_search_respects_threshold() -> Result<()> {
 
     // Search with low threshold (0.1) - should find the node
     let results = store.search_embeddings(&query_vec, 10, Some(0.1)).await?;
-    assert!(
-        !results.is_empty(),
-        "Low threshold should include results"
-    );
+    assert!(!results.is_empty(), "Low threshold should include results");
 
     Ok(())
 }
@@ -621,7 +618,8 @@ async fn test_knn_search_with_multiple_chunks() -> Result<()> {
 
     let (_embedding_service, node_service, store, _temp_dir) = create_unified_test_env().await?;
 
-    let node1 = create_root_node(&node_service, "text", "Long document with multiple chunks").await?;
+    let node1 =
+        create_root_node(&node_service, "text", "Long document with multiple chunks").await?;
 
     // Create multiple chunk embeddings for the same node
     let mut vec_chunk1 = vec![0.0f32; 768];

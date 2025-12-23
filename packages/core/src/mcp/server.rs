@@ -722,7 +722,8 @@ mod tests {
         let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
 
         // Create NLP engine and initialize it (will operate in stub mode since model not available in tests)
-        let mut nlp_engine = nodespace_nlp_engine::EmbeddingService::new(Default::default()).unwrap();
+        let mut nlp_engine =
+            nodespace_nlp_engine::EmbeddingService::new(Default::default()).unwrap();
         nlp_engine.initialize().unwrap();
         let nlp_engine = Arc::new(nlp_engine);
 

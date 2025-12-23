@@ -142,38 +142,33 @@ where
         };
 
     // Resolve excluded collection paths and collect member IDs to exclude
-    let excluded_node_ids: HashSet<String> =
-        if let Some(exclude_paths) = &params.exclude_collections {
-            let collection_service = CollectionService::new(service.store());
-            let mut excluded = HashSet::new();
+    let excluded_node_ids: HashSet<String> = if let Some(exclude_paths) =
+        &params.exclude_collections
+    {
+        let collection_service = CollectionService::new(service.store());
+        let mut excluded = HashSet::new();
 
-            for path in exclude_paths {
-                match collection_service.resolve_path(path).await {
-                    Ok(resolved) => {
-                        let coll_id = resolved.leaf_id().to_string();
-                        if let Ok(members) =
-                            collection_service.get_collection_members(&coll_id).await
-                        {
-                            excluded.extend(members);
-                        }
-                    }
-                    Err(NodeServiceError::CollectionNotFound(_)) => {
-                        // Collection doesn't exist, skip silently
-                        tracing::debug!("Excluded collection '{}' not found, skipping", path);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to resolve excluded collection '{}': {}",
-                            path,
-                            e
-                        );
+        for path in exclude_paths {
+            match collection_service.resolve_path(path).await {
+                Ok(resolved) => {
+                    let coll_id = resolved.leaf_id().to_string();
+                    if let Ok(members) = collection_service.get_collection_members(&coll_id).await {
+                        excluded.extend(members);
                     }
                 }
+                Err(NodeServiceError::CollectionNotFound(_)) => {
+                    // Collection doesn't exist, skip silently
+                    tracing::debug!("Excluded collection '{}' not found, skipping", path);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to resolve excluded collection '{}': {}", path, e);
+                }
             }
-            excluded
-        } else {
-            HashSet::new()
-        };
+        }
+        excluded
+    } else {
+        HashSet::new()
+    };
 
     tracing::info!("Semantic search for: '{}'", params.query);
 
