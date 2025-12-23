@@ -554,7 +554,10 @@ async fn test_knn_search_with_mock_embeddings() -> Result<()> {
         (results[0].score - results[0].max_similarity).abs() < 0.001,
         "Single chunk score should equal max_similarity"
     );
-    assert_eq!(results[0].matching_chunks, 1, "Should have 1 matching chunk");
+    assert_eq!(
+        results[0].matching_chunks, 1,
+        "Should have 1 matching chunk"
+    );
 
     // Second result should be node2 (similar to cats)
     if results.len() > 1 {
