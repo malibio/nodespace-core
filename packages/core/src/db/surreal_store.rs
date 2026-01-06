@@ -1933,11 +1933,11 @@ where
                 .context("Failed to get child relationships")?;
 
             #[derive(serde::Deserialize)]
-            struct EdgeOut {
+            struct RelOut {
                 out: Thing,
             }
 
-            let relationships: Vec<EdgeOut> = rel_response
+            let relationships: Vec<RelOut> = rel_response
                 .take(0)
                 .context("Failed to extract child relationships")?;
 
@@ -2014,7 +2014,7 @@ where
         Ok(nodes)
     }
 
-    /// Get the parent of a node (via incoming has_child edge)
+    /// Get the parent of a node (via incoming has_child relationship)
     ///
     /// Returns the node's parent if it has one, or None if it's a root node.
     /// Universal Graph Architecture (Issue #783, #788): Properties embedded, relationships in universal table.
@@ -2030,7 +2030,7 @@ where
         use surrealdb::sql::Thing;
         let child_thing = Thing::from(("node".to_string(), child_id.to_string()));
 
-        // Query for parent via incoming has_child edge (Issue #788: universal relationship table)
+        // Query for parent via incoming has_child relationship (Issue #788: universal relationship table)
         let mut response = self
             .db
             .query("SELECT * FROM node WHERE id IN (SELECT VALUE in FROM relationship WHERE out = $child_thing AND relationship_type = 'has_child') LIMIT 1;")
@@ -2436,7 +2436,7 @@ where
         // Build SQL with filtering logic (Issue #788: universal relationship table):
         // 1. Content search (case-insensitive)
         // 2. Exclude date and schema types
-        // 3. For text types: only include if root (no incoming has_child edge)
+        // 3. For text types: only include if root (no incoming has_child relationship)
         // 4. For other types: include regardless of hierarchy
         let sql = r#"
             SELECT * FROM node
@@ -2565,7 +2565,7 @@ where
         let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
 
         #[derive(Deserialize)]
-        struct EdgeOut {
+        struct RelOut {
             out: Thing,
         }
 
@@ -2576,7 +2576,7 @@ where
             .await
             .context("Failed to get children for rebalancing")?;
 
-        let relationships: Vec<EdgeOut> = rels_response
+        let relationships: Vec<RelOut> = rels_response
             .take(0)
             .context("Failed to extract children for rebalancing")?;
 
@@ -2621,14 +2621,14 @@ where
     /// Move a node to a new parent atomically
     ///
     /// Guarantees that either:
-    /// - The old edge is deleted AND the new edge is created
+    /// - The old relationship is deleted AND the new relationship is created
     /// - OR nothing changes (transaction rolls back on failure)
     ///
     /// # Arguments
     ///
     /// * `node_id` - ID of the node to move
     /// * `new_parent_id` - ID of the new parent (None = make root node)
-    /// * `insert_after_sibling_id` - Optional sibling to insert after (uses edge-based fractional ordering)
+    /// * `insert_after_sibling_id` - Optional sibling to insert after (uses relationship-based fractional ordering)
     ///
     /// # Returns
     ///
@@ -2677,7 +2677,7 @@ where
 
         // Calculate fractional order for the new position (Issue #788: universal relationship table)
         #[derive(Deserialize)]
-        struct EdgeWithOrder {
+        struct RelWithOrder {
             out: surrealdb::sql::Thing,
             order: f64,
         }
@@ -2695,7 +2695,7 @@ where
                 .await
                 .context("Failed to get child relationships")?;
 
-            let relationships: Vec<EdgeWithOrder> = rels_response
+            let relationships: Vec<RelWithOrder> = rels_response
                 .take(0)
                 .context("Failed to extract child relationships")?;
 
@@ -2736,7 +2736,7 @@ where
                             .await
                             .context("Failed to get child relationships after rebalancing")?;
 
-                        let relationships: Vec<EdgeWithOrder> = rels_response
+                        let relationships: Vec<RelWithOrder> = rels_response
                             .take(0)
                             .context("Failed to extract child relationships after rebalancing")?;
 
@@ -3329,7 +3329,7 @@ where
         let escaped_content = Self::escape_surql_string(&content);
         let props_json = serde_json::to_string(&properties).unwrap_or_else(|_| "{}".to_string());
 
-        // Build single query for node + edge (properties embedded)
+        // Build single query for node + relationship (properties embedded)
         let mut query = String::new();
 
         query.push_str(&format!(
@@ -4104,12 +4104,12 @@ where
     }
 
     // ========================================================================
-    // Collection Membership Operations (member_of edges)
+    // Collection Membership Operations (member_of relationships)
     // ========================================================================
 
-    /// Add a node to a collection (create member_of edge)
+    /// Add a node to a collection (create member_of relationship)
     ///
-    /// Creates a member_of edge from the member node to the collection node.
+    /// Creates a member_of relationship from the member node to the collection node.
     /// Direction: member -> collection (node X belongs to collection Y)
     ///
     /// Issue #788: Universal Relationship Architecture - stored in relationship table with relationship_type='member_of'
@@ -4169,9 +4169,9 @@ where
         Ok(())
     }
 
-    /// Remove a node from a collection (delete member_of edge)
+    /// Remove a node from a collection (delete member_of relationship)
     ///
-    /// Deletes the member_of edge from the member node to the collection node.
+    /// Deletes the member_of relationship from the member node to the collection node.
     /// Issue #788: Universal Relationship Architecture - deletes from relationship table.
     ///
     /// # Arguments

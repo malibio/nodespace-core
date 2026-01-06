@@ -75,8 +75,16 @@ DEFINE INDEX IF NOT EXISTS idx_rel_out ON TABLE relationship COLUMNS out, relati
 -- Query: SELECT * FROM relationship WHERE in = $parent AND relationship_type = 'has_child' ORDER BY properties.order
 DEFINE INDEX IF NOT EXISTS idx_rel_child_order ON TABLE relationship COLUMNS in, relationship_type, properties.order;
 
--- Unique constraint for parent-child relationships
--- A node can only have one parent (in has_child context)
+-- Unique constraint for all relationship types
+-- Design Decision (Issue #788): We use a universal unique constraint on (in, out, relationship_type)
+-- rather than a partial index only for has_child. This prevents duplicate relationships between
+-- any two nodes for the same relationship type. While the original spec only required uniqueness
+-- for has_child (a node can only have one parent), applying this universally:
+-- 1. Simplifies schema - one constraint covers all relationship types
+-- 2. Prevents data anomalies in all relationship types (e.g., duplicate mentions, member_of)
+-- 3. Aligns with graph database best practices (edges should be unique by type)
+-- Future consideration: If a relationship type needs to allow duplicates (e.g., multiple mentions
+-- with different contexts), that type should use a custom edge table via the schema system.
 DEFINE INDEX IF NOT EXISTS idx_rel_unique_child ON TABLE relationship COLUMNS in, out, relationship_type UNIQUE;
 
 -- ============================================================================
