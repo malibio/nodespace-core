@@ -102,56 +102,129 @@ pub struct Node {
 
 ---
 
-## 2. Relationship Model: Universal Edges
+## 2. Relationship Model: Universal Edge Table
 
-Foreign keys are replaced with Graph Edges for all relationships.
+Following the same principle as Universal Nodes, all relationships are stored in a **single `edge` table** with type discrimination. This enables custom relationship types without DDL, supporting the Playbook Marketplace vision.
 
-### 2.1 Structural Edge: `has_child`
-
-Builds the Document Tree (block-based editor model):
+### 2.1 Single Edge Table
 
 ```sql
-DEFINE TABLE has_child SCHEMAFULL TYPE RELATION IN node OUT node;
-DEFINE FIELD order ON TABLE has_child TYPE float ASSERT $value != NONE;
-DEFINE FIELD version ON TABLE has_child TYPE int DEFAULT 1;
-DEFINE FIELD created_at ON TABLE has_child TYPE datetime DEFAULT time::now();
+DEFINE TABLE edge SCHEMAFULL TYPE RELATION IN node OUT node;
 
--- Indexes
-DEFINE INDEX idx_child_order ON TABLE has_child COLUMNS in, order;
-DEFINE INDEX idx_unique_child ON TABLE has_child COLUMNS in, out UNIQUE;
+-- The Discriminator
+DEFINE FIELD edge_type ON TABLE edge TYPE string ASSERT $value != NONE;
+
+-- Common Fields
+DEFINE FIELD properties ON TABLE edge TYPE object DEFAULT {};
+DEFINE FIELD version ON TABLE edge TYPE int DEFAULT 1;
+DEFINE FIELD created_at ON TABLE edge TYPE datetime DEFAULT time::now();
+DEFINE FIELD modified_at ON TABLE edge TYPE datetime DEFAULT time::now();
+
+-- Core indexes
+DEFINE INDEX idx_edge_type ON TABLE edge COLUMNS edge_type;
+DEFINE INDEX idx_edge_in ON TABLE edge COLUMNS in, edge_type;
+DEFINE INDEX idx_edge_out ON TABLE edge COLUMNS out, edge_type;
 ```
 
-**Fractional Ordering**: The `order` field uses floats for O(1) inserts between siblings.
+### 2.2 Core Edge Types
 
-### 2.2 Semantic Edges
+| edge_type | Purpose | Key Properties |
+|-----------|---------|----------------|
+| `has_child` | Document tree hierarchy | `order` (float for fractional ordering) |
+| `mentions` | @references and [[links]] | `context`, `offset`, `root_id` |
+| `member_of` | Collection membership | - |
+
+### 2.3 Partial Indexes for Core Types
 
 ```sql
--- Mentions: @references and [[links]]
-DEFINE TABLE mentions SCHEMAFULL TYPE RELATION IN node OUT node;
-DEFINE FIELD context ON TABLE mentions TYPE string DEFAULT "";
-DEFINE FIELD offset ON TABLE mentions TYPE int DEFAULT 0;
-DEFINE FIELD root_id ON TABLE mentions TYPE option<string>;
-DEFINE FIELD created_at ON TABLE mentions TYPE datetime DEFAULT time::now();
+-- has_child: Ordered children lookup
+DEFINE INDEX idx_edge_child_order ON edge
+  COLUMNS in, properties.order
+  WHERE edge_type = 'has_child';
 
--- Collection Membership
-DEFINE TABLE member_of SCHEMAFULL TYPE RELATION IN node OUT node;
-DEFINE FIELD created_at ON TABLE member_of TYPE datetime DEFAULT time::now();
+-- has_child: Unique parent-child constraint
+DEFINE INDEX idx_edge_unique_child ON edge
+  COLUMNS in, out UNIQUE
+  WHERE edge_type = 'has_child';
+
+-- mentions: Backlinks lookup
+DEFINE INDEX idx_edge_mentions_target ON edge
+  COLUMNS out
+  WHERE edge_type = 'mentions';
 ```
 
-### 2.3 Graph Traversal Queries
+### 2.4 Edge Properties by Type
+
+**has_child** (structural):
+```json
+{
+  "edge_type": "has_child",
+  "properties": {
+    "order": 1.5
+  }
+}
+```
+
+**mentions** (semantic):
+```json
+{
+  "edge_type": "mentions",
+  "properties": {
+    "context": "See also",
+    "offset": 42,
+    "root_id": "node:abc123"
+  }
+}
+```
+
+**Custom relationship** (user-defined):
+```json
+{
+  "edge_type": "blocked_by",
+  "properties": {
+    "reason": "Waiting for API approval",
+    "blocking_since": "2025-01-06"
+  }
+}
+```
+
+### 2.5 Graph Traversal Queries
 
 ```sql
 -- Get children ordered
-SELECT out.* FROM has_child WHERE in = $parent_id ORDER BY order ASC;
+SELECT out.* FROM edge
+WHERE in = $parent_id AND edge_type = 'has_child'
+ORDER BY properties.order ASC;
 
 -- Get all nodes that mention this node (backlinks)
-SELECT <-mentions<-node.* FROM $node_id;
+SELECT in.* FROM edge
+WHERE out = $node_id AND edge_type = 'mentions';
 
 -- Find tasks blocked by high-priority bugs (single traversal)
 SELECT * FROM node
 WHERE node_type = 'task'
-  AND ->related_to[WHERE type = 'blocked_by']->node[WHERE properties.priority = 'high'];
+  AND ->edge[WHERE edge_type = 'blocked_by']->node[WHERE properties.priority = 'high'];
+
+-- Get all relationships for a node (any type)
+SELECT * FROM edge WHERE in = $node_id OR out = $node_id;
 ```
+
+### 2.6 Why Universal Edge Table
+
+| Aspect | Separate Tables (Old) | Single Edge Table (New) |
+|--------|----------------------|-------------------------|
+| **Custom relationships** | Requires DDL | Zero DDL |
+| **Playbook Marketplace** | Can't add relationship types | Install adds new edge_types |
+| **Consistency** | Nodes unified, edges fragmented | Fully unified model |
+| **Query all relationships** | UNION across tables | Single table query |
+| **Sync complexity** | Multiple edge tables | One edge table |
+
+### 2.7 Fractional Ordering
+
+The `order` property in `has_child` edges uses floats for O(1) inserts:
+- Insert between 1.0 and 2.0 → use 1.5
+- Insert between 1.0 and 1.5 → use 1.25
+- Periodic rebalancing when precision degrades
 
 ---
 
@@ -523,6 +596,7 @@ The Janitor observes and recommends indexes, but actual creation is deferred to 
 |-----------|--------|
 | Spoke tables (`task`, `schema`) | **Delete** - data moves to `node.properties` |
 | `data` field (Record Link) | **Delete** - no longer needed |
+| Edge tables (`has_child`, `mentions`, `member_of`) | **Consolidate** - migrate to single `edge` table |
 | `SchemaTableManager` | **Simplify** - index management only |
 | Spoke queries | **Remove** - single-table queries |
 | N+1 property fetching | **Eliminate** - properties inline |
@@ -534,19 +608,57 @@ The Janitor observes and recommends indexes, but actual creation is deferred to 
 > - **Future phase (with users)**: Use batched updates to avoid long-running transactions
 
 ```sql
--- Move spoke data to properties (one-time migration)
+-- 1. Move spoke data to properties (one-time migration)
 UPDATE node SET properties = (
   SELECT * OMIT id, node FROM task WHERE node = $parent.id
 ) WHERE node_type = 'task';
 
--- Delete spoke tables
+-- 2. Delete spoke tables
 REMOVE TABLE task;
 REMOVE TABLE schema;  -- Schema data already in properties
 
--- Add partial indexes
+-- 3. Consolidate edge tables into single 'edge' table
+-- Migrate has_child
+INSERT INTO edge SELECT
+  in, out,
+  'has_child' AS edge_type,
+  { order: order } AS properties,
+  version,
+  created_at,
+  time::now() AS modified_at
+FROM has_child;
+
+-- Migrate mentions
+INSERT INTO edge SELECT
+  in, out,
+  'mentions' AS edge_type,
+  { context: context, offset: offset, root_id: root_id } AS properties,
+  1 AS version,
+  created_at,
+  time::now() AS modified_at
+FROM mentions;
+
+-- Migrate member_of
+INSERT INTO edge SELECT
+  in, out,
+  'member_of' AS edge_type,
+  {} AS properties,
+  1 AS version,
+  created_at,
+  time::now() AS modified_at
+FROM member_of;
+
+-- 4. Delete old edge tables
+REMOVE TABLE has_child;
+REMOVE TABLE mentions;
+REMOVE TABLE member_of;
+
+-- 5. Add partial indexes for nodes
 DEFINE INDEX idx_task_status ON node
   COLUMNS properties.status
   WHERE node_type = 'task';
+
+-- 6. Add partial indexes for edges (see Section 2.3)
 ```
 
 **For future migrations with users** (batched pattern):
@@ -563,8 +675,9 @@ FOR $id IN $batch {
 
 | Phase | Work | Duration |
 |-------|------|----------|
-| Schema changes | Remove spokes, add partial indexes | 1 day |
-| Rust code | Remove spoke-related code (~500 LOC) | 2-3 days |
+| Node consolidation | Remove spokes, move to properties | 1 day |
+| Edge consolidation | Merge edge tables into single `edge` table | 1 day |
+| Rust code | Remove spoke/edge-related code, update queries | 2-3 days |
 | Testing | Validate all queries work | 1 day |
 | **Total** | | ~1 week |
 
