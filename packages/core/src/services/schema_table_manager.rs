@@ -467,9 +467,9 @@ mod tests {
         // Should have: table definition, created_at, version, 3 indexes
         assert!(statements.len() >= 6);
 
-        // Check table definition
+        // Check table definition - Universal Graph Architecture uses 'node' for IN/OUT
         assert!(statements[0].contains("DEFINE TABLE IF NOT EXISTS invoice_billed_to_customer"));
-        assert!(statements[0].contains("TYPE RELATION IN invoice OUT customer"));
+        assert!(statements[0].contains("TYPE RELATION IN node OUT node"));
 
         // Check tracking fields
         assert!(statements[1].contains("created_at"));
@@ -723,14 +723,17 @@ mod tests {
         fn generate_edge_table_ddl(
             &self,
             edge_table: &str,
-            source_type: &str,
+            _source_type: &str,
             relationship: &SchemaRelationship,
         ) -> Result<Vec<String>, NodeServiceError> {
+            let _ = &relationship.target_type; // Suppress unused warning
             let mut statements = Vec::new();
 
+            // Universal Graph Architecture (Issue #783): Match production behavior
+            // All nodes are stored in the 'node' table, so IN and OUT reference 'node'
             statements.push(format!(
-                "DEFINE TABLE IF NOT EXISTS {} SCHEMAFULL TYPE RELATION IN {} OUT {};",
-                edge_table, source_type, relationship.target_type
+                "DEFINE TABLE IF NOT EXISTS {} SCHEMAFULL TYPE RELATION IN node OUT node;",
+                edge_table
             ));
 
             statements.push(format!(
