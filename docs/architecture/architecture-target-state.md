@@ -380,6 +380,59 @@ DEFINE FIELD node_type ON node TYPE string
   PERMISSIONS FOR update WHERE $auth.role = 'admin' OR node_type = $value;
 ```
 
+### 5.4 Encryption Strategy
+
+NodeSpace uses a layered encryption approach, relying on platform capabilities where appropriate:
+
+#### 5.4.1 Data at Rest (Local Database)
+
+| Layer | Approach | Rationale |
+|-------|----------|-----------|
+| **RocksDB files** | Rely on OS encryption (FileVault, BitLocker) | Don't reinvent; OS-level is transparent and hardware-accelerated |
+| **App-level secrets** | OS Keychain (macOS Keychain, Windows Credential Manager) | Secure storage for API keys, cloud tokens, sync credentials |
+
+**User responsibility**: Users who need local encryption should enable OS-level full-disk encryption. NodeSpace does not implement custom database encryption to avoid key management complexity and potential data loss from forgotten passwords.
+
+#### 5.4.2 Data in Transit
+
+| Scenario | Encryption |
+|----------|------------|
+| **SurrealDB Cloud sync** | TLS 1.2+ (handled by SurrealDB) |
+| **API calls** | HTTPS only |
+| **Local embedded DB** | N/A (no network) |
+
+#### 5.4.3 Export Encryption (Optional)
+
+Users can export their data in multiple formats:
+
+| Format | Use Case | Encryption |
+|--------|----------|------------|
+| **Markdown files** | Portable, human-readable, use with other tools | None (plaintext) |
+| **JSON** | Full data export, machine-readable | None (plaintext) |
+| **Encrypted ZIP** | Secure backup, offsite storage | AES-256 with password |
+
+**Encrypted export flow**:
+1. User selects "Export Data" → "Encrypted Backup"
+2. User provides password
+3. Key derived using Argon2id (memory-hard, resistant to GPU attacks)
+4. Data encrypted with AES-256-GCM
+5. Output: `.zip.enc` file
+
+**Why encryption is optional** (following Notion/Obsidian patterns):
+- **Portability**: Unencrypted exports work with other tools
+- **Recovery**: Forgotten passwords = permanent data loss
+- **Transparency**: Users can inspect what's being exported
+- **User choice**: Security-conscious users opt-in
+
+#### 5.4.4 Key Management
+
+| Secret Type | Storage Location |
+|-------------|------------------|
+| Cloud sync tokens | OS Keychain |
+| API keys (AI services) | OS Keychain |
+| Export passwords | **Not stored** (user must remember) |
+| Local DB encryption | Delegated to OS |
+
 ---
 
 ## 6. Sync Architecture
@@ -427,22 +480,68 @@ Using the Dropbox model—don't auto-merge, create copies:
 | **Local + Cloud** | Syncing user | Local is source of truth, cloud holds sync log |
 | **Cloud-Only** | Web app (future) | Cloud backup with RLS-aware export |
 
-### 7.2 Local Snapshots
+### 7.2 Export Formats
+
+| Format | Command | Use Case |
+|--------|---------|----------|
+| **Markdown** | `export_to_markdown` | Human-readable, use with Obsidian/other tools |
+| **JSON** | `export_to_json` | Full data export, machine-readable, re-importable |
+| **Encrypted ZIP** | `export_encrypted` | Secure offsite backup (AES-256, see Section 5.4.3) |
+| **RocksDB Snapshot** | `backup_rocksdb` | Fast binary backup, same-version restore |
+
+### 7.3 Export Commands
 
 ```rust
-// Daily automated backup
+#[tauri::command]
+pub async fn export_to_markdown(path: String, options: MarkdownExportOptions) -> Result<ExportResult> {
+    // Export nodes as Markdown files preserving hierarchy
+    // Options: include_metadata, include_properties, folder_structure
+}
+
 #[tauri::command]
 pub async fn export_to_json(path: String) -> Result<ExportResult> {
     // Export nodes, edges, embeddings to JSON
 }
 
 #[tauri::command]
+pub async fn export_encrypted(path: String, password: String) -> Result<ExportResult> {
+    // JSON export + AES-256-GCM encryption
+}
+
+#[tauri::command]
 pub async fn backup_rocksdb(path: String) -> Result<BackupResult> {
     // RocksDB native snapshot
 }
+
+#[tauri::command]
+pub async fn import_from_json(path: String) -> Result<ImportResult> {
+    // Restore from JSON backup
+}
+
+#[tauri::command]
+pub async fn import_from_markdown(path: String) -> Result<ImportResult> {
+    // Import Markdown files as nodes
+}
 ```
 
-### 7.3 GDPR Compliance
+### 7.4 Markdown Export Structure
+
+```
+export/
+├── README.md              # Export metadata
+├── Daily Notes/
+│   ├── 2025-01-06.md
+│   └── 2025-01-07.md
+├── Projects/
+│   ├── Project Alpha.md
+│   └── Project Beta/
+│       ├── index.md
+│       └── Tasks.md
+└── .nodespace/
+    └── metadata.json      # Node IDs, properties (for re-import)
+```
+
+### 7.5 GDPR Compliance
 
 - **Personal Space**: Hard delete (`DELETE WHERE owner = $user_id`)
 - **Shared Space**: Anonymization (overwrite PII, preserve node for team)
