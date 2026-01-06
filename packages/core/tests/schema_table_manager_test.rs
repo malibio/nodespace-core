@@ -99,18 +99,22 @@ async fn test_generate_relationship_ddl_with_edge_fields() -> Result<()> {
         ]),
     }];
 
-    let statements =
-        table_manager.generate_relationship_ddl_statements("task", &relationships)?;
+    let statements = table_manager.generate_relationship_ddl_statements("task", &relationships)?;
 
     // Should have edge field definitions
     let has_role_field = statements.iter().any(|s| s.contains("role"));
     assert!(has_role_field, "Should have role field definition");
 
     let has_assigned_at_field = statements.iter().any(|s| s.contains("assigned_at"));
-    assert!(has_assigned_at_field, "Should have assigned_at field definition");
+    assert!(
+        has_assigned_at_field,
+        "Should have assigned_at field definition"
+    );
 
     // Should have index for role (marked as indexed)
-    let has_role_index = statements.iter().any(|s| s.contains("INDEX") && s.contains("role"));
+    let has_role_index = statements
+        .iter()
+        .any(|s| s.contains("INDEX") && s.contains("role"));
     assert!(has_role_index, "Should have index for role field");
 
     Ok(())
@@ -151,8 +155,12 @@ async fn test_generate_relationship_ddl_multiple_relationships() -> Result<()> {
         table_manager.generate_relationship_ddl_statements("invoice", &relationships)?;
 
     // Should have DDL for both relationships
-    let has_billed_to = statements.iter().any(|s| s.contains("invoice_billed_to_customer"));
-    let has_shipped_to = statements.iter().any(|s| s.contains("invoice_shipped_to_address"));
+    let has_billed_to = statements
+        .iter()
+        .any(|s| s.contains("invoice_billed_to_customer"));
+    let has_shipped_to = statements
+        .iter()
+        .any(|s| s.contains("invoice_shipped_to_address"));
 
     assert!(has_billed_to, "Should have billed_to edge table");
     assert!(has_shipped_to, "Should have shipped_to edge table");
@@ -190,7 +198,10 @@ async fn test_generate_relationship_ddl_custom_edge_table() -> Result<()> {
     let has_auto_name = statements
         .iter()
         .any(|s| s.contains("project_collaborates_with_person"));
-    assert!(!has_auto_name, "Should NOT have auto-generated edge table name");
+    assert!(
+        !has_auto_name,
+        "Should NOT have auto-generated edge table name"
+    );
 
     Ok(())
 }
@@ -236,8 +247,7 @@ async fn test_generate_relationship_ddl_edge_table_references_node() -> Result<(
         edge_fields: None,
     }];
 
-    let statements =
-        table_manager.generate_relationship_ddl_statements("owner", &relationships)?;
+    let statements = table_manager.generate_relationship_ddl_statements("owner", &relationships)?;
 
     // Universal Graph Architecture: Edge tables reference 'node' table
     let table_def = statements
@@ -270,15 +280,18 @@ async fn test_generate_relationship_ddl_includes_core_indexes() -> Result<()> {
         edge_fields: None,
     }];
 
-    let statements =
-        table_manager.generate_relationship_ddl_statements("user", &relationships)?;
+    let statements = table_manager.generate_relationship_ddl_statements("user", &relationships)?;
 
     // Should have index on 'in' for forward traversal
-    let has_in_index = statements.iter().any(|s| s.contains("INDEX") && s.contains("_in"));
+    let has_in_index = statements
+        .iter()
+        .any(|s| s.contains("INDEX") && s.contains("_in"));
     assert!(has_in_index, "Should have index on 'in' column");
 
     // Should have index on 'out' for reverse traversal
-    let has_out_index = statements.iter().any(|s| s.contains("INDEX") && s.contains("_out"));
+    let has_out_index = statements
+        .iter()
+        .any(|s| s.contains("INDEX") && s.contains("_out"));
     assert!(has_out_index, "Should have index on 'out' column");
 
     // Should have unique index on (in, out)
@@ -298,7 +311,10 @@ async fn test_generate_relationship_ddl_empty_relationships() -> Result<()> {
         table_manager.generate_relationship_ddl_statements("empty_schema", &relationships)?;
 
     // Should return empty vector for no relationships
-    assert!(statements.is_empty(), "Should return empty statements for no relationships");
+    assert!(
+        statements.is_empty(),
+        "Should return empty statements for no relationships"
+    );
 
     Ok(())
 }
