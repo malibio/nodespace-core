@@ -867,6 +867,39 @@ where
         Ok(())
     }
 
+    /// Deep-merge namespaced properties for Issue #794
+    ///
+    /// Properties use namespaced format: `{ "nodeType": { "field": "value" } }`.
+    /// This function deep-merges new properties into existing ones, preserving
+    /// dormant type namespaces (properties from previous node types).
+    ///
+    /// # Arguments
+    ///
+    /// * `existing` - Mutable reference to the existing properties
+    /// * `new` - The new properties to merge in
+    fn deep_merge_namespaced_properties(existing: &mut Value, new: Value) {
+        if let (Some(existing_obj), Some(new_obj)) = (existing.as_object_mut(), new.as_object()) {
+            for (key, value) in new_obj {
+                // If both existing and new have the same key as objects, deep merge
+                if let (Some(existing_ns), Some(new_ns)) = (
+                    existing_obj.get_mut(key).and_then(|v| v.as_object_mut()),
+                    value.as_object(),
+                ) {
+                    // Deep merge: update fields within the namespace
+                    for (field_key, field_value) in new_ns {
+                        existing_ns.insert(field_key.clone(), field_value.clone());
+                    }
+                } else {
+                    // Otherwise replace the key (for new namespaces or non-object values)
+                    existing_obj.insert(key.clone(), value.clone());
+                }
+            }
+        } else {
+            // If either is not an object, just replace (shouldn't happen normally)
+            *existing = new;
+        }
+    }
+
     /// Validate a node against pre-loaded schema fields
     ///
     /// # Arguments
@@ -1871,31 +1904,8 @@ where
         // Use reorder_siblings() or move_node() for ordering changes.
 
         if let Some(properties) = update.properties {
-            // Merge properties using namespaced format (Issue #794)
-            // Properties should come in as { "nodeType": { "field": "value" } }
-            // We deep-merge to preserve other type namespaces (dormant type properties)
-            if let (Some(existing_obj), Some(new_obj)) =
-                (updated.properties.as_object_mut(), properties.as_object())
-            {
-                for (key, value) in new_obj {
-                    // If both existing and new have the same key as objects, deep merge
-                    if let (Some(existing_ns), Some(new_ns)) = (
-                        existing_obj.get_mut(key).and_then(|v| v.as_object_mut()),
-                        value.as_object(),
-                    ) {
-                        // Deep merge: update fields within the namespace
-                        for (field_key, field_value) in new_ns {
-                            existing_ns.insert(field_key.clone(), field_value.clone());
-                        }
-                    } else {
-                        // Otherwise replace the key (for new namespaces or non-object values)
-                        existing_obj.insert(key.clone(), value.clone());
-                    }
-                }
-            } else {
-                // If either is not an object, just replace (shouldn't happen normally)
-                updated.properties = properties;
-            }
+            // Deep-merge namespaced properties (Issue #794)
+            Self::deep_merge_namespaced_properties(&mut updated.properties, properties);
         }
 
         // Step 1: Core behavior validation (PROTECTED)
@@ -2068,31 +2078,8 @@ where
         // Use reorder_siblings() or move_node() for ordering changes.
 
         if let Some(properties) = update.properties {
-            // Merge properties using namespaced format (Issue #794)
-            // Properties should come in as { "nodeType": { "field": "value" } }
-            // We deep-merge to preserve other type namespaces (dormant type properties)
-            if let (Some(existing_obj), Some(new_obj)) =
-                (updated.properties.as_object_mut(), properties.as_object())
-            {
-                for (key, value) in new_obj {
-                    // If both existing and new have the same key as objects, deep merge
-                    if let (Some(existing_ns), Some(new_ns)) = (
-                        existing_obj.get_mut(key).and_then(|v| v.as_object_mut()),
-                        value.as_object(),
-                    ) {
-                        // Deep merge: update fields within the namespace
-                        for (field_key, field_value) in new_ns {
-                            existing_ns.insert(field_key.clone(), field_value.clone());
-                        }
-                    } else {
-                        // Otherwise replace the key (for new namespaces or non-object values)
-                        existing_obj.insert(key.clone(), value.clone());
-                    }
-                }
-            } else {
-                // If either is not an object, just replace (shouldn't happen normally)
-                updated.properties = properties;
-            }
+            // Deep-merge namespaced properties (Issue #794)
+            Self::deep_merge_namespaced_properties(&mut updated.properties, properties);
         }
 
         // Step 1: Core behavior validation (PROTECTED)
@@ -8392,6 +8379,173 @@ mod tests {
             let task_refetch = service.get_task_node(&text_node.id).await.unwrap().unwrap();
             assert_eq!(task_refetch.status, TaskStatus::InProgress);
             assert_eq!(task_refetch.content, "This will become a task");
+        }
+
+        // ============================================================
+        // Issue #794: Namespaced Properties - Type Change Tests
+        // ============================================================
+
+        /// Test that namespaced properties are preserved when changing node types.
+        ///
+        /// This is the core value proposition of Issue #794: when a node changes type,
+        /// the old type's properties should remain as dormant data under their original
+        /// namespace, allowing restoration if the node is converted back.
+        #[tokio::test]
+        async fn test_type_change_preserves_old_type_properties() {
+            let (service, _temp) = create_test_service().await;
+
+            // Step 1: Create a task node with specific properties
+            // Properties will be stored under properties.task.status, properties.task.priority
+            let task_node = Node::new(
+                "task".to_string(),
+                "Important work item".to_string(),
+                json!({
+                    "task": {
+                        "status": "in_progress",
+                        "priority": "high"
+                    }
+                }),
+            );
+            let node_id = service.create_node(task_node).await.unwrap();
+
+            // Verify task properties are stored in namespaced format
+            let node_as_task = service.get_node(&node_id).await.unwrap().unwrap();
+            assert_eq!(node_as_task.properties["task"]["status"], "in_progress");
+            assert_eq!(node_as_task.properties["task"]["priority"], "high");
+
+            // Step 2: Change the node type to text
+            let type_update = crate::models::NodeUpdate {
+                node_type: Some("text".to_string()),
+                ..Default::default()
+            };
+            service.update_node(&node_id, type_update).await.unwrap();
+
+            // Step 3: Verify old task properties are preserved as dormant data
+            let node_as_text = service.get_node(&node_id).await.unwrap().unwrap();
+            assert_eq!(node_as_text.node_type, "text");
+            // Old task properties should still exist under the "task" namespace
+            assert_eq!(node_as_text.properties["task"]["status"], "in_progress");
+            assert_eq!(node_as_text.properties["task"]["priority"], "high");
+
+            // Step 4: Change back to task type
+            let type_update_back = crate::models::NodeUpdate {
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            };
+            service
+                .update_node(&node_id, type_update_back)
+                .await
+                .unwrap();
+
+            // Step 5: Verify original task properties are restored/accessible
+            let node_restored = service.get_node(&node_id).await.unwrap().unwrap();
+            assert_eq!(node_restored.node_type, "task");
+            assert_eq!(node_restored.properties["task"]["status"], "in_progress");
+            assert_eq!(node_restored.properties["task"]["priority"], "high");
+        }
+
+        /// Test that properties with the same field name in different types don't conflict.
+        ///
+        /// For example, both "task" and "invoice" types might have a "status" field,
+        /// but they should be stored independently under their respective namespaces.
+        #[tokio::test]
+        async fn test_same_property_name_different_types_no_conflict() {
+            let (service, _temp) = create_test_service().await;
+
+            // Step 1: Create a node with task properties (use valid task status: done)
+            let node = Node::new(
+                "task".to_string(),
+                "Multi-purpose node".to_string(),
+                json!({
+                    "task": {
+                        "status": "done"
+                    }
+                }),
+            );
+            let node_id = service.create_node(node).await.unwrap();
+
+            // Step 2: Convert to text and add custom:status property
+            // (simulating a custom property with same name as task's status)
+            let update1 = crate::models::NodeUpdate {
+                node_type: Some("text".to_string()),
+                properties: Some(json!({
+                    "custom": {
+                        "status": "draft"
+                    }
+                })),
+                ..Default::default()
+            };
+            service.update_node(&node_id, update1).await.unwrap();
+
+            // Step 3: Verify both status values coexist without conflict
+            let node_after = service.get_node(&node_id).await.unwrap().unwrap();
+            assert_eq!(node_after.node_type, "text");
+            // Task's status should be preserved
+            assert_eq!(node_after.properties["task"]["status"], "done");
+            // Custom status should also exist
+            assert_eq!(node_after.properties["custom"]["status"], "draft");
+
+            // Step 4: Convert back to task
+            let update2 = crate::models::NodeUpdate {
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            };
+            service.update_node(&node_id, update2).await.unwrap();
+
+            // Step 5: Verify task's original status is intact, custom status still exists
+            let node_final = service.get_node(&node_id).await.unwrap().unwrap();
+            assert_eq!(node_final.node_type, "task");
+            assert_eq!(node_final.properties["task"]["status"], "done");
+            assert_eq!(node_final.properties["custom"]["status"], "draft");
+        }
+
+        /// Test that updating properties of the current type doesn't affect dormant properties.
+        #[tokio::test]
+        async fn test_updating_current_type_preserves_dormant_properties() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create a task with properties
+            let task_node = Node::new(
+                "task".to_string(),
+                "Task with dormant data".to_string(),
+                json!({
+                    "task": {
+                        "status": "open",
+                        "priority": "low"
+                    }
+                }),
+            );
+            let node_id = service.create_node(task_node).await.unwrap();
+
+            // Convert to text, which leaves task properties as dormant
+            let to_text = crate::models::NodeUpdate {
+                node_type: Some("text".to_string()),
+                properties: Some(json!({
+                    "text": {
+                        "format": "markdown"
+                    }
+                })),
+                ..Default::default()
+            };
+            service.update_node(&node_id, to_text).await.unwrap();
+
+            // Update the text properties
+            let text_update = crate::models::NodeUpdate {
+                properties: Some(json!({
+                    "text": {
+                        "format": "plain"
+                    }
+                })),
+                ..Default::default()
+            };
+            service.update_node(&node_id, text_update).await.unwrap();
+
+            // Verify dormant task properties are unchanged
+            let node_after_text_update = service.get_node(&node_id).await.unwrap().unwrap();
+            assert_eq!(node_after_text_update.properties["task"]["status"], "open");
+            assert_eq!(node_after_text_update.properties["task"]["priority"], "low");
+            // Active text properties were updated
+            assert_eq!(node_after_text_update.properties["text"]["format"], "plain");
         }
     }
 }
