@@ -63,24 +63,59 @@ DEFINE INDEX idx_node_modified ON TABLE node COLUMNS modified_at;
 | **Flexibility** | Requires CREATE TABLE | Zero DDL | Enables Playbooks |
 | **Property Access** | N+1 fetch from spoke | Direct from properties | Eliminates query overhead |
 
-### 1.3 Partial Indexes for Performance
+### 1.3 Compound Indexes for Performance
 
-Type-specific indexes without spoke tables:
+> **Note**: SurrealDB does not support partial indexes (WHERE clause on index definition).
+> We use **compound indexes** instead, where `node_type` is the leading column.
+
+#### 1.3.1 Namespaced Properties (Issue #794)
+
+Properties are stored under type namespaces to prevent conflicts when node types change:
+
+```json
+{
+  "properties": {
+    "task": {
+      "status": "open",
+      "priority": "high"
+    }
+  }
+}
+```
+
+This enables type-safe property access: `properties.task.status` vs `properties.invoice.status`.
+
+#### 1.3.2 Compound Index Strategy
+
+Queries filter by `node_type` first, then access namespaced properties:
 
 ```sql
--- Task indexes (only index tasks, ignore text/headers)
-DEFINE INDEX idx_task_status ON node
-  COLUMNS properties.status
-  WHERE node_type = 'task';
+-- Core indexes
+DEFINE INDEX idx_node_type ON node COLUMNS node_type;
+DEFINE INDEX idx_node_modified ON node COLUMNS modified_at;
 
-DEFINE INDEX idx_task_priority ON node
-  COLUMNS properties.priority
-  WHERE node_type = 'task';
+-- Compound indexes for type-specific queries
+-- Query: SELECT * FROM node WHERE node_type = 'task' AND properties.task.status = 'open'
+DEFINE INDEX idx_node_task_status ON node COLUMNS node_type, properties.task.status;
+DEFINE INDEX idx_node_task_priority ON node COLUMNS node_type, properties.task.priority;
 
--- Schema indexes
-DEFINE INDEX idx_schema_is_core ON node
-  COLUMNS properties.isCore
-  WHERE node_type = 'schema';
+-- Schema queries
+DEFINE INDEX idx_node_schema_core ON node COLUMNS node_type, properties.schema.isCore;
+```
+
+#### 1.3.3 Query Pattern
+
+Always filter by `node_type` first to leverage compound indexes:
+
+```sql
+-- Efficient (uses compound index)
+SELECT * FROM node
+WHERE node_type = 'task'
+  AND properties.task.status = 'open'
+ORDER BY modified_at DESC;
+
+-- Less efficient (full scan on properties)
+SELECT * FROM node WHERE properties.task.status = 'open';
 ```
 
 ### 1.4 Rust Type Enforcement
@@ -102,63 +137,59 @@ pub struct Node {
 
 ---
 
-## 2. Relationship Model: Universal Edge Table
+## 2. Relationship Model: Universal Relationship Table
 
-Following the same principle as Universal Nodes, all relationships are stored in a **single `edge` table** with type discrimination. This enables custom relationship types without DDL, supporting the Playbook Marketplace vision.
+Following the same principle as Universal Nodes, all relationships are stored in a **single `relationship` table** with type discrimination. This enables custom relationship types without DDL, supporting the Playbook Marketplace vision.
 
-### 2.1 Single Edge Table
+### 2.1 Single Relationship Table
 
 ```sql
-DEFINE TABLE edge SCHEMAFULL TYPE RELATION IN node OUT node;
+DEFINE TABLE relationship SCHEMAFULL TYPE RELATION IN node OUT node;
 
 -- The Discriminator
-DEFINE FIELD edge_type ON TABLE edge TYPE string ASSERT $value != NONE;
+DEFINE FIELD relationship_type ON TABLE relationship TYPE string ASSERT $value != NONE;
 
 -- Common Fields
-DEFINE FIELD properties ON TABLE edge TYPE object DEFAULT {};
-DEFINE FIELD version ON TABLE edge TYPE int DEFAULT 1;
-DEFINE FIELD created_at ON TABLE edge TYPE datetime DEFAULT time::now();
-DEFINE FIELD modified_at ON TABLE edge TYPE datetime DEFAULT time::now();
-
--- Core indexes
-DEFINE INDEX idx_edge_type ON TABLE edge COLUMNS edge_type;
-DEFINE INDEX idx_edge_in ON TABLE edge COLUMNS in, edge_type;
-DEFINE INDEX idx_edge_out ON TABLE edge COLUMNS out, edge_type;
+DEFINE FIELD properties ON TABLE relationship FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD version ON TABLE relationship TYPE int DEFAULT 1;
+DEFINE FIELD created_at ON TABLE relationship TYPE datetime DEFAULT time::now();
+DEFINE FIELD modified_at ON TABLE relationship TYPE datetime DEFAULT time::now();
 ```
 
-### 2.2 Core Edge Types
+### 2.2 Core Relationship Types
 
-| edge_type | Purpose | Key Properties |
-|-----------|---------|----------------|
+| relationship_type | Purpose | Key Properties |
+|-------------------|---------|----------------|
 | `has_child` | Document tree hierarchy | `order` (float for fractional ordering) |
 | `mentions` | @references and [[links]] | `context`, `offset`, `root_id` |
 | `member_of` | Collection membership | - |
 
-### 2.3 Partial Indexes for Core Types
+### 2.3 Compound Indexes for Relationships
+
+> **Note**: SurrealDB does not support partial indexes. We use compound indexes with `relationship_type` as a leading or included column.
 
 ```sql
--- has_child: Ordered children lookup
-DEFINE INDEX idx_edge_child_order ON edge
-  COLUMNS in, properties.order
-  WHERE edge_type = 'has_child';
+-- Core indexes for all relationship queries
+DEFINE INDEX idx_relationship_type ON relationship COLUMNS relationship_type;
+DEFINE INDEX idx_rel_in ON relationship COLUMNS in, relationship_type;
+DEFINE INDEX idx_rel_out ON relationship COLUMNS out, relationship_type;
 
--- has_child: Unique parent-child constraint
-DEFINE INDEX idx_edge_unique_child ON edge
-  COLUMNS in, out UNIQUE
-  WHERE edge_type = 'has_child';
+-- Compound index for ordered children lookup (has_child relationships)
+-- Query: SELECT * FROM relationship WHERE in = $parent AND relationship_type = 'has_child' ORDER BY properties.order
+DEFINE INDEX idx_rel_child_order ON relationship COLUMNS in, relationship_type, properties.order;
 
--- mentions: Backlinks lookup
-DEFINE INDEX idx_edge_mentions_target ON edge
-  COLUMNS out
-  WHERE edge_type = 'mentions';
+-- Universal unique constraint (prevents duplicate relationships of same type between nodes)
+DEFINE INDEX idx_rel_unique ON relationship COLUMNS in, out, relationship_type UNIQUE;
 ```
 
-### 2.4 Edge Properties by Type
+**Design Decision**: The unique constraint applies to all relationship types (not just `has_child`). This prevents data anomalies like duplicate mentions or member_of relationships between the same nodes.
+
+### 2.4 Relationship Properties by Type
 
 **has_child** (structural):
 ```json
 {
-  "edge_type": "has_child",
+  "relationship_type": "has_child",
   "properties": {
     "order": 1.5
   }
@@ -168,7 +199,7 @@ DEFINE INDEX idx_edge_mentions_target ON edge
 **mentions** (semantic):
 ```json
 {
-  "edge_type": "mentions",
+  "relationship_type": "mentions",
   "properties": {
     "context": "See also",
     "offset": 42,
@@ -180,7 +211,7 @@ DEFINE INDEX idx_edge_mentions_target ON edge
 **Custom relationship** (user-defined):
 ```json
 {
-  "edge_type": "blocked_by",
+  "relationship_type": "blocked_by",
   "properties": {
     "reason": "Waiting for API approval",
     "blocking_since": "2025-01-06"
@@ -192,36 +223,36 @@ DEFINE INDEX idx_edge_mentions_target ON edge
 
 ```sql
 -- Get children ordered
-SELECT out.* FROM edge
-WHERE in = $parent_id AND edge_type = 'has_child'
+SELECT out.* FROM relationship
+WHERE in = $parent_id AND relationship_type = 'has_child'
 ORDER BY properties.order ASC;
 
 -- Get all nodes that mention this node (backlinks)
-SELECT in.* FROM edge
-WHERE out = $node_id AND edge_type = 'mentions';
+SELECT in.* FROM relationship
+WHERE out = $node_id AND relationship_type = 'mentions';
 
 -- Find tasks blocked by high-priority bugs (single traversal)
 SELECT * FROM node
 WHERE node_type = 'task'
-  AND ->edge[WHERE edge_type = 'blocked_by']->node[WHERE properties.priority = 'high'];
+  AND ->relationship[WHERE relationship_type = 'blocked_by']->node[WHERE properties.task.priority = 'high'];
 
 -- Get all relationships for a node (any type)
-SELECT * FROM edge WHERE in = $node_id OR out = $node_id;
+SELECT * FROM relationship WHERE in = $node_id OR out = $node_id;
 ```
 
-### 2.6 Why Universal Edge Table
+### 2.6 Why Universal Relationship Table
 
-| Aspect | Separate Tables (Old) | Single Edge Table (New) |
-|--------|----------------------|-------------------------|
+| Aspect | Separate Tables (Old) | Single Relationship Table (New) |
+|--------|----------------------|--------------------------------|
 | **Custom relationships** | Requires DDL | Zero DDL |
-| **Playbook Marketplace** | Can't add relationship types | Install adds new edge_types |
-| **Consistency** | Nodes unified, edges fragmented | Fully unified model |
+| **Playbook Marketplace** | Can't add relationship types | Install adds new relationship_types |
+| **Consistency** | Nodes unified, relationships fragmented | Fully unified model |
 | **Query all relationships** | UNION across tables | Single table query |
-| **Sync complexity** | Multiple edge tables | One edge table |
+| **Sync complexity** | Multiple relationship tables | One relationship table |
 
 ### 2.7 Fractional Ordering
 
-The `order` property in `has_child` edges uses floats for O(1) inserts:
+The `order` property in `has_child` relationships uses floats for O(1) inserts:
 - Insert between 1.0 and 2.0 → use 1.5
 - Insert between 1.0 and 1.5 → use 1.25
 - Periodic rebalancing when precision degrades
@@ -695,7 +726,7 @@ The Janitor observes and recommends indexes, but actual creation is deferred to 
 |-----------|--------|
 | Spoke tables (`task`, `schema`) | **Delete** - data moves to `node.properties` |
 | `data` field (Record Link) | **Delete** - no longer needed |
-| Edge tables (`has_child`, `mentions`, `member_of`) | **Consolidate** - migrate to single `edge` table |
+| Edge tables (`has_child`, `mentions`, `member_of`) | **Consolidate** - migrate to single `relationship` table |
 | `SchemaTableManager` | **Simplify** - index management only |
 | Spoke queries | **Remove** - single-table queries |
 | N+1 property fetching | **Eliminate** - properties inline |
@@ -716,11 +747,11 @@ UPDATE node SET properties = (
 REMOVE TABLE task;
 REMOVE TABLE schema;  -- Schema data already in properties
 
--- 3. Consolidate edge tables into single 'edge' table
+-- 3. Consolidate edge tables into single 'relationship' table
 -- Migrate has_child
-INSERT INTO edge SELECT
+INSERT INTO relationship SELECT
   in, out,
-  'has_child' AS edge_type,
+  'has_child' AS relationship_type,
   { order: order } AS properties,
   version,
   created_at,
@@ -728,9 +759,9 @@ INSERT INTO edge SELECT
 FROM has_child;
 
 -- Migrate mentions
-INSERT INTO edge SELECT
+INSERT INTO relationship SELECT
   in, out,
-  'mentions' AS edge_type,
+  'mentions' AS relationship_type,
   { context: context, offset: offset, root_id: root_id } AS properties,
   1 AS version,
   created_at,
@@ -738,9 +769,9 @@ INSERT INTO edge SELECT
 FROM mentions;
 
 -- Migrate member_of
-INSERT INTO edge SELECT
+INSERT INTO relationship SELECT
   in, out,
-  'member_of' AS edge_type,
+  'member_of' AS relationship_type,
   {} AS properties,
   1 AS version,
   created_at,
@@ -752,12 +783,11 @@ REMOVE TABLE has_child;
 REMOVE TABLE mentions;
 REMOVE TABLE member_of;
 
--- 5. Add partial indexes for nodes
-DEFINE INDEX idx_task_status ON node
-  COLUMNS properties.status
-  WHERE node_type = 'task';
+-- 5. Add compound indexes for nodes (no partial indexes in SurrealDB)
+DEFINE INDEX idx_node_task_status ON node COLUMNS node_type, properties.task.status;
+DEFINE INDEX idx_node_task_priority ON node COLUMNS node_type, properties.task.priority;
 
--- 6. Add partial indexes for edges (see Section 2.3)
+-- 6. Add compound indexes for relationships (see Section 2.3)
 ```
 
 **For future migrations with users** (batched pattern):

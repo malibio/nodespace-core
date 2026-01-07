@@ -511,8 +511,7 @@ where
     /// Seed core schema definitions if database is fresh
     ///
     /// Checks if schema nodes exist. If not, creates all core schemas
-    /// (task, text, date, header, code-block, quote-block, ordered-list)
-    /// with their spoke tables for schemas that have fields.
+    /// (task, text, date, header, code-block, quote-block, ordered-list).
     ///
     /// This is idempotent - safe to call multiple times.
     ///
@@ -561,8 +560,7 @@ where
             .map(|s| (s.id.clone(), !s.fields.is_empty()))
             .collect();
 
-        // Universal Graph Architecture (Issue #783): No spoke tables
-        // Schema field definitions are stored in node.properties, not separate tables.
+        // Universal Graph Architecture (Issue #783): Properties stored in node.properties.
         // Only relationship tables are created for relationships.
         {
             let table_manager = crate::services::schema_table_manager::SchemaTableManager::new();
@@ -573,7 +571,6 @@ where
                 let node = schema.clone().into_node();
 
                 // Universal Graph Architecture: Only generate relationship table DDL for relationships
-                // No spoke table DDL - properties are stored in node.properties
                 let ddl_statements = if !schema.relationships.is_empty() {
                     table_manager
                         .generate_relationship_ddl_statements(&schema_id, &schema.relationships)
@@ -1011,7 +1008,7 @@ where
             return Ok(()); // Empty schema = no version needed
         }
 
-        // Check if _schema_version exists in the type namespace
+        // Check if _schema_version exists in the type namespace (Issue #794)
         let has_version = node
             .properties
             .get(&node.node_type)
@@ -1172,7 +1169,6 @@ where
         // NOTE: root_id filtering removed - hierarchy now managed via relationships
 
         // For schema nodes, use atomic creation with DDL generation (Issue #691, #703)
-        // Universal Graph Architecture (Issue #783): Only relationship table DDL, no spoke tables
         if node.node_type == "schema" {
             // Parse schema relationships from properties (Issue #703)
             let relationships: Vec<SchemaRelationship> = node
@@ -1181,9 +1177,7 @@ where
                 .and_then(|r| serde_json::from_value(r.clone()).ok())
                 .unwrap_or_default();
 
-            // Generate DDL statements for the schema
-            // Universal Graph Architecture: Only relationship tables, no spoke tables
-            // Schema field definitions are stored in node.properties
+            // Generate DDL statements for relationships
             let table_manager = crate::services::schema_table_manager::SchemaTableManager::new();
 
             // Generate relationship table DDL (if it has relationships)
@@ -1649,10 +1643,9 @@ where
     // Strongly-Typed Node Retrieval
     // ========================================================================
 
-    /// Get a task node with strong typing using single-query pattern
+    /// Get a task node with strong typing
     ///
-    /// Provides direct deserialization from the spoke table with hub data via
-    /// record link. Returns strongly-typed `TaskNode` instead of generic `Node`.
+    /// Returns strongly-typed `TaskNode` instead of generic `Node`.
     ///
     /// # Arguments
     ///
@@ -1694,17 +1687,16 @@ where
         })
     }
 
-    /// Update a task node with type-safe spoke field updates
+    /// Update a task node with type-safe field updates
     ///
-    /// Updates task-specific fields (status, priority, due_date, assignee) directly
-    /// in the spoke table, and optionally updates hub content. Uses optimistic
-    /// concurrency control (OCC) to prevent lost updates.
+    /// Updates task-specific fields (status, priority, due_date, assignee).
+    /// Uses optimistic concurrency control (OCC) to prevent lost updates.
     ///
     /// # Type Safety
     ///
     /// This method provides end-to-end type safety for task updates:
     /// - Frontend sends strongly-typed `TaskNodeUpdate` (not generic NodeUpdate)
-    /// - Backend updates spoke table fields directly (not via JSON properties)
+    /// - Backend updates task fields directly (not via JSON properties)
     /// - Returns strongly-typed `TaskNode` with updated fields
     ///
     /// # Arguments
@@ -1790,10 +1782,9 @@ where
             })
     }
 
-    /// Get a schema node with strong typing using single-query pattern
+    /// Get a schema node with strong typing
     ///
-    /// Provides direct deserialization from the spoke table with hub data via
-    /// record link. Returns strongly-typed `SchemaNode` instead of generic `Node`.
+    /// Returns strongly-typed `SchemaNode` instead of generic `Node`.
     ///
     /// # Arguments
     ///
@@ -1943,7 +1934,6 @@ where
         };
 
         // For schema nodes, use atomic update with DDL generation (Issue #690, #703)
-        // Universal Graph Architecture (Issue #783): Only relationship table DDL, no spoke tables
         if updated.node_type == "schema" {
             // Parse schema relationships from properties (Issue #703)
             let relationships: Vec<SchemaRelationship> = updated
@@ -1952,9 +1942,7 @@ where
                 .and_then(|r| serde_json::from_value(r.clone()).ok())
                 .unwrap_or_default();
 
-            // Generate DDL statements for the schema
-            // Universal Graph Architecture: Only relationship tables, no spoke tables
-            // Schema field definitions are stored in node.properties
+            // Generate DDL statements for relationships
             let table_manager = crate::services::schema_table_manager::SchemaTableManager::new();
 
             // Generate relationship table DDL (if it has relationships)
@@ -5130,8 +5118,6 @@ mod tests {
         let (service, _temp) = create_test_service().await;
 
         // Create and persist a date node with custom content
-        // Note: Date nodes don't have a spoke table (Issue #670), so no custom properties
-        // They store everything in the content field
         let date_node = Node::new_with_id(
             "2025-10-13".to_string(),
             "date".to_string(),
@@ -5341,9 +5327,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulk_update_with_task_nodes() {
-        // Test bulk update works correctly with nodes that have spoke tables (tasks)
-        // Note: The store's bulk_update only updates hub table fields (content, node_type).
-        // Spoke table properties (like task status) are not updated by bulk_update.
+        // Test bulk update works correctly with task nodes.
+        // Note: The store's bulk_update only updates base node fields (content, node_type).
+        // Task-specific properties (like status) are not updated by bulk_update.
         // This test verifies that task nodes can be bulk-updated without error.
         let (service, _temp) = create_test_service().await;
 
@@ -5361,7 +5347,7 @@ mod tests {
         let id1 = service.create_node(task1).await.unwrap();
         let id2 = service.create_node(task2).await.unwrap();
 
-        // Update content (spoke table properties like status are NOT updated by bulk_update)
+        // Update content (task properties like status are NOT updated by bulk_update)
         let updates = vec![
             (
                 id1.clone(),
@@ -5388,8 +5374,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulk_update_with_mixed_node_types() {
-        // Test bulk update with mixed text and task nodes (different spoke table handling)
-        // Note: bulk_update only updates hub table fields (content, node_type).
+        // Test bulk update with mixed text and task nodes.
+        // Note: bulk_update only updates base node fields (content, node_type).
         // This test verifies that mixed node types work together in the batch fetch.
         let (service, _temp) = create_test_service().await;
 
@@ -5403,7 +5389,7 @@ mod tests {
         let text_id = service.create_node(text_node).await.unwrap();
         let task_id = service.create_node(task_node).await.unwrap();
 
-        // Update content only (spoke table properties are NOT updated by bulk_update)
+        // Update content only (task-specific properties are NOT updated by bulk_update)
         let updates = vec![
             (
                 text_id.clone(),
@@ -8063,7 +8049,7 @@ mod tests {
 
     /// Tests for type-safe task node CRUD operations (Issue #709)
     ///
-    /// Verifies that `update_task_node` correctly updates spoke table fields
+    /// Verifies that `update_task_node` correctly updates task fields
     /// with type safety, OCC version checking, and proper error handling.
     mod update_task_node_tests {
         use super::*;
@@ -8324,20 +8310,20 @@ mod tests {
         }
 
         /// Test that update_task_node works on nodes that were converted from text to task
-        /// via generic update (which only updates node_type, not creating spoke record).
+        /// via generic update.
         ///
         /// This reproduces the scenario where:
         /// 1. User creates a text node
         /// 2. User converts it to task via /task slash command (generic update changes node_type)
         /// 3. User tries to update task fields like status
         ///
-        /// The fix ensures update_task_node properly creates the spoke record with hub link
-        /// when it doesn't exist (Issue #709).
+        /// The fix ensures update_task_node properly initializes task properties
+        /// when they don't exist (Issue #709).
         #[tokio::test]
         async fn test_update_task_after_type_conversion_from_text() {
             let (service, _temp) = create_test_service().await;
 
-            // Step 1: Create a text node (no spoke record)
+            // Step 1: Create a text node
             let text_node = Node::new_with_id(
                 format!("converted-task-{}", uuid::Uuid::new_v4()),
                 "text".to_string(),
@@ -8347,7 +8333,6 @@ mod tests {
             service.create_node(text_node.clone()).await.unwrap();
 
             // Step 2: Convert text to task via generic update (simulates /task command)
-            // This only updates node_type in hub - NO spoke record is created
             let type_update = crate::models::NodeUpdate {
                 node_type: Some("task".to_string()),
                 ..Default::default()
@@ -8362,7 +8347,6 @@ mod tests {
             assert_eq!(node_after_convert.node_type, "task");
 
             // Step 3: Update task status via type-specific method
-            // This should work even though no spoke record exists yet
             // Version is 2 after the type conversion update
             let status_update = TaskNodeUpdate::new().with_status(TaskStatus::InProgress);
             let task_after = service
