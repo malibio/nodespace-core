@@ -5669,9 +5669,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Reorder child2 to be before child1 (same parent, just reordering)
-        store
-            .move_node(&child2.id, Some(&parent.id), None)
-            .await?;
+        store.move_node(&child2.id, Some(&parent.id), None).await?;
 
         // Get new relationship metadata
         let new_metadata = get_relationship_metadata(&store, &child2.id)
@@ -5823,7 +5821,8 @@ mod tests {
                 .expect("Relationship should exist");
 
             assert_eq!(
-                metadata.2, expected_version,
+                metadata.2,
+                expected_version,
                 "Version should be {} after {} reorders",
                 expected_version,
                 expected_version - 1
