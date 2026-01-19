@@ -16,6 +16,7 @@
 <script lang="ts">
   import Icon from '$lib/design/icons/icon.svelte';
   import { collectionService } from '$lib/services/collection-service';
+  import { collectionsData } from '$lib/stores/collections';
   import type { Node, CollectionNode } from '$lib/types';
   import { tabState, addTab, setActiveTab } from '$lib/stores/navigation';
   import { createLogger } from '$lib/utils/logger';
@@ -61,22 +62,37 @@
       const memberNodes = await collectionService.getCollectionMembers(collectionId);
       members = memberNodes;
 
-      // Try to find collection details (for name and description)
-      // For now, just use the first member's memberOf relationship or a placeholder
-      collection = {
-        id: collectionId,
-        nodeType: 'collection',
-        content: collectionId, // Will be updated if we can get real name
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 1,
-        properties: {}
-      };
-
-      // Try to get actual collection name by fetching it
-      const collectionName = await collectionService.getCollectionByName(collectionId);
-      if (collectionName) {
-        collection = collectionName;
+      // Try to get collection details from cached store data first (by ID)
+      const cachedCollection = collectionsData.getCollectionById(collectionId);
+      if (cachedCollection) {
+        // Convert CollectionInfo to CollectionNode format
+        collection = {
+          id: cachedCollection.id,
+          nodeType: 'collection',
+          content: cachedCollection.content,
+          createdAt: cachedCollection.createdAt,
+          modifiedAt: cachedCollection.modifiedAt,
+          version: cachedCollection.version,
+          properties: cachedCollection.properties as CollectionNode['properties']
+        };
+      } else {
+        // Fallback: Try to get collection by name (legacy behavior)
+        // This handles cases where the viewer is opened before sidebar loaded collections
+        const collectionByName = await collectionService.getCollectionByName(collectionId);
+        if (collectionByName) {
+          collection = collectionByName;
+        } else {
+          // Last resort: Create placeholder with ID as name
+          collection = {
+            id: collectionId,
+            nodeType: 'collection',
+            content: collectionId,
+            createdAt: new Date().toISOString(),
+            modifiedAt: new Date().toISOString(),
+            version: 1,
+            properties: {}
+          };
+        }
       }
 
       log.debug('Loaded collection data', { collectionId, memberCount: members.length });
@@ -171,6 +187,9 @@
       <div class="error-state">
         <Icon name="circle" size={24} color="hsl(var(--destructive))" />
         <span>{error}</span>
+        <button class="retry-button" onclick={() => loadCollectionData(nodeId)}>
+          Try Again
+        </button>
       </div>
     {:else if members.length === 0}
       <div class="empty-state">
@@ -270,6 +289,25 @@
 
   .error-state {
     color: hsl(var(--destructive));
+  }
+
+  .error-state span {
+    margin-bottom: 1rem;
+  }
+
+  .retry-button {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .retry-button:hover {
+    opacity: 0.9;
   }
 
   .empty-state p {

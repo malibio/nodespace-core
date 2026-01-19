@@ -50,6 +50,9 @@ pub struct CollectionInfo {
 /// Returns all nodes with node_type = 'collection', useful for building
 /// the collection browser UI in the navigation sidebar.
 ///
+/// Uses a single batch query to fetch collections with member counts,
+/// avoiding N+1 query pattern for better performance.
+///
 /// # Arguments
 /// * `service` - NodeService instance from Tauri state
 ///
@@ -66,17 +69,12 @@ pub struct CollectionInfo {
 pub async fn get_all_collections(
     service: State<'_, NodeService>,
 ) -> Result<Vec<CollectionInfo>, CommandError> {
-    use nodespace_core::NodeQuery;
+    let store = service.store();
+    let collection_service = CollectionService::new(store);
 
-    // Query all collection nodes
-    let query = NodeQuery {
-        node_type: Some("collection".to_string()),
-        ..Default::default()
-    };
-
-    let collections = service
-        .with_client(TAURI_CLIENT_ID)
-        .query_nodes_simple(query)
+    // Single batch query fetches collections with member counts (avoids N+1 pattern)
+    let collections_with_counts = collection_service
+        .get_all_collections_with_counts()
         .await
         .map_err(|e| CommandError {
             message: format!("Failed to query collections: {}", e),
@@ -84,18 +82,8 @@ pub async fn get_all_collections(
             details: Some(format!("{}", e)),
         })?;
 
-    // Get member count for each collection
-    let store = service.store();
-    let collection_service = CollectionService::new(store);
-
-    let mut result = Vec::with_capacity(collections.len());
-    for collection in collections {
-        let member_count = collection_service
-            .get_collection_members(&collection.id)
-            .await
-            .map(|members| members.len())
-            .unwrap_or(0);
-
+    let mut result = Vec::with_capacity(collections_with_counts.len());
+    for (collection, member_count) in collections_with_counts {
         let node_value = node_to_typed_value(collection)?;
         result.push(CollectionInfo {
             node: node_value,

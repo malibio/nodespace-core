@@ -125,6 +125,16 @@ function createCollectionsDataStore() {
       return result;
     },
 
+    /** Get a collection by ID from cached data */
+    getCollectionById: (collectionId: string): CollectionInfo | undefined => {
+      let result: CollectionInfo | undefined;
+      const unsubscribe = subscribe((state) => {
+        result = state.collections.find((c) => c.id === collectionId);
+      });
+      unsubscribe();
+      return result;
+    },
+
     /** Clear all cached data */
     reset: () => {
       set(initialDataState);
