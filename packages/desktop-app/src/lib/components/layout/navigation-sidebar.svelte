@@ -256,6 +256,12 @@
 
   // Handle navigation item clicks
   function handleNavItemClick(itemId: string) {
+    // Close sub-panel when clicking non-collection nav items
+    if (subPanelOpen) {
+      subPanelOpen = false;
+      selectedCollectionId = null;
+    }
+
     // Special handling for Daily Journal
     if (itemId === 'daily-journal') {
       handleDailyJournalClick();
