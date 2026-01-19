@@ -7,6 +7,7 @@ const log = createLogger('Layout');
 export interface LayoutState {
   sidebarCollapsed: boolean;
   activePane: string;
+  collectionsExpanded: boolean;
 }
 
 export interface NavigationItem {
@@ -20,7 +21,8 @@ export interface NavigationItem {
 // Layout state store
 const initialLayoutState: LayoutState = {
   sidebarCollapsed: false,
-  activePane: 'today'
+  activePane: 'today',
+  collectionsExpanded: false
 };
 
 export const layoutState = writable<LayoutState>(initialLayoutState);
@@ -56,7 +58,8 @@ export function loadPersistedLayoutState(): boolean {
     // Restore the state
     layoutState.set({
       sidebarCollapsed: persisted.sidebarCollapsed,
-      activePane: 'today' // Keep activePane at default for now (not persisted)
+      activePane: 'today', // Keep activePane at default for now (not persisted)
+      collectionsExpanded: persisted.collectionsExpanded ?? false
     });
   }
 
@@ -105,5 +108,19 @@ export function setActivePane(paneId: string) {
   layoutState.update((state) => ({
     ...state,
     activePane: paneId
+  }));
+}
+
+export function setCollectionsExpanded(expanded: boolean) {
+  layoutState.update((state) => ({
+    ...state,
+    collectionsExpanded: expanded
+  }));
+}
+
+export function toggleCollectionsExpanded() {
+  layoutState.update((state) => ({
+    ...state,
+    collectionsExpanded: !state.collectionsExpanded
   }));
 }

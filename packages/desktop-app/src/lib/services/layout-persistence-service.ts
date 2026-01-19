@@ -16,6 +16,7 @@ const log = createLogger('LayoutPersistence');
 export interface PersistedLayoutState {
   version: number;
   sidebarCollapsed: boolean;
+  collectionsExpanded?: boolean; // Added in version 2
 }
 
 /**
@@ -55,12 +56,15 @@ export class LayoutPersistenceService {
   private static saveImmediate(state: LayoutState): void {
     try {
       const persisted: PersistedLayoutState = {
-        version: 1,
-        sidebarCollapsed: state.sidebarCollapsed
+        version: 2,
+        sidebarCollapsed: state.sidebarCollapsed,
+        collectionsExpanded: state.collectionsExpanded
       };
 
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(persisted));
-      log.debug(`State saved: sidebarCollapsed=${state.sidebarCollapsed}`);
+      log.debug(
+        `State saved: sidebarCollapsed=${state.sidebarCollapsed}, collectionsExpanded=${state.collectionsExpanded}`
+      );
     } catch (error) {
       log.error('Failed to save state:', error);
 

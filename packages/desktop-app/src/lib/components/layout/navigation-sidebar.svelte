@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
-  import { layoutState, navigationItems, toggleSidebar } from '$lib/stores/layout.js';
+  import {
+    layoutState,
+    navigationItems,
+    toggleSidebar,
+    setCollectionsExpanded
+  } from '$lib/stores/layout.js';
   import { tabState, setActiveTab, addTab } from '$lib/stores/navigation.js';
   import {
     collectionsState,
@@ -15,9 +20,10 @@
   // Subscribe to stores using Svelte 5 runes
   let isCollapsed = $derived($layoutState.sidebarCollapsed);
   let navItems = $derived($navigationItems);
+  // Collections expanded state from layout store (persisted)
+  let collectionsExpanded = $derived($layoutState.collectionsExpanded);
 
-  // Collections state from store
-  let collectionsExpanded = $derived($collectionsState.expanded);
+  // Collections state from collections store (UI-only, not persisted)
   let selectedCollectionId = $derived($collectionsState.selectedCollectionId);
   let subPanelOpen = $derived($collectionsState.subPanelOpen);
   let expandedCollectionIds = $derived($collectionsState.expandedCollectionIds);
@@ -244,7 +250,7 @@
 
     <!-- Collections section (after Daily Journal) - accordion toggle -->
     {#if !isCollapsed}
-      <Collapsible.Root open={collectionsExpanded} onOpenChange={(open) => collectionsState.setExpanded(open)}>
+      <Collapsible.Root open={collectionsExpanded} onOpenChange={(open) => setCollectionsExpanded(open)}>
         <Collapsible.Trigger class="nav-item">
           <svg
             class="nav-icon"
@@ -357,7 +363,7 @@
         title="Collections"
         onclick={() => {
           toggleSidebar();
-          collectionsState.setExpanded(true);
+          setCollectionsExpanded(true);
         }}
       >
         <svg

@@ -21,8 +21,6 @@ export interface CollectionMember {
 }
 
 export interface CollectionsState {
-  /** Whether the Collections section is expanded in the nav */
-  expanded: boolean;
   /** Currently selected collection ID (for sub-panel display) */
   selectedCollectionId: string | null;
   /** Whether the sub-panel is open */
@@ -32,8 +30,8 @@ export interface CollectionsState {
 }
 
 // Initial state
+// Note: `expanded` (whether Collections section is open) is managed by layoutState for persistence
 const initialState: CollectionsState = {
-  expanded: false,
   selectedCollectionId: null,
   subPanelOpen: false,
   expandedCollectionIds: new Set()
@@ -48,21 +46,7 @@ function createCollectionsStore() {
     set,
     update,
 
-    /** Toggle the Collections section expanded/collapsed state */
-    toggleExpanded: () => {
-      update((state) => ({
-        ...state,
-        expanded: !state.expanded
-      }));
-    },
-
-    /** Set the Collections section expanded state */
-    setExpanded: (expanded: boolean) => {
-      update((state) => ({
-        ...state,
-        expanded
-      }));
-    },
+    // Note: toggleExpanded/setExpanded moved to layoutState for persistence
 
     /** Select a collection and open the sub-panel */
     selectCollection: (collectionId: string) => {

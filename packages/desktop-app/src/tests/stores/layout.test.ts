@@ -42,7 +42,8 @@ describe('Layout Store - Layout State Management', () => {
     // Reset the layoutState to initial state
     layoutState.set({
       sidebarCollapsed: false,
-      activePane: 'today'
+      activePane: 'today',
+      collectionsExpanded: false
     });
 
     // Reset the module state by requiring a fresh import
@@ -108,7 +109,8 @@ describe('Layout Store - Layout State Management', () => {
       // Start with collapsed state
       layoutState.set({
         sidebarCollapsed: true,
-        activePane: 'today'
+        activePane: 'today',
+        collectionsExpanded: false
       });
 
       toggleSidebar();
@@ -121,7 +123,8 @@ describe('Layout Store - Layout State Management', () => {
       // Start with expanded state
       layoutState.set({
         sidebarCollapsed: false,
-        activePane: 'today'
+        activePane: 'today',
+        collectionsExpanded: false
       });
 
       toggleSidebar();
@@ -133,7 +136,8 @@ describe('Layout Store - Layout State Management', () => {
     it('preserves activePane when toggling', () => {
       layoutState.set({
         sidebarCollapsed: false,
-        activePane: 'custom-pane'
+        activePane: 'custom-pane',
+        collectionsExpanded: false
       });
 
       toggleSidebar();
@@ -168,7 +172,8 @@ describe('Layout Store - Layout State Management', () => {
     it('preserves sidebarCollapsed when setting active pane', () => {
       layoutState.set({
         sidebarCollapsed: true,
-        activePane: 'today'
+        activePane: 'today',
+        collectionsExpanded: false
       });
 
       setActivePane('search');
@@ -394,7 +399,8 @@ describe('Layout Store - Persistence Integration', () => {
     // Reset to initial state
     freshModule.layoutState.set({
       sidebarCollapsed: false,
-      activePane: 'today'
+      activePane: 'today',
+      collectionsExpanded: false
     });
   });
 

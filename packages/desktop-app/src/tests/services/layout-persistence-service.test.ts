@@ -20,6 +20,7 @@ describe('LayoutPersistenceService', () => {
   describe('save and load', () => {
     const mockState: LayoutState = {
       sidebarCollapsed: true,
+      collectionsExpanded: false,
       activePane: 'dashboard'
     };
 
@@ -32,8 +33,9 @@ describe('LayoutPersistenceService', () => {
       const loaded = LayoutPersistenceService.load();
 
       expect(loaded).toEqual({
-        version: 1,
-        sidebarCollapsed: true
+        version: 2,
+        sidebarCollapsed: true,
+        collectionsExpanded: false
       });
     });
 
@@ -52,6 +54,7 @@ describe('LayoutPersistenceService', () => {
     it('persists sidebar collapsed state correctly', () => {
       const collapsedState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -65,6 +68,7 @@ describe('LayoutPersistenceService', () => {
     it('persists sidebar expanded state correctly', () => {
       const expandedState: LayoutState = {
         sidebarCollapsed: false,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -75,9 +79,10 @@ describe('LayoutPersistenceService', () => {
       expect(loaded?.sidebarCollapsed).toBe(false);
     });
 
-    it('only persists sidebarCollapsed, not activePane', () => {
+    it('persists sidebarCollapsed and collectionsExpanded, but not activePane', () => {
       const state: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'some-custom-pane'
       };
 
@@ -86,8 +91,9 @@ describe('LayoutPersistenceService', () => {
 
       const loaded = LayoutPersistenceService.load();
       expect(loaded).toEqual({
-        version: 1,
-        sidebarCollapsed: true
+        version: 2,
+        sidebarCollapsed: true,
+        collectionsExpanded: false
       });
       // activePane should NOT be in the persisted state
       expect(loaded).not.toHaveProperty('activePane');
@@ -216,16 +222,19 @@ describe('LayoutPersistenceService', () => {
 
       const state1: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'pane-1'
       };
 
       const state2: LayoutState = {
         sidebarCollapsed: false,
+        collectionsExpanded: false,
         activePane: 'pane-2'
       };
 
       const state3: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'pane-3'
       };
 
@@ -252,6 +261,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -277,6 +287,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -296,6 +307,7 @@ describe('LayoutPersistenceService', () => {
     it('removes persisted state', () => {
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -345,6 +357,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -385,6 +398,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -406,6 +420,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -415,7 +430,7 @@ describe('LayoutPersistenceService', () => {
       expect(spy).toHaveBeenCalledOnce();
 
       const savedData = JSON.parse(spy.mock.calls[0][1] as string);
-      expect(savedData.version).toBe(1);
+      expect(savedData.version).toBe(2);
       expect(savedData.sidebarCollapsed).toBe(true);
     });
 
@@ -424,11 +439,13 @@ describe('LayoutPersistenceService', () => {
 
       const state1: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
       const state2: LayoutState = {
         sidebarCollapsed: false,
+        collectionsExpanded: false,
         activePane: 'dashboard'
       };
 
@@ -461,6 +478,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -482,6 +500,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -521,6 +540,7 @@ describe('LayoutPersistenceService', () => {
 
       const mockState: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -572,9 +592,9 @@ describe('LayoutPersistenceService', () => {
     it('handles multiple rapid save-flush cycles', () => {
       const spy = vi.spyOn(window.localStorage, 'setItem');
 
-      const state1: LayoutState = { sidebarCollapsed: true, activePane: 'today' };
-      const state2: LayoutState = { sidebarCollapsed: false, activePane: 'today' };
-      const state3: LayoutState = { sidebarCollapsed: true, activePane: 'today' };
+      const state1: LayoutState = { sidebarCollapsed: true, collectionsExpanded: false, activePane: 'today' };
+      const state2: LayoutState = { sidebarCollapsed: false, collectionsExpanded: false, activePane: 'today' };
+      const state3: LayoutState = { sidebarCollapsed: true, collectionsExpanded: false, activePane: 'today' };
 
       LayoutPersistenceService.save(state1);
       LayoutPersistenceService.flush();
@@ -592,8 +612,8 @@ describe('LayoutPersistenceService', () => {
     it('handles alternating save and saveNow calls', () => {
       const spy = vi.spyOn(window.localStorage, 'setItem');
 
-      const state1: LayoutState = { sidebarCollapsed: true, activePane: 'today' };
-      const state2: LayoutState = { sidebarCollapsed: false, activePane: 'today' };
+      const state1: LayoutState = { sidebarCollapsed: true, collectionsExpanded: false, activePane: 'today' };
+      const state2: LayoutState = { sidebarCollapsed: false, collectionsExpanded: false, activePane: 'today' };
 
       LayoutPersistenceService.save(state1);
       LayoutPersistenceService.saveNow(state2);
@@ -606,6 +626,7 @@ describe('LayoutPersistenceService', () => {
     it('handles state with only boolean false values', () => {
       const state: LayoutState = {
         sidebarCollapsed: false,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -619,6 +640,7 @@ describe('LayoutPersistenceService', () => {
     it('handles state with only boolean true values', () => {
       const state: LayoutState = {
         sidebarCollapsed: true,
+        collectionsExpanded: false,
         activePane: 'today'
       };
 
@@ -632,7 +654,7 @@ describe('LayoutPersistenceService', () => {
 
   describe('persistence lifecycle', () => {
     it('maintains state across save-load cycles', () => {
-      const state1: LayoutState = { sidebarCollapsed: true, activePane: 'today' };
+      const state1: LayoutState = { sidebarCollapsed: true, collectionsExpanded: false, activePane: 'today' };
 
       LayoutPersistenceService.save(state1);
       vi.advanceTimersByTime(500);
@@ -640,7 +662,7 @@ describe('LayoutPersistenceService', () => {
       const loaded1 = LayoutPersistenceService.load();
       expect(loaded1?.sidebarCollapsed).toBe(true);
 
-      const state2: LayoutState = { sidebarCollapsed: false, activePane: 'dashboard' };
+      const state2: LayoutState = { sidebarCollapsed: false, collectionsExpanded: false, activePane: 'dashboard' };
 
       LayoutPersistenceService.save(state2);
       vi.advanceTimersByTime(500);
@@ -650,7 +672,7 @@ describe('LayoutPersistenceService', () => {
     });
 
     it('clear() followed by load() returns null', () => {
-      const state: LayoutState = { sidebarCollapsed: true, activePane: 'today' };
+      const state: LayoutState = { sidebarCollapsed: true, collectionsExpanded: false, activePane: 'today' };
 
       LayoutPersistenceService.save(state);
       vi.advanceTimersByTime(500);
@@ -663,14 +685,14 @@ describe('LayoutPersistenceService', () => {
     });
 
     it('handles save after clear', () => {
-      const state1: LayoutState = { sidebarCollapsed: true, activePane: 'today' };
+      const state1: LayoutState = { sidebarCollapsed: true, collectionsExpanded: false, activePane: 'today' };
 
       LayoutPersistenceService.save(state1);
       vi.advanceTimersByTime(500);
 
       LayoutPersistenceService.clear();
 
-      const state2: LayoutState = { sidebarCollapsed: false, activePane: 'dashboard' };
+      const state2: LayoutState = { sidebarCollapsed: false, collectionsExpanded: false, activePane: 'dashboard' };
 
       LayoutPersistenceService.save(state2);
       vi.advanceTimersByTime(500);
