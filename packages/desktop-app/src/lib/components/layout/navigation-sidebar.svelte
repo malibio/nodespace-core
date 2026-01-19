@@ -2,6 +2,12 @@
   import { Collapsible } from 'bits-ui';
   import { layoutState, navigationItems, toggleSidebar } from '$lib/stores/layout.js';
   import { tabState, setActiveTab, addTab } from '$lib/stores/navigation.js';
+  import {
+    collectionsState,
+    mockCollections,
+    selectedCollection,
+    selectedCollectionMembers
+  } from '$lib/stores/collections.js';
   import { formatDateISO } from '$lib/utils/date-formatting.js';
   import { v4 as uuidv4 } from 'uuid';
   import CollectionSubPanel from './collection-sub-panel.svelte';
@@ -10,6 +16,16 @@
   let isCollapsed = $derived($layoutState.sidebarCollapsed);
   let navItems = $derived($navigationItems);
 
+  // Collections state from store
+  let collectionsExpanded = $derived($collectionsState.expanded);
+  let selectedCollectionId = $derived($collectionsState.selectedCollectionId);
+  let subPanelOpen = $derived($collectionsState.subPanelOpen);
+  let expandedCollectionIds = $derived($collectionsState.expandedCollectionIds);
+
+  // Derived stores for sub-panel
+  let collectionForPanel = $derived($selectedCollection);
+  let collectionMembers = $derived($selectedCollectionMembers);
+
   // Element references for click-outside detection
   let navElement: HTMLElement | null = $state(null);
   let subPanelElement: HTMLElement | null = $state(null);
@@ -17,8 +33,7 @@
   // Close sub-panel when sidebar collapses
   $effect(() => {
     if (isCollapsed && subPanelOpen) {
-      subPanelOpen = false;
-      selectedCollectionId = null;
+      collectionsState.clearSelection();
     }
   });
 
@@ -33,8 +48,7 @@
       const clickedOutsideSubPanel = subPanelElement && !subPanelElement.contains(target);
 
       if (clickedOutsideNav && clickedOutsideSubPanel) {
-        subPanelOpen = false;
-        selectedCollectionId = null;
+        collectionsState.clearSelection();
       }
     }
 
@@ -46,137 +60,16 @@
     };
   });
 
-  // Collections state
-  let collectionsExpanded = $state(false);
-  let selectedCollectionId = $state<string | null>(null);
-  let subPanelOpen = $state(false);
-
-  // Mock data for visual prototype - 3 levels deep
-  interface CollectionItem {
-    id: string;
-    name: string;
-    children?: CollectionItem[];
-  }
-
-  const mockCollections: CollectionItem[] = [
-    {
-      id: 'col-1',
-      name: 'Project Ideas',
-      children: [
-        {
-          id: 'col-1-1',
-          name: 'AI Features and Machine Learning Integration',
-          children: [
-            { id: 'col-1-1-1', name: 'Natural Language Processing Research' },
-            { id: 'col-1-1-2', name: 'Vector Embeddings and Semantic Search' }
-          ]
-        },
-        { id: 'col-1-2', name: 'UI Improvements' }
-      ]
-    },
-    {
-      id: 'col-2',
-      name: 'Meeting Notes',
-      children: [
-        { id: 'col-2-1', name: '2025 Q1' },
-        {
-          id: 'col-2-2',
-          name: '2024 Q4',
-          children: [
-            { id: 'col-2-2-1', name: 'Sprint Reviews' },
-            { id: 'col-2-2-2', name: 'Retrospectives' }
-          ]
-        }
-      ]
-    },
-    { id: 'col-3', name: 'Research Papers' },
-    { id: 'col-4', name: 'Reading List' }
-  ];
-
-  // Mock member data for all collections (including nested)
-  const mockMembers: Record<string, Array<{ id: string; name: string; nodeType: string }>> = {
-    'col-1': [
-      { id: 'node-1', name: 'AI-Powered Note Taking', nodeType: 'text' },
-      { id: 'node-2', name: 'Voice Interface Design', nodeType: 'text' },
-      { id: 'node-3', name: 'Graph Visualization', nodeType: 'text' }
-    ],
-    'col-1-1': [
-      { id: 'node-10', name: 'GPT Integration Ideas', nodeType: 'text' },
-      { id: 'node-11', name: 'Local LLM Research', nodeType: 'text' }
-    ],
-    'col-1-1-1': [
-      { id: 'node-12', name: 'Prompt Engineering Notes', nodeType: 'text' }
-    ],
-    'col-1-1-2': [
-      { id: 'node-13', name: 'Vector DB Comparison', nodeType: 'text' }
-    ],
-    'col-1-2': [
-      { id: 'node-14', name: 'Dark Mode Implementation', nodeType: 'task' }
-    ],
-    'col-2': [
-      { id: 'node-4', name: 'Team Standup 2025-01-15', nodeType: 'date' },
-      { id: 'node-5', name: 'Sprint Planning', nodeType: 'text' }
-    ],
-    'col-2-1': [
-      { id: 'node-15', name: 'January Kickoff', nodeType: 'date' }
-    ],
-    'col-2-2': [
-      { id: 'node-16', name: 'Q4 Summary', nodeType: 'text' }
-    ],
-    'col-2-2-1': [
-      { id: 'node-17', name: 'Sprint 24 Review', nodeType: 'text' }
-    ],
-    'col-2-2-2': [
-      { id: 'node-18', name: 'Team Improvements', nodeType: 'text' }
-    ],
-    'col-3': [], // Empty collection
-    'col-4': [
-      { id: 'node-6', name: 'Designing Data-Intensive Apps', nodeType: 'text' },
-      { id: 'node-7', name: 'Clean Architecture', nodeType: 'text' },
-      { id: 'node-8', name: 'Review chapter 5', nodeType: 'task' },
-      { id: 'node-9', name: 'Domain-Driven Design', nodeType: 'text' }
-    ]
-  };
-
-  // Track expanded state for nested collections
-  let expandedCollections = $state<Set<string>>(new Set());
-
-  function toggleCollectionExpand(collectionId: string) {
-    expandedCollections = new Set(expandedCollections);
-    if (expandedCollections.has(collectionId)) {
-      expandedCollections.delete(collectionId);
-    } else {
-      expandedCollections.add(collectionId);
-    }
-  }
-
   function isCollectionExpanded(collectionId: string): boolean {
-    return expandedCollections.has(collectionId);
-  }
-
-  // Helper to find collection by ID (for sub-panel display)
-  function findCollectionById(
-    collections: CollectionItem[],
-    id: string
-  ): CollectionItem | undefined {
-    for (const col of collections) {
-      if (col.id === id) return col;
-      if (col.children) {
-        const found = findCollectionById(col.children, id);
-        if (found) return found;
-      }
-    }
-    return undefined;
+    return expandedCollectionIds.has(collectionId);
   }
 
   function handleCollectionClick(collectionId: string) {
-    selectedCollectionId = collectionId;
-    subPanelOpen = true;
+    collectionsState.selectCollection(collectionId);
   }
 
   function handleCloseSubPanel() {
-    subPanelOpen = false;
-    // Keep selection visible in list for context
+    collectionsState.closeSubPanel();
   }
 
   function handleNodeClick(nodeId: string, nodeType: string) {
@@ -205,14 +98,6 @@
       );
     }
   }
-
-  // Derived state for sub-panel
-  let selectedCollection = $derived(
-    selectedCollectionId ? findCollectionById(mockCollections, selectedCollectionId) : undefined
-  );
-  let collectionMembers = $derived(
-    selectedCollectionId ? (mockMembers[selectedCollectionId] ?? []) : []
-  );
 
   /**
    * Get today's date in YYYY-MM-DD format
@@ -359,7 +244,7 @@
 
     <!-- Collections section (after Daily Journal) - accordion toggle -->
     {#if !isCollapsed}
-      <Collapsible.Root bind:open={collectionsExpanded}>
+      <Collapsible.Root open={collectionsExpanded} onOpenChange={(open) => collectionsState.setExpanded(open)}>
         <Collapsible.Trigger class="nav-item">
           <svg
             class="nav-icon"
@@ -385,7 +270,7 @@
                 {#if hasChildren}
                   <button
                     class="expand-btn"
-                    onclick={() => toggleCollectionExpand(collection.id)}
+                    onclick={() => collectionsState.toggleCollectionExpanded(collection.id)}
                     aria-label={isExpanded ? 'Collapse' : 'Expand'}
                   >
                     <svg
@@ -420,7 +305,7 @@
                     {#if childHasChildren}
                       <button
                         class="expand-btn"
-                        onclick={() => toggleCollectionExpand(child.id)}
+                        onclick={() => collectionsState.toggleCollectionExpanded(child.id)}
                         aria-label={childIsExpanded ? 'Collapse' : 'Expand'}
                       >
                         <svg
@@ -472,7 +357,7 @@
         title="Collections"
         onclick={() => {
           toggleSidebar();
-          collectionsExpanded = true;
+          collectionsState.setExpanded(true);
         }}
       >
         <svg
@@ -516,7 +401,7 @@
   <div bind:this={subPanelElement}>
     <CollectionSubPanel
       open={subPanelOpen}
-      collectionName={selectedCollection?.name ?? ''}
+      collectionName={collectionForPanel?.name ?? ''}
       members={collectionMembers}
       onClose={handleCloseSubPanel}
       onNodeClick={handleNodeClick}
