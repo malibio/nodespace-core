@@ -196,8 +196,10 @@ describe('LayoutPersistenceService', () => {
 
       const loaded = LayoutPersistenceService.load();
       expect(loaded).not.toBeNull();
-      expect(loaded?.version).toBe(1);
+      // v1 state is migrated to v2
+      expect(loaded?.version).toBe(2);
       expect(loaded?.sidebarCollapsed).toBe(false);
+      expect(loaded?.collectionsExpanded).toBe(false);
     });
 
     it('accepts state with extra fields (forwards compatibility)', () => {
@@ -211,8 +213,10 @@ describe('LayoutPersistenceService', () => {
 
       const loaded = LayoutPersistenceService.load();
       expect(loaded).not.toBeNull();
-      expect(loaded?.version).toBe(1);
+      // v1 state is migrated to v2
+      expect(loaded?.version).toBe(2);
       expect(loaded?.sidebarCollapsed).toBe(true);
+      expect(loaded?.collectionsExpanded).toBe(false);
     });
   });
 
@@ -555,7 +559,7 @@ describe('LayoutPersistenceService', () => {
   });
 
   describe('migration', () => {
-    it('handles version 1 state without migration', () => {
+    it('migrates version 1 state to version 2 with collectionsExpanded', () => {
       const v1State = {
         version: 1,
         sidebarCollapsed: true
@@ -564,10 +568,14 @@ describe('LayoutPersistenceService', () => {
       localStorage.setItem('nodespace:layout-state', JSON.stringify(v1State));
 
       const loaded = LayoutPersistenceService.load();
-      expect(loaded).toEqual(v1State);
+      expect(loaded).toEqual({
+        version: 2,
+        sidebarCollapsed: true,
+        collectionsExpanded: false
+      });
     });
 
-    it('preserves all valid fields during load', () => {
+    it('preserves all valid fields during migration', () => {
       const state = {
         version: 1,
         sidebarCollapsed: false
@@ -576,8 +584,22 @@ describe('LayoutPersistenceService', () => {
       localStorage.setItem('nodespace:layout-state', JSON.stringify(state));
 
       const loaded = LayoutPersistenceService.load();
-      expect(loaded?.version).toBe(1);
+      expect(loaded?.version).toBe(2);
       expect(loaded?.sidebarCollapsed).toBe(false);
+      expect(loaded?.collectionsExpanded).toBe(false);
+    });
+
+    it('does not modify version 2 state', () => {
+      const v2State = {
+        version: 2,
+        sidebarCollapsed: true,
+        collectionsExpanded: true
+      };
+
+      localStorage.setItem('nodespace:layout-state', JSON.stringify(v2State));
+
+      const loaded = LayoutPersistenceService.load();
+      expect(loaded).toEqual(v2State);
     });
   });
 

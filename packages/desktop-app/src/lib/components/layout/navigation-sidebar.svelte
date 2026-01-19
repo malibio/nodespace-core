@@ -378,7 +378,7 @@
       </button>
     {/if}
 
-    <!-- Remaining nav items (Dashboard, Search, Favorites) -->
+    <!-- Remaining nav items (Search, Favorites) -->
     {#each navItems.slice(1) as item}
       <button
         class="nav-item"

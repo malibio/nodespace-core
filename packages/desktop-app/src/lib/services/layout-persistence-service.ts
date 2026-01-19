@@ -135,8 +135,10 @@ export class LayoutPersistenceService {
    * @returns The migrated state
    */
   private static migrate(state: PersistedLayoutState): PersistedLayoutState {
-    // Currently only version 1 exists, so no migration needed
-    // Future versions can add migration logic here
+    // Version 2 adds collectionsExpanded (defaults to false)
+    if (state.version === 1) {
+      return { ...state, version: 2, collectionsExpanded: false };
+    }
     return state;
   }
 

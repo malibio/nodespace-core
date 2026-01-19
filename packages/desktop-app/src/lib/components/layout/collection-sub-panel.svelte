@@ -7,12 +7,7 @@
 
 <script lang="ts">
   import Icon from '$lib/design/icons/icon.svelte';
-
-  interface CollectionMember {
-    id: string;
-    name: string;
-    nodeType: string;
-  }
+  import type { CollectionMember } from '$lib/stores/collections';
 
   interface Props {
     open: boolean;
@@ -62,9 +57,9 @@
 <style>
   .sub-panel {
     position: absolute;
-    left: 240px; /* Adjacent to expanded sidebar */
+    left: var(--sidebar-width, 240px); /* Adjacent to expanded sidebar */
     top: 0;
-    width: 240px;
+    width: var(--sidebar-width, 240px);
     height: 100%;
     background: hsl(var(--sidebar-background));
     border-right: 1px solid hsl(var(--border));

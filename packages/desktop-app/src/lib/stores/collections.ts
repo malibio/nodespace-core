@@ -91,11 +91,6 @@ function createCollectionsStore() {
       });
     },
 
-    /** Check if a collection is expanded in the tree */
-    isCollectionExpanded: (state: CollectionsState, collectionId: string): boolean => {
-      return state.expandedCollectionIds.has(collectionId);
-    },
-
     /** Reset to initial state */
     reset: () => {
       set(initialState);
