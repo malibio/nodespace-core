@@ -354,11 +354,13 @@ describe('Collections Store', () => {
       const item: CollectionItem = {
         id: 'test-id',
         name: 'Test Name',
-        children: [{ id: 'child-id', name: 'Child Name' }]
+        memberCount: 5,
+        children: [{ id: 'child-id', name: 'Child Name', memberCount: 2 }]
       };
 
       expect(item.id).toBe('test-id');
       expect(item.name).toBe('Test Name');
+      expect(item.memberCount).toBe(5);
       expect(item.children).toHaveLength(1);
     });
 

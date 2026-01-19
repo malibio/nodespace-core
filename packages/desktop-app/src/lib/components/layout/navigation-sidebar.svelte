@@ -9,6 +9,8 @@
   import { tabState, setActiveTab, addTab } from '$lib/stores/navigation.js';
   import {
     collectionsState,
+    collectionsData,
+    collectionsTree,
     mockCollections,
     selectedCollection,
     selectedCollectionMembers
@@ -16,6 +18,8 @@
   import { formatDateISO } from '$lib/utils/date-formatting.js';
   import { v4 as uuidv4 } from 'uuid';
   import CollectionSubPanel from './collection-sub-panel.svelte';
+
+  import { onMount } from 'svelte';
 
   // Subscribe to stores using Svelte 5 runes
   let isCollapsed = $derived($layoutState.sidebarCollapsed);
@@ -28,9 +32,19 @@
   let subPanelOpen = $derived($collectionsState.subPanelOpen);
   let expandedCollectionIds = $derived($collectionsState.expandedCollectionIds);
 
+  // Collections data from backend (or mock if unavailable)
+  let realCollections = $derived($collectionsTree);
+  // Use real collections if available, otherwise fall back to mock data
+  let collections = $derived(realCollections.length > 0 ? realCollections : mockCollections);
+
   // Derived stores for sub-panel
   let collectionForPanel = $derived($selectedCollection);
   let collectionMembers = $derived($selectedCollectionMembers);
+
+  // Load collections from backend on mount
+  onMount(() => {
+    collectionsData.loadCollections();
+  });
 
   // Element references for click-outside detection
   let navElement: HTMLElement | null = $state(null);
@@ -266,7 +280,7 @@
 
         <Collapsible.Content>
           <div class="collection-list">
-            {#each mockCollections as collection (collection.id)}
+            {#each collections as collection (collection.id)}
               {@const hasChildren = collection.children && collection.children.length > 0}
               {@const isExpanded = isCollectionExpanded(collection.id)}
               <div
@@ -407,7 +421,7 @@
   <div bind:this={subPanelElement}>
     <CollectionSubPanel
       open={subPanelOpen}
-      collectionName={collectionForPanel?.name ?? ''}
+      collectionName={collectionForPanel?.content ?? collectionForPanel?.name ?? ''}
       members={collectionMembers}
       onClose={handleCloseSubPanel}
       onNodeClick={handleNodeClick}
