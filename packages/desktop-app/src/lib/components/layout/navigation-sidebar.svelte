@@ -656,6 +656,12 @@
     padding: 0; /* No gap between Collections header and sub-items */
     margin: 0 -1rem; /* Break out of sidebar padding */
     overflow-x: auto; /* Allow horizontal scroll for long names */
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+  }
+
+  .collection-list::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Opera */
   }
 
   /* Collection item - container for expand button and name */
