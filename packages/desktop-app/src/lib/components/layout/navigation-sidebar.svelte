@@ -37,10 +37,10 @@
       children: [
         {
           id: 'col-1-1',
-          name: 'AI Features',
+          name: 'AI Features and Machine Learning Integration',
           children: [
-            { id: 'col-1-1-1', name: 'Natural Language' },
-            { id: 'col-1-1-2', name: 'Embeddings' }
+            { id: 'col-1-1-1', name: 'Natural Language Processing Research' },
+            { id: 'col-1-1-2', name: 'Vector Embeddings and Semantic Search' }
           ]
         },
         { id: 'col-1-2', name: 'UI Improvements' }
@@ -655,6 +655,7 @@
     flex-direction: column;
     padding: 0; /* No gap between Collections header and sub-items */
     margin: 0 -1rem; /* Break out of sidebar padding */
+    overflow-x: auto; /* Allow horizontal scroll for long names */
   }
 
   /* Collection item - container for expand button and name */
@@ -662,7 +663,8 @@
     display: flex;
     align-items: center;
     gap: 0;
-    width: 100%;
+    min-width: 100%; /* Allow growing beyond container width */
+    width: max-content; /* Size to content for horizontal scrolling */
     padding: 0 1rem 0 1.5rem; /* Base indent under Collections */
     font-size: 0.8125rem;
     color: hsl(var(--muted-foreground));
@@ -719,9 +721,7 @@
     text-align: left;
     padding: 0.4rem 0;
     font-size: inherit;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: nowrap; /* Keep on single line, scroll horizontally if needed */
   }
 
   /* Expand chevron inside collection item */
