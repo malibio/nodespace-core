@@ -11,7 +11,6 @@
     collectionsState,
     collectionsData,
     collectionsTree,
-    mockCollections,
     selectedCollection,
     selectedCollectionMembers
   } from '$lib/stores/collections.js';
@@ -32,10 +31,8 @@
   let subPanelOpen = $derived($collectionsState.subPanelOpen);
   let expandedCollectionIds = $derived($collectionsState.expandedCollectionIds);
 
-  // Collections data from backend (or mock if unavailable)
-  let realCollections = $derived($collectionsTree);
-  // Use real collections if available, otherwise fall back to mock data
-  let collections = $derived(realCollections.length > 0 ? realCollections : mockCollections);
+  // Collections data from backend
+  let collections = $derived($collectionsTree);
 
   // Derived stores for sub-panel
   let collectionForPanel = $derived($selectedCollection);

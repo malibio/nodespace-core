@@ -237,6 +237,87 @@ class MockCollectionService implements CollectionServiceInterface {
 // Singleton Export
 // ============================================================================
 
+// ============================================================================
+// HTTP Collection Service (for browser dev mode)
+// ============================================================================
+
+const DEV_PROXY_URL = 'http://localhost:3001';
+
+class HttpCollectionService implements CollectionServiceInterface {
+  async getAllCollections(): Promise<CollectionInfo[]> {
+    log.debug('Fetching all collections via HTTP');
+    const response = await fetch(`${DEV_PROXY_URL}/api/collections`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch collections: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getCollectionMembers(collectionId: string): Promise<Node[]> {
+    log.debug('Fetching collection members via HTTP', { collectionId });
+    const response = await fetch(`${DEV_PROXY_URL}/api/collections/${encodeURIComponent(collectionId)}/members`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch collection members: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getCollectionMembersRecursive(collectionId: string): Promise<Node[]> {
+    // For now, just return direct members (recursive not implemented in dev-proxy)
+    return this.getCollectionMembers(collectionId);
+  }
+
+  async getNodeCollections(_nodeId: string): Promise<string[]> {
+    // Not implemented in dev-proxy yet
+    return [];
+  }
+
+  async findCollectionByPath(_path: string): Promise<CollectionNode | null> {
+    // Not implemented in dev-proxy yet
+    return null;
+  }
+
+  async getCollectionByName(_name: string): Promise<CollectionNode | null> {
+    // Not implemented in dev-proxy yet
+    return null;
+  }
+
+  async addNodeToCollection(_nodeId: string, _collectionId: string): Promise<void> {
+    // Not implemented in dev-proxy yet
+  }
+
+  async addNodeToCollectionPath(_nodeId: string, _path: string): Promise<string> {
+    // Not implemented in dev-proxy yet
+    return '';
+  }
+
+  async removeNodeFromCollection(_nodeId: string, _collectionId: string): Promise<void> {
+    // Not implemented in dev-proxy yet
+  }
+
+  async createCollection(_name: string, _description?: string): Promise<string> {
+    // Not implemented in dev-proxy yet
+    return '';
+  }
+
+  async renameCollection(collectionId: string, _version: number, newName: string): Promise<CollectionNode> {
+    // Not implemented in dev-proxy yet
+    return {
+      id: collectionId,
+      nodeType: 'collection',
+      content: newName,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      version: 1,
+      properties: {}
+    };
+  }
+
+  async deleteCollection(_collectionId: string, _version: number): Promise<void> {
+    // Not implemented in dev-proxy yet
+  }
+}
+
 /**
  * Get the collection service instance based on runtime environment
  */
@@ -249,9 +330,9 @@ function getCollectionService(): CollectionServiceInterface {
     return new TauriCollectionService();
   }
 
-  // For browser dev mode, also use mock (dev-proxy doesn't have collection routes yet)
-  log.info('Using mock collection service (no HTTP adapter implemented)');
-  return new MockCollectionService();
+  // For browser dev mode, use HTTP adapter
+  log.info('Using HTTP collection service for browser dev mode');
+  return new HttpCollectionService();
 }
 
 /** Singleton collection service instance */
