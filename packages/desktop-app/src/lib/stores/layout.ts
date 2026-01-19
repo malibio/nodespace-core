@@ -72,16 +72,11 @@ export const navigationItems = writable<NavigationItem[]>([
     id: 'daily-journal',
     label: 'Daily Journal',
     icon: 'm3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', // home icon
-    active: true,
-    type: 'link'
-  },
-  {
-    id: 'dashboard',
-    label: 'Dashboard',
-    icon: 'M3 3h18v18H3V3zM9 15h6', // dashboard icon
     active: false,
     type: 'link'
   },
+  // Note: "Collections" is rendered inline in NavigationSidebar
+  // using bits-ui Collapsible - inserted after Daily Journal
   {
     id: 'search',
     label: 'Search',
@@ -93,13 +88,6 @@ export const navigationItems = writable<NavigationItem[]>([
     id: 'favorites',
     label: 'Favorites',
     icon: 'M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21.02L12 17.77l-6.18 3.25L7 14.14l-5-4.87l6.91-1.01L12 2z', // star icon
-    active: false,
-    type: 'link'
-  },
-  {
-    id: 'library',
-    label: 'Library',
-    icon: 'M3 3h18v18H3V3zM9 15h6', // placeholder dashboard-style icon
     active: false,
     type: 'link'
   }
