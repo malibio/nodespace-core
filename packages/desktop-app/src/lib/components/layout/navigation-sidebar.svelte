@@ -10,12 +10,40 @@
   let isCollapsed = $derived($layoutState.sidebarCollapsed);
   let navItems = $derived($navigationItems);
 
+  // Element references for click-outside detection
+  let navElement: HTMLElement | null = $state(null);
+  let subPanelElement: HTMLElement | null = $state(null);
+
   // Close sub-panel when sidebar collapses
   $effect(() => {
     if (isCollapsed && subPanelOpen) {
       subPanelOpen = false;
       selectedCollectionId = null;
     }
+  });
+
+  // Click-outside handler for sub-panel dismissal
+  $effect(() => {
+    if (!subPanelOpen) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as Node;
+      // Close if click is outside both nav and sub-panel
+      const clickedOutsideNav = navElement && !navElement.contains(target);
+      const clickedOutsideSubPanel = subPanelElement && !subPanelElement.contains(target);
+
+      if (clickedOutsideNav && clickedOutsideSubPanel) {
+        subPanelOpen = false;
+        selectedCollectionId = null;
+      }
+    }
+
+    // Use capture phase to catch clicks before they bubble
+    document.addEventListener('click', handleClickOutside, true);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside, true);
+    };
   });
 
   // Collections state
@@ -278,6 +306,7 @@
 </script>
 
 <nav
+  bind:this={navElement}
   class="sidebar navigation-sidebar"
   class:sidebar-collapsed={isCollapsed}
   class:sidebar-expanded={!isCollapsed}
@@ -484,13 +513,15 @@
   </div>
 
   <!-- Collection sub-panel -->
-  <CollectionSubPanel
-    open={subPanelOpen}
-    collectionName={selectedCollection?.name ?? ''}
-    members={collectionMembers}
-    onClose={handleCloseSubPanel}
-    onNodeClick={handleNodeClick}
-  />
+  <div bind:this={subPanelElement}>
+    <CollectionSubPanel
+      open={subPanelOpen}
+      collectionName={selectedCollection?.name ?? ''}
+      members={collectionMembers}
+      onClose={handleCloseSubPanel}
+      onNodeClick={handleNodeClick}
+    />
+  </div>
 </nav>
 
 <style>
