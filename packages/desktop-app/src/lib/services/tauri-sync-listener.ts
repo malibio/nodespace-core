@@ -7,12 +7,14 @@
  *
  * This module handles:
  * - Node events (created, updated, deleted) → updates SharedNodeStore
- * - Edge events (hierarchy, mentions) → updates ReactiveStructureTree
+ * - Relationship events (has_child, mentions, member_of) → updates ReactiveStructureTree
  *
  * This enables real-time sync when external sources (MCP, other windows) modify data.
  *
  * Issue #724: Events now send only node_id (not full payload) for efficiency.
  * Frontend fetches full node data via getNode() API only when the node is in the active view.
+ *
+ * Issue #811: All relationship types use unified RelationshipCreated/Updated/Deleted events.
  */
 
 import { listen } from '@tauri-apps/api/event';

@@ -49,22 +49,22 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected';
  *
  * ### Documented Race Conditions
  *
- * 1. **Edge Created Before Node Exists**
+ * 1. **Relationship Created Before Node Exists**
  *    - Scenario: Backend creates Node N1 under Parent P
- *    - Expected order: node:created → edge:created
- *    - Possible order: edge:created → node:created
- *    - Result: ReactiveStructureTree adds edge before SharedNodeStore has node
+ *    - Expected order: node:created → relationship:created
+ *    - Possible order: relationship:created → node:created
+ *    - Result: ReactiveStructureTree adds relationship before SharedNodeStore has node
  *    - Mitigation: Both stores handle missing nodes gracefully
  *
- * 2. **Node Deleted Before Edge Deleted**
- *    - Scenario: Backend deletes Node N1 and its edges
- *    - Expected order: edge:deleted → node:deleted (edges deleted first)
- *    - Possible order: node:deleted → edge:deleted
- *    - Result: Node gone from store but edge still in tree until edge:deleted arrives
+ * 2. **Node Deleted Before Relationship Deleted**
+ *    - Scenario: Backend deletes Node N1 and its relationships
+ *    - Expected order: relationship:deleted → node:deleted (relationships deleted first)
+ *    - Possible order: node:deleted → relationship:deleted
+ *    - Result: Node gone from store but relationship still in tree until relationship:deleted arrives
  *    - Mitigation: Both stores are idempotent and handle orphaned references
  *
  * 3. **Bulk Operations with Interleaved Events**
- *    - Scenario: Creating/deleting multiple nodes and edges simultaneously
+ *    - Scenario: Creating/deleting multiple nodes and relationships simultaneously
  *    - Result: Events may arrive completely out-of-order
  *    - Mitigation: Each store processes events independently and handles duplicates
  *

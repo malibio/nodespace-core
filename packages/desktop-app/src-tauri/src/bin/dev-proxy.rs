@@ -1050,7 +1050,7 @@ async fn set_parent(
         .map_err(map_node_service_error)?;
 
     // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
-    // (EdgeCreated/EdgeDeleted) which is converted to SSE by the domain_event_to_sse_bridge
+    // (RelationshipCreated/Deleted) which is converted to SSE by the domain_event_to_sse_bridge
     // This prevents duplicate events and enables proper client filtering
 
     Ok(StatusCode::NO_CONTENT)
