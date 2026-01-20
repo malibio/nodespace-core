@@ -169,7 +169,7 @@ DEFINE INDEX member_of_in ON member_of FIELDS in;
 DEFINE INDEX member_of_out ON member_of FIELDS out;
 ```
 
-**Collection hierarchy** - Uses existing `has_child` pattern between collection nodes.
+**Collection hierarchy** - Uses `member_of` edges between collection nodes (child `member_of` parent), forming a DAG structure that supports multi-parent relationships.
 
 ### Cycle Validation
 
@@ -177,7 +177,7 @@ Collections form a DAG - cycles are not allowed. When setting a parent:
 
 ```sql
 -- Check if new_parent is a descendant of collection (would create cycle)
-SELECT * FROM node:$new_parent<-has_child*<-node WHERE id = $collection_id;
+SELECT * FROM node:$new_parent<-member_of*<-node WHERE id = $collection_id;
 -- If result is not empty → reject
 ```
 
@@ -270,7 +270,7 @@ SELECT * FROM node WHERE ->member_of->node = $collection_id;
 -- Get all members recursively (collection + descendants)
 SELECT * FROM node WHERE ->member_of->node IN (
   SELECT id FROM node WHERE node_type = 'collection'
-  AND id = $collection_id OR <-has_child*<-node CONTAINS $collection_id
+  AND id = $collection_id OR <-member_of*<-node CONTAINS $collection_id
 );
 
 -- Get all collections a node belongs to
@@ -278,10 +278,10 @@ SELECT ->member_of->node.* FROM node:$id
 WHERE ->member_of->node.node_type = 'collection';
 
 -- Get collection ancestry (for path building)
-SELECT <-has_child<-node.* FROM node:$id;
+SELECT ->member_of->node.* FROM node:$id WHERE node_type = 'collection';
 
 -- Cycle detection
-SELECT * FROM node:$new_parent<-has_child*<-node WHERE id = $collection_id;
+SELECT * FROM node:$new_parent<-member_of*<-node WHERE id = $collection_id;
 ```
 
 ## Usage Examples
