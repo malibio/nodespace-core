@@ -106,10 +106,12 @@ export interface RelationshipEvent {
 /**
  * Payload for relationship deleted events
  *
- * Contains only the ID and type (no full relationship data).
+ * Contains the ID, from/to node IDs, and type.
  */
 export interface RelationshipDeletedPayload {
   id: string;
+  fromId: string;
+  toId: string;
   relationshipType: string;
 }
 

@@ -249,42 +249,9 @@ class BrowserSyncService {
         sharedNodeStore.deleteNode(event.nodeId, { type: 'database', reason: 'sse-sync' }, true);
         break;
 
-      case 'edgeCreated':
-        log.debug('Edge created:', { from: event.parentId, to: event.childId });
-        // Update ReactiveStructureTree with new edge
-        // Note: structureTree.addChild expects HierarchyRelationship format
-        // IMPORTANT: Check if edge already exists (added optimistically by createNode)
-        // to avoid overwriting the correct order with Date.now()
-        if (structureTree) {
-          const existingChildren = structureTree.getChildrenWithOrder(event.parentId);
-          const alreadyExists = existingChildren.some((c) => c.nodeId === event.childId);
-          if (!alreadyExists) {
-            structureTree.addChild({
-              parentId: event.parentId,
-              childId: event.childId,
-              order: Date.now() // Use timestamp as order (will be sorted properly on next load)
-            });
-          } else {
-            log.debug('Edge already exists (optimistic), skipping:', event.childId);
-          }
-        }
-        break;
-
-      case 'edgeDeleted':
-        log.debug('Edge deleted:', { from: event.parentId, to: event.childId });
-        // Update ReactiveStructureTree by removing edge
-        if (structureTree) {
-          structureTree.removeChild({
-            parentId: event.parentId,
-            childId: event.childId,
-            order: 0 // Order doesn't matter for removal
-          });
-        }
-        break;
-
       // ======================================================================
       // Unified Relationship Events (Issue #811)
-      // These are emitted by the store for all relationship types.
+      // All relationship types (has_child, member_of, mentions, custom) use these events.
       // ======================================================================
 
       case 'relationshipCreated': {
@@ -328,12 +295,18 @@ class BrowserSyncService {
       }
 
       case 'relationshipDeleted': {
-        log.debug(`Relationship deleted: ${event.relationshipType} (${event.id})`);
+        log.debug(`Relationship deleted: ${event.relationshipType} (${event.id}) from ${event.fromId} to ${event.toId}`);
 
-        // For member_of and mentions deletions, just log
-        // For has_child, we'd need fromId/toId which aren't in the payload
-        // The existing edgeDeleted event handles hierarchy deletions
-        if (event.relationshipType === 'member_of') {
+        if (event.relationshipType === 'has_child') {
+          // Hierarchy deletion - update ReactiveStructureTree
+          if (structureTree) {
+            structureTree.removeChild({
+              parentId: event.fromId,
+              childId: event.toId,
+              order: 0 // Order doesn't matter for removal
+            });
+          }
+        } else if (event.relationshipType === 'member_of') {
           log.debug(`Member removed from collection: ${event.id}`);
         } else if (event.relationshipType === 'mentions') {
           log.debug(`Mention deleted: ${event.id}`);

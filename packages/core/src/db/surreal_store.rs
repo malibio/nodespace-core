@@ -2984,6 +2984,8 @@ where
         if let Some(rel_id) = existing_ids.first() {
             self.emit_relationship_event(DomainEvent::RelationshipDeleted {
                 id: rel_id.to_string(),
+                from_id: source_id.to_string(),
+                to_id: target_id.to_string(),
                 relationship_type: "mentions".to_string(),
                 source_client_id,
             });
@@ -4342,6 +4344,8 @@ where
         if let Some(rel_id) = existing_ids.first() {
             self.emit_relationship_event(DomainEvent::RelationshipDeleted {
                 id: rel_id.to_string(),
+                from_id: member_id.to_string(),
+                to_id: collection_id.to_string(),
                 relationship_type: "member_of".to_string(),
                 source_client_id,
             });

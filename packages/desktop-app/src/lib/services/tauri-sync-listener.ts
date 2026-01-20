@@ -18,7 +18,6 @@
 import { listen } from '@tauri-apps/api/event';
 import type {
   NodeEventData,
-  EdgeRelationship,
   RelationshipEvent,
   RelationshipDeletedPayload
 } from '$lib/types/event-types';
@@ -112,66 +111,9 @@ export async function initializeTauriSyncListeners(): Promise<void> {
       sharedNodeStore.deleteNode(event.payload.id, { type: 'database', reason: 'domain-event' }, true);
     });
 
-    // Listen for edge events (hierarchy and mention relationships)
-    // Serde internally-tagged format: fields are merged at top level (not nested)
-    await listen<EdgeRelationship>('edge:created', (event) => {
-      if (event.payload.type === 'hierarchy') {
-        const hierarchyEdge = event.payload;
-        log.debug(`Hierarchy relationship created: ${hierarchyEdge.parentId} -> ${hierarchyEdge.childId}`);
-        // Update ReactiveStructureTree with new edge
-        if (structureTree) {
-          const existingChildren = structureTree.getChildrenWithOrder(hierarchyEdge.parentId);
-          const alreadyExists = existingChildren.some((c) => c.nodeId === hierarchyEdge.childId);
-          if (!alreadyExists) {
-            structureTree.addChild({
-              parentId: hierarchyEdge.parentId,
-              childId: hierarchyEdge.childId,
-              order: hierarchyEdge.order ?? Date.now()
-            });
-          } else {
-            log.debug('Edge already exists (optimistic), skipping:', hierarchyEdge.childId);
-          }
-        }
-      } else if (event.payload.type === 'mention') {
-        const mentionEdge = event.payload;
-        log.debug(`Mention relationship created: ${mentionEdge.sourceId} -> ${mentionEdge.targetId}`);
-      }
-    });
-
-    await listen<EdgeRelationship>('edge:updated', (event) => {
-      if (event.payload.type === 'hierarchy') {
-        const hierarchyEdge = event.payload;
-        log.debug(`Hierarchy relationship updated: ${hierarchyEdge.parentId} -> ${hierarchyEdge.childId}`);
-        // For now, just log - order updates are rare
-        // Future: Add updateChildOrder method if needed
-      } else if (event.payload.type === 'mention') {
-        const mentionEdge = event.payload;
-        log.debug(`Mention relationship updated: ${mentionEdge.sourceId} -> ${mentionEdge.targetId}`);
-      }
-    });
-
-    await listen<EdgeRelationship>('edge:deleted', (event) => {
-      if (event.payload.type === 'hierarchy') {
-        const hierarchyEdge = event.payload;
-        log.debug(`Hierarchy relationship deleted: ${hierarchyEdge.parentId} -> ${hierarchyEdge.childId}`);
-        // Update ReactiveStructureTree by removing edge
-        if (structureTree) {
-          structureTree.removeChild({
-            parentId: hierarchyEdge.parentId,
-            childId: hierarchyEdge.childId,
-            order: 0 // Order doesn't matter for removal
-          });
-        }
-      } else if (event.payload.type === 'mention') {
-        const mentionEdge = event.payload;
-        log.debug(`Mention relationship deleted: ${mentionEdge.sourceId} -> ${mentionEdge.targetId}`);
-      }
-    });
-
     // ========================================================================
     // Unified Relationship Events (Issue #811)
-    // These are emitted by the store for member_of, mentions, and custom types.
-    // has_child events will also use this format once hierarchy is migrated.
+    // All relationship types (has_child, member_of, mentions, custom) use these events.
     // ========================================================================
 
     await listen<RelationshipEvent>('relationship:created', (event) => {
@@ -217,13 +159,19 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     await listen<RelationshipDeletedPayload>('relationship:deleted', (event) => {
-      const { id, relationshipType } = event.payload;
-      log.debug(`Relationship deleted: ${relationshipType} (${id})`);
+      const { id, fromId, toId, relationshipType } = event.payload;
+      log.debug(`Relationship deleted: ${relationshipType} (${id}) from ${fromId} to ${toId}`);
 
-      // For hierarchy deletions, we would need the fromId/toId which aren't
-      // in the deleted payload. The existing edge:deleted event handles this.
-      // This is logged for member_of and mentions deletions.
-      if (relationshipType === 'member_of') {
+      if (relationshipType === 'has_child') {
+        // Hierarchy deletion - update ReactiveStructureTree
+        if (structureTree) {
+          structureTree.removeChild({
+            parentId: fromId,
+            childId: toId,
+            order: 0 // Order doesn't matter for removal
+          });
+        }
+      } else if (relationshipType === 'member_of') {
         log.debug(`Member removed from collection: ${id}`);
       } else if (relationshipType === 'mentions') {
         log.debug(`Mention deleted: ${id}`);

@@ -89,24 +89,6 @@ pub enum SseEvent {
         #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
     },
-    /// A parent-child edge was created
-    EdgeCreated {
-        #[serde(rename = "parentId")]
-        parent_id: String,
-        #[serde(rename = "childId")]
-        child_id: String,
-        #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
-    },
-    /// A parent-child edge was deleted
-    EdgeDeleted {
-        #[serde(rename = "parentId")]
-        parent_id: String,
-        #[serde(rename = "childId")]
-        child_id: String,
-        #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
-    },
     /// Unified relationship created event (Issue #811)
     /// Supports all relationship types: has_child, member_of, mentions, custom
     RelationshipCreated {
@@ -142,6 +124,10 @@ pub enum SseEvent {
     /// Unified relationship deleted event (Issue #811)
     RelationshipDeleted {
         id: String,
+        #[serde(rename = "fromId")]
+        from_id: String,
+        #[serde(rename = "toId")]
+        to_id: String,
         #[serde(rename = "relationshipType")]
         relationship_type: String,
         #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
@@ -570,8 +556,6 @@ async fn domain_event_to_sse_bridge(
     mut domain_rx: broadcast::Receiver<DomainEvent>,
     sse_tx: broadcast::Sender<SseEvent>,
 ) {
-    use nodespace_core::db::events::EdgeRelationship;
-
     tracing::info!("🌉 Domain event bridge started, waiting for events...");
 
     loop {
@@ -579,6 +563,7 @@ async fn domain_event_to_sse_bridge(
             Ok(event) => {
                 tracing::debug!("🔔 Received DomainEvent: {:?}", event);
                 // Convert DomainEvent to SseEvent(s)
+                // Issue #811: All relationship events use unified format
                 match event {
                     DomainEvent::NodeCreated {
                         node_id,
@@ -643,79 +628,8 @@ async fn domain_event_to_sse_bridge(
                             client_id: source_client_id,
                         });
                     }
-                    DomainEvent::EdgeCreated {
-                        relationship,
-                        source_client_id,
-                    } => {
-                        // Filter out events from dev-proxy (browser operations)
-                        if source_client_id.as_deref() == Some("dev-proxy") {
-                            tracing::debug!("Filtering out EdgeCreated event from dev-proxy");
-                            continue;
-                        }
-
-                        // Only convert hierarchy edges to SSE (mentions handled differently)
-                        if let EdgeRelationship::Hierarchy(h) = relationship {
-                            let _ = sse_tx.send(SseEvent::EdgeCreated {
-                                parent_id: h.parent_id,
-                                child_id: h.child_id,
-                                client_id: source_client_id,
-                            });
-                        }
-                    }
-                    DomainEvent::EdgeDeleted {
-                        id,
-                        source_client_id,
-                    } => {
-                        // Filter out events from dev-proxy (browser operations)
-                        if source_client_id.as_deref() == Some("dev-proxy") {
-                            tracing::debug!(
-                                "Filtering out EdgeDeleted event from dev-proxy for edge {}",
-                                id
-                            );
-                            continue;
-                        }
-
-                        // EdgeDeleted uses edge ID format "parent_id:child_id"
-                        // Parse and convert to SSE format
-                        if let Some((parent_id, child_id)) = id.split_once(':') {
-                            let _ = sse_tx.send(SseEvent::EdgeDeleted {
-                                parent_id: parent_id.to_string(),
-                                child_id: child_id.to_string(),
-                                client_id: source_client_id,
-                            });
-                        }
-                    }
-                    DomainEvent::EdgeUpdated { .. } => {
-                        // EdgeUpdated events not currently used by SSE clients
-                        // (order changes handled by full node refresh)
-                    }
-                    DomainEvent::CollectionMemberAdded {
-                        source_client_id, ..
-                    } => {
-                        // Filter out events from dev-proxy (browser operations)
-                        if source_client_id.as_deref() == Some("dev-proxy") {
-                            tracing::debug!(
-                                "Filtering out CollectionMemberAdded event from dev-proxy"
-                            );
-                            continue;
-                        }
-                        // Collection membership events not currently used by SSE clients
-                        // TODO: Add SSE event type if browser needs collection membership updates
-                    }
-                    DomainEvent::CollectionMemberRemoved {
-                        source_client_id, ..
-                    } => {
-                        // Filter out events from dev-proxy (browser operations)
-                        if source_client_id.as_deref() == Some("dev-proxy") {
-                            tracing::debug!(
-                                "Filtering out CollectionMemberRemoved event from dev-proxy"
-                            );
-                            continue;
-                        }
-                        // Collection membership events not currently used by SSE clients
-                        // TODO: Add SSE event type if browser needs collection membership updates
-                    }
                     // Unified relationship events (Issue #811)
+                    // All relationship types (has_child, member_of, mentions, custom) use these events
                     DomainEvent::RelationshipCreated {
                         relationship,
                         source_client_id,
@@ -758,6 +672,8 @@ async fn domain_event_to_sse_bridge(
                     }
                     DomainEvent::RelationshipDeleted {
                         id,
+                        from_id,
+                        to_id,
                         relationship_type,
                         source_client_id,
                     } => {
@@ -770,6 +686,8 @@ async fn domain_event_to_sse_bridge(
                         }
                         let _ = sse_tx.send(SseEvent::RelationshipDeleted {
                             id,
+                            from_id,
+                            to_id,
                             relationship_type,
                             client_id: source_client_id,
                         });
@@ -836,8 +754,6 @@ async fn sse_handler(
                     SseEvent::NodeCreated { client_id, .. } => client_id,
                     SseEvent::NodeUpdated { client_id, .. } => client_id,
                     SseEvent::NodeDeleted { client_id, .. } => client_id,
-                    SseEvent::EdgeCreated { client_id, .. } => client_id,
-                    SseEvent::EdgeDeleted { client_id, .. } => client_id,
                     // Unified relationship events (Issue #811)
                     SseEvent::RelationshipCreated { client_id, .. } => client_id,
                     SseEvent::RelationshipUpdated { client_id, .. } => client_id,

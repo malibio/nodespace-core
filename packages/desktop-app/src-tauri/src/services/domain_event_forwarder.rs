@@ -94,6 +94,8 @@ impl DomainEventForwarder {
     ///
     /// Converts domain events from NodeService to Tauri events with proper naming and payload.
     /// Filters out events that originated from this client (prevents feedback loop).
+    ///
+    /// Issue #811: All relationship events use unified format (RelationshipCreated/Updated/Deleted).
     fn forward_event(&self, event: &DomainEvent) {
         // Extract source_client_id from the event
         let source_client_id = match event {
@@ -104,21 +106,6 @@ impl DomainEventForwarder {
                 source_client_id, ..
             } => source_client_id,
             DomainEvent::NodeDeleted {
-                source_client_id, ..
-            } => source_client_id,
-            DomainEvent::EdgeCreated {
-                source_client_id, ..
-            } => source_client_id,
-            DomainEvent::EdgeUpdated {
-                source_client_id, ..
-            } => source_client_id,
-            DomainEvent::EdgeDeleted {
-                source_client_id, ..
-            } => source_client_id,
-            DomainEvent::CollectionMemberAdded {
-                source_client_id, ..
-            } => source_client_id,
-            DomainEvent::CollectionMemberRemoved {
                 source_client_id, ..
             } => source_client_id,
             // Unified relationship events (Issue #811)
@@ -170,34 +157,8 @@ impl DomainEventForwarder {
                     error!("Failed to emit node:deleted: {}", e);
                 }
             }
-            DomainEvent::EdgeCreated { relationship, .. } => {
-                if let Err(e) = self.app.emit("edge:created", relationship) {
-                    error!("Failed to emit edge:created: {}", e);
-                }
-            }
-            DomainEvent::EdgeUpdated { relationship, .. } => {
-                if let Err(e) = self.app.emit("edge:updated", relationship) {
-                    error!("Failed to emit edge:updated: {}", e);
-                }
-            }
-            DomainEvent::EdgeDeleted { id, .. } => {
-                let payload = NodeIdPayload { id: id.clone() };
-                if let Err(e) = self.app.emit("edge:deleted", &payload) {
-                    error!("Failed to emit edge:deleted: {}", e);
-                }
-            }
-            DomainEvent::CollectionMemberAdded { membership, .. } => {
-                if let Err(e) = self.app.emit("collection:member-added", membership) {
-                    error!("Failed to emit collection:member-added: {}", e);
-                }
-            }
-            DomainEvent::CollectionMemberRemoved { membership, .. } => {
-                if let Err(e) = self.app.emit("collection:member-removed", membership) {
-                    error!("Failed to emit collection:member-removed: {}", e);
-                }
-            }
             // Unified relationship events (Issue #811)
-            // These emit a single "relationship:*" event with the full RelationshipEvent payload
+            // All relationship types (has_child, member_of, mentions, custom) use these events
             DomainEvent::RelationshipCreated { relationship, .. } => {
                 debug!(
                     "Forwarding RelationshipCreated: {} ({})",
@@ -218,6 +179,8 @@ impl DomainEventForwarder {
             }
             DomainEvent::RelationshipDeleted {
                 id,
+                from_id,
+                to_id,
                 relationship_type,
                 ..
             } => {
@@ -225,15 +188,19 @@ impl DomainEventForwarder {
                 #[serde(rename_all = "camelCase")]
                 struct RelationshipDeletedPayload {
                     id: String,
+                    from_id: String,
+                    to_id: String,
                     relationship_type: String,
                 }
                 let payload = RelationshipDeletedPayload {
                     id: id.clone(),
+                    from_id: from_id.clone(),
+                    to_id: to_id.clone(),
                     relationship_type: relationship_type.clone(),
                 };
                 debug!(
-                    "Forwarding RelationshipDeleted: {} ({})",
-                    id, relationship_type
+                    "Forwarding RelationshipDeleted: {} ({}) from {} to {}",
+                    id, relationship_type, from_id, to_id
                 );
                 if let Err(e) = self.app.emit("relationship:deleted", &payload) {
                     error!("Failed to emit relationship:deleted: {}", e);
