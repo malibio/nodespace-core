@@ -32,7 +32,7 @@ pub use behaviors::{
 };
 pub use db::{
     DatabaseError, DomainEvent, EdgeRelationship, HierarchyRelationship, MentionRelationship,
-    RelationshipRecord, SurrealStore,
+    RelationshipEvent, RelationshipRecord, SurrealStore,
 };
 pub use models::{
     FilterOperator, Node, NodeFilter, NodeQuery, NodeUpdate, OrderBy, PropertyFilter, SchemaNode,

@@ -1508,21 +1508,16 @@ where
             &root_id
         };
 
+        // Issue #811: Store now emits unified RelationshipCreated event
         self.store
-            .create_mention(mentioning_node_id, mentioned_node_id, final_root_id)
+            .create_mention(
+                mentioning_node_id,
+                mentioned_node_id,
+                final_root_id,
+                self.client_id.clone(),
+            )
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-        // Emit EdgeCreated event (Phase 2 of Issue #665)
-        self.emit_event(DomainEvent::EdgeCreated {
-            relationship: crate::db::events::EdgeRelationship::Mention(
-                crate::db::events::MentionRelationship {
-                    source_id: mentioning_node_id.to_string(),
-                    target_id: mentioned_node_id.to_string(),
-                },
-            ),
-            source_client_id: self.client_id.clone(),
-        });
 
         Ok(())
     }
@@ -1560,18 +1555,15 @@ where
         mentioning_node_id: &str,
         mentioned_node_id: &str,
     ) -> Result<(), NodeServiceError> {
+        // Issue #811: Store now emits unified RelationshipDeleted event
         self.store
-            .delete_mention(mentioning_node_id, mentioned_node_id)
+            .delete_mention(
+                mentioning_node_id,
+                mentioned_node_id,
+                self.client_id.clone(),
+            )
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-        // Emit EdgeDeleted event (Phase 2 of Issue #665)
-        // Use composite ID for mention relationship: "source->target"
-        let relationship_id = format!("{}->{}", mentioning_node_id, mentioned_node_id);
-        self.emit_event(DomainEvent::EdgeDeleted {
-            id: relationship_id,
-            source_client_id: self.client_id.clone(),
-        });
 
         Ok(())
     }
@@ -4182,8 +4174,9 @@ where
             }
         }
 
+        // Issue #811: Store now emits unified RelationshipCreated event
         self.store
-            .create_mention(source_id, target_id, source_id)
+            .create_mention(source_id, target_id, source_id, self.client_id.clone())
             .await
             .map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to insert mention: {}", e))
@@ -4221,18 +4214,13 @@ where
         source_id: &str,
         target_id: &str,
     ) -> Result<(), NodeServiceError> {
+        // Issue #811: Store now emits unified RelationshipDeleted event
         self.store
-            .delete_mention(source_id, target_id)
+            .delete_mention(source_id, target_id, self.client_id.clone())
             .await
             .map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to delete mention: {}", e))
             })?;
-
-        // Emit EdgeDeleted event (Phase 2 of Issue #665)
-        self.emit_event(DomainEvent::EdgeDeleted {
-            id: format!("mentions:{}:{}", source_id, target_id),
-            source_client_id: self.client_id.clone(),
-        });
 
         Ok(())
     }

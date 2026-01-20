@@ -282,6 +282,65 @@ class BrowserSyncService {
         }
         break;
 
+      // ======================================================================
+      // Unified Relationship Events (Issue #811)
+      // These are emitted by the store for all relationship types.
+      // ======================================================================
+
+      case 'relationshipCreated': {
+        log.debug(`Relationship created: ${event.relationshipType} (${event.fromId} -> ${event.toId})`);
+
+        if (event.relationshipType === 'has_child') {
+          // Hierarchy relationship
+          if (structureTree) {
+            const order = (event.properties?.order as number) ?? Date.now();
+            const existingChildren = structureTree.getChildrenWithOrder(event.fromId);
+            const alreadyExists = existingChildren.some((c) => c.nodeId === event.toId);
+            if (!alreadyExists) {
+              structureTree.addChild({
+                parentId: event.fromId,
+                childId: event.toId,
+                order
+              });
+            }
+          }
+        } else if (event.relationshipType === 'member_of') {
+          // Collection membership - log for now
+          log.debug(`Member added: ${event.fromId} to collection ${event.toId}`);
+        } else if (event.relationshipType === 'mentions') {
+          // Mention relationship - log for now
+          log.debug(`Mention created: ${event.fromId} mentions ${event.toId}`);
+        } else {
+          // Custom relationship type
+          log.debug(`Custom relationship created: ${event.relationshipType}`);
+        }
+        break;
+      }
+
+      case 'relationshipUpdated': {
+        log.debug(`Relationship updated: ${event.relationshipType} (${event.fromId} -> ${event.toId})`);
+
+        if (event.relationshipType === 'has_child') {
+          // Future: Update child order in structure tree
+          log.debug(`Hierarchy order updated for ${event.toId}`);
+        }
+        break;
+      }
+
+      case 'relationshipDeleted': {
+        log.debug(`Relationship deleted: ${event.relationshipType} (${event.id})`);
+
+        // For member_of and mentions deletions, just log
+        // For has_child, we'd need fromId/toId which aren't in the payload
+        // The existing edgeDeleted event handles hierarchy deletions
+        if (event.relationshipType === 'member_of') {
+          log.debug(`Member removed from collection: ${event.id}`);
+        } else if (event.relationshipType === 'mentions') {
+          log.debug(`Mention deleted: ${event.id}`);
+        }
+        break;
+      }
+
       default:
         log.warn('Unknown event type:', (event as SseEvent).type);
     }

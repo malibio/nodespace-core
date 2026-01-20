@@ -107,6 +107,46 @@ pub enum SseEvent {
         #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
     },
+    /// Unified relationship created event (Issue #811)
+    /// Supports all relationship types: has_child, member_of, mentions, custom
+    RelationshipCreated {
+        /// Relationship ID in SurrealDB format
+        id: String,
+        /// Source node ID
+        #[serde(rename = "fromId")]
+        from_id: String,
+        /// Target node ID
+        #[serde(rename = "toId")]
+        to_id: String,
+        /// Relationship type: "has_child", "member_of", "mentions", etc.
+        #[serde(rename = "relationshipType")]
+        relationship_type: String,
+        /// Type-specific properties (e.g., order for has_child)
+        properties: serde_json::Value,
+        #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+    },
+    /// Unified relationship updated event (Issue #811)
+    RelationshipUpdated {
+        id: String,
+        #[serde(rename = "fromId")]
+        from_id: String,
+        #[serde(rename = "toId")]
+        to_id: String,
+        #[serde(rename = "relationshipType")]
+        relationship_type: String,
+        properties: serde_json::Value,
+        #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+    },
+    /// Unified relationship deleted event (Issue #811)
+    RelationshipDeleted {
+        id: String,
+        #[serde(rename = "relationshipType")]
+        relationship_type: String,
+        #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+    },
 }
 
 /// Application state shared across handlers
@@ -675,6 +715,65 @@ async fn domain_event_to_sse_bridge(
                         // Collection membership events not currently used by SSE clients
                         // TODO: Add SSE event type if browser needs collection membership updates
                     }
+                    // Unified relationship events (Issue #811)
+                    DomainEvent::RelationshipCreated {
+                        relationship,
+                        source_client_id,
+                    } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out RelationshipCreated event from dev-proxy"
+                            );
+                            continue;
+                        }
+                        let _ = sse_tx.send(SseEvent::RelationshipCreated {
+                            id: relationship.id,
+                            from_id: relationship.from_id,
+                            to_id: relationship.to_id,
+                            relationship_type: relationship.relationship_type,
+                            properties: relationship.properties,
+                            client_id: source_client_id,
+                        });
+                    }
+                    DomainEvent::RelationshipUpdated {
+                        relationship,
+                        source_client_id,
+                    } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out RelationshipUpdated event from dev-proxy"
+                            );
+                            continue;
+                        }
+                        let _ = sse_tx.send(SseEvent::RelationshipUpdated {
+                            id: relationship.id,
+                            from_id: relationship.from_id,
+                            to_id: relationship.to_id,
+                            relationship_type: relationship.relationship_type,
+                            properties: relationship.properties,
+                            client_id: source_client_id,
+                        });
+                    }
+                    DomainEvent::RelationshipDeleted {
+                        id,
+                        relationship_type,
+                        source_client_id,
+                    } => {
+                        // Filter out events from dev-proxy (browser operations)
+                        if source_client_id.as_deref() == Some("dev-proxy") {
+                            tracing::debug!(
+                                "Filtering out RelationshipDeleted event from dev-proxy"
+                            );
+                            continue;
+                        }
+                        let _ = sse_tx.send(SseEvent::RelationshipDeleted {
+                            id,
+                            relationship_type,
+                            client_id: source_client_id,
+                        });
+                    }
                 }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -739,6 +838,10 @@ async fn sse_handler(
                     SseEvent::NodeDeleted { client_id, .. } => client_id,
                     SseEvent::EdgeCreated { client_id, .. } => client_id,
                     SseEvent::EdgeDeleted { client_id, .. } => client_id,
+                    // Unified relationship events (Issue #811)
+                    SseEvent::RelationshipCreated { client_id, .. } => client_id,
+                    SseEvent::RelationshipUpdated { client_id, .. } => client_id,
+                    SseEvent::RelationshipDeleted { client_id, .. } => client_id,
                 };
 
                 // Skip if event came from dev-proxy (browser operations)

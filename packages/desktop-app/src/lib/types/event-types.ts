@@ -78,6 +78,42 @@ export type MentionEdge = { type: 'mention' } & MentionRelationship;
 export type EdgeRelationship = HierarchyEdge | MentionEdge;
 
 // ============================================================================
+// Unified Relationship Event (Issue #811)
+// ============================================================================
+
+/**
+ * Unified relationship event for all relationship types
+ *
+ * This generic structure supports all relationship types: has_child, member_of,
+ * mentions, and custom types. It replaces the enum-based approach that required
+ * modifying the event system for each new relationship type.
+ *
+ * Emitted by the store layer for all relationship operations.
+ */
+export interface RelationshipEvent {
+  /** Unique relationship ID in SurrealDB format (e.g., "relationship:abc123") */
+  id: string;
+  /** Source node ID (the "from" node in the relationship) */
+  fromId: string;
+  /** Target node ID (the "to" node in the relationship) */
+  toId: string;
+  /** Relationship type: "has_child", "member_of", "mentions", or custom types */
+  relationshipType: string;
+  /** Type-specific properties (order for has_child, context for mentions, etc.) */
+  properties: Record<string, unknown>;
+}
+
+/**
+ * Payload for relationship deleted events
+ *
+ * Contains only the ID and type (no full relationship data).
+ */
+export interface RelationshipDeletedPayload {
+  id: string;
+  relationshipType: string;
+}
+
+// ============================================================================
 // Nested Tree Structure (for Recursive FETCH optimization)
 // ============================================================================
 
