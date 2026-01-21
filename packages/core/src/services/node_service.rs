@@ -2257,6 +2257,35 @@ where
                 }
             }
 
+            // Skip mentions to virtual date nodes (dates that don't exist in DB yet).
+            // Date nodes are lazily created, so we can't create relationships to them.
+            // The reference is already embedded in the markdown link, which is sufficient.
+            if is_date_node_id(mentioned_id) {
+                // Check if the date node actually exists in the database
+                match self.store.get_node(mentioned_id).await {
+                    Ok(None) => {
+                        tracing::debug!(
+                            "Skipping mention to virtual date node: {} -> {}",
+                            node_id,
+                            mentioned_id
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Error checking date node existence: {} -> {}: {}",
+                            node_id,
+                            mentioned_id,
+                            e
+                        );
+                        continue;
+                    }
+                    Ok(Some(_)) => {
+                        // Date node exists, proceed with creating mention
+                    }
+                }
+            }
+
             if let Err(e) = self.create_mention(node_id, mentioned_id).await {
                 tracing::warn!(
                     "Failed to create mention: {} -> {}: {}",
