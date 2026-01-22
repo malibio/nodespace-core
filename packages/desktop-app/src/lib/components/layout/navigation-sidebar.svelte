@@ -278,9 +278,7 @@
             {#each collections as collection (collection.id)}
               {@const hasChildren = collection.children && collection.children.length > 0}
               {@const isExpanded = isCollectionExpanded(collection.id)}
-              <div
-                class="collection-item"
-                              >
+              <div class="collection-item">
                 {#if hasChildren}
                   <button
                     class="expand-btn"
@@ -312,9 +310,7 @@
                 {#each collection.children as child (child.id)}
                   {@const childHasChildren = child.children && child.children.length > 0}
                   {@const childIsExpanded = isCollectionExpanded(child.id)}
-                  <div
-                    class="collection-item level-2"
-                                      >
+                  <div class="collection-item level-2">
                     {#if childHasChildren}
                       <button
                         class="expand-btn"
@@ -344,9 +340,7 @@
                   <!-- Level 3 -->
                   {#if childHasChildren && childIsExpanded && child.children}
                     {#each child.children as grandchild (grandchild.id)}
-                      <div
-                        class="collection-item level-3"
-                                              >
+                      <div class="collection-item level-3">
                         <button
                           class="collection-name-btn"
                           onclick={() => handleCollectionClick(grandchild.id)}

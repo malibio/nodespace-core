@@ -3989,6 +3989,7 @@ where
         };
 
         // Format debounce as SurrealDB duration string (e.g., "30s")
+        // Safety: debounce_secs is a u64 from config, not user input - validated at config layer
         let debounce_str = format!("{}s", debounce_secs);
 
         let mut query_builder = self.db.query(sql).bind(("debounce", debounce_str));
@@ -4024,6 +4025,7 @@ where
         }
 
         // Count stale embeddings modified within the debounce window
+        // Safety: debounce_secs is a u64 from config, not user input - validated at config layer
         let debounce_str = format!("{}s", debounce_secs);
 
         let mut response = self
