@@ -2257,32 +2257,18 @@ where
                 }
             }
 
-            // Skip mentions to virtual date nodes (dates that don't exist in DB yet).
-            // Date nodes are lazily created, so we can't create relationships to them.
-            // The reference is already embedded in the markdown link, which is sufficient.
+            // Auto-create date nodes when mentioned (Issue #814 fix).
+            // Date nodes are lazily created, but we need them to exist for the
+            // "Mentioned by" panel to work. This ensures the relationship can be created.
             if is_date_node_id(mentioned_id) {
-                // Check if the date node actually exists in the database
-                match self.store.get_node(mentioned_id).await {
-                    Ok(None) => {
-                        tracing::debug!(
-                            "Skipping mention to virtual date node: {} -> {}",
-                            node_id,
-                            mentioned_id
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Error checking date node existence: {} -> {}: {}",
-                            node_id,
-                            mentioned_id,
-                            e
-                        );
-                        continue;
-                    }
-                    Ok(Some(_)) => {
-                        // Date node exists, proceed with creating mention
-                    }
+                if let Err(e) = self.ensure_date_exists(mentioned_id).await {
+                    tracing::warn!(
+                        "Failed to ensure date node exists for mention: {} -> {}: {}",
+                        node_id,
+                        mentioned_id,
+                        e
+                    );
+                    // Continue anyway - the mention creation will fail if node doesn't exist
                 }
             }
 
