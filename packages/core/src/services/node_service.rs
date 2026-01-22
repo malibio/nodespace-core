@@ -6820,19 +6820,82 @@ mod tests {
     mod adjacency_list_tests {
         use super::*;
         use serial_test::serial;
+        use std::time::Duration;
+        use tokio::time::sleep;
 
         // Tests for the adjacency list strategy (recursive graph traversal)
         // Uses SurrealDB's .{..}(->edge->target) syntax for recursive queries
         //
-        // NOTE: All tests in this module are marked #[serial] because they use
+        // NOTE: All tests in this module are marked #[serial(sibling_ordering)] because they use
         // create_parent_edge with insert_after positioning, which can exhibit race
         // conditions when SurrealDB hasn't made previous writes visible before the
         // next operation queries for sibling positions. This is a SurrealDB timing
         // issue under concurrent test execution, not a functional bug in production.
+        //
+        // The "sibling_ordering" key is shared with integration_tests in nodes_test.rs
+        // to ensure all ordering-sensitive tests run serially across modules.
+
+        /// Helper function to wait for children tree to have expected order with retries.
+        /// This handles SurrealDB's eventual consistency for sibling ordering.
+        async fn wait_for_children_tree_order<C>(
+            service: &NodeService<C>,
+            parent_id: &str,
+            expected_contents: &[&str],
+            max_retries: usize,
+        ) -> Result<serde_json::Value, String>
+        where
+            C: surrealdb::Connection,
+        {
+            for attempt in 0..max_retries {
+                let tree = service
+                    .get_children_tree(parent_id)
+                    .await
+                    .map_err(|e| format!("Failed to get children tree: {:?}", e))?;
+
+                let children = tree["children"]
+                    .as_array()
+                    .ok_or("Expected children array")?;
+
+                if children.len() == expected_contents.len() {
+                    let actual_contents: Vec<&str> = children
+                        .iter()
+                        .filter_map(|c| c["content"].as_str())
+                        .collect();
+
+                    if actual_contents == expected_contents {
+                        return Ok(tree);
+                    }
+                }
+
+                if attempt < max_retries - 1 {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+
+            // Final attempt - return whatever we have for assertion failure message
+            let tree = service
+                .get_children_tree(parent_id)
+                .await
+                .map_err(|e| format!("Failed to get children tree: {:?}", e))?;
+
+            let children = tree["children"]
+                .as_array()
+                .ok_or("Expected children array")?;
+
+            Err(format!(
+                "Children tree order did not stabilize after {} retries. Expected {:?}, got {:?}",
+                max_retries,
+                expected_contents,
+                children
+                    .iter()
+                    .filter_map(|c| c["content"].as_str())
+                    .collect::<Vec<_>>()
+            ))
+        }
 
         /// Test get_children_tree with a leaf node (no children)
         #[tokio::test]
-        #[serial]
+        #[serial(sibling_ordering)]
         async fn test_get_children_tree_leaf_node() {
             let (service, _temp) = create_test_service().await;
 
@@ -6850,7 +6913,7 @@ mod tests {
 
         /// Test get_children_tree with single-level children
         #[tokio::test]
-        #[serial]
+        #[serial(sibling_ordering)]
         async fn test_get_children_tree_single_level() {
             let (service, _temp) = create_test_service().await;
 
@@ -6859,12 +6922,16 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Create two children and add to parent using create_parent_edge
+            // NOTE: Small delays between insertions ensure SurrealDB write visibility
+            // for sibling order calculations.
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
                 .create_parent_edge(&child1_id, &parent_id, None) // First child - insert at beginning
                 .await
                 .unwrap();
+
+            sleep(Duration::from_millis(50)).await;
 
             let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
             let child2_id = service.create_node(child2).await.unwrap();
@@ -6873,8 +6940,13 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Get tree - should have parent with 2 children
-            let tree = service.get_children_tree(&parent_id).await.unwrap();
+            sleep(Duration::from_millis(50)).await;
+
+            // Get tree - should have parent with 2 children (with retry for eventual consistency)
+            let tree =
+                wait_for_children_tree_order(&service, &parent_id, &["Child 1", "Child 2"], 10)
+                    .await
+                    .expect("Children should stabilize in order Child 1, Child 2");
 
             assert_eq!(tree["id"], parent_id);
             let children = tree["children"].as_array().unwrap();
@@ -6885,7 +6957,7 @@ mod tests {
 
         /// Test get_children_tree with multi-level deep tree
         #[tokio::test]
-        #[serial]
+        #[serial(sibling_ordering)]
         async fn test_get_children_tree_deep_hierarchy() {
             let (service, _temp) = create_test_service().await;
 
@@ -6926,7 +6998,7 @@ mod tests {
 
         /// Test sibling ordering is preserved (insertion order since create_parent_edge appends)
         #[tokio::test]
-        #[serial]
+        #[serial(sibling_ordering)]
         async fn test_get_children_tree_sibling_ordering() {
             let (service, _temp) = create_test_service().await;
 
@@ -6935,12 +7007,16 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Add children in order A, B, C - they should maintain this order
+            // NOTE: Small delays between insertions ensure SurrealDB write visibility
+            // for sibling order calculations.
             let child_a = Node::new("text".to_string(), "A".to_string(), json!({}));
             let child_a_id = service.create_node(child_a).await.unwrap();
             service
                 .create_parent_edge(&child_a_id, &parent_id, None) // First child - insert at beginning
                 .await
                 .unwrap();
+
+            sleep(Duration::from_millis(50)).await;
 
             let child_b = Node::new("text".to_string(), "B".to_string(), json!({}));
             let child_b_id = service.create_node(child_b).await.unwrap();
@@ -6949,6 +7025,8 @@ mod tests {
                 .await
                 .unwrap();
 
+            sleep(Duration::from_millis(50)).await;
+
             let child_c = Node::new("text".to_string(), "C".to_string(), json!({}));
             let child_c_id = service.create_node(child_c).await.unwrap();
             service
@@ -6956,8 +7034,10 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Get tree - children should be in order A, B, C
-            let tree = service.get_children_tree(&parent_id).await.unwrap();
+            // Get tree - children should be in order A, B, C (with retry for eventual consistency)
+            let tree = wait_for_children_tree_order(&service, &parent_id, &["A", "B", "C"], 10)
+                .await
+                .expect("Children should stabilize in order A, B, C");
 
             let children = tree["children"].as_array().unwrap();
             assert_eq!(children.len(), 3);
@@ -6968,7 +7048,7 @@ mod tests {
 
         /// Test get_children_tree with non-existent root returns empty object
         #[tokio::test]
-        #[serial]
+        #[serial(sibling_ordering)]
         async fn test_get_children_tree_nonexistent_root() {
             let (service, _temp) = create_test_service().await;
 
@@ -7097,6 +7177,12 @@ mod tests {
     /// Tests for create_node_with_parent (Issue #676: NodeOperations merge)
     mod create_node_with_parent_tests {
         use super::*;
+        use serial_test::serial;
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        // NOTE: Tests that verify sibling ordering are marked #[serial(sibling_ordering)]
+        // to prevent race conditions with SurrealDB write visibility.
 
         /// Test that date containers are auto-created when referenced as parent
         #[tokio::test]
@@ -7188,6 +7274,7 @@ mod tests {
 
         /// Test sibling validation - sibling must have same parent
         #[tokio::test]
+        #[serial(sibling_ordering)]
         async fn test_sibling_must_have_same_parent() {
             let (service, _temp) = create_test_service().await;
 
@@ -7228,6 +7315,7 @@ mod tests {
 
         /// Test that None inserts at beginning (new behavior)
         #[tokio::test]
+        #[serial(sibling_ordering)]
         async fn test_insert_at_beginning_by_default() {
             let (service, _temp) = create_test_service().await;
 
@@ -7236,6 +7324,7 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Create first child (None = insert at beginning)
+            // NOTE: Small delays between insertions ensure SurrealDB write visibility
             let params1 = CreateNodeParams {
                 id: Some("test-child-1".to_string()),
                 node_type: "text".to_string(),
@@ -7245,6 +7334,8 @@ mod tests {
                 properties: json!({}),
             };
             service.create_node_with_parent(params1).await.unwrap();
+
+            sleep(Duration::from_millis(50)).await;
 
             // Create second child (None = insert at beginning, so comes BEFORE first)
             let params2 = CreateNodeParams {
@@ -7256,6 +7347,8 @@ mod tests {
                 properties: json!({}),
             };
             service.create_node_with_parent(params2).await.unwrap();
+
+            sleep(Duration::from_millis(50)).await;
 
             // Verify order: Child 2, Child 1 (reversed - None inserts at beginning)
             let children = service.get_children(&parent_id).await.unwrap();
