@@ -150,22 +150,34 @@ New Node Type (e.g., Person, Project, Invoice)
 
 ```rust
 impl CollectionService {
+    /// Creates a new CollectionService with both store (reads) and NodeService (writes)
+    pub fn new(store: &Arc<SurrealStore>, node_service: &NodeService) -> Self {
+        Self { store, node_service }
+    }
+
     /// Resolves path, creates collections, establishes member_of relationships
     pub async fn resolve_path(&self, path: &str) -> Result<ResolvedPath> {
         // Parse path syntax
         let segments = parse_collection_path(path)?;
 
+        // Batch fetch existing collections (READ - direct store access)
+        let existing = self.store.get_collections_by_names(&segment_names).await?;
+
         // For each segment, find or create collection node
         for segment in segments {
-            // Delegates to NodeService for CRUD
-            let collection_id = self.node_service.find_or_create_collection(&segment).await?;
+            let (node, created) = match existing.get(&segment.normalized_name) {
+                Some(existing) => (existing.clone(), false),
+                None => {
+                    // CREATE - goes through NodeService for event emission
+                    let new_node = self.create_collection(&segment.name).await?;
+                    (new_node, true)
+                }
+            };
 
-            // Delegates to NodeService for relationship
-            if let Some(parent_id) = parent {
-                self.node_service.create_relationship(
-                    &collection_id,
-                    "member_of",
-                    &parent_id
+            // Create hierarchy relationship (WRITE - through NodeService)
+            if let Some(parent_id) = &previous_collection_id {
+                self.node_service.create_builtin_relationship(
+                    &node.id, "member_of", parent_id, json!({})
                 ).await?;
             }
         }
@@ -173,16 +185,58 @@ impl CollectionService {
 
     /// Add node to collection - thin wrapper with validation
     pub async fn add_to_collection(&self, node_id: &str, collection_id: &str) -> Result<()> {
-        // Validate target is a collection (domain-specific check)
-        let collection = self.node_service.get_node(collection_id).await?
+        // Validate target is a collection (READ - direct store access)
+        let collection = self.store.get_node(collection_id).await?
             .ok_or(CollectionNotFound)?;
 
         if collection.node_type != "collection" {
             return Err(InvalidCollectionTarget);
         }
 
-        // Delegate to NodeService - it handles events
-        self.node_service.create_relationship(node_id, "member_of", collection_id).await
+        // Delegate to NodeService for relationship (WRITE - handles events)
+        self.node_service.create_builtin_relationship(
+            node_id, "member_of", collection_id, json!({})
+        ).await
+    }
+}
+```
+
+### Domain Service Data Access Pattern: Read from Store, Write through NodeService
+
+Domain services follow a clear pattern for data access:
+
+**READ Operations** - Direct store access is acceptable:
+- Querying collections by name
+- Getting collection members
+- Finding nodes by criteria
+- Any read-only query
+
+**WRITE Operations** - MUST go through NodeService:
+- Creating nodes (to emit `NodeCreated` events)
+- Creating relationships (to emit `RelationshipCreated` events)
+- Updating nodes (to emit `NodeUpdated` events)
+- Deleting relationships (to emit `RelationshipDeleted` events)
+
+This pattern allows domain services to have efficient reads while ensuring all write operations emit proper events.
+
+```rust
+// CollectionService holds both references
+pub struct CollectionService<'a> {
+    store: &'a Arc<SurrealStore>,       // For reads
+    node_service: &'a NodeService,       // For writes
+}
+
+impl CollectionService {
+    // READ: Direct store access is fine
+    pub async fn get_collection_members(&self, collection_id: &str) -> Result<Vec<String>> {
+        self.store.get_collection_members(collection_id).await
+    }
+
+    // WRITE: Must go through NodeService for event emission
+    pub async fn add_to_collection(&self, node_id: &str, collection_id: &str) -> Result<()> {
+        self.node_service.create_builtin_relationship(
+            node_id, "member_of", collection_id, json!({})
+        ).await
     }
 }
 ```
@@ -190,7 +244,7 @@ impl CollectionService {
 ### What Domain Services Should NOT Do
 
 - **NO event emission** - NodeService is the single source
-- **NO direct store access** for CRUD - Go through NodeService
+- **NO direct store writes** - Go through NodeService for creates/updates/deletes
 - **NO duplicating NodeService logic**
 
 ## Guidelines for New Node Types
@@ -228,7 +282,7 @@ impl CollectionService {
 - Path resolution orchestrates multiple node creations
 - Collection hierarchy requires relationship orchestration
 
-However, `CollectionService` should delegate to `NodeService.create_relationship()` for `member_of` operations (Issue #813).
+As of Issue #813, `CollectionService` now delegates to `NodeService.create_builtin_relationship()` for all `member_of` operations, ensuring proper event emission.
 
 ## Related Documentation
 
