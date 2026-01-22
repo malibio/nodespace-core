@@ -58,7 +58,10 @@ fn test_tools_list_returns_tier1_core_tools() {
     assert!(tool_names.contains(&"search_tools"));
 
     // Tier 1: Core Relationships (Issue #814)
-    assert!(tool_names.contains(&"create_relationship"));
+    assert!(
+        tool_names.contains(&"create_relationship"),
+        "create_relationship tool should be in Tier 1"
+    );
 
     // Verify deprecated tools are NOT present (removed in cleanup)
     assert!(!tool_names.contains(&"search_containers")); // Removed

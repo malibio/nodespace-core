@@ -8832,4 +8832,271 @@ mod tests {
             assert_eq!(node_after_text_update.properties["text"]["format"], "plain");
         }
     }
+
+    /// Tests for built-in relationship methods (Issue #814)
+    ///
+    /// Verifies that the built-in relationships (member_of, has_child, mentions)
+    /// can be created, queried, and deleted via the public API.
+    mod builtin_relationship_tests {
+        use super::*;
+
+        /// Helper to create a collection node
+        async fn create_collection(service: &NodeService, name: &str) -> String {
+            let collection = Node::new_with_id(
+                format!("collection-{}", uuid::Uuid::new_v4()),
+                "collection".to_string(),
+                name.to_string(),
+                json!({}),
+            );
+            service.create_node(collection.clone()).await.unwrap();
+            collection.id
+        }
+
+        /// Helper to create a text node
+        async fn create_text_node(service: &NodeService, content: &str) -> String {
+            let node = Node::new_with_id(
+                format!("text-{}", uuid::Uuid::new_v4()),
+                "text".to_string(),
+                content.to_string(),
+                json!({}),
+            );
+            service.create_node(node.clone()).await.unwrap();
+            node.id
+        }
+
+        #[tokio::test]
+        async fn test_create_member_of_relationship() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create a collection and a text node
+            let collection_id = create_collection(&service, "My Collection").await;
+            let text_id = create_text_node(&service, "Test content").await;
+
+            // Create member_of relationship
+            let result = service
+                .create_relationship(&text_id, "member_of", &collection_id, json!({}))
+                .await;
+            assert!(
+                result.is_ok(),
+                "Failed to create member_of relationship: {:?}",
+                result.err()
+            );
+
+            // Verify via get_related_nodes (forward direction)
+            let collections = service
+                .get_related_nodes(&text_id, "member_of", "out")
+                .await
+                .unwrap();
+            assert_eq!(collections.len(), 1);
+            assert_eq!(collections[0].id, collection_id);
+
+            // Verify via reverse direction (collection -> members)
+            let members = service
+                .get_related_nodes(&collection_id, "member_of", "in")
+                .await
+                .unwrap();
+            assert_eq!(members.len(), 1);
+            assert_eq!(members[0].id, text_id);
+        }
+
+        #[tokio::test]
+        async fn test_member_of_validates_target_is_collection() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create two text nodes (neither is a collection)
+            let text1_id = create_text_node(&service, "Text 1").await;
+            let text2_id = create_text_node(&service, "Text 2").await;
+
+            // Attempt to create member_of to non-collection should fail
+            let result = service
+                .create_relationship(&text1_id, "member_of", &text2_id, json!({}))
+                .await;
+            assert!(result.is_err());
+            let err_msg = format!("{:?}", result.err().unwrap());
+            assert!(
+                err_msg.contains("must be a collection"),
+                "Expected collection validation error, got: {}",
+                err_msg
+            );
+        }
+
+        #[tokio::test]
+        async fn test_create_member_of_idempotent() {
+            let (service, _temp) = create_test_service().await;
+
+            let collection_id = create_collection(&service, "My Collection").await;
+            let text_id = create_text_node(&service, "Test content").await;
+
+            // Create relationship twice - should be idempotent
+            service
+                .create_relationship(&text_id, "member_of", &collection_id, json!({}))
+                .await
+                .unwrap();
+            service
+                .create_relationship(&text_id, "member_of", &collection_id, json!({}))
+                .await
+                .unwrap();
+
+            // Should only have one relationship
+            let collections = service
+                .get_related_nodes(&text_id, "member_of", "out")
+                .await
+                .unwrap();
+            assert_eq!(collections.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn test_delete_member_of_relationship() {
+            let (service, _temp) = create_test_service().await;
+
+            let collection_id = create_collection(&service, "My Collection").await;
+            let text_id = create_text_node(&service, "Test content").await;
+
+            // Create and verify relationship exists
+            service
+                .create_relationship(&text_id, "member_of", &collection_id, json!({}))
+                .await
+                .unwrap();
+            let before = service
+                .get_related_nodes(&text_id, "member_of", "out")
+                .await
+                .unwrap();
+            assert_eq!(before.len(), 1);
+
+            // Delete the relationship
+            service
+                .delete_relationship(&text_id, "member_of", &collection_id)
+                .await
+                .unwrap();
+
+            // Verify it's gone
+            let after = service
+                .get_related_nodes(&text_id, "member_of", "out")
+                .await
+                .unwrap();
+            assert_eq!(after.len(), 0);
+        }
+
+        #[tokio::test]
+        async fn test_delete_relationship_idempotent() {
+            let (service, _temp) = create_test_service().await;
+
+            let collection_id = create_collection(&service, "My Collection").await;
+            let text_id = create_text_node(&service, "Test content").await;
+
+            // Delete non-existent relationship should succeed (idempotent)
+            let result = service
+                .delete_relationship(&text_id, "member_of", &collection_id)
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_create_mentions_relationship() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create two text nodes
+            let text1_id = create_text_node(&service, "This mentions another node").await;
+            let text2_id = create_text_node(&service, "I am mentioned").await;
+
+            // mentions can link any two nodes
+            let result = service
+                .create_relationship(&text1_id, "mentions", &text2_id, json!({}))
+                .await;
+            assert!(result.is_ok());
+
+            // Verify forward direction
+            let mentioned = service
+                .get_related_nodes(&text1_id, "mentions", "out")
+                .await
+                .unwrap();
+            assert_eq!(mentioned.len(), 1);
+            assert_eq!(mentioned[0].id, text2_id);
+
+            // Verify reverse direction (who mentions me)
+            let mentioners = service
+                .get_related_nodes(&text2_id, "mentions", "in")
+                .await
+                .unwrap();
+            assert_eq!(mentioners.len(), 1);
+            assert_eq!(mentioners[0].id, text1_id);
+        }
+
+        #[tokio::test]
+        async fn test_create_has_child_relationship() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create parent and child text nodes
+            let parent_id = create_text_node(&service, "Parent node").await;
+            let child_id = create_text_node(&service, "Child node").await;
+
+            // has_child establishes parent-child hierarchy
+            let result = service
+                .create_relationship(&parent_id, "has_child", &child_id, json!({}))
+                .await;
+            assert!(result.is_ok());
+
+            // Verify forward direction (parent -> children)
+            let children = service
+                .get_related_nodes(&parent_id, "has_child", "out")
+                .await
+                .unwrap();
+            assert_eq!(children.len(), 1);
+            assert_eq!(children[0].id, child_id);
+
+            // Verify reverse direction (child -> parent)
+            let parents = service
+                .get_related_nodes(&child_id, "has_child", "in")
+                .await
+                .unwrap();
+            assert_eq!(parents.len(), 1);
+            assert_eq!(parents[0].id, parent_id);
+        }
+
+        #[tokio::test]
+        async fn test_unknown_builtin_relationship_fails() {
+            let (service, _temp) = create_test_service().await;
+
+            let text1_id = create_text_node(&service, "Text 1").await;
+            let text2_id = create_text_node(&service, "Text 2").await;
+
+            // Attempting to create an undefined relationship should fail
+            // (unless it's defined in the schema, which we don't have for 'fake_relationship')
+            let result = service
+                .create_relationship(&text1_id, "fake_relationship", &text2_id, json!({}))
+                .await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_multiple_collections_membership() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create two collections and one node
+            let collection1_id = create_collection(&service, "Collection 1").await;
+            let collection2_id = create_collection(&service, "Collection 2").await;
+            let text_id = create_text_node(&service, "Belongs to both").await;
+
+            // Add to both collections
+            service
+                .create_relationship(&text_id, "member_of", &collection1_id, json!({}))
+                .await
+                .unwrap();
+            service
+                .create_relationship(&text_id, "member_of", &collection2_id, json!({}))
+                .await
+                .unwrap();
+
+            // Verify node belongs to both collections
+            let collections = service
+                .get_related_nodes(&text_id, "member_of", "out")
+                .await
+                .unwrap();
+            assert_eq!(collections.len(), 2);
+
+            let collection_ids: Vec<&str> = collections.iter().map(|n| n.id.as_str()).collect();
+            assert!(collection_ids.contains(&collection1_id.as_str()));
+            assert!(collection_ids.contains(&collection2_id.as_str()));
+        }
+    }
 }
