@@ -87,41 +87,25 @@ mod tests {
     #[test]
     fn test_calculate_order_first_child() {
         let result = FractionalOrderCalculator::calculate_order(None, None);
-        assert!(
-            approx_eq(result, 1.0),
-            "Expected ~1.0, got {}",
-            result
-        );
+        assert!(approx_eq(result, 1.0), "Expected ~1.0, got {}", result);
     }
 
     #[test]
     fn test_calculate_order_before_first() {
         let result = FractionalOrderCalculator::calculate_order(None, Some(2.0));
-        assert!(
-            approx_eq(result, 1.0),
-            "Expected ~1.0, got {}",
-            result
-        );
+        assert!(approx_eq(result, 1.0), "Expected ~1.0, got {}", result);
     }
 
     #[test]
     fn test_calculate_order_after_last() {
         let result = FractionalOrderCalculator::calculate_order(Some(3.0), None);
-        assert!(
-            approx_eq(result, 4.0),
-            "Expected ~4.0, got {}",
-            result
-        );
+        assert!(approx_eq(result, 4.0), "Expected ~4.0, got {}", result);
     }
 
     #[test]
     fn test_calculate_order_between() {
         let result = FractionalOrderCalculator::calculate_order(Some(1.0), Some(3.0));
-        assert!(
-            approx_eq(result, 2.0),
-            "Expected ~2.0, got {}",
-            result
-        );
+        assert!(approx_eq(result, 2.0), "Expected ~2.0, got {}", result);
     }
 
     #[test]

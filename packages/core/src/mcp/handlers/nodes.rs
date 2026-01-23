@@ -12,6 +12,8 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 
 /// Convert a Node to its strongly-typed JSON representation
 ///
@@ -809,9 +811,6 @@ pub async fn handle_insert_child_at_index<C>(
 where
     C: surrealdb::Connection,
 {
-    use std::time::Duration;
-    use tokio::time::sleep;
-
     let params: InsertChildAtIndexParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
@@ -929,9 +928,6 @@ pub async fn handle_move_child_to_index<C>(
 where
     C: surrealdb::Connection,
 {
-    use std::time::Duration;
-    use tokio::time::sleep;
-
     let params: MoveChildToIndexParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
@@ -1005,8 +1001,7 @@ where
         // For specific index, check that node is at that position
         sleep(Duration::from_millis(50)).await;
 
-        let verification_children =
-            get_children_ordered(node_service, &parent_id, false).await?;
+        let verification_children = get_children_ordered(node_service, &parent_id, false).await?;
         let actual_position = verification_children
             .iter()
             .position(|c| c.node_id == params.node_id);
@@ -1030,8 +1025,7 @@ where
             // Position is wrong - refresh siblings and retry
             if move_attempt < max_move_attempts - 1 {
                 sleep(Duration::from_millis(100)).await;
-                let all_children =
-                    get_children_ordered(node_service, &parent_id, false).await?;
+                let all_children = get_children_ordered(node_service, &parent_id, false).await?;
                 siblings = all_children
                     .into_iter()
                     .filter(|c| c.node_id != params.node_id)

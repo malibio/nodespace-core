@@ -3461,10 +3461,8 @@ where
                         for _verify in 0..10 {
                             sleep(Duration::from_millis(50)).await;
                             let verify_children = self.get_children(parent_id).await?;
-                            let v_child_pos =
-                                verify_children.iter().position(|c| c.id == child_id);
-                            let v_after_pos =
-                                verify_children.iter().position(|c| c.id == after_id);
+                            let v_child_pos = verify_children.iter().position(|c| c.id == child_id);
+                            let v_after_pos = verify_children.iter().position(|c| c.id == after_id);
 
                             if let (Some(c), Some(a)) = (v_child_pos, v_after_pos) {
                                 if c == a + 1 {
