@@ -1334,8 +1334,10 @@ where
         // Title is set for: task nodes (always) OR root nodes (no parent)
         // Note: create_node will also set title for task nodes, but we set it here too
         // for root non-task nodes that won't go through the task check in create_node
+        // TODO #824: Refactor to schema-driven title_template approach
         let title = if params.node_type == "task" || params.parent_id.is_none() {
             // Exclude certain types from having titles
+            // TODO #824: Replace hardcoded exclusions with schema-driven title_template
             match params.node_type.as_str() {
                 "date" | "schema" | "collection" => None,
                 _ => Some(crate::utils::strip_markdown(&params.content)),
@@ -2097,11 +2099,13 @@ where
 
         // Issue #821: Sync title when content or node_type changes
         // Title is indexed for @mention search on task nodes and root nodes
+        // TODO #824: Refactor to schema-driven title_template approach
         let title_update = if content_changed || node_type_changed {
             // Determine if this node should have a title
             // 1. Task nodes always get titles (regardless of hierarchy)
             // 2. Root nodes (no parent) get titles
             // 3. Date, schema, and collection nodes never get titles
+            // TODO #824: Replace hardcoded exclusions with schema-driven title_template
             let should_have_title = match updated.node_type.as_str() {
                 "date" | "schema" | "collection" => false,
                 "task" => true,
@@ -2279,8 +2283,10 @@ where
 
         // Issue #821: Sync title when content or node_type changes
         // Title is indexed for @mention search on task nodes and root nodes
+        // TODO #824: Refactor to schema-driven title_template approach
         let title_update = if content_changed || node_type_changed {
             // Determine if this node should have a title
+            // TODO #824: Replace hardcoded exclusions with schema-driven title_template
             let should_have_title = match updated.node_type.as_str() {
                 "date" | "schema" | "collection" => false,
                 "task" => true,
