@@ -51,7 +51,7 @@ fn default_lifecycle_status() -> String {
 }
 
 /// Check if lifecycle status is "active" (for skip_serializing_if)
-fn is_active_lifecycle(status: &String) -> bool {
+fn is_active_lifecycle(status: &str) -> bool {
     status == "active"
 }
 
