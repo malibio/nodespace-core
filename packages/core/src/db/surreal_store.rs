@@ -4868,6 +4868,8 @@ where
             .into_iter()
             .map(|row| {
                 // Extract UUID from Thing record ID (e.g., node:⟨uuid⟩ -> uuid)
+                // Node IDs are always stored as String variants. Other Id variants
+                // (Number, Array, Object) are not expected but handled via to_string() fallback.
                 let id = match &row.id.id {
                     Id::String(s) => s.clone(),
                     _ => row.id.id.to_string(),

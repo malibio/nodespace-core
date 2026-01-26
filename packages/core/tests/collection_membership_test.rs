@@ -1532,5 +1532,4 @@ mod collection_service_tests {
 
         Ok(())
     }
-
 }
