@@ -4252,151 +4252,6 @@ where
     }
 
     // ========================================================================
-    // Generic Builtin Relationship Operations (Issue #813)
-    // ========================================================================
-
-    /// Create a builtin relationship between two nodes
-    ///
-    /// Creates a relationship in the universal `relationship` table with the specified type.
-    /// This is idempotent - if the relationship already exists, returns None.
-    ///
-    /// # Arguments
-    ///
-    /// * `from_id` - The source node ID
-    /// * `relationship_type` - The relationship type (e.g., "member_of", "has_child")
-    /// * `to_id` - The target node ID
-    /// * `properties` - Properties for the relationship
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(id))` - Relationship ID if newly created
-    /// * `Ok(None)` - If relationship already existed (idempotent)
-    /// * `Err` - Database error
-    pub async fn create_builtin_relationship(
-        &self,
-        from_id: &str,
-        relationship_type: &str,
-        to_id: &str,
-        properties: &Value,
-    ) -> Result<Option<String>> {
-        let from_thing = Thing::from(("node".to_string(), from_id.to_string()));
-        let to_thing = Thing::from(("node".to_string(), to_id.to_string()));
-        let rel_type_owned = relationship_type.to_string();
-
-        // Check if relationship already exists (for idempotency)
-        let check_query =
-            "SELECT VALUE id FROM relationship WHERE in = $from AND out = $to AND relationship_type = $rel_type;";
-        let mut check_response = self
-            .db
-            .query(check_query)
-            .bind(("from", from_thing.clone()))
-            .bind(("to", to_thing.clone()))
-            .bind(("rel_type", rel_type_owned.clone()))
-            .await
-            .context("Failed to check for existing relationship")?;
-
-        let existing_ids: Vec<Thing> = check_response
-            .take(0)
-            .context("Failed to extract relationship check results")?;
-
-        // Only create relationship if it doesn't exist
-        if existing_ids.is_empty() {
-            let properties_json =
-                serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
-            let query = format!(
-                r#"RELATE $from->relationship->$to CONTENT {{
-                    relationship_type: $rel_type,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now(),
-                    version: 1
-                }} RETURN id;"#,
-                properties_json
-            );
-
-            let mut response = self
-                .db
-                .query(&query)
-                .bind(("from", from_thing))
-                .bind(("to", to_thing))
-                .bind(("rel_type", rel_type_owned))
-                .await
-                .context("Failed to create relationship")?;
-
-            #[derive(Debug, Deserialize)]
-            struct RelateResult {
-                id: Thing,
-            }
-            let results: Vec<RelateResult> = response
-                .take(0)
-                .context("Failed to extract relationship ID")?;
-
-            if let Some(result) = results.first() {
-                return Ok(Some(result.id.to_string()));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Delete a builtin relationship between two nodes
-    ///
-    /// Removes a relationship from the universal `relationship` table.
-    /// This is idempotent - succeeds even if relationship doesn't exist.
-    ///
-    /// # Arguments
-    ///
-    /// * `from_id` - The source node ID
-    /// * `relationship_type` - The relationship type (e.g., "member_of", "has_child")
-    /// * `to_id` - The target node ID
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(id))` - Relationship ID if deleted
-    /// * `Ok(None)` - If relationship didn't exist
-    /// * `Err` - Database error
-    pub async fn delete_builtin_relationship(
-        &self,
-        from_id: &str,
-        relationship_type: &str,
-        to_id: &str,
-    ) -> Result<Option<String>> {
-        let from_thing = Thing::from(("node".to_string(), from_id.to_string()));
-        let to_thing = Thing::from(("node".to_string(), to_id.to_string()));
-        let rel_type_owned = relationship_type.to_string();
-
-        // First get the relationship ID before deleting
-        let check_query = "SELECT VALUE id FROM relationship WHERE in = $from AND out = $to AND relationship_type = $rel_type;";
-        let mut check_response = self
-            .db
-            .query(check_query)
-            .bind(("from", from_thing.clone()))
-            .bind(("to", to_thing.clone()))
-            .bind(("rel_type", rel_type_owned.clone()))
-            .await
-            .context("Failed to get relationship ID")?;
-
-        let existing_ids: Vec<Thing> = check_response
-            .take(0)
-            .context("Failed to extract relationship IDs")?;
-
-        // Delete the relationship
-        self.db
-            .query("DELETE FROM relationship WHERE in = $from AND out = $to AND relationship_type = $rel_type;")
-            .bind(("from", from_thing))
-            .bind(("to", to_thing))
-            .bind(("rel_type", rel_type_owned))
-            .await
-            .context("Failed to delete relationship")?;
-
-        // Return relationship ID for caller to emit event
-        if let Some(rel_id) = existing_ids.first() {
-            return Ok(Some(rel_id.to_string()));
-        }
-
-        Ok(None)
-    }
-
     // ========================================================================
     // Collection Membership Operations (member_of relationships)
     // ========================================================================
@@ -4840,6 +4695,26 @@ where
     ///
     /// Vec of (Node, member_count) tuples for all collection nodes
     pub async fn get_all_collections_with_member_counts(&self) -> Result<Vec<(Node, usize)>> {
+        // Issue #817: Use typed struct for deserialization instead of serde_json::Value
+        // The SurrealDB Rust client cannot deserialize computed count() fields to serde_json::Value
+        // because SurrealDB's internal number representation uses an enum type.
+        #[derive(Debug, Deserialize)]
+        struct CollectionWithCount {
+            id: Thing,
+            node_type: String,
+            content: String,
+            version: i64,
+            created_at: String,
+            modified_at: String,
+            #[serde(default)]
+            properties: Value,
+            #[serde(default)]
+            title: Option<String>,
+            #[serde(default = "default_lifecycle_status")]
+            lifecycle_status: String,
+            member_count: i64,
+        }
+
         // Single query that fetches collections and counts their members via graph traversal
         let query = r#"
             SELECT
@@ -4856,90 +4731,49 @@ where
             .await
             .context("Failed to get collections with member counts")?;
 
-        // Parse results - each row has node fields plus member_count
-        let rows: Vec<Value> = response
+        // Parse results using typed struct
+        let rows: Vec<CollectionWithCount> = response
             .take(0)
             .context("Failed to extract collection results")?;
 
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            // Extract member_count from the row
-            let member_count = row
-                .get("member_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
+        let results = rows
+            .into_iter()
+            .map(|row| {
+                // Extract UUID from Thing record ID (e.g., node:⟨uuid⟩ -> uuid)
+                // Node IDs are always stored as String variants. Other Id variants
+                // (Number, Array, Object) are not expected but handled via to_string() fallback.
+                let id = match &row.id.id {
+                    Id::String(s) => s.clone(),
+                    _ => row.id.id.to_string(),
+                };
 
-            // Build Node from hub fields
-            let id = row
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| {
-                    // Handle Thing format: node:xxx -> xxx
-                    if s.starts_with("node:") {
-                        s.strip_prefix("node:").unwrap_or(s)
-                    } else {
-                        s
-                    }
-                })
-                .unwrap_or("")
-                .to_string();
+                let created_at = chrono::DateTime::parse_from_rfc3339(&row.created_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
 
-            let node_type = row
-                .get("node_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("collection")
-                .to_string();
+                let modified_at = chrono::DateTime::parse_from_rfc3339(&row.modified_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
 
-            let content = row
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                let node = Node {
+                    id,
+                    node_type: row.node_type,
+                    content: row.content,
+                    version: row.version,
+                    properties: row.properties,
+                    created_at,
+                    modified_at,
+                    mentions: vec![],
+                    mentioned_by: vec![],
+                    member_of: vec![],
+                    title: row.title,
+                    lifecycle_status: row.lifecycle_status,
+                };
 
-            let version = row.get("version").and_then(|v| v.as_i64()).unwrap_or(1);
-
-            let properties = row
-                .get("properties")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-
-            let created_at = row
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(chrono::Utc::now);
-
-            let modified_at = row
-                .get("modified_at")
-                .and_then(|v| v.as_str())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(chrono::Utc::now);
-
-            let lifecycle_status = row
-                .get("lifecycle_status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("active")
-                .to_string();
-
-            let node = Node {
-                id,
-                node_type,
-                content,
-                version,
-                properties,
-                created_at,
-                modified_at,
-                mentions: vec![],
-                mentioned_by: vec![],
-                member_of: vec![],
-                title: None, // Collection query doesn't need titles
-                lifecycle_status,
-            };
-
-            results.push((node, member_count));
-        }
+                let member_count = row.member_count.max(0) as usize;
+                (node, member_count)
+            })
+            .collect();
 
         Ok(results)
     }
