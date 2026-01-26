@@ -1094,6 +1094,9 @@ where
     }
 
     pub async fn create_node(&self, mut node: Node) -> Result<String, NodeServiceError> {
+        let start = std::time::Instant::now();
+        tracing::debug!(node_type = %node.node_type, node_id = %node.id, "create_node: START");
+
         // Auto-detect date nodes by ID format (YYYY-MM-DD) to ensure correct node_type.
         // This maintains data integrity regardless of caller mistakes.
         // NOTE: Per Issue #670, date nodes can have custom content (not required to match ID).
@@ -1106,9 +1109,10 @@ where
         // Step 1: Core behavior validation (PROTECTED)
         // Validates basic data integrity (non-empty content, correct types, etc.)
         self.behaviors.validate_node(&node)?;
+        tracing::debug!("create_node: behavior validation at {}ms", start.elapsed().as_millis());
 
-        // Step 1.5: Apply schema defaults and validate
-        // Apply default values for missing fields before validation
+        // Step 1.5: Apply schema defaults, validate, and add version
+        // Fetch schema ONCE and reuse for all operations (performance fix)
         // Skip for schema nodes to avoid circular dependency
         //
         // NOTE: We ONLY apply schema defaults, NOT behavior defaults.
@@ -1116,8 +1120,13 @@ where
         // that should be handled client-side, not stored in database properties.
         // The properties field is for user data and schema-defined fields only.
         if node.node_type != "schema" {
-            // Fetch schema once and reuse it for both operations
+            let schema_start = std::time::Instant::now();
+            // Fetch schema ONCE and reuse it for all operations
             if let Some(schema_json) = self.get_schema_for_type(&node.node_type).await? {
+                tracing::debug!(
+                    "create_node: schema fetched in {}ms",
+                    schema_start.elapsed().as_millis()
+                );
                 // Parse schema fields
                 if let Some(fields_json) = schema_json.get("fields") {
                     if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
@@ -1128,43 +1137,38 @@ where
 
                         // Validate with the same fields
                         self.validate_node_with_fields(&node, &fields)?;
-                    }
-                }
-            }
-            // If no schema exists, that's fine - just don't add any defaults
-            // Properties should contain only what the user explicitly provided
-        }
 
-        // NOTE: Parent/container validation removed - now handled by NodeOperations layer
-        // The graph-native architecture uses edges for hierarchy, not fields on Node struct
-
-        // Add schema version to type namespace ONLY if schema has fields (Issue #794)
-        // For empty schemas (text, date, header, etc.), don't pollute properties with version
-        // Schema versioning is only needed for types with schema-defined fields (task, person, etc.)
-        if let Some(schema) = self.get_schema_for_type(&node.node_type).await? {
-            // Check if schema has any fields
-            if let Some(fields) = schema.get("fields").and_then(|f| f.as_array()) {
-                if !fields.is_empty() {
-                    // Schema has fields - add version for migration tracking
-                    if let Some(version) = schema.get("version").and_then(|v| v.as_i64()) {
-                        if let Some(props_obj) = node.properties.as_object_mut() {
-                            // Get or create the type namespace
-                            let type_namespace = props_obj
-                                .entry(&node.node_type)
-                                .or_insert_with(|| serde_json::json!({}));
-                            if let Some(type_props) = type_namespace.as_object_mut() {
-                                type_props.insert(
-                                    "_schema_version".to_string(),
-                                    serde_json::json!(version),
-                                );
+                        // Add schema version if schema has fields (Issue #794)
+                        // Using the already-fetched schema instead of fetching again
+                        if !fields.is_empty() {
+                            if let Some(version) = schema_json.get("version").and_then(|v| v.as_i64())
+                            {
+                                if let Some(props_obj) = node.properties.as_object_mut() {
+                                    let type_namespace = props_obj
+                                        .entry(&node.node_type)
+                                        .or_insert_with(|| serde_json::json!({}));
+                                    if let Some(type_props) = type_namespace.as_object_mut() {
+                                        type_props.insert(
+                                            "_schema_version".to_string(),
+                                            serde_json::json!(version),
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+            // If no schema exists, that's fine - just don't add any defaults
+            // Properties should contain only what the user explicitly provided
+            tracing::debug!(
+                "create_node: schema processing complete at {}ms",
+                start.elapsed().as_millis()
+            );
         }
-        // Note: No else clause - if no schema or empty schema, don't add version
-        // The backfill_schema_version function will add it on read if needed
+
+        // NOTE: Parent/container validation removed - now handled by NodeOperations layer
+        // The graph-native architecture uses edges for hierarchy, not fields on Node struct
 
         // NOTE: root_id filtering removed - hierarchy now managed via relationships
 
@@ -1204,16 +1208,26 @@ where
             tracing::info!("Atomically created schema node '{}' with DDL sync", node.id);
         } else {
             // Regular node creation
+            let db_start = std::time::Instant::now();
             self.store
                 .create_node(node.clone(), self.client_id.clone())
                 .await
                 .map_err(|e| {
                     NodeServiceError::query_failed(format!("Failed to insert node: {}", e))
                 })?;
+            tracing::debug!(
+                "create_node: database insert completed in {}ms",
+                db_start.elapsed().as_millis()
+            );
         }
 
         // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
 
+        tracing::debug!(
+            node_id = %node.id,
+            "create_node: COMPLETE at {}ms",
+            start.elapsed().as_millis()
+        );
         Ok(node.id)
     }
 
@@ -1269,6 +1283,13 @@ where
         &self,
         params: CreateNodeParams,
     ) -> Result<String, NodeServiceError> {
+        let start = std::time::Instant::now();
+        tracing::debug!(
+            node_type = %params.node_type,
+            has_parent = params.parent_id.is_some(),
+            "create_node_with_parent: START"
+        );
+
         // Step 1: Auto-create date container if parent is a date ID
         if let Some(ref parent_id) = params.parent_id {
             self.ensure_date_exists(parent_id).await?;
@@ -1361,7 +1382,16 @@ where
             lifecycle_status: "active".to_string(),
         };
 
+        tracing::debug!(
+            "create_node_with_parent: about to call create_node at {}ms",
+            start.elapsed().as_millis()
+        );
         let created_id = self.create_node(node).await?;
+        tracing::debug!(
+            node_id = %created_id,
+            "create_node_with_parent: create_node completed at {}ms",
+            start.elapsed().as_millis()
+        );
 
         // Step 6: Create parent relationship if parent specified
         if let Some(parent_id) = params.parent_id {
