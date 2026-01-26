@@ -4151,34 +4151,38 @@ where
         // eliminating the need for separate get_node() calls (saves ~300ms for 5 results).
         //
         // BREADTH_BOOST = 0.3 is inlined in SQL (previously was a Rust constant)
-        // Note: SurrealDB doesn't support HAVING, so we use nested subqueries:
-        // 1. Inner: KNN search to get candidate chunks
-        // 2. Middle: GROUP BY node with aggregate calculations (max_similarity, matching_chunks)
-        // 3. Outer: Calculate composite_score from aggregates and filter by threshold
+        // Note: SurrealDB doesn't support referencing aliases in the same-level WHERE clause,
+        // so we use nested subqueries to calculate composite_score once, then filter on it:
+        // 1. Innermost: KNN search to get candidate chunks with similarity scores
+        // 2. Middle-inner: GROUP BY node with aggregate calculations (max_similarity, matching_chunks)
+        // 3. Middle-outer: Calculate composite_score from aggregates (defined once here)
+        // 4. Outermost: Filter by composite_score > threshold (no duplication)
         let knn_limit = limit * 5;
         let query = format!(
             r#"
             SELECT * FROM (
-                SELECT
-                    node,
-                    max_similarity,
-                    matching_chunks,
-                    max_similarity * (1.0 + 0.3 * math::log10(matching_chunks)) AS composite_score
-                FROM (
+                SELECT * FROM (
                     SELECT
                         node,
-                        math::max(similarity) AS max_similarity,
-                        count() AS matching_chunks
+                        max_similarity,
+                        matching_chunks,
+                        max_similarity * (1.0 + 0.3 * math::log10(matching_chunks)) AS composite_score
                     FROM (
                         SELECT
                             node,
-                            vector::similarity::cosine(vector, $query_vector) AS similarity
-                        FROM embedding
-                        WHERE stale = false AND vector <|{knn_limit}|> $query_vector
+                            math::max(similarity) AS max_similarity,
+                            count() AS matching_chunks
+                        FROM (
+                            SELECT
+                                node,
+                                vector::similarity::cosine(vector, $query_vector) AS similarity
+                            FROM embedding
+                            WHERE stale = false AND vector <|{knn_limit}|> $query_vector
+                        )
+                        GROUP BY node
                     )
-                    GROUP BY node
                 )
-                WHERE max_similarity * (1.0 + 0.3 * math::log10(matching_chunks)) > $threshold
+                WHERE composite_score > $threshold
             )
             ORDER BY composite_score DESC
             LIMIT $limit
