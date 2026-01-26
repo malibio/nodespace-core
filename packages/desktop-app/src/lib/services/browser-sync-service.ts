@@ -20,15 +20,14 @@
 
 /* global EventSource, MessageEvent */
 
-import { get } from 'svelte/store';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
-import { collectionsData, collectionsState } from '$lib/stores/collections';
 import type { SseEvent } from '$lib/types/sse-events';
 import type { Node } from '$lib/types/node';
 import { nodeToTaskNode } from '$lib/types/task-node';
 import { backendAdapter } from './backend-adapter';
 import { createLogger } from '$lib/utils/logger';
+import { scheduleCollectionRefresh } from '$lib/utils/collection-refresh';
 
 const log = createLogger('BrowserSyncService');
 
@@ -96,41 +95,6 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected';
  *
  * See: https://github.com/malibio/nodespace-core/issues/643
  */
-// Debounce timer for collection refreshes during bulk operations
-let collectionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-const COLLECTION_REFRESH_DEBOUNCE_MS = 300;
-
-/**
- * Debounced refresh of collections sidebar
- *
- * When member_of relationships change (especially during bulk imports),
- * we debounce the refresh to avoid excessive API calls.
- *
- * @param affectedCollectionId - Optional collection ID that was affected (for member refresh)
- */
-function scheduleCollectionRefresh(affectedCollectionId?: string): void {
-  if (collectionRefreshTimer) {
-    clearTimeout(collectionRefreshTimer);
-  }
-
-  collectionRefreshTimer = setTimeout(async () => {
-    collectionRefreshTimer = null;
-    log.debug('Refreshing collections after change');
-
-    // Reload all collections (updates sidebar)
-    await collectionsData.loadCollections();
-
-    // If the affected collection is currently selected, also refresh its members
-    if (affectedCollectionId) {
-      const state = get(collectionsState);
-      if (state.selectedCollectionId === affectedCollectionId) {
-        log.debug('Refreshing members for selected collection', affectedCollectionId);
-        await collectionsData.loadMembers(affectedCollectionId);
-      }
-    }
-  }, COLLECTION_REFRESH_DEBOUNCE_MS);
-}
-
 class BrowserSyncService {
   private eventSource: EventSource | null = null;
   private reconnectAttempts = 0;
