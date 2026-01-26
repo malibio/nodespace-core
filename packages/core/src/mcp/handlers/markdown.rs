@@ -797,6 +797,34 @@ where
                 let store = node_service.store.clone();
                 let root_id_for_log = root_id.clone();
 
+                // Resolve collection path synchronously (for error reporting), but defer membership creation
+                // This validates the path and creates any missing collections upfront
+                let collection_id_for_spawn = if let Some(path) = &params.collection {
+                    let collection_service =
+                        CollectionService::new(&node_service.store, node_service);
+                    let resolved = collection_service.resolve_path(path).await.map_err(|e| {
+                        match e {
+                            NodeServiceError::InvalidCollectionPath(msg) => {
+                                MCPError::invalid_params(format!("Invalid collection path: {}", msg))
+                            }
+                            NodeServiceError::CollectionCycle(msg) => {
+                                MCPError::invalid_params(format!(
+                                    "Collection cycle detected: {}",
+                                    msg
+                                ))
+                            }
+                            _ => MCPError::internal_error(format!(
+                                "Failed to resolve collection: {}",
+                                e
+                            )),
+                        }
+                    })?;
+                    Some(resolved.leaf_id().to_string())
+                } else {
+                    None
+                };
+                let root_id_for_collection = root_id.clone();
+
                 // Get the current tokio runtime handle and spawn on it
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
@@ -835,11 +863,28 @@ where
                             }
                         }
 
+                        // Add root to collection after nodes are created (in background)
+                        // Uses store directly to skip NodeService validation overhead
+                        if let Some(ref coll_id) = collection_id_for_spawn {
+                            if let Err(e) = store
+                                .add_to_collection(&root_id_for_collection, coll_id)
+                                .await
+                            {
+                                tracing::warn!(
+                                    root_id = %root_id_for_collection,
+                                    collection_id = %coll_id,
+                                    error = %e,
+                                    "Failed to add root to collection in background"
+                                );
+                            }
+                        }
+
                         tracing::info!(
                             root_id = %root_id_for_log,
                             nodes_created = created_count,
                             errors = error_count,
                             total = total_nodes,
+                            collection = ?collection_id_for_spawn,
                             duration_ms = insert_start.elapsed().as_millis(),
                             "Background streaming import completed"
                         );
@@ -853,28 +898,45 @@ where
                         .map_err(|e| {
                             tracing::error!(error = %e, "Sync fallback bulk creation failed");
                         });
+
+                    // Also add to collection synchronously in fallback
+                    if let Some(ref coll_id) = collection_id_for_spawn {
+                        let _ = node_service
+                            .store
+                            .add_to_collection(&root_id, coll_id)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!(error = %e, "Sync fallback collection add failed");
+                            });
+                    }
                 }
             }
         }
     }
 
-    // Add root node to collection if specified
-    let _collection_id = if let Some(path) = &params.collection {
-        let collection_service = CollectionService::new(&node_service.store, node_service);
-        let resolved = collection_service
-            .add_to_collection_by_path(&root_id, path)
-            .await
-            .map_err(|e| match e {
-                NodeServiceError::InvalidCollectionPath(msg) => {
-                    MCPError::invalid_params(format!("Invalid collection path: {}", msg))
-                }
-                NodeServiceError::CollectionCycle(msg) => {
-                    MCPError::invalid_params(format!("Collection cycle detected: {}", msg))
-                }
-                _ => MCPError::internal_error(format!("Failed to add to collection: {}", e)),
-            })?;
-        Some(resolved.leaf_id().to_string())
+    // For sync mode, collection handling is done inline (not via spawn)
+    // For async mode, collection was already handled above in the spawn setup
+    let _collection_id = if params.sync_import {
+        if let Some(path) = &params.collection {
+            let collection_service = CollectionService::new(&node_service.store, node_service);
+            let resolved = collection_service
+                .add_to_collection_by_path(&root_id, path)
+                .await
+                .map_err(|e| match e {
+                    NodeServiceError::InvalidCollectionPath(msg) => {
+                        MCPError::invalid_params(format!("Invalid collection path: {}", msg))
+                    }
+                    NodeServiceError::CollectionCycle(msg) => {
+                        MCPError::invalid_params(format!("Collection cycle detected: {}", msg))
+                    }
+                    _ => MCPError::internal_error(format!("Failed to add to collection: {}", e)),
+                })?;
+            Some(resolved.leaf_id().to_string())
+        } else {
+            None
+        }
     } else {
+        // Async mode: collection was handled in spawn setup above
         None
     };
 

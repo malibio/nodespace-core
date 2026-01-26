@@ -369,6 +369,7 @@ where
                 "id": node.id,
                 "nodeType": node.node_type,
                 "content": node.content,
+                "title": node.title,
                 "version": node.version,
                 "createdAt": node.created_at,
                 "modifiedAt": node.modified_at,
