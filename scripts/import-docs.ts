@@ -7,11 +7,15 @@
  *   bun run scripts/import-docs.ts --dry-run # Preview mappings without importing
  *
  * This script:
- * 1. Finds all .md files in docs/
- * 2. Derives collection path from folder structure with intelligent routing
- * 3. Derives title from the first H1 heading in the file, or falls back to filename
- * 4. Calls create_nodes_from_markdown MCP tool for each file
- * 5. Post-import: Updates archived docs to lifecycle_status: "archived"
+ * 1. Phase 1: Finds all .md files in docs/ and imports them
+ *    - Derives collection path from folder structure with intelligent routing
+ *    - Derives title from the first H1 heading in the file, or falls back to filename
+ *    - Calls create_nodes_from_markdown MCP tool for each file
+ *    - Builds a mapping of file paths to node IDs
+ * 2. Phase 2: Resolves internal markdown links to nodespace:// URIs
+ *    - Converts [text](./relative/path.md) to [text](nodespace://node-id)
+ *    - Creates bidirectional mentions relationships for navigation
+ * 3. Post-import: Updates archived docs to lifecycle_status: "archived"
  *
  * Collection Routing (Upper Case, No Prefix, Spaces Allowed):
  *   docs/architecture/decisions/foo.md -> "ADR"
@@ -26,7 +30,7 @@
  */
 
 import { readdir, readFile } from "fs/promises";
-import { join, relative, dirname, basename } from "path";
+import { join, relative, dirname, basename, resolve, normalize } from "path";
 
 const DOCS_ROOT = join(import.meta.dir, "..", "docs");
 const MCP_ENDPOINT = "http://localhost:3100/mcp"; // NodeSpace MCP HTTP endpoint
@@ -55,7 +59,11 @@ interface ImportResult {
 	rootId?: string;
 	error?: string;
 	isArchived: boolean;
+	filePath: string;
 }
+
+/** Mapping from relative file path (from docs root) to node ID */
+type PathToNodeIdMap = Map<string, string>;
 
 let requestId = 1;
 
@@ -227,6 +235,122 @@ function deriveCollectionAndMetadata(filePath: string): CollectionMetadata {
 }
 
 /**
+ * Extract all markdown links from content
+ * Returns array of { fullMatch, linkText, linkPath }
+ */
+function extractMarkdownLinks(content: string): Array<{ fullMatch: string; linkText: string; linkPath: string }> {
+	const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+	const links: Array<{ fullMatch: string; linkText: string; linkPath: string }> = [];
+	let match;
+
+	while ((match = linkPattern.exec(content)) !== null) {
+		const [fullMatch, linkText, linkPath] = match;
+		// Only process relative markdown links (not http/https, nodespace://, or anchors)
+		if (
+			linkPath.endsWith(".md") &&
+			!linkPath.startsWith("http://") &&
+			!linkPath.startsWith("https://") &&
+			!linkPath.startsWith("nodespace://") &&
+			!linkPath.startsWith("#")
+		) {
+			links.push({ fullMatch, linkText, linkPath });
+		}
+	}
+
+	return links;
+}
+
+/**
+ * Resolve a relative link path to an absolute path relative to docs root
+ * Example: from "architecture/core/system-overview.md" with link "../decisions/foo.md"
+ *          returns "architecture/decisions/foo.md"
+ */
+function resolveRelativePath(fromFile: string, linkPath: string): string {
+	// Get the directory of the source file
+	const fromDir = dirname(fromFile);
+	// Resolve the link path relative to that directory
+	const resolved = resolve(fromDir, linkPath);
+	// Normalize to remove any . or .. segments
+	return normalize(resolved).replace(/\\/g, "/");
+}
+
+/**
+ * Convert markdown links to nodespace:// URIs
+ * Returns the updated content and a list of resolved links for reporting
+ */
+function convertLinksToNodespaceUris(
+	content: string,
+	sourceFile: string,
+	pathToNodeId: PathToNodeIdMap
+): { updatedContent: string; resolvedLinks: number; unresolvedLinks: string[] } {
+	const links = extractMarkdownLinks(content);
+	let updatedContent = content;
+	let resolvedLinks = 0;
+	const unresolvedLinks: string[] = [];
+
+	for (const { fullMatch, linkText, linkPath } of links) {
+		// Resolve the relative path to get the target file path
+		const targetPath = resolveRelativePath(sourceFile, linkPath);
+
+		// Look up the node ID for this path
+		const nodeId = pathToNodeId.get(targetPath);
+
+		if (nodeId) {
+			// Replace with nodespace:// URI
+			const newLink = `[${linkText}](nodespace://${nodeId})`;
+			updatedContent = updatedContent.replace(fullMatch, newLink);
+			resolvedLinks++;
+		} else {
+			// Track unresolved links for reporting
+			unresolvedLinks.push(`${linkPath} → ${targetPath}`);
+		}
+	}
+
+	return { updatedContent, resolvedLinks, unresolvedLinks };
+}
+
+/**
+ * Get node content by ID via MCP
+ */
+async function getNodeContent(nodeId: string): Promise<{ content: string; version: number } | null> {
+	try {
+		const result = (await callMCP("tools/call", {
+			name: "get_node",
+			arguments: { node_id: nodeId },
+		})) as { content: Array<{ text: string }> };
+
+		const resultText = result?.content?.[0]?.text || "{}";
+		const parsed = JSON.parse(resultText);
+
+		if (parsed.content !== undefined && parsed.version !== undefined) {
+			return { content: parsed.content, version: parsed.version };
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Update node content via MCP
+ */
+async function updateNodeContent(nodeId: string, content: string): Promise<boolean> {
+	try {
+		await callMCP("tools/call", {
+			name: "update_node",
+			arguments: {
+				node_id: nodeId,
+				content: content,
+			},
+		});
+		return true;
+	} catch (error) {
+		console.error(`    ✗ Failed to update ${nodeId}:`, error);
+		return false;
+	}
+}
+
+/**
  * Find all markdown files recursively
  */
 async function findMarkdownFiles(dir: string): Promise<string[]> {
@@ -274,7 +398,7 @@ async function importFile(
 
 		if (dryRun) {
 			console.log(`    → Would import to collection "${collection}"\n`);
-			return { success: true, isArchived };
+			return { success: true, isArchived, filePath: relativePath };
 		}
 
 		// Don't pass title - let the handler extract it from the first line
@@ -293,15 +417,15 @@ async function importFile(
 
 		if (parsed.root_id) {
 			console.log(`    ✓ Created root: ${parsed.root_id}\n`);
-			return { success: true, rootId: parsed.root_id, isArchived };
+			return { success: true, rootId: parsed.root_id, isArchived, filePath: relativePath };
 		} else {
 			console.log(`    ✗ No root_id in response\n`);
-			return { success: false, error: "No root_id in response", isArchived };
+			return { success: false, error: "No root_id in response", isArchived, filePath: relativePath };
 		}
 	} catch (error) {
 		const errorMsg = error instanceof Error ? error.message : String(error);
 		console.log(`    ✗ Error: ${errorMsg}\n`);
-		return { success: false, error: errorMsg, isArchived };
+		return { success: false, error: errorMsg, isArchived, filePath: relativePath };
 	}
 }
 
@@ -385,16 +509,28 @@ async function main() {
 		console.log("\n=== File Mappings ===\n");
 	}
 
-	// Import each file
+	// ============================================================
+	// PHASE 1: Import all files and build path-to-nodeId mapping
+	// ============================================================
+	console.log("=== Phase 1: Importing Documents ===\n");
+
 	let successCount = 0;
 	let errorCount = 0;
 	const errors: Array<{ file: string; error: string }> = [];
 	const archivedRootIds: string[] = [];
+	const pathToNodeId: PathToNodeIdMap = new Map();
+	const importedResults: ImportResult[] = [];
 
 	for (let i = 0; i < files.length; i++) {
 		const result = await importFile(files[i], i, files.length, dryRun);
+		importedResults.push(result);
+
 		if (result.success) {
 			successCount++;
+			// Build the path-to-nodeId mapping
+			if (result.rootId && result.filePath) {
+				pathToNodeId.set(result.filePath, result.rootId);
+			}
 			// Track archived nodes for post-import lifecycle update
 			if (result.isArchived && result.rootId) {
 				archivedRootIds.push(result.rootId);
@@ -411,6 +547,77 @@ async function main() {
 		if (!dryRun) {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
+	}
+
+	console.log(`Phase 1 complete: ${successCount} imported, ${errorCount} failed\n`);
+
+	// ============================================================
+	// PHASE 2: Resolve internal markdown links to nodespace:// URIs
+	// ============================================================
+	if (!dryRun && pathToNodeId.size > 0) {
+		console.log("=== Phase 2: Resolving Internal Links ===\n");
+
+		let linksResolved = 0;
+		let docsUpdated = 0;
+		const allUnresolvedLinks: Array<{ file: string; links: string[] }> = [];
+
+		for (const result of importedResults) {
+			if (!result.success || !result.rootId || !result.filePath) continue;
+
+			// Read the original file content to find links
+			const fullPath = join(DOCS_ROOT, result.filePath);
+			const originalContent = await readFile(fullPath, "utf-8");
+
+			// Check if there are any markdown links to convert
+			const links = extractMarkdownLinks(originalContent);
+			if (links.length === 0) continue;
+
+			// Get current node content (which may differ slightly from original due to markdown parsing)
+			const nodeData = await getNodeContent(result.rootId);
+			if (!nodeData) {
+				console.log(`  ⚠️ Could not fetch ${result.filePath} (${result.rootId})`);
+				continue;
+			}
+
+			// Convert links in the node content
+			const { updatedContent, resolvedLinks, unresolvedLinks } = convertLinksToNodespaceUris(
+				nodeData.content,
+				result.filePath,
+				pathToNodeId
+			);
+
+			if (resolvedLinks > 0) {
+				// Update the node with converted links
+				if (await updateNodeContent(result.rootId, updatedContent)) {
+					console.log(`  ✓ ${result.filePath}: ${resolvedLinks} links resolved`);
+					linksResolved += resolvedLinks;
+					docsUpdated++;
+				}
+			}
+
+			if (unresolvedLinks.length > 0) {
+				allUnresolvedLinks.push({ file: result.filePath, links: unresolvedLinks });
+			}
+		}
+
+		console.log(`\nPhase 2 complete: ${linksResolved} links resolved in ${docsUpdated} documents`);
+
+		if (allUnresolvedLinks.length > 0) {
+			console.log(`\n⚠️ Unresolved links (target files not imported):`);
+			for (const { file, links } of allUnresolvedLinks.slice(0, 10)) {
+				console.log(`  ${file}:`);
+				for (const link of links.slice(0, 3)) {
+					console.log(`    - ${link}`);
+				}
+				if (links.length > 3) {
+					console.log(`    ... and ${links.length - 3} more`);
+				}
+			}
+			if (allUnresolvedLinks.length > 10) {
+				console.log(`  ... and ${allUnresolvedLinks.length - 10} more files with unresolved links`);
+			}
+		}
+		console.log("");
 	}
 
 	// Post-import: Update lifecycle_status for archived docs
