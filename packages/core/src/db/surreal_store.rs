@@ -1646,6 +1646,16 @@ where
                 .context("Failed to update properties")?;
         }
 
+        // Issue #828, #770: Update lifecycle_status if provided
+        if let Some(status) = update.lifecycle_status {
+            self.db
+                .query("UPDATE type::thing('node', $id) SET lifecycle_status = $lifecycle_status;")
+                .bind(("id", id.to_string()))
+                .bind(("lifecycle_status", status))
+                .await
+                .context("Failed to update lifecycle_status")?;
+        }
+
         // Fetch fresh node
         let node = self
             .get_node(id)

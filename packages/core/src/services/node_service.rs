@@ -2000,6 +2000,7 @@ where
             content: Some(updated.content.clone()),
             properties: Some(updated.properties.clone()),
             title: title_update,
+            lifecycle_status: None, // Schema update doesn't change lifecycle_status
         };
 
         // For schema nodes, use atomic update with DDL generation (Issue #690, #703)
@@ -2171,11 +2172,13 @@ where
         };
 
         // Create node update
+        // Issue #828, #770: Pass through lifecycle_status if provided
         let node_update = crate::models::NodeUpdate {
             node_type: Some(updated.node_type.clone()),
             content: Some(updated.content.clone()),
             properties: Some(updated.properties.clone()),
             title: title_update,
+            lifecycle_status: update.lifecycle_status,
         };
 
         // Perform atomic update with version check
@@ -3558,7 +3561,8 @@ where
             node_type: Some(node.node_type.clone()),
             content: Some(node.content.clone()),
             properties: Some(node.properties.clone()),
-            title: None, // Don't update title on version bump
+            title: None,            // Don't update title on version bump
+            lifecycle_status: None, // Don't update lifecycle_status on version bump
         };
 
         // Perform atomic update with version check
