@@ -48,6 +48,9 @@ static MARKDOWN_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|
     ]
 });
 
+/// Compiled regex for whitespace normalization
+static WHITESPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
+
 /// Strip markdown formatting from content to produce plain text
 ///
 /// This function removes common markdown syntax to produce clean text
@@ -89,8 +92,7 @@ pub fn strip_markdown(content: &str) -> String {
     }
 
     // Clean up multiple whitespace and trim
-    let whitespace_re = Regex::new(r"\s+").unwrap();
-    result = whitespace_re.replace_all(&result, " ").to_string();
+    result = WHITESPACE_RE.replace_all(&result, " ").to_string();
     result.trim().to_string()
 }
 
