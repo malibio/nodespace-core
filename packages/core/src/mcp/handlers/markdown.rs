@@ -802,23 +802,25 @@ where
                 let collection_id_for_spawn = if let Some(path) = &params.collection {
                     let collection_service =
                         CollectionService::new(&node_service.store, node_service);
-                    let resolved = collection_service.resolve_path(path).await.map_err(|e| {
-                        match e {
-                            NodeServiceError::InvalidCollectionPath(msg) => {
-                                MCPError::invalid_params(format!("Invalid collection path: {}", msg))
-                            }
-                            NodeServiceError::CollectionCycle(msg) => {
-                                MCPError::invalid_params(format!(
-                                    "Collection cycle detected: {}",
-                                    msg
-                                ))
-                            }
-                            _ => MCPError::internal_error(format!(
-                                "Failed to resolve collection: {}",
-                                e
-                            )),
-                        }
-                    })?;
+                    let resolved =
+                        collection_service
+                            .resolve_path(path)
+                            .await
+                            .map_err(|e| match e {
+                                NodeServiceError::InvalidCollectionPath(msg) => {
+                                    MCPError::invalid_params(format!(
+                                        "Invalid collection path: {}",
+                                        msg
+                                    ))
+                                }
+                                NodeServiceError::CollectionCycle(msg) => MCPError::invalid_params(
+                                    format!("Collection cycle detected: {}", msg),
+                                ),
+                                _ => MCPError::internal_error(format!(
+                                    "Failed to resolve collection: {}",
+                                    e
+                                )),
+                            })?;
                     Some(resolved.leaf_id().to_string())
                 } else {
                     None
