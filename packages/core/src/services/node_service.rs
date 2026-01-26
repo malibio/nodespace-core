@@ -1337,7 +1337,7 @@ where
         let title = if params.node_type == "task" || params.parent_id.is_none() {
             // Exclude certain types from having titles
             match params.node_type.as_str() {
-                "date" | "schema" => None,
+                "date" | "schema" | "collection" => None,
                 _ => Some(crate::utils::strip_markdown(&params.content)),
             }
         } else {
@@ -2101,9 +2101,9 @@ where
             // Determine if this node should have a title
             // 1. Task nodes always get titles (regardless of hierarchy)
             // 2. Root nodes (no parent) get titles
-            // 3. Date and schema nodes never get titles
+            // 3. Date, schema, and collection nodes never get titles
             let should_have_title = match updated.node_type.as_str() {
-                "date" | "schema" => false,
+                "date" | "schema" | "collection" => false,
                 "task" => true,
                 _ => {
                     // Check if root node (no parent)
@@ -2282,7 +2282,7 @@ where
         let title_update = if content_changed || node_type_changed {
             // Determine if this node should have a title
             let should_have_title = match updated.node_type.as_str() {
-                "date" | "schema" => false,
+                "date" | "schema" | "collection" => false,
                 "task" => true,
                 _ => self.get_parent(id).await?.is_none(),
             };
