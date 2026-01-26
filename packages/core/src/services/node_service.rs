@@ -4965,10 +4965,7 @@ where
             .bind(("rel_type", rel_type_owned))
             .await
             .map_err(|e| {
-                NodeServiceError::query_failed(format!(
-                    "Failed to get built-in related nodes: {}",
-                    e
-                ))
+                NodeServiceError::query_failed(format!("Failed to get related nodes: {}", e))
             })?;
 
         #[derive(serde::Deserialize)]
@@ -4977,7 +4974,7 @@ where
         }
 
         let edges: Vec<EdgeOut> = result.take(0).map_err(|e| {
-            NodeServiceError::query_failed(format!("Failed to parse built-in related edges: {}", e))
+            NodeServiceError::query_failed(format!("Failed to parse related edges: {}", e))
         })?;
 
         if edges.is_empty() {
