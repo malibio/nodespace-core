@@ -555,7 +555,8 @@ where
                 .get_collection_members(coll_id)
                 .await
                 .map_err(service_error_to_mcp)?;
-            Some(members.into_iter().collect())
+            // Extract IDs from nodes for membership filtering
+            Some(members.into_iter().map(|n| n.id).collect())
         } else {
             None
         };
