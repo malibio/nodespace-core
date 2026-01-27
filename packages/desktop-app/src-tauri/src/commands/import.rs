@@ -438,13 +438,6 @@ pub async fn import_markdown_files(
     let total_files = file_paths.len();
     let options = options.unwrap_or_default();
 
-    println!(
-        ">>> import_markdown_files: auto_collection_routing={}, base_directory={:?}, exclude_patterns={:?}",
-        options.auto_collection_routing,
-        options.base_directory,
-        options.exclude_patterns
-    );
-
     let mut results = Vec::with_capacity(total_files);
     let mut successful = 0;
     let mut failed = 0;
@@ -502,16 +495,8 @@ pub async fn import_markdown_files(
         // Determine collection and metadata
         let (collection, is_archived) = if options.auto_collection_routing {
             let metadata = derive_collection_metadata(&path, &base_dir);
-            println!(
-                ">>> Auto-routing: {} -> collection='{}', archived={}",
-                relative_path, metadata.collection, metadata.is_archived
-            );
             (Some(metadata.collection), metadata.is_archived)
         } else {
-            println!(
-                ">>> No auto-routing, using explicit collection: {:?}",
-                options.collection
-            );
             (options.collection.clone(), false)
         };
 
@@ -563,38 +548,9 @@ pub async fn import_markdown_files(
         match import_markdown_content(&node_service, &title, &content, is_archived).await {
             Ok((root_id, nodes_created)) => {
                 // Assign to collection inline for real-time UI visibility
-                // Write to file for reliable debug output
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/import-debug.log")
-                {
-                    let _ = writeln!(
-                        f,
-                        ">>> MATCH Ok branch: root_id={}, nodes_created={}",
-                        root_id, nodes_created
-                    );
-                }
-
                 if let Some(ref coll) = collection {
-                    println!(
-                        ">>> Attempting collection assignment: root_id={}, collection={}",
-                        root_id, coll
-                    );
-                    let _ = std::io::stdout().flush();
-                    if let Err(e) = assign_to_collection(&node_service, &root_id, coll).await {
-                        println!(">>> Collection assignment ERROR for {}: {}", root_id, e);
-                    } else {
-                        println!(
-                            ">>> Collection assignment SUCCESS for {} to {}",
-                            root_id, coll
-                        );
-                    }
-                } else {
-                    println!(">>> No collection for file: {}", file_path);
+                    let _ = assign_to_collection(&node_service, &root_id, coll).await;
                 }
-                let _ = std::io::stdout().flush();
                 results.push(FileImportResult {
                     file_path: file_path.clone(),
                     root_id: Some(root_id),
@@ -607,9 +563,6 @@ pub async fn import_markdown_files(
                 successful += 1;
             }
             Err(e) => {
-                println!(">>> MATCH Err branch: file={}, error={}", file_path, e);
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
                 results.push(FileImportResult {
                     file_path: file_path.clone(),
                     root_id: None,
@@ -865,11 +818,6 @@ async fn assign_to_collection(
 ) -> Result<(), String> {
     use nodespace_core::services::CollectionService;
 
-    println!(
-        ">>> [assign_to_collection] node={}, path={}",
-        node_id, collection_path
-    );
-
     let collection_service = CollectionService::new(node_service.store(), node_service);
 
     // This creates the collection path if needed AND adds the node to it
@@ -877,17 +825,11 @@ async fn assign_to_collection(
         .add_to_collection_by_path(node_id, collection_path)
         .await
         .map_err(|e| {
-            let err_msg = format!(
+            format!(
                 "Failed to add {} to collection '{}': {:?}",
                 node_id, collection_path, e
-            );
-            println!(">>> [assign_to_collection] ERROR: {}", err_msg);
-            err_msg
+            )
         })?;
 
-    println!(
-        ">>> [assign_to_collection] SUCCESS: {} -> {}",
-        node_id, collection_path
-    );
     Ok(())
 }

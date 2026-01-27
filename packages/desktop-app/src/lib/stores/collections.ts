@@ -82,15 +82,6 @@ function createCollectionsDataStore() {
       try {
         const collections = await collectionService.getAllCollections();
         log.debug('Loaded collections', { count: collections.length });
-        // Debug: Log first few collections to see parentCollectionIds
-        if (collections.length > 0) {
-          console.log('DEBUG Collections sample:', collections.slice(0, 3).map(c => ({
-            id: c.id,
-            content: c.content,
-            parentCollectionIds: c.parentCollectionIds,
-            memberOf: (c as unknown as { memberOf?: string[] }).memberOf
-          })));
-        }
 
         update((state) => ({
           ...state,
