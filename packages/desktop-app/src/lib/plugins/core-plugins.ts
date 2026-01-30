@@ -157,13 +157,15 @@ export const taskNodePlugin: PluginDefinition = {
     priority: 1
   },
   // Type-specific metadata extraction (Issue #698, #794, #838)
-  // Issue #838: Backend now returns flat properties (namespace is internal storage detail)
-  extractMetadata: (node: { nodeType: string; properties?: Record<string, unknown> }) => {
+  // Issue #838: Backend returns TaskNode with status at TOP LEVEL (flat spoke fields)
+  // Also supports generic Node where status is in properties (for SSE events)
+  extractMetadata: (node: { nodeType: string; status?: string; priority?: string | number; properties?: Record<string, unknown> }) => {
     const properties = node.properties || {};
-    // Issue #838: Properties are now flat (status, priority, etc.) not namespaced
-    const status = properties.status;
+    // Issue #838: Check top-level status first (TaskNode format), fall back to properties.status
+    // TaskNode has status at node.status, generic Node has it at node.properties.status
+    const status = node.status ?? properties.status;
 
-    // Map task status to NodeState expected by TaskNode
+    // Map task status to NodeState expected by TaskNode component
     let taskState: 'pending' | 'inProgress' | 'completed' = 'pending';
     if (status === 'IN_PROGRESS' || status === 'in_progress') {
       taskState = 'inProgress';
@@ -173,7 +175,8 @@ export const taskNodePlugin: PluginDefinition = {
       taskState = 'pending';
     }
 
-    return { taskState, ...properties };
+    // Include both top-level spoke fields and properties for complete metadata
+    return { taskState, status, priority: node.priority ?? properties.priority, ...properties };
   },
   // Type-specific state mapping (Issue #698)
   mapStateToSchema: (state: string, _fieldName: string): CoreTaskStatus => {
