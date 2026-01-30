@@ -9604,7 +9604,7 @@ mod tests {
                 surrealdb::sql::Thing::from(("node".to_string(), collection_id.clone()));
 
             #[derive(Debug, serde::Deserialize)]
-            #[allow(dead_code)] // member is used for deserialization but not accessed
+            #[expect(dead_code, reason = "member is used for deserialization but not accessed")]
             struct RelWithOrder {
                 #[serde(rename = "in")]
                 member: surrealdb::sql::Thing,
@@ -9750,7 +9750,7 @@ mod tests {
             let parent_thing = surrealdb::sql::Thing::from(("node".to_string(), parent_id.clone()));
 
             #[derive(Debug, serde::Deserialize)]
-            #[allow(dead_code)] // out is used for deserialization but not accessed
+            #[expect(dead_code, reason = "out is used for deserialization but not accessed")]
             struct RelWithOrder {
                 out: surrealdb::sql::Thing,
                 order: Option<f64>,
