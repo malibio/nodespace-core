@@ -946,6 +946,14 @@ where
         for (key, value) in props_obj {
             // Check if this key looks like a namespace (an object with nested properties)
             // Namespaces are typically node types like "task", "text", "custom", etc.
+            //
+            // CONSTRAINT: This heuristic assumes client properties are simple values
+            // (strings, numbers, booleans, arrays). If a property has an object value
+            // and isn't a known schema field, it's treated as a namespace. This works
+            // because NodeSpace schema fields are designed to be simple types. If
+            // object-typed custom properties are needed in the future, consider adding
+            // an explicit namespace marker (e.g., `_is_namespace: true`) to distinguish
+            // namespaces from complex property values.
             if value.is_object() && !schema_field_names.contains(key.as_str()) {
                 // This is likely a namespace (dormant or active) - preserve it
                 namespaced.insert(key.clone(), value.clone());

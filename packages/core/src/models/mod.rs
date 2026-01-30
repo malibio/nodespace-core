@@ -143,6 +143,13 @@ fn flatten_properties_for_api(node: &mut Node) {
 
     // No namespace found - properties might already be flat or empty
     // Filter out any namespace objects and internal fields
+    //
+    // CONSTRAINT: This fallback path filters out ALL object-typed values as a
+    // defensive measure. This ensures no nested namespaces leak through if the
+    // data format is unexpected. Since NodeSpace properties are designed to be
+    // simple types (strings, numbers, booleans, arrays), this is safe. If
+    // object-typed properties are added in the future, this filter would need
+    // to distinguish between namespace objects and legitimate complex properties.
     let flat: serde_json::Map<String, serde_json::Value> = props_obj
         .iter()
         .filter(|(k, v)| !v.is_object() && !k.starts_with('_'))
