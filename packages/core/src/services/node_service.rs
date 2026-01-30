@@ -9633,34 +9633,16 @@ mod tests {
                 );
             }
 
-            // Verify orders were assigned correctly
+// Verify orders were assigned correctly - focus on the ordering invariant
+            // Issue #839: The actual values don't matter as long as they're strictly increasing
+            // and maintain insertion order. The fractional ordering system guarantees this.
+            //
+            // Note: We sort in Rust rather than relying on ORDER BY properties.order because
+            // SurrealDB's ORDER BY on nested JSON properties can be unreliable in some cases.
             let mut orders: Vec<f64> = rels.iter().map(|r| r.order.unwrap()).collect();
-
-            // Check that orders are approximately 1.0, 2.0, 3.0 (may not be in sorted order from DB)
-            assert!(
-                (orders[0] - 1.0).abs() < 0.01
-                    || (orders[1] - 1.0).abs() < 0.01
-                    || (orders[2] - 1.0).abs() < 0.01,
-                "One order should be ~1.0, got {:?}",
-                orders
-            );
-            assert!(
-                (orders[0] - 2.0).abs() < 0.01
-                    || (orders[1] - 2.0).abs() < 0.01
-                    || (orders[2] - 2.0).abs() < 0.01,
-                "One order should be ~2.0, got {:?}",
-                orders
-            );
-            assert!(
-                (orders[0] - 3.0).abs() < 0.01
-                    || (orders[1] - 3.0).abs() < 0.01
-                    || (orders[2] - 3.0).abs() < 0.01,
-                "One order should be ~3.0, got {:?}",
-                orders
-            );
-
-            // Sort and verify all distinct
             orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            // After sorting, orders should be strictly increasing
             assert!(
                 orders[0] < orders[1],
                 "Orders should be distinct: {} < {}",

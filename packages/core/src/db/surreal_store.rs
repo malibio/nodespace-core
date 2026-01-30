@@ -4447,14 +4447,16 @@ where
     ) -> Result<f64> {
         #[derive(Deserialize)]
         struct EdgeOrder {
-            order: f64,
+            order: Option<f64>,
         }
 
         let node_thing = Thing::from(("node".to_string(), node_id.to_string()));
         let direction_column = if use_out_direction { "out" } else { "in" };
 
+// Note: We fetch ALL order values and find max in Rust because SurrealDB's
+        // ORDER BY on nested JSON properties (properties.order) can be unreliable.
         let query = format!(
-            "SELECT properties.order AS order FROM relationship WHERE {} = $node_thing AND relationship_type = $rel_type ORDER BY properties.order DESC LIMIT 1;",
+            "SELECT properties.order AS order FROM relationship WHERE {} = $node_thing AND relationship_type = $rel_type;",
             direction_column
         );
 
@@ -4464,14 +4466,20 @@ where
             .bind(("node_thing", node_thing))
             .bind(("rel_type", relationship_type.to_string()))
             .await
-            .context("Failed to get last relationship order")?;
+.context(format!("Failed to get {} orders", relationship_type))?;
 
-        let last_order: Option<EdgeOrder> = response
+        let orders: Vec<EdgeOrder> = response
             .take(0)
-            .context("Failed to extract last relationship order")?;
+            .context(format!("Failed to extract {} orders", relationship_type))?;
 
-        let new_order = if let Some(rel) = last_order {
-            FractionalOrderCalculator::calculate_order(Some(rel.order), None)
+        // Find the maximum order value in Rust (reliable sorting)
+        let max_order = orders
+            .iter()
+            .filter_map(|e| e.order)
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let new_order = if let Some(last_order) = max_order {
+            FractionalOrderCalculator::calculate_order(Some(last_order), None)
         } else {
             FractionalOrderCalculator::calculate_order(None, None)
         };
@@ -4720,46 +4728,97 @@ where
     ///
     /// Full Node structs for all collection members, ordered by their membership order
     pub async fn get_collection_members(&self, collection_id: &str) -> Result<Vec<Node>> {
-        // Single query using SurrealDB graph traversal for optimal performance
-        // Uses subquery to fetch full node data in one round-trip
-        // Issue #839: Uses idx_rel_member_order index and preserves order
+        // Issue #839: Get collection members in order
+        // Note: SurrealDB's ORDER BY on nested JSON properties (properties.order) can be
+        // unreliable, so we fetch relationships with order values and sort in Rust.
         use surrealdb::sql::Thing;
         let start = std::time::Instant::now();
         let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
 
-        // Single query: get member IDs ordered by properties.order, then fetch full node data
-        // Must SELECT both `in` and `properties.order` so ORDER BY works in SurrealDB
-        // Uses LET to preserve the ordered array, then SELECT * FROM array preserves order
-        // This should use idx_rel_member_order index on (out, relationship_type, properties.order)
+        // Step 1: Get member IDs with their order values
+        // The idx_rel_member_order index is used for filtering, but we sort in Rust for reliability
+        #[derive(Debug, Deserialize)]
+        struct MemberWithOrder {
+            #[serde(rename = "in")]
+            member: Thing,
+            order: Option<f64>,
+        }
+
         let mut response = self
             .db
             .query(
                 r#"
-                LET $member_ids = (
-                    SELECT in, properties.order FROM relationship
-                    WHERE out = $collection_thing AND relationship_type = 'member_of'
-                    ORDER BY properties.order ASC
-                ).in;
-                SELECT * FROM $member_ids;
+                SELECT in, properties.order AS order FROM relationship
+                WHERE out = $collection_thing AND relationship_type = 'member_of';
                 "#,
             )
             .bind(("collection_thing", collection_thing))
             .await
             .context("Failed to get collection members")?;
 
-        // Skip the LET result (statement 0), take the SELECT result (statement 1)
-        let surreal_nodes: Vec<SurrealNode> = response
-            .take(1)
-            .context("Failed to extract members from response")?;
+        let mut members_with_order: Vec<MemberWithOrder> = response
+            .take(0)
+            .context("Failed to extract member relationships")?;
+
+        // Step 2: Sort by order in Rust (reliable sorting)
+        members_with_order.sort_by(|a, b| {
+            let order_a = a.order.unwrap_or(f64::MAX);
+            let order_b = b.order.unwrap_or(f64::MAX);
+            order_a
+                .partial_cmp(&order_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Step 3: If no members, return early
+        if members_with_order.is_empty() {
+            tracing::debug!(
+                "get_collection_members: no members found, took {:?}",
+                start.elapsed()
+            );
+            return Ok(vec![]);
+        }
+
+        // Step 4: Fetch full node data for each member (preserving order)
+        // Build array of member IDs for batch fetch
+        let member_ids: Vec<Thing> = members_with_order
+            .iter()
+            .map(|m| m.member.clone())
+            .collect();
+
+        let mut node_response = self
+            .db
+            .query("SELECT * FROM $member_ids;")
+            .bind(("member_ids", member_ids.clone()))
+            .await
+            .context("Failed to fetch member nodes")?;
+
+        let surreal_nodes: Vec<SurrealNode> = node_response
+            .take(0)
+            .context("Failed to extract member nodes")?;
+
+        // Step 5: Create a map for quick lookup by ID
+        let node_map: std::collections::HashMap<String, Node> = surreal_nodes
+            .into_iter()
+            .map(|sn| {
+                let node: Node = sn.into();
+                (node.id.clone(), node)
+            })
+            .collect();
+
+        // Step 6: Return nodes in the sorted order
+        let nodes: Vec<Node> = member_ids
+            .iter()
+            .filter_map(|thing| {
+                let id = thing.id.to_raw();
+                node_map.get(&id).cloned()
+            })
+            .collect();
 
         tracing::debug!(
-            "get_collection_members: single query took {:?} for {} nodes",
+            "get_collection_members: took {:?} for {} nodes",
             start.elapsed(),
-            surreal_nodes.len()
+            nodes.len()
         );
-
-        // Convert to nodes (properties already embedded) - order is preserved
-        let nodes: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
 
         Ok(nodes)
     }
