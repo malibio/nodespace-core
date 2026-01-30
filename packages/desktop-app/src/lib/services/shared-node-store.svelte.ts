@@ -1129,7 +1129,6 @@ export class SharedNodeStore {
                 return;
               }
 
-
               // Check if node has been persisted - use in-memory tracking to avoid database query
               const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
               if (isPersistedToDatabase) {
