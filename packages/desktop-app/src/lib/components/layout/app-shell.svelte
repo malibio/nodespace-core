@@ -22,7 +22,7 @@
   import { loadPersistedState } from '$lib/stores/navigation';
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
-  import { openUrl } from '$lib/utils/external-links';
+  import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -244,7 +244,7 @@
       if (!href) return;
 
       // Handle external links (http/https) - open in system browser
-      if (href.startsWith('http://') || href.startsWith('https://')) {
+      if (isExternalUrl(href)) {
         event.preventDefault();
         event.stopPropagation();
 
@@ -256,7 +256,7 @@
       }
 
       // Only handle nodespace:// protocol from here
-      if (!href.startsWith('nodespace://')) return;
+      if (!isNodespaceUrl(href)) return;
 
       // Prevent default browser navigation
       event.preventDefault();
@@ -311,7 +311,9 @@
         const sourcePaneElement = (event.target as HTMLElement).closest('[data-pane-id]');
         const sourcePaneId = sourcePaneElement?.getAttribute('data-pane-id') ?? undefined;
 
-        // Resolve node target to check if it exists
+        // Pre-resolve node target to provide user feedback before navigation.
+        // Note: Navigation methods call resolveNodeTarget again internally, but the result
+        // is cached in SharedNodeStore so this doesn't cause redundant database queries.
         const target = await navService.resolveNodeTarget(nodeId);
 
         if (!target) {
