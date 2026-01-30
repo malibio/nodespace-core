@@ -4419,6 +4419,65 @@ where
     // Collection Membership Operations (member_of relationships)
     // ========================================================================
 
+    /// Get the next order value for an ordered relationship.
+    ///
+    /// Issue #839: Common helper for fractional ordering of relationships.
+    /// Queries for the highest order value in the specified relationship type
+    /// and calculates the next value using FractionalOrderCalculator.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The ID of the anchor node (collection for member_of, parent for has_child)
+    /// * `relationship_type` - The type of relationship ("member_of" or "has_child")
+    /// * `use_out_as_anchor` - If true, query by `out` field; if false, query by `in` field
+    ///
+    /// # Returns
+    ///
+    /// The next order value for appending to this relationship set
+    async fn get_next_order_for_relationship(
+        &self,
+        node_id: &str,
+        relationship_type: &str,
+        use_out_as_anchor: bool,
+    ) -> Result<f64> {
+        #[derive(Deserialize)]
+        struct EdgeOrder {
+            order: f64,
+        }
+
+        let node_thing = Thing::from(("node".to_string(), node_id.to_string()));
+
+        // Build query based on anchor direction
+        // member_of: collection is the OUT target (node -> relationship -> collection)
+        // has_child: parent is the IN source (parent -> relationship -> child)
+        let anchor_field = if use_out_as_anchor { "out" } else { "in" };
+        let query = format!(
+            "SELECT properties.order AS order FROM relationship WHERE {} = $node_thing AND relationship_type = $rel_type ORDER BY properties.order DESC LIMIT 1;",
+            anchor_field
+        );
+
+        let mut response = self
+            .db
+            .query(&query)
+            .bind(("node_thing", node_thing))
+            .bind(("rel_type", relationship_type.to_string()))
+            .await
+            .context(format!("Failed to get last {} order", relationship_type))?;
+
+        let last_order: Option<EdgeOrder> = response.take(0).context(format!(
+            "Failed to extract last {} order",
+            relationship_type
+        ))?;
+
+        let new_order = if let Some(rel) = last_order {
+            FractionalOrderCalculator::calculate_order(Some(rel.order), None)
+        } else {
+            FractionalOrderCalculator::calculate_order(None, None)
+        };
+
+        Ok(new_order)
+    }
+
     /// Get the next order value for appending a member to a collection.
     ///
     /// Issue #839: Fractional ordering for member_of relationships.
@@ -4433,34 +4492,9 @@ where
     ///
     /// The next order value for appending to this collection
     pub async fn get_next_member_order(&self, collection_id: &str) -> Result<f64> {
-        #[derive(Deserialize)]
-        struct EdgeOrder {
-            order: f64,
-        }
-
-        let collection_thing = Thing::from(("node".to_string(), collection_id.to_string()));
-
-        // Query for highest order - note: member_of uses OUT as the collection
-        let mut response = self
-            .db
-            .query(
-                "SELECT properties.order AS order FROM relationship WHERE out = $collection_thing AND relationship_type = 'member_of' ORDER BY properties.order DESC LIMIT 1;",
-            )
-            .bind(("collection_thing", collection_thing))
+        // member_of: collection is the OUT target (node -> relationship -> collection)
+        self.get_next_order_for_relationship(collection_id, "member_of", true)
             .await
-            .context("Failed to get last member order")?;
-
-        let last_order: Option<EdgeOrder> = response
-            .take(0)
-            .context("Failed to extract last member order")?;
-
-        let new_order = if let Some(rel) = last_order {
-            FractionalOrderCalculator::calculate_order(Some(rel.order), None)
-        } else {
-            FractionalOrderCalculator::calculate_order(None, None)
-        };
-
-        Ok(new_order)
     }
 
     /// Get the next order value for appending a child to a parent.
@@ -4477,34 +4511,9 @@ where
     ///
     /// The next order value for appending to this parent
     pub async fn get_next_child_order(&self, parent_id: &str) -> Result<f64> {
-        #[derive(Deserialize)]
-        struct EdgeOrder {
-            order: f64,
-        }
-
-        let parent_thing = Thing::from(("node".to_string(), parent_id.to_string()));
-
-        // Query for highest order - note: has_child uses IN as the parent
-        let mut response = self
-            .db
-            .query(
-                "SELECT properties.order AS order FROM relationship WHERE in = $parent_thing AND relationship_type = 'has_child' ORDER BY properties.order DESC LIMIT 1;",
-            )
-            .bind(("parent_thing", parent_thing))
+        // has_child: parent is the IN source (parent -> relationship -> child)
+        self.get_next_order_for_relationship(parent_id, "has_child", false)
             .await
-            .context("Failed to get last child order")?;
-
-        let last_order: Option<EdgeOrder> = response
-            .take(0)
-            .context("Failed to extract last child order")?;
-
-        let new_order = if let Some(rel) = last_order {
-            FractionalOrderCalculator::calculate_order(Some(rel.order), None)
-        } else {
-            FractionalOrderCalculator::calculate_order(None, None)
-        };
-
-        Ok(new_order)
     }
 
     /// Add a node to a collection (create member_of relationship)
