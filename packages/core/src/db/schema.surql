@@ -42,6 +42,11 @@ DEFINE FIELD IF NOT EXISTS title ON TABLE node TYPE option<string>;
 --   - "deleted": Soft-deleted, in trash, excluded from all queries, purgeable
 DEFINE FIELD IF NOT EXISTS lifecycle_status ON TABLE node TYPE string DEFAULT "active";
 
+-- Access control tags for cloud sync (Issue #842 - Stamped ACL pattern)
+-- Empty array = default open in local mode, stamped with user/collection tags on cloud upgrade
+-- Used by RLS: $auth.held_tags CONTAINSANY access_tags
+DEFINE FIELD IF NOT EXISTS access_tags ON TABLE node TYPE array<string> DEFAULT [];
+
 -- Indexes for performance
 DEFINE INDEX IF NOT EXISTS idx_node_type ON TABLE node COLUMNS node_type;
 DEFINE INDEX IF NOT EXISTS idx_node_modified ON TABLE node COLUMNS modified_at;
@@ -152,6 +157,11 @@ DEFINE FIELD IF NOT EXISTS last_error ON TABLE embedding TYPE option<string>;
 -- Timestamps
 DEFINE FIELD IF NOT EXISTS created_at ON TABLE embedding TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS modified_at ON TABLE embedding TYPE datetime DEFAULT time::now();
+
+-- Access control tags for cloud sync (Issue #842 - Stamped ACL pattern)
+-- Copied from root node's access_tags when embedding is created/updated
+-- Enables RLS filtering on semantic search results
+DEFINE FIELD IF NOT EXISTS access_tags ON TABLE embedding TYPE array<string> DEFAULT [];
 
 -- Indexes for efficient lookups
 DEFINE INDEX IF NOT EXISTS idx_embedding_node ON TABLE embedding COLUMNS node;
