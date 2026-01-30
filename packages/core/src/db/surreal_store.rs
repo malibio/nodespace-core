@@ -3112,6 +3112,8 @@ where
 
         // Step 2: For each source, find its container (root or task)
         // Tasks are their own containers; other nodes traverse up to find root
+        // Performance: O(N * depth) where N = mention count, depth = tree depth
+        // Typical case: N < 10, depth < 5 - acceptable for knowledge management workloads
         let mut container_ids: Vec<String> = Vec::new();
         for source_id in source_ids {
             let container_id = self.get_container_for_mention(&source_id).await?;
