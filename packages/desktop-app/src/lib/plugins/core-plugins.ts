@@ -156,12 +156,12 @@ export const taskNodePlugin: PluginDefinition = {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
   },
-  // Type-specific metadata extraction (Issue #698, #794)
-  // Issue #794: Properties are now namespaced under properties[node_type]
+  // Type-specific metadata extraction (Issue #698, #794, #838)
+  // Issue #838: Backend now returns flat properties (namespace is internal storage detail)
   extractMetadata: (node: { nodeType: string; properties?: Record<string, unknown> }) => {
     const properties = node.properties || {};
-    const taskProps = properties[node.nodeType] as Record<string, unknown> | undefined;
-    const status = taskProps?.status;
+    // Issue #838: Properties are now flat (status, priority, etc.) not namespaced
+    const status = properties.status;
 
     // Map task status to NodeState expected by TaskNode
     let taskState: 'pending' | 'inProgress' | 'completed' = 'pending';

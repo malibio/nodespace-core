@@ -426,10 +426,11 @@ mod occ_tests {
         let result = handle_update_node(&node_service, params).await.unwrap();
         assert_eq!(result["version"], 2);
 
+        // Issue #838: Internal API returns namespaced properties
         let updated = node_service.get_node(&node_id).await.unwrap().unwrap();
         assert_eq!(updated.version, 2);
-        assert_eq!(updated.properties["status"], "done");
-        assert_eq!(updated.properties["priority"], "high");
+        assert_eq!(updated.properties["task"]["status"], "done");
+        assert_eq!(updated.properties["task"]["priority"], "high");
     }
 
     /// Verifies update SUCCEEDS without version parameter (auto-fetches current version)
@@ -1365,10 +1366,11 @@ mod integration_tests {
 
         assert_eq!(result["count"].as_u64().unwrap(), 1);
 
+        // Issue #838: Internal API returns namespaced properties
         // Verify property update
         let updated = node_service.get_node(&node).await.unwrap().unwrap();
-        assert_eq!(updated.properties["priority"], "high");
-        assert_eq!(updated.properties["status"], "done");
+        assert_eq!(updated.properties["task"]["priority"], "high");
+        assert_eq!(updated.properties["task"]["status"], "done");
     }
 }
 
