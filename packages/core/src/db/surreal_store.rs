@@ -6219,7 +6219,10 @@ mod tests {
             surrealdb::sql::Thing::from(("node".to_string(), collection.id.clone()));
 
         #[derive(Debug, serde::Deserialize)]
-        #[allow(dead_code)] // member is used for deserialization but not accessed
+        #[expect(
+            dead_code,
+            reason = "member is used for deserialization but not accessed"
+        )]
         struct RelWithOrder {
             #[serde(rename = "in")]
             member: surrealdb::sql::Thing,
