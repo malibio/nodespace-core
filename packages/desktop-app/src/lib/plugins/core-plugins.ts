@@ -164,6 +164,7 @@ export const taskNodePlugin: PluginDefinition = {
     // Issue #838: Check top-level status first (TaskNode format), fall back to properties.status
     // TaskNode has status at node.status, generic Node has it at node.properties.status
     const status = node.status ?? properties.status;
+    const priority = node.priority ?? properties.priority;
 
     // Map task status to NodeState expected by TaskNode component
     let taskState: 'pending' | 'inProgress' | 'completed' = 'pending';
@@ -175,8 +176,9 @@ export const taskNodePlugin: PluginDefinition = {
       taskState = 'pending';
     }
 
-    // Include both top-level spoke fields and properties for complete metadata
-    return { taskState, status, priority: node.priority ?? properties.priority, ...properties };
+    // Spread properties first, then override with resolved top-level values
+    // This ensures top-level spoke fields take precedence over properties
+    return { ...properties, taskState, status, priority };
   },
   // Type-specific state mapping (Issue #698)
   mapStateToSchema: (state: string, _fieldName: string): CoreTaskStatus => {
