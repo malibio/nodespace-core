@@ -3789,9 +3789,8 @@ where
 
         if let Some(ref priority_opt) = update.priority {
             match priority_opt {
-                Some(p) => {
-                    property_set_clauses.push(format!("properties.task.priority = '{}'", p.as_str()))
-                }
+                Some(p) => property_set_clauses
+                    .push(format!("properties.task.priority = '{}'", p.as_str())),
                 None => property_set_clauses.push("properties.task.priority = NONE".to_string()),
             }
         }
@@ -3833,7 +3832,9 @@ where
                     "properties.task.completed_at = <datetime>'{}'",
                     dt.to_rfc3339()
                 )),
-                None => property_set_clauses.push("properties.task.completed_at = NONE".to_string()),
+                None => {
+                    property_set_clauses.push("properties.task.completed_at = NONE".to_string())
+                }
             }
         }
 

@@ -2175,7 +2175,10 @@ where
                     None, // Schema fields are fetched later if needed
                 );
                 // Deep-merge namespaced properties (Issue #794)
-                Self::deep_merge_namespaced_properties(&mut updated.properties, normalized_properties);
+                Self::deep_merge_namespaced_properties(
+                    &mut updated.properties,
+                    normalized_properties,
+                );
             }
         }
 
@@ -2393,7 +2396,10 @@ where
                     None,
                 );
                 // Deep-merge namespaced properties (Issue #794)
-                Self::deep_merge_namespaced_properties(&mut updated.properties, normalized_properties);
+                Self::deep_merge_namespaced_properties(
+                    &mut updated.properties,
+                    normalized_properties,
+                );
             }
         }
 
