@@ -1915,10 +1915,14 @@ Some content"#;
             quote_node.content.contains("> **First line of quote**"),
             "Missing first line of quote"
         );
-        assert!(
-            quote_node.content.contains(">"),
-            "Missing empty continuation line"
+        // Verify we have 4 lines including the empty continuation line
+        let lines: Vec<&str> = quote_node.content.lines().collect();
+        assert_eq!(
+            lines.len(),
+            4,
+            "Should have 4 lines including empty continuation"
         );
+        assert_eq!(lines[1], ">", "Second line should be empty continuation");
         assert!(
             quote_node.content.contains("> **Second line of quote**"),
             "Missing second line of quote"
@@ -1999,5 +2003,52 @@ Some content"#;
 
         let nodes = result["nodes"].as_array().unwrap();
         assert_eq!(nodes[1]["node_type"], "quote-block");
+    }
+
+    // Issue #855: Test quote block via update path (handle_update_root_from_markdown)
+    // This ensures the parse_markdown function (used for updates) also handles empty continuations
+    #[tokio::test]
+    async fn test_update_root_with_quote_block_empty_continuation() {
+        let (node_service, _temp_dir) = setup_test_service().await;
+
+        // Create root with simple content
+        let create_params = json!({
+            "markdown_content": "Simple text",
+            "sync_import": true,
+            "title": "Quote Update Test"
+        });
+        let create_result = handle_create_nodes_from_markdown(&node_service, create_params)
+            .await
+            .unwrap();
+        let root_id = create_result["root_id"].as_str().unwrap();
+
+        // Update with multi-line quote containing empty continuation (issue #855 pattern)
+        let update_params = json!({
+            "root_id": root_id,
+            "markdown": "> Line 1\n>\n> Line 2"
+        });
+
+        let result = handle_update_root_from_markdown(&node_service, update_params)
+            .await
+            .unwrap();
+
+        // Should create exactly ONE quote-block node (not split into multiple)
+        assert_eq!(
+            result["nodes_created"].as_u64().unwrap(),
+            1,
+            "Should create single quote-block node, not split on empty continuation"
+        );
+
+        // Verify the quote-block structure
+        let children = node_service.get_children(root_id).await.unwrap();
+        assert_eq!(children.len(), 1, "Should have one child node");
+        assert_eq!(children[0].node_type, "quote-block");
+
+        // Verify all lines are preserved including empty continuation
+        let lines: Vec<&str> = children[0].content.lines().collect();
+        assert_eq!(lines.len(), 3, "Should have 3 lines");
+        assert_eq!(lines[0], "> Line 1");
+        assert_eq!(lines[1], ">");
+        assert_eq!(lines[2], "> Line 2");
     }
 }
