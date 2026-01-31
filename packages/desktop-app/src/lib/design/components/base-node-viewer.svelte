@@ -1443,7 +1443,7 @@
                   }>
                 ) => {
                   const newNodeType = e.detail.nodeType;
-                  const cleanedContent = e.detail.cleanedContent;
+                  let cleanedContent = e.detail.cleanedContent;
                   // Use cursor position from event (captured by TextareaController)
                   const cursorPosition = e.detail.cursorPosition ?? 0;
 
@@ -1456,6 +1456,12 @@
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
                   focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
+
+                  // Normalize content for code-block conversion: add closing fence if missing
+                  // This handles pattern conversion where user types "```\n" before existing content
+                  if (newNodeType === 'code-block' && cleanedContent && !cleanedContent.endsWith('```')) {
+                    cleanedContent = cleanedContent + '\n```';
+                  }
 
                   // Update content if cleanedContent is provided (e.g., from contentTemplate)
                   if (cleanedContent !== undefined) {
@@ -1636,7 +1642,7 @@
                   }>
                 ) => {
                   const newNodeType = e.detail.nodeType;
-                  const cleanedContent = e.detail.cleanedContent;
+                  let cleanedContent = e.detail.cleanedContent;
                   // Use cursor position from event (captured by TextareaController)
                   const cursorPosition = e.detail.cursorPosition ?? 0;
 
@@ -1649,6 +1655,12 @@
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
                   focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
+
+                  // Normalize content for code-block conversion: add closing fence if missing
+                  // This handles pattern conversion where user types "```\n" before existing content
+                  if (newNodeType === 'code-block' && cleanedContent && !cleanedContent.endsWith('```')) {
+                    cleanedContent = cleanedContent + '\n```';
+                  }
 
                   // Handle placeholder nodes - promote them to real nodes with the new type
                   if (

@@ -21,29 +21,30 @@ describe('CodeBlockNode Plugin', () => {
       expect(detection?.metadata.language).toBe('plaintext');
     });
 
-    it('should detect ```javascript\\n pattern and extract language', () => {
+    it('should NOT detect ```javascript\\n pattern (prevents content being treated as language)', () => {
+      // Pattern only matches ```\n (immediate newline) to avoid treating user content as language
+      // e.g., "```Hello\n" should NOT match with "Hello" as language
       const content = '```javascript\n';
       const detection = pluginRegistry.detectPatternInContent(content);
 
-      expect(detection).not.toBeNull();
-      expect(detection?.config.targetNodeType).toBe('code-block');
-      expect(detection?.metadata.language).toBe('javascript');
+      // Should not match code-block - language is set via dropdown only
+      expect(detection?.config.targetNodeType).not.toBe('code-block');
     });
 
-    it('should detect ```python\\n pattern', () => {
+    it('should NOT detect ```python\\n pattern (language via dropdown only)', () => {
       const content = '```python\n';
       const detection = pluginRegistry.detectPatternInContent(content);
 
-      expect(detection).not.toBeNull();
-      expect(detection?.metadata.language).toBe('python');
+      // Should not match - prevents "```Hello\n" from treating Hello as language
+      expect(detection?.config.targetNodeType).not.toBe('code-block');
     });
 
-    it('should detect ```typescript\\n pattern', () => {
+    it('should NOT detect ```typescript\\n pattern (language via dropdown only)', () => {
       const content = '```typescript\n';
       const detection = pluginRegistry.detectPatternInContent(content);
 
-      expect(detection).not.toBeNull();
-      expect(detection?.metadata.language).toBe('typescript');
+      // Should not match - language selection is via dropdown UI
+      expect(detection?.config.targetNodeType).not.toBe('code-block');
     });
 
     it('should NOT detect ``` without newline', () => {
@@ -132,23 +133,30 @@ describe('CodeBlockNode Plugin', () => {
       expect(codeBlockPattern?.desiredCursorPosition).toBe(4);
     });
 
-    it('pattern detection should preserve opening fence for auto-completion logic', () => {
+    it('pattern detection should preserve user content (no contentTemplate)', () => {
+      // Pattern detection must NOT use contentTemplate - it should preserve user-typed content
+      // contentTemplate is ONLY for slash commands (e.g., /code), not pattern detection
       const content = '```\n';
       const detection = pluginRegistry.detectPatternInContent(content);
 
       expect(detection).not.toBeNull();
       expect(detection?.config.cleanContent).toBe(false);
-      expect(detection?.config.contentTemplate).toBe('```\n\n```');
+      // contentTemplate should be undefined during pattern detection
+      // User content like "```\nHello" should be preserved, not replaced with template
+      expect(detection?.config.contentTemplate).toBeUndefined();
     });
 
-    it('pattern detection should preserve language in fence', () => {
-      const content = '```javascript\n';
+    it('pattern detection for ```\\n should use plaintext language (dropdown for language selection)', () => {
+      // Pattern only matches ```\n - language is always plaintext, user selects via dropdown
+      // This prevents "```Hello\n" from being parsed as language="Hello"
+      const content = '```\n';
       const detection = pluginRegistry.detectPatternInContent(content);
 
       expect(detection).not.toBeNull();
-      expect(detection?.metadata.language).toBe('javascript');
+      expect(detection?.metadata.language).toBe('plaintext');
       expect(detection?.config.cleanContent).toBe(false);
-      expect(detection?.config.contentTemplate).toBe('```\n\n```');
+      // contentTemplate should be undefined - user content preserved
+      expect(detection?.config.contentTemplate).toBeUndefined();
     });
   });
 });
