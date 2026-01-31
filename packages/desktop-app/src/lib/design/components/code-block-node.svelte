@@ -79,7 +79,6 @@
   // Use $derived to reactively parse language from content
   let language = $state<string>(parseLanguage(content));
 
-
   // Code blocks use multiline editing (Shift+Enter for new lines, Enter creates new node)
   // Prevent merging into code-blocks (structured content can't accept arbitrary merges)
   const editableConfig = { allowMultiline: true, allowMergeInto: false };

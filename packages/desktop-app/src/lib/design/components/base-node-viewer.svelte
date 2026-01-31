@@ -110,6 +110,17 @@
     cachedPlaceholderId = null;
   }
 
+  /**
+   * Normalize content for code-block conversion by adding closing fence if missing.
+   * Handles pattern conversion where user types "```\n" before existing content.
+   */
+  function normalizeCodeBlockContent(content: string | undefined): string | undefined {
+    if (content && !content.endsWith('```')) {
+      return content + '\n```';
+    }
+    return content;
+  }
+
   // Viewer-local placeholder (not in sharedNodeStore until it gets content)
   // This placeholder is only visible to this viewer instance
   // Issue #653: Now uses lazy ID generation instead of $effect-managed state
@@ -1457,10 +1468,9 @@
                   // This ensures focus manager state is ready when the new component mounts
                   focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
-                  // Normalize content for code-block conversion: add closing fence if missing
-                  // This handles pattern conversion where user types "```\n" before existing content
-                  if (newNodeType === 'code-block' && cleanedContent && !cleanedContent.endsWith('```')) {
-                    cleanedContent = cleanedContent + '\n```';
+                  // Normalize content for code-block conversion
+                  if (newNodeType === 'code-block') {
+                    cleanedContent = normalizeCodeBlockContent(cleanedContent);
                   }
 
                   // Update content if cleanedContent is provided (e.g., from contentTemplate)
@@ -1656,10 +1666,9 @@
                   // This ensures focus manager state is ready when the new component mounts
                   focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
-                  // Normalize content for code-block conversion: add closing fence if missing
-                  // This handles pattern conversion where user types "```\n" before existing content
-                  if (newNodeType === 'code-block' && cleanedContent && !cleanedContent.endsWith('```')) {
-                    cleanedContent = cleanedContent + '\n```';
+                  // Normalize content for code-block conversion
+                  if (newNodeType === 'code-block') {
+                    cleanedContent = normalizeCodeBlockContent(cleanedContent);
                   }
 
                   // Handle placeholder nodes - promote them to real nodes with the new type
