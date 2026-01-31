@@ -62,6 +62,32 @@ describe('CodeBlockNode Plugin', () => {
       // Should not match - avoids treating user content as language
       expect(detection?.config.targetNodeType).not.toBe('code-block');
     });
+
+    it('should NOT detect ```Hello\\n (prevents user content being treated as language)', () => {
+      // REGRESSION TEST: This was a bug where typing ``` before "Hello\n```"
+      // would match "```Hello\n" and treat "Hello" as the language identifier,
+      // causing the user's content to disappear
+      const content = '```Hello\n```';
+      const detection = pluginRegistry.detectPatternInContent(content);
+
+      // Should NOT match code-block - we don't want "Hello" to be parsed as language
+      // The correct pattern is ```\n only (language selected via dropdown)
+      expect(detection?.config.targetNodeType).not.toBe('code-block');
+    });
+
+    it('should detect ```\\nHello\\n``` and preserve content', () => {
+      // When properly formatted with newline after opening fence,
+      // content should be preserved (not stripped)
+      const content = '```\nHello\n```';
+      const detection = pluginRegistry.detectPatternInContent(content);
+
+      expect(detection).not.toBeNull();
+      expect(detection?.config.targetNodeType).toBe('code-block');
+      // cleanContent should be false so content is preserved
+      expect(detection?.config.cleanContent).toBe(false);
+      // Language defaults to plaintext (user selects via dropdown)
+      expect(detection?.metadata.language).toBe('plaintext');
+    });
   });
 
   describe('Plugin Registration', () => {
