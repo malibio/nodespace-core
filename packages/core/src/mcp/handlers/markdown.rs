@@ -157,6 +157,12 @@ impl PrepareContext {
 
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Static regex for matching markdown links: [text](url)
+/// Compiled once and reused across all calls to transform_links_in_nodes.
+static LINK_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap());
 
 /// Transform inter-file markdown links in node content
 ///
@@ -188,16 +194,12 @@ pub fn transform_links_in_nodes(
     file_to_root_id: &HashMap<PathBuf, String>,
     current_file_path: Option<&Path>,
 ) {
-    // Regex to match markdown links: [text](url)
-    // Captures: [1] = link text, [2] = url/path
-    let link_regex = Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
-
     for node in nodes.iter_mut() {
         node.content = transform_links_in_content(
             &node.content,
             file_to_root_id,
             current_file_path,
-            &link_regex,
+            &LINK_REGEX,
         );
     }
 }

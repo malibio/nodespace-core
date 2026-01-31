@@ -620,22 +620,23 @@ pub async fn import_markdown_files(
         };
 
         // Parse markdown to prepared nodes
-        let children = match prepare_nodes_from_markdown(&content_for_children, Some(root_id.clone())) {
-            Ok(nodes) => nodes,
-            Err(e) => {
-                results.push(FileImportResult {
-                    file_path: file_path.clone(),
-                    root_id: None,
-                    nodes_created: 0,
-                    success: false,
-                    error: Some(format!("Failed to parse markdown: {:?}", e)),
-                    collection: None,
-                    archived: false,
-                });
-                failed += 1;
-                continue;
-            }
-        };
+        let children =
+            match prepare_nodes_from_markdown(&content_for_children, Some(root_id.clone())) {
+                Ok(nodes) => nodes,
+                Err(e) => {
+                    results.push(FileImportResult {
+                        file_path: file_path.clone(),
+                        root_id: None,
+                        nodes_created: 0,
+                        success: false,
+                        error: Some(format!("Failed to parse markdown: {:?}", e)),
+                        collection: None,
+                        archived: false,
+                    });
+                    failed += 1;
+                    continue;
+                }
+            };
 
         // Emit parsing progress
         let _ = app.emit(
@@ -740,8 +741,14 @@ pub async fn import_markdown_files(
         };
 
         // Step 2: Build all nodes for bulk insertion
-        let mut all_nodes: Vec<(String, String, String, Option<String>, f64, serde_json::Value)> =
-            Vec::new();
+        let mut all_nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )> = Vec::new();
         let mut collection_assignments: Vec<(String, String)> = Vec::new();
 
         for prepared in &prepared_files {
@@ -761,7 +768,10 @@ pub async fn import_markdown_files(
 
             // Add child nodes (with parent remapping)
             for child in &prepared.children {
-                let parent = child.parent_id.clone().or_else(|| Some(prepared.root_id.clone()));
+                let parent = child
+                    .parent_id
+                    .clone()
+                    .or_else(|| Some(prepared.root_id.clone()));
                 all_nodes.push((
                     child.id.clone(),
                     child.node_type.clone(),
@@ -781,7 +791,10 @@ pub async fn import_markdown_files(
         }
 
         // Step 3: Bulk create all nodes using trusted import (skips schema validation)
-        match node_service_clone.bulk_create_hierarchy_trusted(all_nodes).await {
+        match node_service_clone
+            .bulk_create_hierarchy_trusted(all_nodes)
+            .await
+        {
             Ok(created_ids) => {
                 tracing::info!(
                     "Bulk created {} nodes in {:?}",
@@ -838,7 +851,10 @@ pub async fn import_markdown_files(
         tracing::info!(
             "Background import complete: {} files, {} nodes in {:?}",
             prepared_files.len(),
-            prepared_files.iter().map(|f| 1 + f.children.len()).sum::<usize>(),
+            prepared_files
+                .iter()
+                .map(|f| 1 + f.children.len())
+                .sum::<usize>(),
             insert_start.elapsed()
         );
     });

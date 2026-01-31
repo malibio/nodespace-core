@@ -5100,10 +5100,7 @@ where
     ///
     /// This method is idempotent - if a membership already exists, it's skipped.
     /// Order is calculated individually per collection to append new members at the end.
-    pub async fn bulk_add_to_collections(
-        &self,
-        memberships: &[(String, String)],
-    ) -> Result<usize> {
+    pub async fn bulk_add_to_collections(&self, memberships: &[(String, String)]) -> Result<usize> {
         if memberships.is_empty() {
             return Ok(0);
         }
@@ -5121,7 +5118,8 @@ where
         }
 
         // For each collection, get the current max order and assign sequential orders
-        let mut ordered_memberships: Vec<(String, String, f64)> = Vec::with_capacity(memberships.len());
+        let mut ordered_memberships: Vec<(String, String, f64)> =
+            Vec::with_capacity(memberships.len());
 
         for (collection_id, node_ids) in by_collection {
             // Get current max order for this collection
@@ -5130,11 +5128,7 @@ where
             for (i, node_id) in node_ids.iter().enumerate() {
                 // Each subsequent member gets an incremented order
                 let order = base_order + (i as f64);
-                ordered_memberships.push((
-                    node_id.to_string(),
-                    collection_id.to_string(),
-                    order,
-                ));
+                ordered_memberships.push((node_id.to_string(), collection_id.to_string(), order));
             }
         }
 
@@ -5189,9 +5183,7 @@ where
             query = query.bind((name, value));
         }
 
-        query
-            .await
-            .context("Failed to bulk add to collections")?;
+        query.await.context("Failed to bulk add to collections")?;
 
         tracing::debug!(
             "bulk_add_to_collections: {} memberships in {:?}",

@@ -424,16 +424,12 @@ code block
                 );
 
                 // Check the status property - Issue #854: properties are now namespaced
-                // Status is stored at properties.task.status (or legacy properties.status)
+                // Status is stored at properties.task.status
                 let status = node
                     .properties
                     .get("task")
                     .and_then(|t| t.get("status"))
                     .and_then(|v| v.as_str())
-                    .or_else(|| {
-                        // Fallback to flat format for backward compatibility
-                        node.properties.get("status").and_then(|v| v.as_str())
-                    })
                     .unwrap_or("open");
 
                 if status == "done" {
@@ -1947,10 +1943,7 @@ mod link_transformation_tests {
         let file_map = HashMap::new();
         transform_links_in_nodes(&mut nodes, &file_map, None);
 
-        assert_eq!(
-            nodes[0].content,
-            "Jump to [Section 1](#section-1) below"
-        );
+        assert_eq!(nodes[0].content, "Jump to [Section 1](#section-1) below");
     }
 
     #[test]
@@ -1965,7 +1958,10 @@ mod link_transformation_tests {
         )];
 
         let mut file_map = HashMap::new();
-        file_map.insert(PathBuf::from("docs/architecture.md"), "uuid-123".to_string());
+        file_map.insert(
+            PathBuf::from("docs/architecture.md"),
+            "uuid-123".to_string(),
+        );
 
         let current_file = Path::new("README.md");
         transform_links_in_nodes(&mut nodes, &file_map, Some(current_file));
@@ -2054,9 +2050,18 @@ mod link_transformation_tests {
         let map = build_file_to_uuid_map(files);
 
         assert_eq!(map.len(), 3);
-        assert_eq!(map.get(&PathBuf::from("docs/intro.md")), Some(&"uuid-1".to_string()));
-        assert_eq!(map.get(&PathBuf::from("docs/guide.md")), Some(&"uuid-2".to_string()));
-        assert_eq!(map.get(&PathBuf::from("README.md")), Some(&"uuid-3".to_string()));
+        assert_eq!(
+            map.get(&PathBuf::from("docs/intro.md")),
+            Some(&"uuid-1".to_string())
+        );
+        assert_eq!(
+            map.get(&PathBuf::from("docs/guide.md")),
+            Some(&"uuid-2".to_string())
+        );
+        assert_eq!(
+            map.get(&PathBuf::from("README.md")),
+            Some(&"uuid-3".to_string())
+        );
     }
 
     #[test]
