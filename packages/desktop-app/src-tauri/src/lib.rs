@@ -309,34 +309,60 @@ pub fn run() {
 
     // Run with event handler for graceful shutdown
     // This allows proper cleanup of Metal/GPU resources before exit
+    //
+    // Note: On macOS, RunEvent::ExitRequested may not fire reliably (Tauri issue #9198)
+    // We handle cleanup in multiple places to ensure GPU resources are released:
+    // 1. WindowEvent::CloseRequested - when user clicks X or Cmd+Q
+    // 2. RunEvent::ExitRequested - when app is about to exit
+    // 3. RunEvent::Exit - final cleanup before process termination
     app.run(|app_handle, event| {
         match event {
+            RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { .. },
+                ..
+            } => {
+                // Window close requested - release GPU resources before the window closes
+                // This is the most reliable place to do cleanup on macOS
+                tracing::info!(
+                    "Window '{}' close requested, releasing GPU context...",
+                    label
+                );
+                release_gpu_resources(app_handle);
+            }
             RunEvent::ExitRequested { code, .. } => {
-                // Allow exit to proceed - Tauri will handle cleanup
+                // App exit requested - this may not fire on macOS (Tauri issue #9198)
                 tracing::info!(
                     "App exit requested (code: {:?}), performing cleanup...",
                     code
                 );
-
-                // Cleanup embedding service to release Metal/GPU resources
-                // This prevents SIGABRT crashes from ggml_metal_rsets_free during
-                // static destruction (Issue #863)
-                if let Some(embedding_state) =
-                    app_handle.try_state::<crate::commands::embeddings::EmbeddingState>()
-                {
-                    tracing::info!("Releasing GPU context before exit...");
-                    // Release the LlamaContext which holds Metal residency sets
-                    // This must happen before the global LLAMA_BACKEND static is destroyed
-                    embedding_state.service.nlp_engine().release_gpu_context();
-                }
-
+                release_gpu_resources(app_handle);
                 tracing::info!("Cleanup complete, exiting...");
-                // Don't call api.prevent_exit() - allow the exit to proceed
             }
             RunEvent::Exit => {
+                // Final exit - last chance to cleanup (may be too late for GPU resources)
                 tracing::info!("App exiting normally");
             }
             _ => {}
         }
     });
+}
+
+/// Release GPU resources (Metal context) to prevent SIGABRT crash on exit.
+///
+/// This must be called before the app exits to properly clean up Metal/GPU
+/// resources. The crash occurs when ggml_metal_rsets_free is called during
+/// static destruction (__cxa_finalize_ranges) while resources are still in use.
+fn release_gpu_resources(app_handle: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(embedding_state) =
+        app_handle.try_state::<crate::commands::embeddings::EmbeddingState>()
+    {
+        tracing::info!("Releasing GPU context to prevent Metal crash...");
+        // Release the LlamaContext which holds Metal residency sets
+        // This must happen before the global LLAMA_BACKEND static is destroyed
+        embedding_state.service.nlp_engine().release_gpu_context();
+        tracing::info!("GPU context released successfully");
+    }
 }
