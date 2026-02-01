@@ -914,9 +914,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // This ensures move operations are processed in order, preventing edge conflicts.
         await waitForPendingMoveOperations();
 
-        // CRITICAL: Flush and wait for any pending updates before moving
-        // This prevents race conditions with content updates
-        await sharedNodeStore.flushNodeSaves([nodeId]);
+        // CRITICAL: Flush and wait for any pending saves before moving
+        // This prevents race conditions where:
+        // 1. Content updates race with the move (node's own saves)
+        // 2. Parent doesn't exist in DB yet (parent's CREATE still pending)
+        const nodesToFlush = [nodeId];
+        if (targetParentId) {
+          nodesToFlush.push(targetParentId);
+        }
+        await sharedNodeStore.flushNodeSaves(nodesToFlush);
 
         // Get fresh node data to ensure we have the latest version
         const freshNode = sharedNodeStore.getNode(nodeId);
