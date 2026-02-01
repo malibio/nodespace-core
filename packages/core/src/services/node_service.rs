@@ -8255,83 +8255,64 @@ mod tests {
             Ok(())
         }
 
-        /// Test that schema seeding is idempotent across "app restarts"
+        /// Test that schema seeding is idempotent (calling NodeService::new twice doesn't duplicate schemas)
         ///
-        /// Issue #865: This test is ignored in automated runs because:
-        /// 1. RocksDB file lock release is non-deterministic and can take indefinitely
-        /// 2. SurrealDB embedded mode doesn't provide explicit connection close
-        /// 3. Even with 30+ seconds of backoff, the lock may not be released
-        ///
-        /// The underlying idempotency behavior is still verified by:
-        /// - Other tests that seed schemas on fresh databases
-        /// - Manual testing during app development
-        /// - The fact that NodeService::new checks for existing schemas before seeding
-        ///
-        /// To run manually: `cargo test test_node_service_idempotent_seeding -- --ignored`
+        /// This verifies the core idempotency logic by calling NodeService::new twice on the
+        /// same store instance. This avoids the RocksDB lock release timing issues that occur
+        /// when trying to reopen a database file.
         #[tokio::test]
-        #[ignore = "RocksDB lock release is non-deterministic - run manually"]
         async fn test_node_service_idempotent_seeding() -> Result<(), Box<dyn std::error::Error>> {
-            use std::time::Duration;
             use tempfile::TempDir;
 
             let temp_dir = TempDir::new()?;
             let db_path = temp_dir.path().join("test.db");
+            let mut store = Arc::new(SurrealStore::new(db_path).await?);
 
-            // First "launch" - seeds schemas
+            // First initialization - seeds schemas
             {
-                let mut store = Arc::new(SurrealStore::new(db_path.clone()).await?);
-                let _service = NodeService::new(&mut store).await?;
-                // Service and store dropped at end of scope (simulates app shutdown)
-                // Explicit drop to ensure cleanup starts immediately
-                drop(_service);
-                drop(store);
+                let _service1 = NodeService::new(&mut store).await?;
+                // service1 dropped here, releasing Arc reference
             }
 
-            // Issue #865: RocksDB lock release is asynchronous
-            // Use aggressive exponential backoff with longer delays
-            let mut store = None;
-            let mut delay_ms = 100; // Start with longer initial delay
-            let max_retries = 10; // More retries with longer delays
-            let max_delay_ms = 5000; // Cap individual delay at 5 seconds
-
-            for attempt in 1..=max_retries {
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                match SurrealStore::new(db_path.clone()).await {
-                    Ok(s) => {
-                        store = Some(Arc::new(s));
-                        break;
-                    }
-                    Err(e) if attempt < max_retries => {
-                        // Exponential backoff with cap
-                        delay_ms = std::cmp::min(delay_ms * 2, max_delay_ms);
-                        eprintln!(
-                            "Retry {}/{}: RocksDB lock not released, waiting {}ms: {}",
-                            attempt, max_retries, delay_ms, e
-                        );
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "Failed to open store after {} retries: {}",
-                            max_retries, e
-                        )
-                        .into());
-                    }
-                }
+            // Count schema nodes after first init using COUNT()
+            #[derive(Debug, serde::Deserialize)]
+            struct CountResult {
+                count: i64,
             }
+            let mut response = store
+                .db()
+                .query("SELECT count() AS count FROM node WHERE node_type = 'schema' GROUP ALL")
+                .await?;
+            let count_results: Vec<CountResult> = response.take(0)?;
+            let count_after_first = count_results.first().map(|r| r.count).unwrap_or(0);
 
-            // Second "launch" - should NOT re-seed (idempotent)
+            // Second initialization on same store - should NOT re-seed
             {
-                let mut store = store.expect("Store should be opened");
-                let _service = NodeService::new(&mut store).await?;
-
-                // Verify schemas still exist and weren't duplicated
-                let task = store.get_node("task").await?.unwrap();
-                assert_eq!(task.node_type, "schema");
-
-                // Verify we can query task schema (ensures it's valid)
-                let schema = store.get_schema_node("task").await?;
-                assert!(schema.is_some(), "task schema should be retrievable");
+                let _service2 = NodeService::new(&mut store).await?;
+                // service2 dropped here
             }
+
+            // Count schema nodes after second init
+            let mut response = store
+                .db()
+                .query("SELECT count() AS count FROM node WHERE node_type = 'schema' GROUP ALL")
+                .await?;
+            let count_results: Vec<CountResult> = response.take(0)?;
+            let count_after_second = count_results.first().map(|r| r.count).unwrap_or(0);
+
+            // Verify no duplicates were created
+            assert_eq!(
+                count_after_first, count_after_second,
+                "Schema count should be same after second NodeService::new (idempotent). First: {}, Second: {}",
+                count_after_first, count_after_second
+            );
+
+            // Verify schemas still exist and are valid
+            let task = store.get_node("task").await?.unwrap();
+            assert_eq!(task.node_type, "schema");
+
+            let schema = store.get_schema_node("task").await?;
+            assert!(schema.is_some(), "task schema should be retrievable");
 
             Ok(())
         }
