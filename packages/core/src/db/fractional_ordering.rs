@@ -73,6 +73,32 @@ impl FractionalOrderCalculator {
     pub fn rebalance(count: usize) -> Vec<f64> {
         (1..=count).map(|i| i as f64).collect()
     }
+
+    /// Generate a jitter value for order uniqueness
+    ///
+    /// Issue #865: Extracted for use in atomic SurrealDB queries.
+    /// Returns a value in range [0.0, 0.001) that can be passed to SurrealDB
+    /// and added to order values within the query itself.
+    ///
+    /// Uses the same entropy sources as calculate_order:
+    /// - Nanoseconds since epoch (rapid change)
+    /// - Process-unique counter (guaranteed uniqueness within process)
+    pub fn generate_jitter() -> f64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let counter_val = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let time_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+
+        // Combine both sources for uniqueness
+        let combined = time_nanos.wrapping_add(counter_val);
+        (combined % 1_000_000) as f64 / 1_000_000_000.0 // 0.0 to 0.001
+    }
 }
 
 #[cfg(test)]
