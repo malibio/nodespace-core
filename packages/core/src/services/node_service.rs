@@ -2297,13 +2297,15 @@ where
 
     /// Update node with optimistic concurrency control (version check)
     ///
-    /// This method performs an atomic update with version checking to prevent
-    /// race conditions when multiple clients modify the same node concurrently.
+    /// Internal method that returns the updated node directly to avoid redundant fetches.
+    ///
+    /// Performs an atomic update with version checking to prevent race conditions
+    /// when multiple clients modify the same node concurrently.
     ///
     /// The version check ensures that:
     /// 1. The node hasn't been modified since the client last read it
     /// 2. Updates are applied atomically with version increment
-    /// 3. Conflicts are detected via rows_affected = 0
+    /// 3. Conflicts are detected via `None` return (version mismatch)
     ///
     /// # Arguments
     ///
@@ -2313,35 +2315,9 @@ where
     ///
     /// # Returns
     ///
-    /// * `Ok(rows_affected)` - Number of rows updated (0 = version mismatch, 1 = success)
+    /// * `Ok(Some(node))` - Successfully updated node with incremented version
+    /// * `Ok(None)` - Version conflict (node was modified by another client)
     /// * `Err(NodeServiceError)` - Database or validation errors
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
-    /// # use nodespace_core::NodeUpdate;
-    /// # use std::path::PathBuf;
-    /// # use std::sync::Arc;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(&mut db).await?;
-    /// let rows = service.update_with_version_check(
-    ///     "node-123",
-    ///     5,  // Expected version
-    ///     NodeUpdate::new().with_content("New content".into())
-    /// ).await?;
-    ///
-    /// if rows == 0 {
-    ///     // Version conflict - node was modified by another client
-    ///     // Caller should fetch current state and handle conflict
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    /// Internal method that returns the updated node directly to avoid redundant fetches.
     async fn update_with_version_check_returning_node(
         &self,
         id: &str,

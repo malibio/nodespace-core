@@ -3344,18 +3344,9 @@ where
             let escaped_content = Self::escape_surql_string(content);
             let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
 
-            // Root nodes (no parent) and task/collection nodes get titles
-            // EXCEPT date and schema types which never get titles
-            // This matches the logic in NodeService.create_node_with_parent
-            let title_value = if node_type == "date" || node_type == "schema" {
-                "NONE".to_string()
-            } else if parent_id.is_none() || node_type == "task" || node_type == "collection" {
-                let stripped = crate::utils::strip_markdown(content);
-                let escaped_title = Self::escape_surql_string(&stripped);
-                format!("\"{}\"", escaped_title)
-            } else {
-                "NONE".to_string()
-            };
+            // Compute title using shared helper to avoid logic duplication
+            let title_value =
+                Self::compute_title_for_bulk_insert(node_type, parent_id.as_deref(), content);
 
             // Create node with embedded properties
             query.push_str(&format!(
@@ -3466,18 +3457,9 @@ where
             let escaped_content = Self::escape_surql_string(content);
             let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
 
-            // Root nodes (no parent) and task/collection nodes get titles
-            // EXCEPT date and schema types which never get titles
-            // This matches the logic in NodeService.create_node_with_parent
-            let title_value = if node_type == "date" || node_type == "schema" {
-                "NONE".to_string()
-            } else if parent_id.is_none() || node_type == "task" || node_type == "collection" {
-                let stripped = crate::utils::strip_markdown(content);
-                let escaped_title = Self::escape_surql_string(&stripped);
-                format!("\"{}\"", escaped_title)
-            } else {
-                "NONE".to_string()
-            };
+            // Compute title using shared helper to avoid logic duplication
+            let title_value =
+                Self::compute_title_for_bulk_insert(node_type, parent_id.as_deref(), content);
 
             // Create node with embedded properties
             query.push_str(&format!(
@@ -3662,6 +3644,27 @@ where
             .replace('\n', "\\n")
             .replace('\r', "\\r")
             .replace('\t', "\\t")
+    }
+
+    /// Compute title value for bulk node creation queries.
+    ///
+    /// Root nodes (no parent) and task/collection nodes get titles computed from content.
+    /// Date and schema types never get titles.
+    /// Returns a SurrealQL-ready string: either "NONE" or a quoted escaped title.
+    fn compute_title_for_bulk_insert(
+        node_type: &str,
+        parent_id: Option<&str>,
+        content: &str,
+    ) -> String {
+        if node_type == "date" || node_type == "schema" {
+            "NONE".to_string()
+        } else if parent_id.is_none() || node_type == "task" || node_type == "collection" {
+            let stripped = crate::utils::strip_markdown(content);
+            let escaped_title = Self::escape_surql_string(&stripped);
+            format!("\"{}\"", escaped_title)
+        } else {
+            "NONE".to_string()
+        }
     }
 
     pub fn close(&self) -> Result<()> {
