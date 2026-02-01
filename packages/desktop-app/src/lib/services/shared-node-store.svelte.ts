@@ -29,6 +29,7 @@ import * as tauriCommands from './tauri-commands';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { isVersionConflict } from '$lib/types/errors';
 import { createLogger } from '$lib/utils/logger';
+import { getPendingMoveOperation } from './pending-operations';
 import type { Node } from '$lib/types';
 import type {
   NodeUpdate,
@@ -223,6 +224,10 @@ class SimplePersistenceCoordinator {
 
   isPending(nodeId: string): boolean {
     return this.pendingOperations.has(nodeId);
+  }
+
+  isExecuting(nodeId: string): boolean {
+    return this.executingOperations.has(nodeId);
   }
 
   /**
@@ -1123,7 +1128,7 @@ export class SharedNodeStore {
             try {
               // CRITICAL: Read current node state at execution time, not capture time
               // This ensures we persist the latest content, not stale content from when persist() was called
-              const currentNode = this.nodes.get(nodeId);
+              let currentNode = this.nodes.get(nodeId);
               if (!currentNode) {
                 log.warn(`Node ${nodeId} no longer exists in store, skipping persistence`);
                 return;
@@ -1132,6 +1137,20 @@ export class SharedNodeStore {
               // Check if node has been persisted - use in-memory tracking to avoid database query
               const isPersistedToDatabase = this.persistedNodeIds.has(nodeId);
               if (isPersistedToDatabase) {
+                // CRITICAL: Wait for any pending move operation to complete before UPDATE.
+                // Move operations (indent/outdent) increment the version in the backend.
+                // If we UPDATE before the move completes, we'll have a version mismatch.
+                const pendingMove = getPendingMoveOperation(nodeId);
+                if (pendingMove) {
+                  log.debug(`[UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+                  await pendingMove;
+                  // Re-read current node to get updated version after move
+                  const refreshedNode = this.nodes.get(nodeId);
+                  if (refreshedNode) {
+                    currentNode = refreshedNode;
+                  }
+                }
+
                 try {
                   // Get current version for optimistic concurrency control
                   const currentVersion = currentNode.version ?? 1;
@@ -1158,6 +1177,26 @@ export class SharedNodeStore {
                   }
                 }
               } else {
+                // RACE CONDITION FIX: Validate insertAfterNodeId before CREATE
+                // If the node was moved (indent/outdent) after the CREATE was scheduled,
+                // insertAfterNodeId may reference a sibling under a different parent.
+                // The backend will reject this with "Sibling has different parent" error.
+                // Solution: Clear insertAfterNodeId if it's no longer a valid sibling.
+                const nodeWithInsertHint = currentNode as Node & { insertAfterNodeId?: string | null };
+                if (nodeWithInsertHint.insertAfterNodeId) {
+                  const siblingNode = this.nodes.get(nodeWithInsertHint.insertAfterNodeId);
+                  if (siblingNode && siblingNode.parentId !== currentNode.parentId) {
+                    log.debug(
+                      `[CREATE] Clearing stale insertAfterNodeId for ${nodeId.substring(0, 8)}: ` +
+                      `sibling ${nodeWithInsertHint.insertAfterNodeId.substring(0, 8)} has parentId ` +
+                      `${siblingNode.parentId?.substring(0, 8) ?? 'null'} but node has parentId ` +
+                      `${currentNode.parentId?.substring(0, 8) ?? 'null'}`
+                    );
+                    // Clear the stale hint - backend will use sortOrder instead
+                    nodeWithInsertHint.insertAfterNodeId = null;
+                  }
+                }
+
                 await tauriCommands.createNode(currentNode);
                 this.persistedNodeIds.add(nodeId); // Track as persisted
 
@@ -1665,6 +1704,15 @@ export class SharedNodeStore {
    */
   isNodePersisted(nodeId: string): boolean {
     return this.persistedNodeIds.has(nodeId);
+  }
+
+  /**
+   * Check if a node has a persistence operation currently executing
+   * @param nodeId - Node ID to check
+   * @returns True if an operation is in-flight for this node
+   */
+  isNodePersistenceExecuting(nodeId: string): boolean {
+    return PersistenceCoordinator.getInstance().isExecuting(nodeId);
   }
 
   /**

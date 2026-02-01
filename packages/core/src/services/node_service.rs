@@ -3546,7 +3546,7 @@ where
         expected_version: i64,
         new_parent: Option<&str>,
         insert_after_node_id: Option<&str>,
-    ) -> Result<(), NodeServiceError> {
+    ) -> Result<Node, NodeServiceError> {
         // Get current node and verify version
         let node = self
             .get_node(node_id)
@@ -3612,10 +3612,9 @@ where
         // Bump the node's version to support OCC
         // Even though we're only modifying edge relationships, we bump the node version
         // so that concurrent move operations will fail with version conflict
+        // Returns the updated node with new version so frontend can sync its local state
         self.update_node_with_version_bump(node_id, expected_version)
-            .await?;
-
-        Ok(())
+            .await
     }
 
     /// Reorder a node within its siblings with OCC
@@ -3687,7 +3686,9 @@ where
         // Bump the node's version to support OCC
         // Even though we're only modifying edge ordering, we bump the node version
         // so that concurrent reorder operations will fail with version conflict
-        self.update_node_with_version_bump(node_id, expected_version)
+        // Note: We discard the returned Node since reorder_node_with_occ returns ()
+        let _ = self
+            .update_node_with_version_bump(node_id, expected_version)
             .await?;
 
         Ok(())
@@ -3957,12 +3958,12 @@ where
     ///
     /// # Returns
     ///
-    /// Ok(()) if version bump succeeds, Err if version mismatch or node not found
+    /// Ok(Node) with updated version if bump succeeds, Err if version mismatch or node not found
     pub async fn update_node_with_version_bump(
         &self,
         node_id: &str,
         expected_version: i64,
-    ) -> Result<(), NodeServiceError> {
+    ) -> Result<Node, NodeServiceError> {
         // Get current node to preserve its values
         let node = self
             .get_node(node_id)
@@ -3991,16 +3992,16 @@ where
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         // Check if update succeeded (version matched)
-        if result.is_none() {
-            return Err(NodeServiceError::query_failed(format!(
+        let updated_node = result.ok_or_else(|| {
+            NodeServiceError::query_failed(format!(
                 "Version conflict: expected version {} for node {}",
                 expected_version, node_id
-            )));
-        }
+            ))
+        })?;
 
         // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
 
-        Ok(())
+        Ok(updated_node)
     }
 
     /// Query nodes with filtering
