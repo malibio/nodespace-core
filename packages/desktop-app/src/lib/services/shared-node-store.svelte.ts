@@ -869,10 +869,24 @@ export class SharedNodeStore {
                 if (isPersistedToDatabase) {
                   // CRITICAL: Read current node state at execution time, not capture time
                   // This ensures we persist the latest content, not stale content from when persist() was called
-                  const currentNode = this.nodes.get(nodeId);
+                  let currentNode = this.nodes.get(nodeId);
                   if (!currentNode) {
                     log.warn(`Node ${nodeId} no longer exists in store, skipping update persistence`);
                     return;
+                  }
+
+                  // CRITICAL: Wait for any pending move operation to complete before UPDATE.
+                  // Move operations (indent/outdent) increment the version in the backend.
+                  // If we UPDATE before the move completes, we'll have a version mismatch.
+                  const pendingMove = getPendingMoveOperation(nodeId);
+                  if (pendingMove) {
+                    log.debug(`[UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+                    await pendingMove;
+                    // Re-read current node to get updated version after move
+                    const refreshedNode = this.nodes.get(nodeId);
+                    if (refreshedNode) {
+                      currentNode = refreshedNode;
+                    }
                   }
 
                   // IMPORTANT: For UPDATE, only send the changed fields with CURRENT values
@@ -2546,8 +2560,23 @@ export class SharedNodeStore {
           //
           // STRATEGY: Try UPDATE first if we know node is persisted, otherwise CREATE
           if (isPersistedToDatabase) {
+            // CRITICAL: Wait for any pending move operation to complete before UPDATE.
+            // Move operations (indent/outdent) increment the version in the backend.
+            // If we UPDATE before the move completes, we'll have a version mismatch.
+            let currentNode = this.nodes.get(nodeId);
+            const pendingMove = getPendingMoveOperation(nodeId);
+            if (pendingMove) {
+              log.debug(`[BATCH UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+              await pendingMove;
+              // Re-read current node to get updated version after move
+              const refreshedNode = this.nodes.get(nodeId);
+              if (refreshedNode) {
+                currentNode = refreshedNode;
+              }
+            }
+
             // Get current version for optimistic concurrency control
-            const currentVersion = finalNode.version ?? 1;
+            const currentVersion = currentNode?.version ?? finalNode.version ?? 1;
 
             // CRITICAL: Capture updated node to get new version from backend
             // This prevents version conflicts on subsequent updates
@@ -2587,7 +2616,18 @@ export class SharedNodeStore {
               ) {
                 // Race detected: Old debounced path persisted before batch started
                 // Update with batched changes to fix inconsistent state
-                const currentVersion = finalNode.version ?? 1;
+                // First check for pending move operations
+                let raceCurrentNode = this.nodes.get(nodeId);
+                const raceMove = getPendingMoveOperation(nodeId);
+                if (raceMove) {
+                  log.debug(`[BATCH RACE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+                  await raceMove;
+                  const refreshed = this.nodes.get(nodeId);
+                  if (refreshed) {
+                    raceCurrentNode = refreshed;
+                  }
+                }
+                const currentVersion = raceCurrentNode?.version ?? finalNode.version ?? 1;
                 const updatedNodeFromBackend = await tauriCommands.updateNode(nodeId, currentVersion, changes);
                 this.persistedNodeIds.add(nodeId);
 
