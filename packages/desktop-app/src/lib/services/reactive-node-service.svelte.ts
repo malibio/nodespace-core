@@ -37,6 +37,25 @@ const log = createLogger('ReactiveNodeService');
 import { moveNode as moveNodeCommand } from './tauri-commands';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
+/**
+ * Calculate the insert order for an outdented node in its new parent's children list.
+ * The outdented node should appear right after its old parent among the new parent's children.
+ *
+ * @param newParentId - The new parent (grandparent of the node being outdented)
+ * @param oldParentId - The old parent (the node is moving out from under this parent)
+ * @returns The calculated fractional order for insertion
+ */
+function calculateOutdentInsertOrder(newParentId: string, oldParentId: string): number {
+  const newParentChildren = structureTree.getChildrenWithOrder(newParentId);
+  const oldParentIndex = newParentChildren.findIndex(c => c.nodeId === oldParentId);
+  if (oldParentIndex >= 0) {
+    const oldParentOrder = newParentChildren[oldParentIndex].order;
+    const nextSibling = newParentChildren[oldParentIndex + 1];
+    return nextSibling ? (oldParentOrder + nextSibling.order) / 2 : oldParentOrder + 1.0;
+  }
+  // Fallback: append to end
+  return newParentChildren.length > 0 ? newParentChildren[newParentChildren.length - 1].order + 1.0 : 1.0;
+}
 
 export interface NodeManagerEvents {
   focusRequested: (nodeId: string, position?: number) => void;
@@ -1036,16 +1055,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         // Update structure tree for browser mode
         if (newParentId) {
-          const newParentChildren = structureTree.getChildrenWithOrder(newParentId);
-          const oldParentIndex = newParentChildren.findIndex(c => c.nodeId === oldParentId);
-          let insertOrder: number;
-          if (oldParentIndex >= 0) {
-            const oldParentOrder = newParentChildren[oldParentIndex].order;
-            const nextSibling = newParentChildren[oldParentIndex + 1];
-            insertOrder = nextSibling ? (oldParentOrder + nextSibling.order) / 2 : oldParentOrder + 1.0;
-          } else {
-            insertOrder = newParentChildren.length > 0 ? newParentChildren[newParentChildren.length - 1].order + 1.0 : 1.0;
-          }
+          const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
           structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
         }
 
@@ -1082,16 +1092,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         // Update structure tree for browser mode (same as non-executing case)
         if (newParentId) {
-          const newParentChildren = structureTree.getChildrenWithOrder(newParentId);
-          const oldParentIndex = newParentChildren.findIndex(c => c.nodeId === oldParentId);
-          let insertOrder: number;
-          if (oldParentIndex >= 0) {
-            const oldParentOrder = newParentChildren[oldParentIndex].order;
-            const nextSibling = newParentChildren[oldParentIndex + 1];
-            insertOrder = nextSibling ? (oldParentOrder + nextSibling.order) / 2 : oldParentOrder + 1.0;
-          } else {
-            insertOrder = newParentChildren.length > 0 ? newParentChildren[newParentChildren.length - 1].order + 1.0 : 1.0;
-          }
+          const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
           structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
         }
 
@@ -1119,17 +1120,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     if (newParentId) {
       // Calculate correct order: insert right after oldParentId among newParentId's children
       // This matches backend behavior which uses insertAfterNodeId = oldParentId
-      const newParentChildren = structureTree.getChildrenWithOrder(newParentId);
-      const oldParentIndex = newParentChildren.findIndex(c => c.nodeId === oldParentId);
-      let insertOrder: number;
-      if (oldParentIndex >= 0) {
-        const oldParentOrder = newParentChildren[oldParentIndex].order;
-        const nextSibling = newParentChildren[oldParentIndex + 1];
-        insertOrder = nextSibling ? (oldParentOrder + nextSibling.order) / 2 : oldParentOrder + 1.0;
-      } else {
-        // Fallback: append to end
-        insertOrder = newParentChildren.length > 0 ? newParentChildren[newParentChildren.length - 1].order + 1.0 : 1.0;
-      }
+      const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
       structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
     }
 
