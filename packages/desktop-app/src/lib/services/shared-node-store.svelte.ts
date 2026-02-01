@@ -304,18 +304,22 @@ class SimplePersistenceCoordinator {
     for (const nodeId of nodeIds) {
       const pending = this.pendingOperations.get(nodeId);
       if (pending) {
-        // Clear the debounce timeout and execute immediately
+        // Clear the debounce timeout to prevent it from firing
         clearTimeout(pending.timeoutId);
 
-        // Start the operation now (if it hasn't started yet)
-        pending.operation().then(
-          () => pending.resolve(),
-          (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
-        ).finally(() => {
-          this.pendingOperations.delete(nodeId);
-        });
+        // Only start the operation if it's not already executing
+        // This prevents double-execution when the timeout fires just before clearTimeout
+        if (!this.executingOperations.has(nodeId)) {
+          // Start the operation now
+          pending.operation().then(
+            () => pending.resolve(),
+            (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
+          ).finally(() => {
+            this.pendingOperations.delete(nodeId);
+          });
+        }
 
-        // Wait for completion with timeout
+        // Wait for completion with timeout (whether we started it or it was already running)
         promises.push(
           Promise.race([
             pending.promise,
