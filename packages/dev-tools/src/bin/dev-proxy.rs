@@ -880,43 +880,12 @@ async fn update_node(
     Path(id): Path<String>,
     Json(request): Json<UpdateNodeRequest>,
 ) -> ApiResult<serde_json::Value> {
-    // Use optimistic concurrency control via version check
-    let rows_affected = state
-        .node_service
-        .update_with_version_check(&id, request.version, request.update)
-        .await
-        .map_err(map_node_service_error)?;
-
-    // Check if update succeeded (version matched)
-    if rows_affected == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(ApiError::new(
-                "VERSION_CONFLICT",
-                format!(
-                    "Version conflict: node {} has been modified by another client",
-                    id
-                ),
-            )),
-        ));
-    }
-
-    // Retrieve and return the updated node
-    // This includes all business logic (populate_mentions, backfill_schema_version, etc.)
+    // Use optimistic concurrency control - returns updated node directly
     let updated_node = state
         .node_service
-        .get_node(&id)
+        .update_node_with_occ(&id, request.version, request.update)
         .await
-        .map_err(map_node_service_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiError::new(
-                    "RESOURCE_NOT_FOUND",
-                    format!("Node {} not found after update", id),
-                )),
-            )
-        })?;
+        .map_err(map_node_service_error)?;
 
     // NOTE: No SSE broadcast needed here - NodeService emits DomainEvent
     // which is converted to SSE by the domain_event_to_sse_bridge
