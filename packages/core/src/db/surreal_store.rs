@@ -4592,8 +4592,11 @@ where
             id: Thing,
         }
 
-        // Try multiple indices to find the result
-        for idx in 0..5 {
+        // Try indices 0-4 to find the result. We check beyond index 3 as a safety buffer
+        // in case SurrealDB query structure changes or adds intermediate results.
+        // Expected: index 3 contains the RELATE result from the IF block.
+        const MAX_RESULT_INDEX: usize = 5;
+        for idx in 0..MAX_RESULT_INDEX {
             if let Ok(results) = response.take::<Vec<RelateResult>>(idx) {
                 if let Some(result) = results.first() {
                     return Ok(Some(result.id.to_string()));
@@ -5242,6 +5245,7 @@ where
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashSet;
     use tempfile::TempDir;
 
     /// Test helper to create a SurrealStore with schemas seeded
@@ -6454,8 +6458,7 @@ mod tests {
         assert_eq!(members.len(), 3, "Should have 3 members");
 
         // Verify all expected members are present
-        let member_ids: std::collections::HashSet<_> =
-            members.iter().map(|m| m.id.as_str()).collect();
+        let member_ids: HashSet<_> = members.iter().map(|m| m.id.as_str()).collect();
         assert!(
             member_ids.contains(member_a.id.as_str()),
             "Member A should be present"

@@ -19,25 +19,8 @@ impl FractionalOrderCalculator {
     /// calculate_order(Some(1.0), Some(2.0)) => ~1.5 (with tiny jitter)
     /// ```
     pub fn calculate_order(prev_order: Option<f64>, next_order: Option<f64>) -> f64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        // Add jitter to prevent exact order collisions during concurrent inserts
-        // Uses multiple entropy sources combined:
-        // 1. Nanoseconds since epoch (changes rapidly)
-        // 2. Process-unique counter (guarantees uniqueness within process)
-        // Range: 0.0 to 0.001 (small enough to not affect normal ordering)
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let counter_val = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let time_nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-
-        // Combine both sources for uniqueness
-        let combined = time_nanos.wrapping_add(counter_val);
-        let jitter = (combined % 1_000_000) as f64 / 1_000_000_000.0; // 0.0 to 0.001
+        // Use generate_jitter() to prevent code duplication (DRY principle)
+        let jitter = Self::generate_jitter();
 
         let base = match (prev_order, next_order) {
             (None, None) => 1.0,                             // First child
