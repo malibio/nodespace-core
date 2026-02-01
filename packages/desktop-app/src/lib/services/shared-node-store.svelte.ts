@@ -944,14 +944,16 @@ export class SharedNodeStore {
                   } catch (updateError) {
                     // If UPDATE fails because node doesn't exist, try CREATE instead
                     // This handles cases where persistedNodeIds is out of sync (page reload, database reset)
-                    // Match both "NodeNotFound" and "does not exist" error messages
-                    if (
-                      updateError instanceof Error &&
-                      (updateError.message.includes('NodeNotFound') ||
-                        updateError.message.includes('does not exist'))
-                    ) {
+                    // Match various error message formats for "node not found"
+                    const errorMsg = updateError instanceof Error ? updateError.message.toLowerCase() : '';
+                    const isNodeNotFound =
+                      errorMsg.includes('not found') ||
+                      errorMsg.includes('does not exist') ||
+                      errorMsg.includes('nodenotfound');
+
+                    if (updateError instanceof Error && isNodeNotFound) {
                       log.warn(
-                        `Node ${nodeId} not found in database, creating instead of updating`
+                        `Node ${nodeId} not found in database, creating instead of updating (error: ${updateError.message})`
                       );
                       await tauriCommands.createNode(currentNode);
                       this.persistedNodeIds.add(nodeId); // Now it's persisted
