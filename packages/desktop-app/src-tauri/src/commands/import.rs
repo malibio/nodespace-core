@@ -136,6 +136,24 @@ struct CollectionMetadata {
     is_archived: bool,
 }
 
+/// Intermediate result from reading a file (before parsing)
+///
+/// Holds file content and metadata between the "reading" and "parsing" phases,
+/// enabling per-step progress events.
+#[derive(Debug)]
+struct FileReadResult {
+    /// Full path to the file
+    path: PathBuf,
+    /// Raw file content
+    content: String,
+    /// Path relative to base directory (for display)
+    relative_path: String,
+    /// Collection path for assignment (if auto-routing enabled)
+    collection_path: Option<String>,
+    /// Whether this file is in an archived directory
+    is_archived: bool,
+}
+
 /// Derive collection and metadata from file path relative to base directory
 ///
 /// Implements smart routing rules:
@@ -530,7 +548,7 @@ pub async fn import_markdown_files(
     );
 
     // Store file contents for reading/parsing phases
-    let mut file_contents: Vec<(PathBuf, String, String, Option<String>, bool)> = Vec::new();
+    let mut file_contents: Vec<FileReadResult> = Vec::new();
 
     // Step 2: Reading files (emit per-file progress)
     for (index, file_path) in file_paths.iter().enumerate() {
@@ -601,13 +619,25 @@ pub async fn import_markdown_files(
             }
         };
 
-        file_contents.push((path, content, relative_path, collection_path, is_archived));
+        file_contents.push(FileReadResult {
+            path,
+            content,
+            relative_path,
+            collection_path,
+            is_archived,
+        });
     }
 
     // Step 3: Parsing markdown (emit per-file progress)
-    for (index, (path, content, relative_path, collection_path, is_archived)) in
-        file_contents.iter().enumerate()
-    {
+    for (index, file_read) in file_contents.iter().enumerate() {
+        let FileReadResult {
+            path,
+            content,
+            relative_path,
+            collection_path,
+            is_archived,
+        } = file_read;
+
         // Extract just the filename for display
         let filename = path
             .file_name()
@@ -750,7 +780,11 @@ pub async fn import_markdown_files(
 
     let parsing_duration = start.elapsed().as_millis();
 
-    // Clone data for the spawned task
+    // Clone data for the spawned task.
+    // These values are computed before tokio::spawn because:
+    // 1. The async block uses `move`, which takes ownership of captured variables
+    // 2. Computing lengths/counts here avoids borrowing issues in the async context
+    // 3. Cloning Arc/handles is cheap and allows the original references to be dropped
     let store = Arc::clone(node_service.store());
     let node_service_clone = node_service.inner().clone();
     let app_clone = app.clone();
