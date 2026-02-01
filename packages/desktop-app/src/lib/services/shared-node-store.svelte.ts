@@ -183,7 +183,9 @@ class SimplePersistenceCoordinator {
       coordLog.debug(`[op#${opId}] scheduling IMMEDIATE for ${shortNodeId}`);
       const pending: PendingOperation = {
         nodeId,
-        operation,
+        // Store the wrapper that tracks executingOperations, not the raw operation
+        // This ensures flushAndWaitForNodes() properly tracks execution state
+        operation: executeOperation,
         timeoutId: setTimeout(() => {}, 0),
         promise,
         resolve,
@@ -196,7 +198,9 @@ class SimplePersistenceCoordinator {
       const timeoutId = setTimeout(executeOperation, this.DEBOUNCE_MS);
       const pending: PendingOperation = {
         nodeId,
-        operation,
+        // Store the wrapper that tracks executingOperations, not the raw operation
+        // This ensures flushAndWaitForNodes() properly tracks execution state
+        operation: executeOperation,
         timeoutId,
         promise,
         resolve,
