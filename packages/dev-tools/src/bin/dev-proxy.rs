@@ -1032,8 +1032,8 @@ async fn set_parent(
     // This prevents duplicate events and enables proper client filtering
 
     // Return the updated node with new version (critical for frontend to sync local state)
-    let typed = node_to_typed_value(node)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(e)))?;
+    let typed =
+        node_to_typed_value(node).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(e)))?;
     Ok(Json(typed))
 }
 

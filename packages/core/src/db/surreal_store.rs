@@ -2688,59 +2688,70 @@ where
                 // Find the sibling we're inserting after
                 let after_thing =
                     surrealdb::sql::Thing::from(("node".to_string(), after_id.clone()));
-                let after_index = relationships
-                    .iter()
-                    .position(|e| e.out == after_thing)
-                    .ok_or_else(|| anyhow::anyhow!("Sibling not found: {}", after_id))?;
 
-                // Get orders before and after insertion point
-                let prev_order = relationships[after_index].order;
-                let next_order = relationships.get(after_index + 1).map(|e| e.order);
+                // If sibling not found, fall back to append at end (best-effort hint)
+                // This prevents data loss from race conditions during rapid operations
+                if let Some(after_index) = relationships.iter().position(|e| e.out == after_thing) {
+                    // Get orders before and after insertion point
+                    let prev_order = relationships[after_index].order;
+                    let next_order = relationships.get(after_index + 1).map(|e| e.order);
 
-                // Calculate new order between them
-                let calculated =
-                    FractionalOrderCalculator::calculate_order(Some(prev_order), next_order);
+                    // Calculate new order between them
+                    let calculated =
+                        FractionalOrderCalculator::calculate_order(Some(prev_order), next_order);
 
-                // Check if rebalancing is needed
-                if let Some(next) = next_order {
-                    if (next - prev_order) < 0.0001 {
-                        // Gap too small, need to rebalance before inserting
-                        self.rebalance_children_for_parent(parent_id).await?;
+                    // Check if rebalancing is needed
+                    if let Some(next) = next_order {
+                        if (next - prev_order) < 0.0001 {
+                            // Gap too small, need to rebalance before inserting
+                            self.rebalance_children_for_parent(parent_id).await?;
 
-                        // Re-query relationships after rebalancing (Issue #788: universal relationship table)
-                        // NOTE: There is a small race condition window here - between rebalancing
-                        // completion and this re-query, another client could move/delete the sibling.
-                        // If this occurs, we'll get "Sibling not found after rebalancing" error and
-                        // the operation fails. This is an accepted limitation - clients can retry.
-                        // A fully atomic solution would require SurrealDB to support multi-step
-                        // transactions with deferred constraint checking, which isn't available.
-                        let mut rels_response = self
-                            .db
-                            .query("SELECT out, properties.order AS order FROM relationship WHERE in = $parent_thing AND relationship_type = 'has_child' AND out != $node_thing ORDER BY properties.order ASC;")
-                            .bind(("parent_thing", parent_thing.clone()))
-                            .bind(("node_thing", node_thing.clone()))
-                            .await
-                            .context("Failed to get child relationships after rebalancing")?;
+                            // Re-query relationships after rebalancing
+                            let mut rels_response = self
+                                .db
+                                .query("SELECT out, properties.order AS order FROM relationship WHERE in = $parent_thing AND relationship_type = 'has_child' AND out != $node_thing ORDER BY properties.order ASC;")
+                                .bind(("parent_thing", parent_thing.clone()))
+                                .bind(("node_thing", node_thing.clone()))
+                                .await
+                                .context("Failed to get child relationships after rebalancing")?;
 
-                        let relationships: Vec<RelWithOrder> = rels_response
-                            .take(0)
-                            .context("Failed to extract child relationships after rebalancing")?;
+                            let relationships: Vec<RelWithOrder> = rels_response.take(0).context(
+                                "Failed to extract child relationships after rebalancing",
+                            )?;
 
-                        let after_index = relationships
-                            .iter()
-                            .position(|e| e.out == after_thing)
-                            .ok_or_else(|| {
-                            anyhow::anyhow!("Sibling not found after rebalancing: {}", after_id)
-                        })?;
-
-                        let prev_order = relationships[after_index].order;
-                        let next_order = relationships.get(after_index + 1).map(|e| e.order);
-                        FractionalOrderCalculator::calculate_order(Some(prev_order), next_order)
+                            // If sibling disappeared after rebalancing, fall back to append
+                            if let Some(after_index) =
+                                relationships.iter().position(|e| e.out == after_thing)
+                            {
+                                let prev_order = relationships[after_index].order;
+                                let next_order =
+                                    relationships.get(after_index + 1).map(|e| e.order);
+                                FractionalOrderCalculator::calculate_order(
+                                    Some(prev_order),
+                                    next_order,
+                                )
+                            } else {
+                                tracing::warn!(
+                                    sibling_id = %after_id,
+                                    "sibling disappeared after rebalancing, falling back to append"
+                                );
+                                let last_order = relationships.last().map(|e| e.order);
+                                FractionalOrderCalculator::calculate_order(last_order, None)
+                            }
+                        } else {
+                            calculated
+                        }
                     } else {
                         calculated
                     }
                 } else {
-                    calculated
+                    tracing::warn!(
+                        sibling_id = %after_id,
+                        parent_id = %parent_id,
+                        "insert_after_sibling_id not found in parent's children, falling back to append"
+                    );
+                    let last_order = relationships.last().map(|e| e.order);
+                    FractionalOrderCalculator::calculate_order(last_order, None)
                 }
             } else {
                 // No insert_after_sibling specified, insert at beginning

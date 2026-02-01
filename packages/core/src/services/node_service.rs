@@ -1454,8 +1454,11 @@ where
     /// Returns error if:
     /// - Parent doesn't exist (and isn't a valid date format)
     /// - Node validation fails
-    /// - Sibling doesn't exist or has different parent
     /// - ID format is invalid (non-UUID for production nodes)
+    ///
+    /// Note: If `insert_after_node_id` references a sibling that no longer exists
+    /// or has moved to a different parent (stale hint from race condition), the
+    /// operation falls back to appending at the end rather than failing.
     ///
     /// # Examples
     ///
@@ -1485,6 +1488,8 @@ where
         &self,
         params: CreateNodeParams,
     ) -> Result<String, NodeServiceError> {
+        // Make params mutable so we can clear insert_after_node_id if stale
+        let mut params = params;
         let start = std::time::Instant::now();
         tracing::debug!(
             node_type = %params.node_type,
@@ -1505,22 +1510,31 @@ where
             }
         }
 
-        // Step 3: Validate sibling exists and has same parent (if provided)
-        if let Some(ref sibling_id) = params.insert_after_node_id {
-            let _sibling = self
-                .get_node(sibling_id)
-                .await?
-                .ok_or_else(|| NodeServiceError::node_not_found(sibling_id))?;
+        // Step 3: Validate sibling (if provided) - treat as best-effort hint
+        // If sibling doesn't exist or has moved to different parent, fall back to append
+        // This prevents data loss from race conditions during rapid indent/outdent operations
+        if let Some(ref sibling_id) = params.insert_after_node_id.clone() {
+            let sibling_valid = match self.get_node(sibling_id).await {
+                Ok(Some(_)) => {
+                    // Sibling exists, verify it has same parent
+                    match self.get_parent(sibling_id).await {
+                        Ok(sibling_parent) => {
+                            let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
+                            sibling_parent_id == params.parent_id.as_deref()
+                        }
+                        Err(_) => false,
+                    }
+                }
+                _ => false,
+            };
 
-            // Verify sibling has same parent
-            let sibling_parent = self.get_parent(sibling_id).await?;
-            let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
-
-            if sibling_parent_id != params.parent_id.as_deref() {
-                return Err(NodeServiceError::hierarchy_violation(format!(
-                    "Sibling '{}' has different parent than the node being created",
-                    sibling_id
-                )));
+            if !sibling_valid {
+                tracing::warn!(
+                    sibling_id = %sibling_id,
+                    parent_id = ?params.parent_id,
+                    "insert_after_node_id is stale (sibling moved or deleted), falling back to append"
+                );
+                params.insert_after_node_id = None;
             }
         }
 
@@ -8312,7 +8326,7 @@ mod tests {
         /// Test sibling validation - sibling must have same parent
         #[tokio::test]
         #[serial(sibling_ordering)]
-        async fn test_sibling_must_have_same_parent() {
+        async fn test_sibling_with_different_parent_falls_back_to_append() {
             let (service, _temp) = create_test_service().await;
 
             // Create two different parent nodes
@@ -8331,22 +8345,31 @@ mod tests {
                 .unwrap();
 
             // Try to create a node under parent2 with sibling from parent1
+            // This should succeed (fall back to append) rather than fail
+            // This prevents data loss from race conditions during rapid indent/outdent
             let params = CreateNodeParams {
                 id: None,
                 node_type: "text".to_string(),
                 content: "New node".to_string(),
-                parent_id: Some(parent2_id),
+                parent_id: Some(parent2_id.clone()),
                 insert_after_node_id: Some(sibling_id),
                 properties: json!({}),
             };
 
             let result = service.create_node_with_parent(params).await;
-            assert!(result.is_err());
-            let err = result.unwrap_err();
             assert!(
-                format!("{:?}", err).contains("different parent"),
-                "Error should indicate sibling has different parent: {:?}",
-                err
+                result.is_ok(),
+                "Should succeed with fallback to append: {:?}",
+                result
+            );
+
+            // Verify node was created under parent2
+            let new_node_id = result.unwrap();
+            let parent = service.get_parent(&new_node_id).await.unwrap();
+            assert_eq!(
+                parent.map(|p| p.id),
+                Some(parent2_id),
+                "Node should be under parent2"
             );
         }
 
