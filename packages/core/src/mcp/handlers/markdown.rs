@@ -205,14 +205,9 @@ pub fn transform_links_in_nodes(
     file_to_root_id: &HashMap<PathBuf, String>,
     current_file_path: Option<&Path>,
 ) {
-    for node in nodes.iter_mut() {
-        node.content = transform_links_in_content(
-            &node.content,
-            file_to_root_id,
-            current_file_path,
-            &LINK_REGEX,
-        );
-    }
+    // Delegate to the mentions-aware version and discard the mentions result (DRY principle)
+    // The overhead of collecting mentions is negligible (just Vec allocation)
+    let _ = transform_links_in_nodes_with_mentions(nodes, file_to_root_id, current_file_path, "");
 }
 
 /// Transform inter-file markdown links and collect mention relationships (Issue #868)
@@ -274,8 +269,12 @@ fn transform_links_in_content_with_mentions(
             let link_text = &caps[1];
             let link_url = &caps[2];
 
-            let (transformed_link, target_id) =
-                transform_single_link_with_target(link_text, link_url, file_to_root_id, current_file_path);
+            let (transformed_link, target_id) = transform_single_link_with_target(
+                link_text,
+                link_url,
+                file_to_root_id,
+                current_file_path,
+            );
 
             if let Some(id) = target_id {
                 target_ids.push(id);
@@ -286,33 +285,6 @@ fn transform_links_in_content_with_mentions(
         .to_string();
 
     (transformed, target_ids)
-}
-
-/// Transform links in a single content string
-fn transform_links_in_content(
-    content: &str,
-    file_to_root_id: &HashMap<PathBuf, String>,
-    current_file_path: Option<&Path>,
-    link_regex: &Regex,
-) -> String {
-    link_regex
-        .replace_all(content, |caps: &regex::Captures| {
-            let link_text = &caps[1];
-            let link_url = &caps[2];
-
-            transform_single_link(link_text, link_url, file_to_root_id, current_file_path)
-        })
-        .to_string()
-}
-
-/// Transform a single link based on its target
-fn transform_single_link(
-    link_text: &str,
-    link_url: &str,
-    file_to_root_id: &HashMap<PathBuf, String>,
-    current_file_path: Option<&Path>,
-) -> String {
-    transform_single_link_with_target(link_text, link_url, file_to_root_id, current_file_path).0
 }
 
 /// Transform a single link and return the target ID if it resolves to a nodespace link (Issue #868)

@@ -2373,12 +2373,8 @@ mod mention_collection_tests {
         )];
 
         let file_map = HashMap::new();
-        let result = transform_links_in_nodes_with_mentions(
-            &mut nodes,
-            &file_map,
-            None,
-            "source-uuid",
-        );
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-uuid");
 
         // External URLs should not produce mentions
         assert_eq!(result.mentions.len(), 0);
@@ -2396,12 +2392,8 @@ mod mention_collection_tests {
         )];
 
         let file_map = HashMap::new();
-        let result = transform_links_in_nodes_with_mentions(
-            &mut nodes,
-            &file_map,
-            None,
-            "source-uuid",
-        );
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-uuid");
 
         // Anchor links should not produce mentions
         assert_eq!(result.mentions.len(), 0);
@@ -2443,12 +2435,8 @@ mod mention_collection_tests {
         )];
 
         let file_map = HashMap::new();
-        let result = transform_links_in_nodes_with_mentions(
-            &mut nodes,
-            &file_map,
-            None,
-            "source-uuid",
-        );
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-uuid");
 
         // Existing nodespace:// links SHOULD produce mentions (handles re-imports)
         assert_eq!(result.mentions.len(), 1);
@@ -2472,12 +2460,8 @@ mod mention_collection_tests {
         file_map.insert(PathBuf::from("intro.md"), "uuid-1".to_string());
         file_map.insert(PathBuf::from("guide.md"), "uuid-2".to_string());
 
-        let result = transform_links_in_nodes_with_mentions(
-            &mut nodes,
-            &file_map,
-            None,
-            "source-uuid",
-        );
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-uuid");
 
         // Should collect 2 mentions (intro and guide), external URL doesn't count
         assert_eq!(result.mentions.len(), 2);
@@ -2512,12 +2496,8 @@ mod mention_collection_tests {
         file_map.insert(PathBuf::from("intro.md"), "uuid-1".to_string());
         file_map.insert(PathBuf::from("guide.md"), "uuid-2".to_string());
 
-        let result = transform_links_in_nodes_with_mentions(
-            &mut nodes,
-            &file_map,
-            None,
-            "source-root",
-        );
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-root");
 
         // Should collect mentions from both nodes
         assert_eq!(result.mentions.len(), 2);
@@ -2540,12 +2520,8 @@ mod mention_collection_tests {
         )];
 
         let file_map = HashMap::new();
-        let result = transform_links_in_nodes_with_mentions(
-            &mut nodes,
-            &file_map,
-            None,
-            "source-uuid",
-        );
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-uuid");
 
         // No links = no mentions
         assert!(result.mentions.is_empty());

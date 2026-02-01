@@ -7101,7 +7101,10 @@ mod tests {
         // Verify relationship exists via the existing create_mention API (which checks existence)
         // If we try to create again and get None, it means it already exists
         let existing = store.create_mention(&source.id, &target.id).await?;
-        assert!(existing.is_none(), "Mention should already exist (idempotency check)");
+        assert!(
+            existing.is_none(),
+            "Mention should already exist (idempotency check)"
+        );
 
         Ok(())
     }
@@ -7127,7 +7130,10 @@ mod tests {
 
         // Verify only one mention exists by trying to create via single API
         let existing = store.create_mention(&source.id, &target.id).await?;
-        assert!(existing.is_none(), "Only one mention should exist despite two bulk calls");
+        assert!(
+            existing.is_none(),
+            "Only one mention should exist despite two bulk calls"
+        );
 
         Ok(())
     }
