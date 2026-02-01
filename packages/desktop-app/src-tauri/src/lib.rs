@@ -147,9 +147,9 @@ pub fn initialize_mcp_server(app: tauri::AppHandle) -> anyhow::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use tauri::{menu::*, Emitter, Manager};
+    use tauri::{menu::*, Emitter, Manager, RunEvent};
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -240,7 +240,11 @@ pub fn run() {
                     println!("Import folder requested from menu");
                 }
             } else if *event.id() == quit_id {
-                std::process::exit(0);
+                // Request exit through Tauri's event loop instead of std::process::exit(0)
+                // This triggers RunEvent::ExitRequested, allowing proper cleanup
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.close();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -300,6 +304,39 @@ pub fn run() {
             commands::import::import_markdown_files,
             commands::import::import_markdown_directory,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Run with event handler for graceful shutdown
+    // This allows proper cleanup of Metal/GPU resources before exit
+    app.run(|app_handle, event| {
+        match event {
+            RunEvent::ExitRequested { code, .. } => {
+                // Allow exit to proceed - Tauri will handle cleanup
+                tracing::info!(
+                    "App exit requested (code: {:?}), performing cleanup...",
+                    code
+                );
+
+                // Cleanup embedding service to release Metal/GPU resources
+                // This prevents SIGABRT crashes from ggml_metal_rsets_free during
+                // static destruction (Issue #863)
+                if let Some(embedding_state) =
+                    app_handle.try_state::<crate::commands::embeddings::EmbeddingState>()
+                {
+                    tracing::info!("Releasing GPU context before exit...");
+                    // Release the LlamaContext which holds Metal residency sets
+                    // This must happen before the global LLAMA_BACKEND static is destroyed
+                    embedding_state.service.nlp_engine().release_gpu_context();
+                }
+
+                tracing::info!("Cleanup complete, exiting...");
+                // Don't call api.prevent_exit() - allow the exit to proceed
+            }
+            RunEvent::Exit => {
+                tracing::info!("App exiting normally");
+            }
+            _ => {}
+        }
+    });
 }

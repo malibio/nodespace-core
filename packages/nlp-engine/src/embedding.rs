@@ -557,6 +557,64 @@ impl EmbeddingService {
         self.initialized
     }
 
+    /// Shutdown the embedding service and release GPU resources.
+    ///
+    /// This must be called before application exit to properly clean up Metal/GPU
+    /// contexts. Failure to call this before exit may result in crashes during
+    /// static destruction (e.g., SIGABRT from ggml_metal_rsets_free).
+    ///
+    /// After shutdown, the service cannot be used until re-initialized.
+    pub fn shutdown(&mut self) {
+        tracing::info!("Shutting down embedding service...");
+
+        #[cfg(feature = "embedding-service")]
+        {
+            // Drop the LlamaState which holds the context and model
+            // This must happen before the global LLAMA_BACKEND is destroyed
+            if let Some(state) = self.state.take() {
+                // Explicitly drop the state to release Metal resources
+                drop(state);
+                tracing::info!("LlamaState dropped, Metal resources released");
+            }
+        }
+
+        // Clear cache
+        self.clear_cache();
+
+        self.initialized = false;
+        tracing::info!("Embedding service shutdown complete");
+    }
+
+    /// Release GPU context resources without requiring mutable access.
+    ///
+    /// This method can be called on an `Arc<EmbeddingService>` to release
+    /// the LlamaContext before application exit. The context holds Metal
+    /// GPU resources that must be released before the global llama backend
+    /// is destroyed to prevent SIGABRT crashes.
+    ///
+    /// After calling this, the next embedding request will recreate the context.
+    /// This is safe because context creation is lazy (Issue #776).
+    pub fn release_gpu_context(&self) {
+        tracing::info!("Releasing GPU context resources...");
+
+        #[cfg(feature = "embedding-service")]
+        {
+            if let Some(ref state_mutex) = self.state {
+                let mut state = state_mutex.lock().unwrap_or_else(|p| p.into_inner());
+                if state.context.is_some() {
+                    // Drop the context to release Metal resources
+                    // The model remains loaded, but the GPU-bound context is released
+                    state.context = None;
+                    state.current_batch_size = 0;
+                    tracing::info!("LlamaContext released, Metal resources freed");
+                }
+            }
+        }
+
+        // Also clear the cache to reduce memory pressure
+        self.clear_cache();
+    }
+
     /// Get the embedding dimension
     pub fn embedding_dimension(&self) -> usize {
         #[cfg(feature = "embedding-service")]
