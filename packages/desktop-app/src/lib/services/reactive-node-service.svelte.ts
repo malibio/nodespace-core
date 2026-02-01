@@ -1192,6 +1192,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         );
 
         // Move sibling transfers (get fresh versions for each)
+        // NOTE: Sequential to preserve sibling order. Parallel execution is possible but requires
+        // pre-calculating fractional order values upfront to guarantee ordering. For typical
+        // outdent operations (0-3 siblings), sequential latency is negligible.
         for (const siblingId of siblingsBelow) {
           const freshSibling = sharedNodeStore.getNode(siblingId);
           if (freshSibling) {
