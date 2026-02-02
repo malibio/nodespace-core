@@ -1135,6 +1135,93 @@ it('should handle [SCENARIO] without race condition', async () => {
 });
 ```
 
+## UX Bug → Regression Test Workflow
+
+**Key principle: Manual testing finds bugs, automated tests prevent regressions.**
+
+UX issues (race conditions, timing bugs, focus management) are often discovered through manual testing rather than anticipated upfront. When you find and fix a UX bug, add a regression test so it never comes back.
+
+### Workflow
+
+```
+1. DISCOVER: Find UX bug through manual testing
+2. FIX: Update the code to resolve the issue
+3. TEST: Add regression test that would have caught the bug
+4. COMMIT: Include both fix and test in the same PR
+```
+
+### Where to Add Regression Tests
+
+| Bug Type | Test Location | Example |
+|----------|---------------|---------|
+| Keyboard timing/sequencing | `rapid-keyboard-operations.test.ts` | Backspace→Enter merges incorrectly |
+| Hierarchy/order calculation | `rapid-hierarchy-operations.test.ts` | Indent moves node to wrong position |
+| Focus management | `src/tests/browser/focus-management.test.ts` | Focus lost after node deletion |
+| Dropdown behavior | `src/tests/browser/slash-dropdown-interaction.test.ts` | Dropdown closes unexpectedly |
+| Node operations | `src/tests/integration/node-workflow.test.ts` | Split/merge corrupts content |
+
+### Example: Bug to Test
+
+**Bug discovered:** User presses Backspace→Enter quickly and the node merge happens incorrectly.
+
+**Fix:** Update merge logic in `reactive-node-service.ts` to wait for pending operations.
+
+**Regression test added to `rapid-keyboard-operations.test.ts`:**
+
+```typescript
+it('should handle Backspace→Enter rapid sequence correctly', () => {
+  const textarea = document.createElement('textarea');
+  document.body.appendChild(textarea);
+  textarea.focus();
+
+  const events: string[] = [];
+
+  textarea.addEventListener('keydown', (e) => {
+    events.push(e.key);
+    // Simulate the app's event handling
+    if (e.key === 'Backspace') {
+      // Merge would happen here
+    } else if (e.key === 'Enter') {
+      // Split would happen here
+    }
+  });
+
+  // Rapid Backspace→Enter sequence
+  textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+  textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+  // Events should be received in correct order
+  expect(events).toEqual(['Backspace', 'Enter']);
+});
+```
+
+### Benefits of This Approach
+
+1. **Organic growth**: Test suite grows based on real bugs, not hypotheticals
+2. **High value**: Every test prevents a known regression
+3. **Documentation**: Tests document edge cases discovered through usage
+4. **Confidence**: Each bug fix includes proof it won't regress
+
+### When NOT to Add a Regression Test
+
+- **One-time configuration issues** (not reproducible in code)
+- **Environment-specific bugs** (wrong Node version, missing dependencies)
+- **Already covered** by existing tests (check first!)
+
+### Commit Message Convention
+
+When fixing a UX bug with a regression test:
+
+```
+Fix: [Brief description of the bug]
+
+- Root cause: [What was wrong]
+- Solution: [How it was fixed]
+- Regression test: [Which test file, what it covers]
+
+Closes #[issue-number]
+```
+
 ## Full Backend Integration Testing
 
 For catching timing issues that only appear with real database latency, use the Tauri backend in test mode:
