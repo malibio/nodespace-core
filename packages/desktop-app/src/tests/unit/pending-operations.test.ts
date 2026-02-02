@@ -15,6 +15,13 @@ import {
   getPendingMoveOperation
 } from '$lib/services/pending-operations';
 
+/**
+ * Generate a unique node ID for testing.
+ * Uses random suffix to prevent interference between tests since the
+ * pending-operations module uses global state (a Map of pending operations).
+ */
+const uniqueNodeId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2)}`;
+
 describe('pending-operations module', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -26,7 +33,7 @@ describe('pending-operations module', () => {
 
   describe('trackMoveOperation', () => {
     it('should track a pending move operation', async () => {
-      const nodeId = 'test-node-' + Math.random().toString(36).slice(2);
+      const nodeId = uniqueNodeId('test-node');
       let resolveOperation: () => void;
       const operation = new Promise<void>((resolve) => {
         resolveOperation = resolve;
@@ -44,7 +51,7 @@ describe('pending-operations module', () => {
     });
 
     it('should clean up tracked operations when complete', async () => {
-      const nodeId = 'cleanup-node-' + Math.random().toString(36).slice(2);
+      const nodeId = uniqueNodeId('cleanup-node');
       let resolveOperation: () => void;
       const operation = new Promise<void>((resolve) => {
         resolveOperation = resolve;
@@ -61,7 +68,7 @@ describe('pending-operations module', () => {
     });
 
     it('should clean up tracked operations even on failure', async () => {
-      const nodeId = 'fail-node-' + Math.random().toString(36).slice(2);
+      const nodeId = uniqueNodeId('fail-node');
       let rejectOperation: (error: Error) => void;
       const operation = new Promise<void>((_, reject) => {
         rejectOperation = reject;
@@ -82,7 +89,7 @@ describe('pending-operations module', () => {
     });
 
     it('should return the tracked promise', async () => {
-      const nodeId = 'return-node-' + Math.random().toString(36).slice(2);
+      const nodeId = uniqueNodeId('return-node');
       let resolveOperation: () => void;
       const operation = new Promise<void>((resolve) => {
         resolveOperation = resolve;
@@ -111,8 +118,8 @@ describe('pending-operations module', () => {
 
     it('should wait for all pending operations to complete', async () => {
       const completionOrder: string[] = [];
-      const nodeId1 = 'wait-node-1-' + Math.random().toString(36).slice(2);
-      const nodeId2 = 'wait-node-2-' + Math.random().toString(36).slice(2);
+      const nodeId1 = uniqueNodeId('wait-node-1');
+      const nodeId2 = uniqueNodeId('wait-node-2');
       let resolveOp1: () => void;
       let resolveOp2: () => void;
 
@@ -159,7 +166,7 @@ describe('pending-operations module', () => {
     });
 
     it('should return the pending promise for tracked nodes', async () => {
-      const nodeId = 'get-pending-node-' + Math.random().toString(36).slice(2);
+      const nodeId = uniqueNodeId('get-pending-node');
       let resolveOperation: () => void;
       const operation = new Promise<void>((resolve) => {
         resolveOperation = resolve;
@@ -178,9 +185,15 @@ describe('pending-operations module', () => {
   });
 
   describe('Race condition prevention (real module)', () => {
+    // These tests require real timers because:
+    // 1. We're testing actual timing coordination between async operations
+    // 2. Fake timers don't properly simulate Promise.race/setTimeout interactions
+    //    when multiple promises are racing against real delays
+    // 3. The module uses real setTimeout internally, which needs real time to test
+
     it('should ensure subsequent operations wait for pending moves', async () => {
-      vi.useRealTimers(); // Use real timers for this test
-      const nodeId = 'race-node-' + Math.random().toString(36).slice(2);
+      vi.useRealTimers();
+      const nodeId = uniqueNodeId('race-node');
       const executionOrder: string[] = [];
 
       // First operation takes 50ms
@@ -218,7 +231,7 @@ describe('pending-operations module', () => {
 
     it('should handle the Enter+Tab+Shift+Tab scenario (Issue #662)', async () => {
       vi.useRealTimers();
-      const nodeId = 'issue-662-node-' + Math.random().toString(36).slice(2);
+      const nodeId = uniqueNodeId('issue-662-node');
       const operationLog: string[] = [];
 
       // Simulate indent operation (takes 100ms to complete backend call)
