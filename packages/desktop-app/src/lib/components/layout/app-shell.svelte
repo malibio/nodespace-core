@@ -223,7 +223,6 @@
               unsubProgress = null;
             }
             // Refresh collections after background import completes
-            const { collectionsData } = await import('$lib/stores/collections');
             await collectionsData.loadCollections();
           } else {
             statusBar.show(event.message, progress);
