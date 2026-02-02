@@ -1048,8 +1048,206 @@ Before creating PR, verify:
 
 **Add Complexity** (As Needed):
 - Performance testing
-- Security validation  
+- Security validation
 - Cross-platform E2E
 - Advanced mocking
 
 This approach provides immediate practical value while allowing natural growth as the project matures.
+
+## Stress Tests for Race Condition Detection (Issue #870)
+
+NodeSpace includes stress tests specifically designed to catch race conditions in hierarchy operations (indent/outdent). These tests were added after PR #861 revealed that mocked backends can miss timing issues.
+
+### Stress Test Location
+
+- **Frontend Stress Tests**: `src/tests/integration/rapid-hierarchy-operations.test.ts`
+- **Browser Stress Tests**: `src/tests/browser/rapid-keyboard-operations.test.ts`
+
+### What the Stress Tests Cover
+
+| Test Type | Location | What It Tests |
+|-----------|----------|---------------|
+| Order Calculation | `rapid-hierarchy-operations.test.ts` | `calculateOutdentInsertOrderPure()` edge cases |
+| Floating Point Precision | `rapid-hierarchy-operations.test.ts` | 50+ rapid insertions, precision degradation |
+| Concurrent Operations | `rapid-hierarchy-operations.test.ts` | Out-of-order completion, pending operation tracking |
+| Keyboard Event Sequencing | `rapid-keyboard-operations.test.ts` | Enter→Tab, Tab→Shift+Tab patterns |
+| High-Frequency Events | `rapid-keyboard-operations.test.ts` | 500+ rapid keyboard events |
+
+### Running Stress Tests
+
+```bash
+# Run frontend stress tests
+bun run test src/tests/integration/rapid-hierarchy-operations.test.ts
+
+# Run browser stress tests (requires Playwright)
+bun run test:browser src/tests/browser/rapid-keyboard-operations.test.ts
+
+# Run all tests including stress tests
+bun run test:all
+```
+
+### Key Scenarios Tested
+
+**1. Enter→Tab Race Condition (PR #861)**
+```typescript
+// Simulates user pressing Enter then immediately Tab
+// This creates a new node and indents it before the first operation completes
+it('should receive keyboard events in correct order during rapid input', () => {
+  // Events should be: down:Enter, up:Enter, down:Tab, up:Tab
+  // NOT: down:Tab, down:Enter (out of order)
+});
+```
+
+**2. Floating Point Precision Limits**
+```typescript
+// Demonstrates why backend needs rebalancing after ~50 insertions
+// Between the same two siblings (halving algorithm hits 52-bit limit)
+it('should handle 50 rapid order calculations - demonstrates precision limits', () => {
+  // After 50 insertions, some orders may collide at floating point limits
+  // Backend rebalancing handles this automatically
+});
+```
+
+**3. Out-of-Order Completion**
+```typescript
+// Simulates database operations completing in different order than started
+it('should track pending operations correctly', async () => {
+  // maxPending > 1 confirms concurrent operations occurred
+  // Final pendingCount === 0 confirms all completed
+});
+```
+
+### Adding New Stress Tests
+
+When adding features that involve hierarchy operations or backend coordination:
+
+1. **Identify the race condition scenario** - What rapid user action could expose timing issues?
+2. **Add unit stress tests** in `rapid-hierarchy-operations.test.ts` for logic validation
+3. **Add browser stress tests** in `rapid-keyboard-operations.test.ts` for event sequencing
+4. **Document the scenario** - What bug would this catch?
+
+Example template:
+```typescript
+it('should handle [SCENARIO] without race condition', async () => {
+  // Setup: Create initial state
+  // Action: Perform rapid operations that could race
+  // Assert: Final state is consistent
+});
+```
+
+## UX Bug → Regression Test Workflow
+
+**Key principle: Manual testing finds bugs, automated tests prevent regressions.**
+
+UX issues (race conditions, timing bugs, focus management) are often discovered through manual testing rather than anticipated upfront. When you find and fix a UX bug, add a regression test so it never comes back.
+
+### Workflow
+
+```
+1. DISCOVER: Find UX bug through manual testing
+2. FIX: Update the code to resolve the issue
+3. TEST: Add regression test that would have caught the bug
+4. COMMIT: Include both fix and test in the same PR
+```
+
+### Where to Add Regression Tests
+
+| Bug Type | Test Location | Example |
+|----------|---------------|---------|
+| Keyboard timing/sequencing | `rapid-keyboard-operations.test.ts` | Backspace→Enter merges incorrectly |
+| Hierarchy/order calculation | `rapid-hierarchy-operations.test.ts` | Indent moves node to wrong position |
+| Focus management | `src/tests/browser/focus-management.test.ts` | Focus lost after node deletion |
+| Dropdown behavior | `src/tests/browser/slash-dropdown-interaction.test.ts` | Dropdown closes unexpectedly |
+| Node operations | `src/tests/integration/node-workflow.test.ts` | Split/merge corrupts content |
+
+### Example: Bug to Test
+
+**Bug discovered:** User presses Backspace→Enter quickly and the node merge happens incorrectly.
+
+**Fix:** Update merge logic in `reactive-node-service.ts` to wait for pending operations.
+
+**Regression test added to `rapid-keyboard-operations.test.ts`:**
+
+```typescript
+it('should handle Backspace→Enter rapid sequence correctly', () => {
+  const textarea = document.createElement('textarea');
+  document.body.appendChild(textarea);
+  textarea.focus();
+
+  const events: string[] = [];
+
+  textarea.addEventListener('keydown', (e) => {
+    events.push(e.key);
+    // Simulate the app's event handling
+    if (e.key === 'Backspace') {
+      // Merge would happen here
+    } else if (e.key === 'Enter') {
+      // Split would happen here
+    }
+  });
+
+  // Rapid Backspace→Enter sequence
+  textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+  textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+  // Events should be received in correct order
+  expect(events).toEqual(['Backspace', 'Enter']);
+});
+```
+
+### Benefits of This Approach
+
+1. **Organic growth**: Test suite grows based on real bugs, not hypotheticals
+2. **High value**: Every test prevents a known regression
+3. **Documentation**: Tests document edge cases discovered through usage
+4. **Confidence**: Each bug fix includes proof it won't regress
+
+### When NOT to Add a Regression Test
+
+- **One-time configuration issues** (not reproducible in code)
+- **Environment-specific bugs** (wrong Node version, missing dependencies)
+- **Already covered** by existing tests (check first!)
+
+### Commit Message Convention
+
+When fixing a UX bug with a regression test:
+
+```
+Fix: [Brief description of the bug]
+
+- Root cause: [What was wrong]
+- Solution: [How it was fixed]
+- Regression test: [Which test file, what it covers]
+
+Closes #[issue-number]
+```
+
+## Full Backend Integration Testing
+
+For catching timing issues that only appear with real database latency, use the Tauri backend in test mode:
+
+### Running with Real SurrealDB (Manual)
+
+```bash
+# Terminal 1: Start backend with test database
+NODESPACE_DB_PATH=/tmp/nodespace-test-db bun run dev:tauri
+
+# Terminal 2: Run tests (tests will use mocked commands, but you can
+# verify behavior by watching the backend logs)
+bun run test
+```
+
+### Future: Automated Integration Tests (Planned)
+
+The `test:integration:full` command is planned for automated testing against the real Tauri backend. This would:
+
+1. Start Tauri in headless mode with a test database
+2. Run integration tests against real SurrealDB
+3. Clean up test database after completion
+
+**Current Status**: The stress tests in `rapid-hierarchy-operations.test.ts` provide most of the race condition detection value. Full backend integration is recommended for:
+- Pre-release validation
+- After major database schema changes
+- When debugging production-only issues
+
+See [Issue #870](https://github.com/malibio/nodespace-core/issues/870) for tracking.
