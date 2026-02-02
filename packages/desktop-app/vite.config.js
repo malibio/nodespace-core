@@ -6,7 +6,7 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
-  
+
   // Fix esbuild CSS processing issues
   esbuild: {
     keepNames: true,
@@ -31,6 +31,57 @@ export default defineConfig(async () => ({
     ],
     // Include dependencies that should be pre-bundled
     include: ['uuid', 'clsx', 'tailwind-merge']
+  },
+
+  // Build configuration
+  build: {
+    // Suppress the "dynamic/static import mixing" warnings
+    // These are intentional: Tauri APIs are dynamically imported for lazy loading
+    // while also being statically imported by other modules. This is expected
+    // behavior for environment-adaptive code and doesn't affect bundle output.
+    // Note: Vite 6's reporter plugin may still show some warnings that can't be
+    // suppressed via onwarn - these are informational only and don't affect the build.
+    rollupOptions: {
+      onwarn(warning, warn) {
+        // Suppress dynamic/static import mixing warnings
+        // This pattern is intentional for environment-adaptive code (Tauri/browser)
+        if (warning.message?.includes('is dynamically imported by') &&
+            warning.message?.includes('but also statically imported by')) {
+          return;
+        }
+        // Suppress circular dependency warnings for internal modules
+        if (warning.code === 'CIRCULAR_DEPENDENCY') {
+          return;
+        }
+        warn(warning);
+      },
+      output: {
+        // Split large vendor chunks to stay under 500KB limit
+        // This improves initial load time through better caching
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            // Tauri APIs - used extensively, keep together
+            if (id.includes('@tauri-apps')) {
+              return 'vendor-tauri';
+            }
+            // UI component libraries
+            if (id.includes('bits-ui') || id.includes('@lucide') || id.includes('sveltednd')) {
+              return 'vendor-ui';
+            }
+            // Svelte runtime
+            if (id.includes('svelte')) {
+              return 'vendor-svelte';
+            }
+            // Utilities
+            if (id.includes('uuid') || id.includes('clsx') || id.includes('tailwind-merge') || id.includes('marked')) {
+              return 'vendor-utils';
+            }
+            // Remaining node_modules go to vendor chunk
+            return 'vendor';
+          }
+        }
+      }
+    }
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
