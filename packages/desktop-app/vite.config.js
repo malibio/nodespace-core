@@ -60,23 +60,16 @@ export default defineConfig(async () => ({
         // This improves initial load time through better caching
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            // Tauri APIs - used extensively, keep together
+            // Tauri APIs - separate chunk for desktop-specific code
             if (id.includes('@tauri-apps')) {
               return 'vendor-tauri';
             }
-            // UI component libraries
+            // UI component libraries - separate chunk for lazy-loadable UI
             if (id.includes('bits-ui') || id.includes('@lucide') || id.includes('sveltednd')) {
               return 'vendor-ui';
             }
-            // Svelte runtime
-            if (id.includes('svelte')) {
-              return 'vendor-svelte';
-            }
-            // Utilities
-            if (id.includes('uuid') || id.includes('clsx') || id.includes('tailwind-merge') || id.includes('marked')) {
-              return 'vendor-utils';
-            }
-            // Remaining node_modules go to vendor chunk
+            // All other node_modules (including svelte) in single vendor chunk
+            // to avoid circular chunk dependencies
             return 'vendor';
           }
         }
