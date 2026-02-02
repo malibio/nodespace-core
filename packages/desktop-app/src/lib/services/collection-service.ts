@@ -97,57 +97,57 @@ class TauriCollectionService implements CollectionServiceInterface {
   }
 
   async getCollectionMembers(collectionId: string): Promise<Node[]> {
-        log.debug('Fetching collection members', { collectionId });
+    log.debug('Fetching collection members', { collectionId });
     return invoke<Node[]>('get_collection_members', { collectionId });
   }
 
   async getCollectionMembersRecursive(collectionId: string): Promise<Node[]> {
-        log.debug('Fetching recursive collection members', { collectionId });
+    log.debug('Fetching recursive collection members', { collectionId });
     return invoke<Node[]>('get_collection_members_recursive', { collectionId });
   }
 
   async getNodeCollections(nodeId: string): Promise<string[]> {
-        log.debug('Fetching node collections', { nodeId });
+    log.debug('Fetching node collections', { nodeId });
     return invoke<string[]>('get_node_collections', { nodeId });
   }
 
   async findCollectionByPath(path: string): Promise<CollectionNode | null> {
-        log.debug('Finding collection by path', { path });
+    log.debug('Finding collection by path', { path });
     return invoke<CollectionNode | null>('find_collection_by_path', { collectionPath: path });
   }
 
   async getCollectionByName(name: string): Promise<CollectionNode | null> {
-        log.debug('Getting collection by name', { name });
+    log.debug('Getting collection by name', { name });
     return invoke<CollectionNode | null>('get_collection_by_name', { name });
   }
 
   async addNodeToCollection(nodeId: string, collectionId: string): Promise<void> {
-        log.debug('Adding node to collection', { nodeId, collectionId });
+    log.debug('Adding node to collection', { nodeId, collectionId });
     return invoke<void>('add_node_to_collection', { nodeId, collectionId });
   }
 
   async addNodeToCollectionPath(nodeId: string, path: string): Promise<string> {
-        log.debug('Adding node to collection path', { nodeId, path });
+    log.debug('Adding node to collection path', { nodeId, path });
     return invoke<string>('add_node_to_collection_path', { nodeId, collectionPath: path });
   }
 
   async removeNodeFromCollection(nodeId: string, collectionId: string): Promise<void> {
-        log.debug('Removing node from collection', { nodeId, collectionId });
+    log.debug('Removing node from collection', { nodeId, collectionId });
     return invoke<void>('remove_node_from_collection', { nodeId, collectionId });
   }
 
   async createCollection(name: string, description?: string): Promise<string> {
-        log.debug('Creating collection', { name, description });
+    log.debug('Creating collection', { name, description });
     return invoke<string>('create_collection', { name, description });
   }
 
   async renameCollection(collectionId: string, version: number, newName: string): Promise<CollectionNode> {
-        log.debug('Renaming collection', { collectionId, version, newName });
+    log.debug('Renaming collection', { collectionId, version, newName });
     return invoke<CollectionNode>('rename_collection', { collectionId, version, newName });
   }
 
   async deleteCollection(collectionId: string, version: number): Promise<void> {
-        log.debug('Deleting collection', { collectionId, version });
+    log.debug('Deleting collection', { collectionId, version });
     return invoke<void>('delete_collection', { collectionId, version });
   }
 }
