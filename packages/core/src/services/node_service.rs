@@ -2995,28 +2995,19 @@ where
 
         match root_node {
             Some(mut root) => {
-                // Fetch mentioning containers and populate mentioned_in for the root node
-                // This provides backlink data with {id, title, nodeType} in a single fetch
-                let mentioning_nodes = self
+                // Fetch incoming mention containers for the root node
+                // Uses optimized batch query with recursive ancestor traversal
+                // Returns NodeReference with {id, title, nodeType} for each container
+                root.mentioned_in = self
                     .store
-                    .get_mentioning_containers(&root.id)
+                    .get_incoming_mention_containers(&root.id)
                     .await
                     .map_err(|e| {
                         NodeServiceError::query_failed(format!(
-                            "Failed to fetch mentioning containers: {}",
+                            "Failed to fetch incoming mention containers: {}",
                             e
                         ))
                     })?;
-
-                // Convert to NodeReference for efficient UI display
-                root.mentioned_in = mentioning_nodes
-                    .into_iter()
-                    .map(|n| crate::models::NodeReference {
-                        id: n.id,
-                        title: n.title,
-                        node_type: n.node_type,
-                    })
-                    .collect();
 
                 // Recursively build tree structure
                 let tree_json = build_node_tree_recursive(&root, &node_map, &adjacency_list);
@@ -5222,13 +5213,20 @@ where
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
-    /// Get root nodes of nodes that mention the target node (backlinks at root level).
+    /// Get containers (root or task nodes) that mention the target node (backlinks).
     ///
-    /// This resolves incoming mentions to their root nodes and deduplicates.
+    /// This resolves incoming mentions to their container nodes and deduplicates.
+    /// Returns `NodeReference` with {id, title, nodeType} for efficient UI display.
     ///
-    /// # Root Resolution Logic
-    /// - For task and ai-chat nodes: Uses the node's own ID (they are their own roots)
-    /// - For other nodes: Uses their root_id (or the node ID itself if it's a root)
+    /// # Container Resolution Logic
+    /// - For task nodes: Uses the task node itself (tasks are their own containers)
+    /// - For other nodes: Traverses up the hierarchy to find the root node
+    ///
+    /// # Performance
+    ///
+    /// Uses optimized batch queries with recursive ancestor traversal:
+    /// - Single query to get all mentioning sources with their ancestor chains
+    /// - Single batch query to fetch container nodes
     ///
     /// # Example
     /// ```no_run
@@ -5241,7 +5239,7 @@ where
     /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // If nodes A and B (both children of Container X) mention target node,
-    /// // returns ['container-x-id'] (deduplicated)
+    /// // returns [NodeReference { id: "container-x-id", title: "...", nodeType: "text" }]
     /// let containers = service.get_mentioning_containers("target-node-id").await?;
     /// # Ok(())
     /// # }
@@ -5249,15 +5247,11 @@ where
     pub async fn get_mentioning_containers(
         &self,
         node_id: &str,
-    ) -> Result<Vec<String>, NodeServiceError> {
-        let nodes = self
-            .store
-            .get_mentioning_containers(node_id)
+    ) -> Result<Vec<crate::models::NodeReference>, NodeServiceError> {
+        self.store
+            .get_incoming_mention_containers(node_id)
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-        // Extract node IDs from the nodes
-        Ok(nodes.into_iter().map(|n| n.id).collect())
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
     // ========================================================================
@@ -7181,15 +7175,17 @@ mod tests {
             // Child mentions target
             service.create_mention(&child_id, &target_id).await.unwrap();
 
-            // Get mentioning roots for target
-            let roots = service.get_mentioning_containers(&target_id).await.unwrap();
+            // Get mentioning containers for target
+            let containers = service.get_mentioning_containers(&target_id).await.unwrap();
 
             // Should return the root (not the child)
-            assert_eq!(roots.len(), 1, "Should return exactly one root");
+            assert_eq!(containers.len(), 1, "Should return exactly one container");
             assert_eq!(
-                roots[0], root_id,
+                containers[0].id, root_id,
                 "Should return the root node, not the child"
             );
+            // Verify NodeReference includes title and node_type
+            assert_eq!(containers[0].node_type, "text");
         }
 
         #[tokio::test]
@@ -7246,16 +7242,16 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Get mentioning roots
-            let roots = service.get_mentioning_containers(&target_id).await.unwrap();
+            // Get mentioning containers
+            let containers = service.get_mentioning_containers(&target_id).await.unwrap();
 
-            // Should return only ONE root (deduplicated)
+            // Should return only ONE container (deduplicated)
             assert_eq!(
-                roots.len(),
+                containers.len(),
                 1,
                 "Should deduplicate to single root despite two children mentioning target"
             );
-            assert_eq!(roots[0], root_id, "Should return the root node");
+            assert_eq!(containers[0].id, root_id, "Should return the root node");
         }
 
         #[tokio::test]
@@ -7293,19 +7289,21 @@ mod tests {
             // Task mentions target
             service.create_mention(&task_id, &target_id).await.unwrap();
 
-            // Get mentioning roots
-            let roots = service.get_mentioning_containers(&target_id).await.unwrap();
+            // Get mentioning containers
+            let containers = service.get_mentioning_containers(&target_id).await.unwrap();
 
             // Should return the TASK itself (not its root)
-            assert_eq!(roots.len(), 1, "Should return exactly one root");
+            assert_eq!(containers.len(), 1, "Should return exactly one container");
             assert_eq!(
-                roots[0], task_id,
-                "Task nodes should be treated as their own roots (exception rule)"
+                containers[0].id, task_id,
+                "Task nodes should be treated as their own containers (exception rule)"
             );
             assert_ne!(
-                roots[0], root_id,
+                containers[0].id, root_id,
                 "Should NOT return the parent root for task nodes"
             );
+            // Verify task metadata is included
+            assert_eq!(containers[0].node_type, "task");
         }
 
         // TODO: Uncomment this test when ai-chat node type is implemented
@@ -7475,21 +7473,24 @@ mod tests {
                 "Should return three different containers"
             );
 
+            // Collect IDs for easier checking
+            let container_ids: Vec<&str> = containers.iter().map(|c| c.id.as_str()).collect();
+
             // Verify all three are present (order may vary)
             assert!(
-                containers.contains(&container1_id),
+                container_ids.contains(&container1_id.as_str()),
                 "Should include container 1"
             );
             assert!(
-                containers.contains(&container2_id),
+                container_ids.contains(&container2_id.as_str()),
                 "Should include container 2"
             );
             assert!(
-                containers.contains(&task_id),
+                container_ids.contains(&task_id.as_str()),
                 "Should include task (as its own container)"
             );
             assert!(
-                !containers.contains(&container3_id),
+                !container_ids.contains(&container3_id.as_str()),
                 "Should NOT include container 3 (task is treated as own container)"
             );
         }

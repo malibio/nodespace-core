@@ -3035,100 +3035,150 @@ where
         Ok(mentioned_by_ids)
     }
 
-    pub async fn get_mentioning_containers(&self, node_id: &str) -> Result<Vec<Node>> {
-        // Issue #834: Compute roots dynamically via graph traversal instead of reading properties.root_id
-        // This eliminates denormalized/cached data that could become stale.
+    /// Get incoming mentions to a node with their container nodes (root or task)
+    ///
+    /// This method finds all nodes that mention the target and resolves each
+    /// to its "container" - either the root node of its hierarchy, or itself
+    /// if it's a task node.
+    ///
+    /// # Performance
+    ///
+    /// Optimized batch approach:
+    /// 1. Single query to get all mentioning sources with their types
+    /// 2. Single recursive query to get ancestor chains for non-task sources
+    /// 3. Single batch query to fetch container nodes with id, title, nodeType
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The target node ID to find incoming mentions for
+    ///
+    /// # Returns
+    ///
+    /// Vector of `NodeReference` containing {id, title, nodeType} for each container
+    pub async fn get_incoming_mention_containers(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<crate::models::NodeReference>> {
+        use surrealdb::sql::Thing;
+        let start = std::time::Instant::now();
         let target_thing = Thing::from(("node".to_string(), node_id.to_string()));
 
-        // Step 1: Get all source nodes that mention the target
-        let query =
-            "SELECT in FROM relationship WHERE out = $target AND relationship_type = 'mentions';";
+        // Query: Get mentioning sources with type, plus ancestor chain for each
+        // Uses SurrealDB's recursive traversal to get all ancestors in one query
+        let query = r#"
+            -- Get all nodes that mention the target, with their type and ancestor chain
+            SELECT
+                in.id AS source_id,
+                in.node_type AS source_type,
+                in.{..+collect}<-relationship[WHERE relationship_type = 'has_child']<-node AS ancestors
+            FROM relationship
+            WHERE out = $target AND relationship_type = 'mentions';
+        "#;
 
         let mut response = self
             .db
             .query(query)
-            .bind(("target", target_thing))
+            .bind(("target", target_thing.clone()))
             .await
-            .context("Failed to get mentioning sources")?;
+            .context("Failed to get incoming mentions with ancestors")?;
 
         #[derive(Debug, Deserialize)]
-        struct MentionRow {
-            #[serde(rename = "in")]
-            source: Thing,
+        struct MentionWithAncestors {
+            source_id: Thing,
+            source_type: String,
+            #[serde(default)]
+            ancestors: Vec<Thing>,
         }
 
-        let results: Vec<MentionRow> = response
+        let sources: Vec<MentionWithAncestors> = response
             .take(0)
-            .context("Failed to extract source IDs from response")?;
+            .context("Failed to extract mention sources")?;
 
-        // Extract source IDs as strings
-        let source_ids: Vec<String> = results
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Determine container IDs: task nodes are their own container, others use root (last ancestor)
+        let mut container_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for source in &sources {
+            let source_id = match &source.source_id.id {
+                Id::String(s) => s.clone(),
+                _ => continue,
+            };
+
+            if source.source_type == "task" {
+                // Tasks are their own containers
+                container_ids.insert(source_id);
+            } else if source.ancestors.is_empty() {
+                // No ancestors = source is a root node itself
+                container_ids.insert(source_id);
+            } else {
+                // Last ancestor in the chain is the root
+                // The recursive collect returns ancestors in order from closest to farthest
+                if let Some(root_thing) = source.ancestors.last() {
+                    let root_id = match &root_thing.id {
+                        Id::String(s) => s.clone(),
+                        _ => continue,
+                    };
+                    container_ids.insert(root_id);
+                }
+            }
+        }
+
+        if container_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Batch fetch container nodes with just id, title, node_type
+        let container_things: Vec<Thing> = container_ids
+            .iter()
+            .map(|id| Thing::from(("node".to_string(), id.clone())))
+            .collect();
+
+        let batch_query = "SELECT id, title, node_type FROM $containers;";
+        let mut response = self
+            .db
+            .query(batch_query)
+            .bind(("containers", container_things))
+            .await
+            .context("Failed to batch fetch container nodes")?;
+
+        #[derive(Debug, Deserialize)]
+        struct ContainerRow {
+            id: Thing,
+            title: Option<String>,
+            node_type: String,
+        }
+
+        let containers: Vec<ContainerRow> = response
+            .take(0)
+            .context("Failed to extract container nodes")?;
+
+        let result: Vec<crate::models::NodeReference> = containers
             .into_iter()
-            .filter_map(|r| {
-                if let Id::String(id_str) = r.source.id {
-                    Some(id_str)
-                } else {
-                    None
+            .map(|c| {
+                let id_str = match c.id.id {
+                    Id::String(s) => s,
+                    Id::Number(n) => n.to_string(),
+                    _ => c.id.to_string(),
+                };
+                crate::models::NodeReference {
+                    id: id_str,
+                    title: c.title,
+                    node_type: c.node_type,
                 }
             })
             .collect();
 
-        // Step 2: For each source, find its container (root or task)
-        // Tasks are their own containers; other nodes traverse up to find root
-        // Performance: O(N * depth) where N = mention count, depth = tree depth
-        // Typical case: N < 10, depth < 5 - acceptable for knowledge management workloads
-        let mut container_ids: Vec<String> = Vec::new();
-        for source_id in source_ids {
-            let container_id = self.get_container_for_mention(&source_id).await?;
-            container_ids.push(container_id);
-        }
+        tracing::debug!(
+            "get_incoming_mention_containers: fetched {} containers in {:?} for node_id={}",
+            result.len(),
+            start.elapsed(),
+            node_id
+        );
 
-        // Deduplicate container IDs
-        container_ids.sort();
-        container_ids.dedup();
-
-        // Step 3: Fetch full node records
-        let mut nodes = Vec::new();
-        for container_id in container_ids {
-            if let Some(node) = self.get_node(&container_id).await? {
-                nodes.push(node);
-            }
-        }
-
-        Ok(nodes)
-    }
-
-    /// Find the container for a mentioning node
-    ///
-    /// Tasks are treated as their own containers (they're self-contained items).
-    /// For all other nodes, traverse UP via has_child relationships to find the root.
-    ///
-    /// # Issue #834
-    ///
-    /// This replaces reading `properties.root_id` from the mention relationship,
-    /// ensuring container resolution is always accurate even if nodes have moved.
-    async fn get_container_for_mention(&self, source_id: &str) -> Result<String> {
-        // First, check if the source is a task (tasks are their own containers)
-        if let Some(source_node) = self.get_node(source_id).await? {
-            if source_node.node_type == "task" {
-                return Ok(source_id.to_string());
-            }
-        }
-
-        // For non-task nodes, traverse up to find root
-        let mut current_id = source_id.to_string();
-        loop {
-            let parent = self.get_parent(&current_id).await?;
-            match parent {
-                Some(parent_node) => {
-                    current_id = parent_node.id;
-                }
-                None => {
-                    // Found the root
-                    return Ok(current_id);
-                }
-            }
-        }
+        Ok(result)
     }
 
     pub async fn get_schema(&self, node_type: &str) -> Result<Option<Value>> {

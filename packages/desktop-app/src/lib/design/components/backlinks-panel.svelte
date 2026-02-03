@@ -6,25 +6,43 @@
   - List of node links with icons (like node tree, but without children)
   - Clean, minimal styling
 
-  Uses SharedNodeStore reactivity pattern:
-  - mentionedIn is populated during initial root fetch (get_children_tree)
+  Uses SharedNodeStore subscription pattern:
+  - mentionedIn is populated during root fetch (get_children_tree)
   - Data includes {id, title, nodeType} for efficient display without N+1 queries
-  - Updates reactively when domain events trigger node refetch
+  - Subscribes to node changes via store.subscribe() for reliable updates
+  - Updates when domain events trigger node refetch
 -->
 
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { Collapsible } from 'bits-ui';
   import Icon, { type IconName } from '$lib/design/icons/icon.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import type { NodeReference } from '$lib/types/node';
 
   let { nodeId }: { nodeId: string } = $props();
 
-  // Same reactivity pattern as main content area - $derived from store
-  let node = $derived(sharedNodeStore.getNode(nodeId));
-  let backlinks = $derived(node?.mentionedIn ?? []);
+  // Use local state updated via store subscription for reliable reactivity
+  // Svelte 5's $derived doesn't reliably track Map.set() mutations
+  let backlinks = $state<NodeReference[]>([]);
 
-  // No loading state needed - data comes with the node fetch
-  // If node isn't loaded yet, backlinks will be empty (handled gracefully)
+  // Helper to update backlinks from store
+  function updateBacklinks() {
+    const node = sharedNodeStore.nodes.get(nodeId);
+    backlinks = node?.mentionedIn ?? [];
+  }
+
+  // Initial load
+  updateBacklinks();
+
+  // Subscribe to node changes - the store's observer pattern notifies us when node updates
+  const unsubscribe = sharedNodeStore.subscribe(nodeId, () => {
+    updateBacklinks();
+  });
+
+  onDestroy(() => {
+    unsubscribe();
+  });
 
   let isOpen = $state(false);
 

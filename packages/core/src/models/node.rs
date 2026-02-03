@@ -68,6 +68,44 @@ pub struct NodeReference {
     pub node_type: String,
 }
 
+/// Direction of a relationship relative to a node
+///
+/// - `Out`: The relationship points FROM this node TO another (outgoing)
+/// - `In`: The relationship points FROM another node TO this node (incoming)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RelationshipDirection {
+    /// Outgoing relationship: this node -> other node
+    Out,
+    /// Incoming relationship: other node -> this node
+    In,
+}
+
+/// Represents a relationship with another node, including direction
+///
+/// Used for returning relationships in subtree queries where we need to know
+/// both the related node and the direction of the relationship.
+///
+/// For outgoing relationships (direction = Out):
+/// - `id` is the target node ID
+/// - The current node points TO this node
+///
+/// For incoming relationships (direction = In):
+/// - `id` is the source node ID
+/// - This node points TO the current node
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeRelationship {
+    /// The related node's ID
+    pub id: String,
+    /// The related node's title (for display)
+    pub title: Option<String>,
+    /// Direction of the relationship relative to the node this is attached to
+    pub direction: RelationshipDirection,
+    /// Type of relationship (e.g., "mentions", "has_child", "member_of")
+    pub relationship_type: String,
+}
+
 /// Validation errors for Node operations
 #[derive(Error, Debug)]
 pub enum ValidationError {
