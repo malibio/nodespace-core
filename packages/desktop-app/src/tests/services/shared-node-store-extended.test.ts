@@ -930,5 +930,28 @@ describe('SharedNodeStore - Extended Coverage', () => {
         storeAny.updateMentionedInOnContentChange(sourceNode.id, 'same', 'same');
       }).not.toThrow();
     });
+
+    it('should skip self-mentions (node mentioning itself)', () => {
+      const storeAny = store as unknown as {
+        updateMentionedInOnContentChange: (
+          sourceNodeId: string,
+          oldContent: string | undefined,
+          newContent: string | undefined
+        ) => void;
+      };
+
+      // Source node mentions itself
+      const contentWithSelfMention = `Check out [@Self](nodespace://${sourceNode.id})`;
+
+      storeAny.updateMentionedInOnContentChange(
+        sourceNode.id,
+        '', // old content without mention
+        contentWithSelfMention // new content with self-mention
+      );
+
+      // Source node's mentionedIn should NOT include itself
+      const updatedSource = store.getNode(sourceNode.id);
+      expect(updatedSource?.mentionedIn ?? []).toHaveLength(0);
+    });
   });
 });

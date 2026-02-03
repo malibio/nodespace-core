@@ -2291,6 +2291,9 @@ export class SharedNodeStore {
 
     // Update mentionedIn for added mentions
     for (const targetId of added) {
+      // Skip self-mentions - a node shouldn't appear in its own backlinks
+      if (targetId === sourceContainer.id) continue;
+
       const targetNode = this.nodes.get(targetId);
       if (targetNode) {
         const mentionedIn = [...(targetNode.mentionedIn ?? [])];
@@ -2307,6 +2310,9 @@ export class SharedNodeStore {
 
     // Update mentionedIn for removed mentions
     for (const targetId of removed) {
+      // Skip self-mentions - consistency with added mentions handling
+      if (targetId === sourceContainer.id) continue;
+
       const targetNode = this.nodes.get(targetId);
       if (targetNode?.mentionedIn) {
         const mentionedIn = targetNode.mentionedIn.filter(ref => ref.id !== containerRef.id);
