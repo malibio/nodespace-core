@@ -1594,7 +1594,7 @@ where
             version: 1,
             properties: params.properties,
             mentions: vec![],
-            mentioned_by: vec![],
+            mentioned_in: vec![],
             member_of: vec![],
             created_at: chrono::Utc::now(),
             modified_at: chrono::Utc::now(),
@@ -1903,7 +1903,7 @@ where
                     modified_at: chrono::Utc::now(),
                     properties: serde_json::json!({}),
                     mentions: vec![],
-                    mentioned_by: vec![],
+                    mentioned_in: vec![],
                     member_of: vec![],
                     title: None, // Date nodes don't have indexed titles
                     lifecycle_status: "active".to_string(),
@@ -2994,7 +2994,30 @@ where
         let (root_node, node_map, adjacency_list) = self.get_subtree_data(parent_id).await?;
 
         match root_node {
-            Some(root) => {
+            Some(mut root) => {
+                // Fetch mentioning containers and populate mentioned_in for the root node
+                // This provides backlink data with {id, title, nodeType} in a single fetch
+                let mentioning_nodes = self
+                    .store
+                    .get_mentioning_containers(&root.id)
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::query_failed(format!(
+                            "Failed to fetch mentioning containers: {}",
+                            e
+                        ))
+                    })?;
+
+                // Convert to NodeReference for efficient UI display
+                root.mentioned_in = mentioning_nodes
+                    .into_iter()
+                    .map(|n| crate::models::NodeReference {
+                        id: n.id,
+                        title: n.title,
+                        node_type: n.node_type,
+                    })
+                    .collect();
+
                 // Recursively build tree structure
                 let tree_json = build_node_tree_recursive(&root, &node_map, &adjacency_list);
                 Ok(tree_json)
@@ -4390,7 +4413,7 @@ where
                 version: 1,
                 properties: properties.clone(),
                 mentions: vec![],
-                mentioned_by: vec![],
+                mentioned_in: vec![],
                 member_of: vec![],
                 created_at: chrono::Utc::now(),
                 modified_at: chrono::Utc::now(),
@@ -4502,7 +4525,7 @@ where
                 version: 1,
                 properties: properties.clone(),
                 mentions: vec![],
-                mentioned_by: vec![],
+                mentioned_in: vec![],
                 member_of: vec![],
                 created_at: chrono::Utc::now(),
                 modified_at: chrono::Utc::now(),
@@ -4606,7 +4629,7 @@ where
                 version: 1,
                 properties: properties.clone(),
                 mentions: vec![],
-                mentioned_by: vec![],
+                mentioned_in: vec![],
                 member_of: vec![],
                 created_at: chrono::Utc::now(),
                 modified_at: chrono::Utc::now(),
@@ -4928,7 +4951,7 @@ where
                 version: 1,
                 properties: serde_json::json!({}),
                 mentions: vec![],
-                mentioned_by: vec![],
+                mentioned_in: vec![],
                 member_of: vec![],
                 created_at: chrono::Utc::now(),
                 modified_at: chrono::Utc::now(),
@@ -4973,10 +4996,11 @@ where
 
     // Helper methods
 
-    /// Populate mentions fields from node_mentions table
+    /// Populate outgoing mentions from node_mentions table
     ///
-    /// Queries the node_mentions table to populate both outgoing mentions
-    /// and incoming mentioned_by references for a node.
+    /// Queries the node_mentions table to populate outgoing mentions for a node.
+    /// Note: mentioned_in (backlinks) is populated separately by get_children_tree
+    /// with full NodeReference data {id, title, nodeType} for efficient UI display.
     ///
     /// # Arguments
     ///
@@ -4992,15 +5016,8 @@ where
             })?;
         node.mentions = mentions;
 
-        // Query incoming mentions (nodes that reference THIS node)
-        let mentioned_by = self
-            .store
-            .get_incoming_mentions(&node.id)
-            .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to get incoming mentions: {}", e))
-            })?;
-        node.mentioned_by = mentioned_by;
+        // Note: mentioned_in is populated by get_children_tree with full NodeReference data
+        // This allows the UI to display backlinks without N+1 queries
 
         Ok(())
     }
@@ -6626,8 +6643,11 @@ mod tests {
         assert_eq!(node.mentions.len(), 2);
         assert!(node.mentions.contains(&id2));
         assert!(node.mentions.contains(&id3));
-        assert_eq!(node.mentioned_by.len(), 1);
-        assert!(node.mentioned_by.contains(&id2));
+        // Note: mentioned_in is now Vec<NodeReference> and populated by get_children_tree
+        // Use get_mentioned_by() to check incoming mentions
+        let mentioned_by = service.get_mentioned_by(&id1).await.unwrap();
+        assert_eq!(mentioned_by.len(), 1);
+        assert!(mentioned_by.contains(&id2));
     }
 
     #[tokio::test]
@@ -6705,19 +6725,23 @@ mod tests {
         service.add_mention(&id1, &id2).await.unwrap();
         service.add_mention(&id2, &id1).await.unwrap();
 
-        // Verify node 1
+        // Verify node 1 outgoing mentions
         let node1 = service.get_node(&id1).await.unwrap().unwrap();
         assert_eq!(node1.mentions.len(), 1);
         assert_eq!(node1.mentions[0], id2);
-        assert_eq!(node1.mentioned_by.len(), 1);
-        assert_eq!(node1.mentioned_by[0], id2);
+        // Verify incoming mentions via get_mentioned_by (mentioned_in is populated by get_children_tree)
+        let mentioned_by_1 = service.get_mentioned_by(&id1).await.unwrap();
+        assert_eq!(mentioned_by_1.len(), 1);
+        assert_eq!(mentioned_by_1[0], id2);
 
-        // Verify node 2
+        // Verify node 2 outgoing mentions
         let node2 = service.get_node(&id2).await.unwrap().unwrap();
         assert_eq!(node2.mentions.len(), 1);
         assert_eq!(node2.mentions[0], id1);
-        assert_eq!(node2.mentioned_by.len(), 1);
-        assert_eq!(node2.mentioned_by[0], id1);
+        // Verify incoming mentions via get_mentioned_by
+        let mentioned_by_2 = service.get_mentioned_by(&id2).await.unwrap();
+        assert_eq!(mentioned_by_2.len(), 1);
+        assert_eq!(mentioned_by_2[0], id1);
     }
 
     #[tokio::test]

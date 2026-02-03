@@ -8,6 +8,21 @@
  */
 
 /**
+ * Lightweight reference to a node for backlinks display
+ *
+ * Contains minimal data needed to show a link: id, title, and type.
+ * Used by the `mentionedIn` field to provide backlinks without N+1 queries.
+ */
+export interface NodeReference {
+  /** Node ID */
+  id: string;
+  /** Display title (markdown-stripped content for root/task nodes) */
+  title: string | null;
+  /** Node type (e.g., "text", "task", "date") */
+  nodeType: string;
+}
+
+/**
  * Node - Matches Rust backend schema exactly
  *
  * This is the authoritative node type. All services and components
@@ -187,6 +202,27 @@ export interface Node {
    */
   memberOf?: string[];
 
+  /**
+   * Nodes that mention this node (backlinks) with preview data
+   *
+   * Populated during root fetch (get_children_tree) for efficient UI display.
+   * Contains {id, title, nodeType} for each mentioning node's container (root or task).
+   *
+   * This eliminates N+1 queries - backlink data comes with the initial node fetch.
+   * The SharedNodeStore caches this data, and domain events trigger refetch on changes.
+   *
+   * ## Usage in BacklinksPanel
+   *
+   * ```typescript
+   * let node = $derived(sharedNodeStore.getNode(nodeId));
+   * let backlinks = $derived(node?.mentionedIn ?? []);
+   *
+   * {#each backlinks as backlink}
+   *   <a href="nodespace://{backlink.id}">{backlink.title || backlink.id}</a>
+   * {/each}
+   * ```
+   */
+  mentionedIn?: NodeReference[];
 }
 
 // ============================================================================

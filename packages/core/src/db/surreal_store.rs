@@ -177,8 +177,8 @@ struct SurrealNode {
     modified_at: String,
     #[serde(default)]
     mentions: Vec<String>,
-    #[serde(default)]
-    mentioned_by: Vec<String>,
+    // Note: mentioned_by is no longer used - replaced by mentioned_in (Vec<NodeReference>)
+    // which is populated at fetch time with {id, title, nodeType}, not stored in DB
     /// Properties field stores all type-specific properties directly on the node
     #[serde(default)]
     properties: Value,
@@ -227,7 +227,7 @@ impl From<SurrealNode> for Node {
                 .unwrap_or_else(|_| Utc::now()),
             properties,
             mentions: sn.mentions,
-            mentioned_by: sn.mentioned_by,
+            mentioned_in: Vec::new(), // Populated at fetch time by get_children_tree
             member_of: Vec::new(),
             title: sn.title,
             lifecycle_status: sn.lifecycle_status,
@@ -662,7 +662,7 @@ where
                 created_at: time::now(),
                 modified_at: time::now(),
                 mentions: [],
-                mentioned_by: [],
+                mentioned_in: [],
                 properties: $properties,
                 title: $title
             }};
@@ -919,15 +919,7 @@ where
             })
             .unwrap_or_default();
 
-        let mentioned_by = hub["mentioned_by"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
+        // Note: mentioned_in is populated at fetch time by get_children_tree, not from DB
         Node {
             id: node_id,
             node_type,
@@ -937,7 +929,7 @@ where
             modified_at,
             properties,
             mentions,
-            mentioned_by,
+            mentioned_in: Vec::new(), // Populated by get_children_tree with {id, title, nodeType}
             member_of: Vec::new(),
             title: hub["title"].as_str().map(String::from),
             lifecycle_status: hub["lifecycle_status"]
@@ -1203,7 +1195,7 @@ where
                 created_at: time::now(),
                 modified_at: time::now(),
                 mentions: [],
-                mentioned_by: [],
+                mentioned_in: [],
                 properties: $properties
             }};"#,
             node.id
@@ -2156,7 +2148,7 @@ where
                 "created_at": node.created_at,
                 "modified_at": node.modified_at,
                 "mentions": node.mentions,
-                "mentioned_by": node.mentioned_by,
+                "mentionedIn": node.mentioned_in,
                 "data": node.properties,
                 "variants": serde_json::Value::Null,
                 "_schema_version": 1,
@@ -3422,7 +3414,7 @@ where
                 modified_at: chrono::Utc::now(),
                 properties: properties.clone(),
                 mentions: vec![],
-                mentioned_by: vec![],
+                mentioned_in: vec![],
                 member_of: vec![],
                 title: None, // Child nodes don't have titles
                 lifecycle_status: "active".to_string(),
@@ -3536,7 +3528,7 @@ where
                     modified_at: chrono::Utc::now(),
                     properties: properties.clone(),
                     mentions: vec![],
-                    mentioned_by: vec![],
+                    mentioned_in: vec![],
                     member_of: vec![],
                     title: None,
                     lifecycle_status: "active".to_string(),
@@ -3634,7 +3626,7 @@ where
             modified_at: chrono::Utc::now(),
             properties,
             mentions: vec![],
-            mentioned_by: vec![],
+            mentioned_in: vec![],
             member_of: vec![],
             title: None, // Streaming nodes don't have titles (typically child nodes)
             lifecycle_status: "active".to_string(),
@@ -5091,7 +5083,7 @@ where
                     created_at,
                     modified_at,
                     mentions: vec![],
-                    mentioned_by: vec![],
+                    mentioned_in: vec![],
                     member_of: parent_collection_ids,
                     title: row.title,
                     lifecycle_status: row.lifecycle_status,

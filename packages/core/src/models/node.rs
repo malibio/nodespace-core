@@ -55,6 +55,19 @@ fn is_active_lifecycle(status: &str) -> bool {
     status == "active"
 }
 
+/// Lightweight reference to a node for backlinks display
+/// Contains minimal data needed to show a link: id, title, and type
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeReference {
+    /// Node ID
+    pub id: String,
+    /// Display title (markdown-stripped content for root/task nodes)
+    pub title: Option<String>,
+    /// Node type (e.g., "text", "task", "date")
+    pub node_type: String,
+}
+
 /// Validation errors for Node operations
 #[derive(Error, Debug)]
 pub enum ValidationError {
@@ -161,13 +174,13 @@ pub struct Node {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mentions: Vec<String>,
 
-    /// Incoming mentions - IDs of nodes that reference THIS node (backlinks)
-    /// Example: If node-456 mentions this node, then mentioned_by = ["node-456"]
-    /// Computed from node_mentions table WHERE mentions_node_id = this.id
-    /// Read-only field, populated on query
+    /// Nodes that mention THIS node (backlinks) with preview data
+    /// Contains {id, title, nodeType} for efficient UI display without N+1 queries
+    /// Populated during root fetch (get_children_tree) for the root node only
+    /// Read-only field, computed from mentions relationships
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub mentioned_by: Vec<String>,
+    pub mentioned_in: Vec<NodeReference>,
 
     /// Collection memberships - IDs of collections this node belongs to
     /// Computed from member_of edges (member_of.in = this.id)
@@ -234,7 +247,7 @@ impl Node {
             modified_at: now,
             properties,
             mentions: Vec::new(),
-            mentioned_by: Vec::new(),
+            mentioned_in: Vec::new(),
             member_of: Vec::new(),
             title: None, // Title is set by NodeService based on root/task status
             lifecycle_status: "active".to_string(),
@@ -279,7 +292,7 @@ impl Node {
             modified_at: now,
             properties,
             mentions: Vec::new(),
-            mentioned_by: Vec::new(),
+            mentioned_in: Vec::new(),
             member_of: Vec::new(),
             title: None, // Title is set by NodeService based on root/task status
             lifecycle_status: "active".to_string(),
