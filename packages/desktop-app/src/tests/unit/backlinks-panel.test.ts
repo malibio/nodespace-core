@@ -292,7 +292,9 @@ describe('BacklinksPanel Subscription Behavior', () => {
     });
   });
 
-  describe('nodeId change simulation (PR #879 fix verification)', () => {
+  // Verifies the reactive subscription fix from PR #879:
+  // BacklinksPanel must unsubscribe and resubscribe when nodeId prop changes
+  describe('nodeId change simulation', () => {
     it('should support switching subscriptions between nodes', async () => {
       // This test verifies the pattern used in BacklinksPanel's $effect:
       // - Subscribe to nodeId
