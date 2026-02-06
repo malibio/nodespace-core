@@ -154,20 +154,18 @@ T6    -                        [proceeds with write]      ✓ Acquires write loc
 - Claude Code **cannot pipe stdin/stdout** to an already-running GUI app
 - stdio transport is incompatible with GUI application lifecycle
 
-**Solution: HTTP Transport (Port 3001)**
+**Solution: HTTP Transport (Port 3100)**
 
 The MCP server now supports **both** stdio and HTTP transports:
 
 ```
-CLI/Headless Mode: Claude Code → stdio bridge (existing)
+CLI/Headless Mode: Claude Code → stdio (direct)
 
-GUI Mode: Claude Code → Bridge Script → HTTP POST localhost:3001/mcp → MCP Server
-                                                        ↓
-                                                  Tauri Application
+GUI Mode: AI Agent → HTTP POST localhost:3100/mcp → MCP Server (Tauri Application)
 ```
 
 **HTTP Configuration:**
-- **Port**: 3001 (hardcoded for now, future: configurable)
+- **Port**: 3100 (default, configurable via `MCP_PORT` env var)
 - **Binding**: 127.0.0.1 only (localhost, no network exposure)
 - **Protocol**: Standard MCP over HTTP (JSON-RPC 2.0)
 - **Endpoint**: POST `/mcp` with JSON-RPC 2.0 body
@@ -175,44 +173,27 @@ GUI Mode: Claude Code → Bridge Script → HTTP POST localhost:3001/mcp → MCP
 
 **Why Both Transports?**
 - **stdio**: Works for CLI tools and headless servers
-- **HTTP**: Works for GUI apps (NodeSpace desktop, Claude Code bridge)
+- **HTTP**: Works for GUI apps (NodeSpace desktop) and MCP clients with HTTP support
 - **Shared logic**: Same handlers, different transports
 - **Zero duplication**: Single business logic layer handles both
 
-**Claude Code Integration with Bridge Script:**
-
-Create bridge script (`~/.config/claude/mcp-servers/nodespace-bridge.sh`):
-```bash
-#!/usr/bin/env bash
-# Translates stdio to HTTP
-while IFS= read -r line; do
-    response=$(curl -s -X POST http://localhost:3001/mcp \
-        -H "Content-Type: application/json" \
-        -d "$line" 2>/dev/null)
-    echo "$response"
-done
-```
-
-Configure Claude Code (`~/.claude.json`):
+**Claude Code Configuration (`~/.claude.json`):**
 ```json
 {
   "mcpServers": {
     "nodespace": {
-      "type": "stdio",
-      "command": "/path/to/mcp-bridge.sh"
+      "type": "http",
+      "url": "http://localhost:3100/mcp"
     }
   }
 }
 ```
 
 **Workflow:**
-1. Launch NodeSpace app (HTTP server starts on port 3001)
-2. Claude Code loads bridge script configuration
-3. Claude Code sends MCP requests to bridge script via stdio
-4. Bridge script POSTs requests to http://localhost:3001/mcp
-5. MCP server processes request and returns JSON-RPC response
-6. Bridge script forwards response back to Claude Code via stdout
-7. Tauri events trigger UI updates in real-time
+1. Launch NodeSpace app (MCP HTTP server starts on port 3100)
+2. AI agent connects to `http://localhost:3100/mcp`
+3. MCP server processes request and returns JSON-RPC response
+4. Tauri events trigger UI updates in real-time
 
 **Transport Abstraction (Code):**
 
@@ -240,10 +221,11 @@ GUI Mode (Tauri):
 ```rust
 // packages/desktop-app/src-tauri/src/mcp_integration.rs
 pub async fn run_mcp_server_with_events(...) -> anyhow::Result<()> {
-    // Use HTTP transport for GUI app
+    // Use HTTP transport for GUI app (port from MCP_PORT env or default 3100)
+    let port = default_mcp_port();
     mcp::run_mcp_server_with_callback(
         services,
-        McpTransport::Http { port: 3001 },
+        McpTransport::Http { port },
         Some(callback),
     ).await
 }
