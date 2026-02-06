@@ -173,7 +173,7 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
 
     // Initialize MCP server now that NodeService is available
     // MCP will use the same NodeService as Tauri commands
-    if let Err(e) = crate::initialize_mcp_server(app.clone(), shutdown_token.0.child_token()) {
+    if let Err(e) = crate::initialize_mcp_server(app.clone(), shutdown_token.child_token()) {
         tracing::error!("❌ Failed to initialize MCP server: {}", e);
         // Don't fail database init if MCP fails - MCP is optional
     }
@@ -185,7 +185,7 @@ async fn init_services(app: &AppHandle, db_path: PathBuf) -> Result<(), String> 
         app.clone(),
         node_service_arc.clone(),
         client_id,
-        shutdown_token.0.child_token(),
+        shutdown_token.child_token(),
     ) {
         tracing::error!("❌ Failed to initialize domain event forwarder: {}", e);
         // Don't fail database init if event forwarding fails - it's not critical

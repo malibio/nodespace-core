@@ -169,14 +169,32 @@ pub fn initialize_mcp_server(
 /// shutdown is triggered). When cancelled, all background tasks (MCP server,
 /// domain event forwarder) exit their loops before the Tokio runtime drops.
 #[derive(Clone)]
-pub struct ShutdownToken(pub tokio_util::sync::CancellationToken);
+pub struct ShutdownToken(tokio_util::sync::CancellationToken);
+
+impl ShutdownToken {
+    fn new() -> Self {
+        Self(tokio_util::sync::CancellationToken::new())
+    }
+
+    /// Create a child token for a background task.
+    /// Cancelling the parent automatically cancels all children.
+    pub fn child_token(&self) -> tokio_util::sync::CancellationToken {
+        self.0.child_token()
+    }
+
+    /// Signal all background tasks to shut down.
+    /// Idempotent - safe to call multiple times.
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::{menu::*, Emitter, Manager, RunEvent};
 
     // Create shutdown token for coordinating graceful background task termination
-    let shutdown_token = ShutdownToken(tokio_util::sync::CancellationToken::new());
+    let shutdown_token = ShutdownToken::new();
     let shutdown_token_for_setup = shutdown_token.clone();
 
     let app = tauri::Builder::default()
@@ -366,7 +384,10 @@ pub fn run() {
                     "Window '{}' close requested, signaling shutdown and releasing GPU context...",
                     label
                 );
-                shutdown_token_for_events.0.cancel();
+                shutdown_token_for_events.cancel();
+                // Brief pause to let background tasks exit their loops before
+                // releasing GPU resources they may still reference
+                std::thread::sleep(std::time::Duration::from_millis(50));
                 release_gpu_resources(app_handle);
             }
             RunEvent::ExitRequested { code, .. } => {
@@ -375,14 +396,14 @@ pub fn run() {
                     "App exit requested (code: {:?}), performing cleanup...",
                     code
                 );
-                shutdown_token_for_events.0.cancel();
+                shutdown_token_for_events.cancel();
                 release_gpu_resources(app_handle);
                 tracing::info!("Cleanup complete, exiting...");
             }
             RunEvent::Exit => {
                 // Final exit - ensure shutdown signal is sent (idempotent)
                 tracing::info!("App exiting, ensuring shutdown signal sent...");
-                shutdown_token_for_events.0.cancel();
+                shutdown_token_for_events.cancel();
             }
             _ => {}
         }

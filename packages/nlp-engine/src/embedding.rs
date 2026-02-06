@@ -125,8 +125,7 @@ impl std::ops::Deref for BackendGuard {
 #[cfg(feature = "embedding-service")]
 pub fn release_llama_backend() {
     let mut guard = LLAMA_BACKEND.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(backend) = guard.take() {
-        drop(backend);
+    if guard.take().is_some() {
         tracing::info!("Global LLAMA_BACKEND released, Metal resources freed");
     }
 }
