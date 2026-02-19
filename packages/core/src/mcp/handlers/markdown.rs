@@ -1303,7 +1303,7 @@ fn detect_heading(line: &str) -> Option<usize> {
 ///
 /// Tasks are lines starting with "- [ ] " (unchecked) or "- [x] " (checked).
 fn is_task_line(line: &str) -> bool {
-    line.starts_with("- [ ] ") || line.starts_with("- [x] ")
+    line.starts_with("- [ ] ") || line.starts_with("- [x] ") || line.starts_with("- [X] ")
 }
 
 /// Check if a line is a bullet list item (not a task)
