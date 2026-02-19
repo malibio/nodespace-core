@@ -6090,6 +6090,7 @@ where
 
 /// Result of checking node completeness against its schema's required relationships
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompletenessResult {
     /// The node ID that was checked
     pub node_id: String,

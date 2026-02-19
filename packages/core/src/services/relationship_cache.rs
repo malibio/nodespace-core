@@ -148,6 +148,11 @@ impl InboundRelationshipCache {
     ///
     /// Returns the complete cache index. Useful for NLP to understand
     /// the entire relationship graph.
+    ///
+    /// **Note**: The returned map may contain the sentinel key `"*"` which represents
+    /// untyped relationships (those defined with `target_type: None`). Callers that
+    /// iterate over the map to build a type graph should be aware of this key and
+    /// filter or handle it explicitly.
     pub async fn get_all_inbound_relationships(
         &self,
     ) -> anyhow::Result<HashMap<String, Vec<InboundRelationship>>> {

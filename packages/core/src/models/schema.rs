@@ -299,7 +299,8 @@ pub struct SchemaRelationship {
 
     /// Auto-computed edge table name (can be overridden)
     ///
-    /// If not specified, computed as: `{source_type}_{name}_{target_type}`
+    /// If not specified, computed as: `{source_type}_{name}_{target_type}` when `target_type` is set,
+    /// or `{source_type}_{name}` when `target_type` is `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge_table: Option<String>,
 

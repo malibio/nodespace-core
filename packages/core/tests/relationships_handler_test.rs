@@ -438,9 +438,9 @@ fn test_completeness_result_complete_camel_case() {
     };
 
     let json = serde_json::to_value(&result).unwrap();
-    assert_eq!(json["node_id"], "invoice-001");
-    assert_eq!(json["is_complete"], true);
-    assert!(json["missing_relationships"].as_array().unwrap().is_empty());
+    assert_eq!(json["nodeId"], "invoice-001");
+    assert_eq!(json["isComplete"], true);
+    assert!(json["missingRelationships"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -452,8 +452,8 @@ fn test_completeness_result_incomplete() {
     };
 
     let json = serde_json::to_value(&result).unwrap();
-    assert_eq!(json["is_complete"], false);
-    let missing = json["missing_relationships"].as_array().unwrap();
+    assert_eq!(json["isComplete"], false);
+    let missing = json["missingRelationships"].as_array().unwrap();
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0], "billed_to");
 }
@@ -467,7 +467,7 @@ fn test_completeness_result_multiple_missing() {
     };
 
     let json = serde_json::to_value(&result).unwrap();
-    let missing = json["missing_relationships"].as_array().unwrap();
+    let missing = json["missingRelationships"].as_array().unwrap();
     assert_eq!(missing.len(), 2);
 }
 
