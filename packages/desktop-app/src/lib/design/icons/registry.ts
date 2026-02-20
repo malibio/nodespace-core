@@ -175,6 +175,15 @@ class IconRegistry {
       hasRingEffect: false // Ordered lists are leaf nodes (no children)
     });
 
+    // Checkbox nodes - two-state (unchecked=pending, checked=completed)
+    this.register('checkbox', {
+      component: TaskIcon,
+      semanticClass: 'task-icon',
+      colorVar: 'hsl(var(--node-task, 200 40% 45%))',
+      hasState: true,
+      hasRingEffect: true
+    });
+
     // Date nodes - for calendar dates and journal entries
     this.register('date', {
       component: CircleIcon,
@@ -252,8 +261,8 @@ export function resolveNodeState(
     return explicitState;
   }
 
-  // For task nodes, read state from metadata
-  if (nodeType === 'task' && additionalProps) {
+  // For task and checkbox nodes, read state from metadata
+  if ((nodeType === 'task' || nodeType === 'checkbox') && additionalProps) {
     const taskState = additionalProps.taskState as string;
     if (taskState && ['pending', 'inProgress', 'completed'].includes(taskState)) {
       return taskState as NodeState;
