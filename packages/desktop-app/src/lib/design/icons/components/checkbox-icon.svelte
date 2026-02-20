@@ -104,15 +104,15 @@
     background-image: url("data:image/svg+xml,%3Csvg width='9' height='7' viewBox='0 0 9 7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 3.5L3.5 6L8 1' stroke='%23252523' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 
-  /* Ring effect for checkbox nodes with children */
+  /* Ring effect for checkbox nodes with children — 2px beyond square on each side */
   .checkbox-ring {
-    width: 20px;
-    height: 20px;
-    border-radius: 4px;
-    border: 2px solid hsl(var(--primary) / 0.5);
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1.5px solid hsl(var(--primary) / 0.5);
     box-sizing: border-box;
     position: absolute;
-    top: 0;
-    left: 0;
+    top: 1px;
+    left: 1px;
   }
 </style>
