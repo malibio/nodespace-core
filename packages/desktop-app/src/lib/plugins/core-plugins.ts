@@ -220,6 +220,7 @@ export const checkboxNodePlugin: PluginDefinition = {
   pattern: {
     detect: /^- \[[ xX]\] /,
     canRevert: true, // prefix preserved in content; breaking "- [ ] " reverts node to text
+    revert: /^-[ \[]?$|^- \[[ xX]?\]?$/, // partially-deleted prefix (e.g. "- [" or "- [ ]") → revert to text
     onEnter: 'inherit',
     prefixToInherit: '- [ ] ',
     splittingStrategy: 'simple-split',

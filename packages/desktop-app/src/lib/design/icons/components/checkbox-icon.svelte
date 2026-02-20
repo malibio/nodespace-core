@@ -78,7 +78,7 @@
     border-radius: 3px;
   }
 
-  /* Checkmark for checked state */
+  /* Checkmark for checked state — light theme */
   .checkbox-square-checked::after {
     content: '';
     position: absolute;
@@ -90,10 +90,6 @@
     background-repeat: no-repeat;
     background-position: center;
     background-size: contain;
-  }
-
-  /* Light theme checkmark */
-  .checkbox-square-checked::after {
     background-image: url("data:image/svg+xml,%3Csvg width='9' height='7' viewBox='0 0 9 7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 3.5L3.5 6L8 1' stroke='%23FAF9F5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 
