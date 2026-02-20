@@ -71,10 +71,10 @@
     border: 1.5px solid hsl(var(--primary));
   }
 
-  /* Ring via outline — renders flush against the border, no gap */
+  /* Ring via outline — sits directly on the square's border, no gap */
   .checkbox-square-with-ring {
     outline: 2px solid hsl(var(--primary) / 0.5);
-    outline-offset: 2px;
+    outline-offset: 0;
     border-radius: 3px;
   }
 
