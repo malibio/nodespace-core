@@ -13,7 +13,7 @@
   import { layoutState, toggleSidebar, loadPersistedLayoutState } from '$lib/stores/layout';
   import { registerCorePlugins } from '$lib/plugins/core-plugins';
   import { pluginRegistry } from '$lib/plugins/index';
-  import { toggleTheme } from '$lib/design/theme';
+  import { toggleTheme, setTheme } from '$lib/design/theme';
   import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { browserSyncService } from '$lib/services/browser-sync-service';
   import { MCP_EVENTS } from '$lib/constants';
@@ -166,6 +166,18 @@
       typeof window !== 'undefined' &&
       (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
     ) {
+      // Sync theme from backend preferences (overrides localStorage if different)
+      invoke<{ activeDatabasePath: string; savedDatabasePath: string | null; display: { renderMarkdown: boolean; theme: string } }>('get_settings')
+        .then((settings) => {
+          const savedTheme = settings.display.theme;
+          if (['system', 'light', 'dark'].includes(savedTheme)) {
+            setTheme(savedTheme as 'system' | 'light' | 'dark');
+          }
+        })
+        .catch((err) => {
+          log.debug('Could not sync theme from backend preferences:', err);
+        });
+
       unlistenMenu = listen('menu-toggle-sidebar', () => {
         toggleSidebar();
       });

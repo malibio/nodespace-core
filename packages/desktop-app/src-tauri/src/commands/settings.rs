@@ -59,6 +59,12 @@ pub async fn update_display_settings(
         prefs.display.render_markdown = rm;
     }
     if let Some(t) = &theme {
+        if !["system", "light", "dark"].contains(&t.as_str()) {
+            return Err(format!(
+                "Invalid theme value: '{}'. Must be system, light, or dark.",
+                t
+            ));
+        }
         prefs.display.theme = t.clone();
     }
 
@@ -69,7 +75,7 @@ pub async fn update_display_settings(
         let _ = window.emit(
             "settings-changed",
             serde_json::json!({
-                "render_markdown": prefs.display.render_markdown,
+                "renderMarkdown": prefs.display.render_markdown,
                 "theme": prefs.display.theme,
             }),
         );
