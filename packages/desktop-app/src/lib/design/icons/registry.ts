@@ -14,6 +14,7 @@
 import type { Component, ComponentType } from 'svelte';
 import CircleIcon from './components/circle-icon.svelte';
 import TaskIcon from './components/task-icon.svelte';
+import CheckboxIcon from './components/checkbox-icon.svelte';
 import AIIcon from './components/ai-icon.svelte';
 import CodeBlockIcon from './components/code-block-icon.svelte';
 import QuoteBlockIcon from './components/quote-block-icon.svelte';
@@ -176,8 +177,9 @@ class IconRegistry {
     });
 
     // Checkbox nodes - two-state (unchecked=pending, checked=completed)
+    // Uses a rounded square icon to distinguish from circular task icons
     this.register('checkbox', {
-      component: TaskIcon,
+      component: CheckboxIcon,
       semanticClass: 'task-icon',
       colorVar: 'hsl(var(--node-task, 200 40% 45%))',
       hasState: true,
