@@ -12,7 +12,7 @@
   - Rounded square (border-radius: 3px) to distinguish from task circles
   - Same sizing container as task-icon for layout consistency
   - Theme-aware checkmark colors
-  - Ring effect support for checkbox nodes with children
+  - Ring effect via outline on the square (no gap, no separate element)
 -->
 
 <script lang="ts">
@@ -29,19 +29,15 @@
 
 <div
   class="checkbox-icon {className}"
-  class:checkbox-icon-with-ring={hasChildren}
   style="--icon-size: {size}px"
   role="img"
   aria-label="Checkbox {displayState === 'completed' ? 'checked' : 'unchecked'} icon"
 >
-  {#if hasChildren}
-    <div class="checkbox-ring"></div>
-  {/if}
-
   <div
     class="checkbox-square"
     class:checkbox-square-unchecked={displayState === 'pending'}
     class:checkbox-square-checked={displayState === 'completed'}
+    class:checkbox-square-with-ring={hasChildren}
   ></div>
 </div>
 
@@ -52,11 +48,6 @@
     position: relative;
     display: block;
     flex-shrink: 0;
-  }
-
-  .checkbox-icon-with-ring {
-    width: calc(var(--icon-size, 20px) + 4px);
-    height: calc(var(--icon-size, 20px) + 4px);
   }
 
   /* Rounded square — 14x14 centered in the 20px container */
@@ -78,6 +69,13 @@
   .checkbox-square-checked {
     background: hsl(var(--primary));
     border: 1.5px solid hsl(var(--primary));
+  }
+
+  /* Ring via outline — renders flush against the border, no gap */
+  .checkbox-square-with-ring {
+    outline: 2px solid hsl(var(--primary) / 0.5);
+    outline-offset: 2px;
+    border-radius: 3px;
   }
 
   /* Checkmark for checked state */
@@ -102,17 +100,5 @@
   /* Dark theme checkmark */
   :global(.dark) .checkbox-square-checked::after {
     background-image: url("data:image/svg+xml,%3Csvg width='9' height='7' viewBox='0 0 9 7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 3.5L3.5 6L8 1' stroke='%23252523' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
-
-  /* Ring effect for checkbox nodes with children — 2px beyond square on each side */
-  .checkbox-ring {
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 1.5px solid hsl(var(--primary) / 0.5);
-    box-sizing: border-box;
-    position: absolute;
-    top: 1px;
-    left: 1px;
   }
 </style>
