@@ -22,6 +22,15 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 nodespace-core = { workspace = true }
 
+# System tray (ADR-031): the daemon owns the tray icon, not the Tauri app.
+# tray-icon ships an event loop via `tao`; we run it on the main thread on
+# macOS (NSApplication requirement) and the gRPC server inside a dedicated
+# tokio runtime on a worker thread.
+tray-icon = "0.21"
+tao = "0.31"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tower = { version = "0.5", features = ["util"] }
+
 [build-dependencies]
 tonic-build = "0.12"
 protoc-bin-vendored = "3"
