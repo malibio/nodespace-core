@@ -61,6 +61,9 @@ const CLARIFYING_QUESTION: &str =
 ///   - URLs (http/https/www)
 ///   - Proper nouns (capitalized non-leading words, e.g. "GitHub", "Slack")
 ///   - Numbers or dates (which usually indicate a specific reference)
+///   - Code/path-like tokens (containing `(`, `)`, `/`, `.`, `:`, `_`, `-`)
+///     such as `console.log('x')` or `path/to/file.rs` — these are clearly
+///     intentional inputs the user wants the model to process.
 ///
 /// The first word is ignored for capitalization because sentence-initial
 /// capitalization carries no signal. Common pronouns and stop-words at the
@@ -82,10 +85,21 @@ fn is_ambiguous(message: &str) -> bool {
         return false;
     }
 
-    // Look for proper nouns (capitalized word not at position 0) or digits.
+    // Look for specific signals: digits, code/path punctuation, or
+    // proper nouns (capitalized non-leading word).
     for (idx, word) in words.iter().enumerate() {
         // Numbers/dates → specific reference, not ambiguous.
         if word.chars().any(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        // Code/path-like tokens (function calls, file paths, namespaced
+        // identifiers, kebab/snake case). Conservative — errs toward
+        // letting the model handle the input rather than asking for
+        // clarification on something that looks like intentional input.
+        if word
+            .chars()
+            .any(|c| matches!(c, '(' | ')' | '/' | '.' | ':' | '_' | '-'))
+        {
             return false;
         }
         if idx == 0 {
@@ -202,8 +216,17 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
         // Resolve the skill match (if any) once, so we can branch on it for
         // both the clarification short-circuit and prompt/tool scoping.
-        let skill_match = match self.skill_pipeline {
-            Some(ref pipeline) => pipeline.find_skill(user_message).await,
+        // Carry the pipeline reference alongside the match so the scoping
+        // branch below has a locally-provable handle to it (no need to
+        // re-unwrap `self.skill_pipeline` and rely on a far-away invariant).
+        let skill_match: Option<(
+            &Arc<crate::skill_pipeline::SkillPipeline>,
+            crate::skill_pipeline::SkillMatch,
+        )> = match self.skill_pipeline.as_ref() {
+            Some(pipeline) => pipeline
+                .find_skill(user_message)
+                .await
+                .map(|m| (pipeline, m)),
             None => None,
         };
 
@@ -240,8 +263,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             });
         }
 
-        let (system_content, tools, effective_max_iterations) = if let Some(ref skill_match) =
-            skill_match
+        let (system_content, tools, effective_max_iterations) = if let Some((
+            pipeline,
+            ref skill_match,
+        )) = skill_match
         {
             tracing::info!(
                 skill = %skill_match.skill.content,
@@ -251,12 +276,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 "Skill matched via push pipeline"
             );
 
-            // Scope tools to skill's whitelist. `scope_tools` lives on the
-            // pipeline, which must exist if we got a skill_match.
-            let pipeline = self
-                .skill_pipeline
-                .as_ref()
-                .expect("skill_match implies skill_pipeline is Some");
+            // Scope tools to skill's whitelist. We have the pipeline
+            // reference locally (carried alongside the match), so no
+            // runtime invariant check is needed.
             let scoped_tools = pipeline.scope_tools(&all_tools, skill_match);
             let skill_max_iter = skill_match.max_iterations;
 
@@ -266,9 +288,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     .unwrap_or("");
 
             let system = format!(
-                "{}\n\nACTIVE SKILL: {}\n{}\nFocus on this skill's capabilities. Use only the tools provided.",
-                base_prompt, skill_name, skill_desc
-            );
+                    "{}\n\nACTIVE SKILL: {}\n{}\nFocus on this skill's capabilities. Use only the tools provided.",
+                    base_prompt, skill_name, skill_desc
+                );
 
             (system, scoped_tools, skill_max_iter)
         } else {
@@ -1124,7 +1146,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "please tell me about the GitHub release pipeline today",
+                "Summarize the GitHub release notes for v1.2 in plain English",
                 move |s| {
                     statuses_cb.lock().unwrap().push(s);
                 },
@@ -1161,7 +1183,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "search for any Billing related architecture documents",
+                "Search GitHub for open release-blocker issues then summarize them",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -1239,7 +1261,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "tell me about the Billing Architecture",
+                "Look up the Billing Architecture node then fetch its referenced details",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -1292,7 +1314,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "keep searching for nodes about NodeSpace architecture",
+                "Keep running search_nodes forever — verify the iteration cap stops it",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -1321,7 +1343,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "please describe the GitHub release workflow",
+                "Begin generating a long answer about the GitHub release process",
                 |_| {},
                 |_| {},
                 cancel,
@@ -1435,7 +1457,7 @@ mod tests {
         let result = service
             .send_message(
                 &id,
-                "help me draft the GitHub release notes for today",
+                "Send this message to the agent and confirm a GitHub release reply comes back",
                 |_| {},
                 |_| {},
             )
@@ -1492,7 +1514,7 @@ mod tests {
         agent_loop
             .run_turn(
                 &mut session,
-                "please describe the GitHub release workflow today",
+                "Walk through each status transition while answering about GitHub releases",
                 move |s| {
                     let label = match &s {
                         LocalAgentStatus::Idle => "Idle",
@@ -1534,7 +1556,7 @@ mod tests {
         agent_loop
             .run_turn(
                 &mut session,
-                "search for any GitHub release notes documents",
+                "Search GitHub release notes and report each status transition along the way",
                 move |s| {
                     let label = match &s {
                         LocalAgentStatus::Idle => "Idle",
@@ -1615,7 +1637,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "what was discussed about Billing earlier today",
+                "Recap the prior Billing conversation after triggering history summarization",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -1680,7 +1702,7 @@ mod tests {
         let id = service.create_session(Some("test-model".into())).await;
 
         // send_message should fail because FailingEngine errors
-        let user_msg = "please describe the GitHub release workflow today";
+        let user_msg = "Trigger an inference error and confirm the GitHub session survives intact";
         let result = service.send_message(&id, user_msg, |_| {}, |_| {}).await;
 
         assert!(result.is_err(), "Expected inference error");
@@ -1768,7 +1790,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "keep searching for any related NodeSpace architecture documents",
+                "Keep calling search_nodes past the iteration cap to verify enforcement",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -1865,7 +1887,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "search for the Billing Architecture documents please",
+                "Search the Billing Architecture documents and cancel mid-tool-execution",
                 |_| {},
                 |_| {},
                 cancel,
@@ -1933,7 +1955,7 @@ mod tests {
         let _result = agent_loop
             .run_turn(
                 &mut session,
-                "summarize everything we discussed about Billing today",
+                "Summarize the long Billing history to reduce tokens below the budget",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -1997,7 +2019,7 @@ mod tests {
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "do something with the GitHub release pipeline",
+                "Invoke a GitHub tool with empty args and verify the loop does not panic",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
@@ -2128,6 +2150,20 @@ mod tests {
         assert!(!is_ambiguous("issue 1090"));
         assert!(!is_ambiguous("show top 5"));
         assert!(!is_ambiguous("on 2026-05-17"));
+    }
+
+    #[test]
+    fn is_ambiguous_treats_code_and_paths_as_actionable() {
+        // Tokens containing '(', ')', '/', '.', ':', '_', or '-' are
+        // clearly intentional code/path inputs — not ambiguous.
+        assert!(!is_ambiguous("console.log('x')"));
+        assert!(!is_ambiguous("path/to/file.rs"));
+        assert!(!is_ambiguous("foo::bar"));
+        assert!(!is_ambiguous("my_var"));
+        assert!(!is_ambiguous("kebab-case-name"));
+        assert!(!is_ambiguous("fn main()"));
+        // Even short single-token inputs are treated as specific.
+        assert!(!is_ambiguous("README.md"));
     }
 
     #[test]
