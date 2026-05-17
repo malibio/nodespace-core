@@ -11,12 +11,14 @@ pub use agent_types::*;
 // Local agent subsystem: model management, inference, tool execution
 pub mod local_agent;
 
+// Shared agent guidance rules: single source of truth for tool strategy,
+// schema creation, and node reference guidance (issue #1089). Consumed by
+// `prompt_assembler` (local Ollama agent) and by ADR-032 context-file
+// writers in `acp`.
+pub mod agent_guidance;
+
 // Prompt assembly: hardcoded base + graph-stored overrides
 pub mod prompt_assembler;
-
-// Shared agent guidance rules: single source of truth for search-first,
-// schema creation, and node reference guidance (issue #1089)
-pub mod agent_guidance;
 
 // Intent extraction: pattern matching + filler stripping for skill discovery
 pub mod intent;

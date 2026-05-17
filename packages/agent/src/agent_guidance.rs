@@ -11,19 +11,22 @@
 
 /// Schema creation guidance.
 ///
-/// Covers the node-vs-schema mental model and the rules for `create_schema`,
-/// `update_schema`, and instantiating typed nodes. Per #1088, this will grow
-/// to include explicit rules about `title_template` token / field alignment.
+/// Covers the node-vs-schema mental model: when to call `create_schema` vs.
+/// `create_node`, and how custom types relate to built-in types. More detailed
+/// `title_template` token / field alignment guidance currently lives in
+/// `skill_pipeline.rs` (used only by the skill-based schema-creation path) and
+/// should be consolidated here when that path is unified — tracked separately
+/// from #1089.
 pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything in NodeSpace is a node. Built-in types (task, text, date) are always available. Custom types (e.g. 'project', 'customer') require a schema node to exist first — the schema defines the type's fields and title template. Once a schema exists, create instances with create_node(node_type=<schema_id>). Use create_schema only to define a new type; use create_node to create data.";
 
-/// Search-first tool strategy guidance.
+/// Tool strategy guidance.
 ///
-/// The full "TOOL STRATEGY:" bulleted list, anchored on the rule that the
+/// The full "TOOL STRATEGY:" bulleted list. Anchored on the rule that the
 /// agent must always search before updating or fetching nodes — never invent
-/// placeholder IDs. Also covers how to choose between search_nodes,
-/// search_semantic, get_node, and get_related_nodes, and the canonical
+/// placeholder IDs — but also covers how to choose between search_nodes,
+/// search_semantic, get_node, and get_related_nodes, plus the canonical
 /// create_node / create_schema / create_relationship usage patterns.
-pub const SEARCH_FIRST_RULES: &str = "TOOL STRATEGY:\n\
+pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
     - To find nodes by exact title or keyword (when you know the name): use search_nodes with query=<keyword>. To filter by type (e.g. \"show all tasks\"), pass node_type=\"task\" with query=\"\". To filter by property (e.g. \"open tasks\"), pass filters={\"status\":\"open\"}.\n\
     - To find nodes by meaning/topic (when the exact name is unknown): use search_semantic (natural language query)\n\
@@ -62,11 +65,11 @@ mod tests {
     }
 
     #[test]
-    fn search_first_rules_non_empty() {
-        assert!(!SEARCH_FIRST_RULES.is_empty());
-        assert!(SEARCH_FIRST_RULES.contains("TOOL STRATEGY:"));
-        assert!(SEARCH_FIRST_RULES.contains("ALWAYS search first"));
-        assert!(SEARCH_FIRST_RULES.contains("NEVER use placeholder IDs"));
+    fn tool_strategy_rules_non_empty() {
+        assert!(!TOOL_STRATEGY_RULES.is_empty());
+        assert!(TOOL_STRATEGY_RULES.contains("TOOL STRATEGY:"));
+        assert!(TOOL_STRATEGY_RULES.contains("ALWAYS search first"));
+        assert!(TOOL_STRATEGY_RULES.contains("NEVER use placeholder IDs"));
     }
 
     #[test]

@@ -17,7 +17,6 @@
 //!
 //! Issue #1005
 
-use crate::agent_guidance::{NODE_REFERENCE_FORMAT, SCHEMA_CREATION_RULES, SEARCH_FIRST_RULES};
 use crate::agent_types::{
     ContextAssembler, ContextError, ContextNode, ContextPacket, ContextRelationship,
 };
@@ -62,20 +61,6 @@ const MCP_ACCESS_SECTION: &str = "\
 Query the graph using these MCP tools: search_semantic, search_nodes, get_node, \
 create_nodes_from_markdown, update_node, delete_node.
 ";
-
-/// Compose the shared agent guidance section for embedding in context files.
-///
-/// Returns a markdown-formatted section containing the schema creation rules,
-/// search-first tool strategy, and node reference format — all sourced from
-/// [`crate::agent_guidance`]. ADR-032 callers (CLAUDE.md / AGENTS.md writers)
-/// embed this in the files surfaced to external agent sessions, ensuring the
-/// PTY agent and local agent operate under identical rules.
-pub fn agent_guidance_section() -> String {
-    format!(
-        "### Agent Guidance\n\n{}\n\n{}\n\n{}\n",
-        SCHEMA_CREATION_RULES, SEARCH_FIRST_RULES, NODE_REFERENCE_FORMAT
-    )
-}
 
 /// Estimate token count from character length using the ~4 chars/token heuristic.
 fn estimate_tokens(text: &str) -> u32 {
@@ -928,34 +913,6 @@ mod tests {
                 expected
             );
         }
-    }
-
-    // =========================================================================
-    // Agent guidance section tests
-    // =========================================================================
-
-    #[test]
-    fn test_agent_guidance_section_includes_all_rules() {
-        let section = agent_guidance_section();
-        assert!(section.contains("### Agent Guidance"));
-        // Schema creation rules content
-        assert!(section.contains("NODE MODEL:"));
-        assert!(section.contains("create_schema"));
-        // Search-first rules content
-        assert!(section.contains("TOOL STRATEGY:"));
-        assert!(section.contains("ALWAYS search first"));
-        // Node reference format
-        assert!(section.contains("nodespace://"));
-        assert!(section.contains("no markdown links"));
-    }
-
-    #[test]
-    fn test_agent_guidance_section_uses_shared_constants() {
-        // Changing a constant in agent_guidance.rs must propagate here.
-        let section = agent_guidance_section();
-        assert!(section.contains(SCHEMA_CREATION_RULES));
-        assert!(section.contains(SEARCH_FIRST_RULES));
-        assert!(section.contains(NODE_REFERENCE_FORMAT));
     }
 
     // =========================================================================
