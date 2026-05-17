@@ -6,10 +6,25 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "nodespaced"
+path = "src/main.rs"
+
 [dependencies]
 tonic = "0.12"
 prost = "0.13"
+tokio = { workspace = true }
+tokio-stream = "0.1"
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+nodespace-core = { workspace = true }
 
 [build-dependencies]
 tonic-build = "0.12"
 protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tempfile = "3.0"
