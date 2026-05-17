@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::nodespace::{
-    CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, UpdateNodeRequest,
+    CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, SearchRequest,
+    UpdateNodeRequest,
 };
 use nodespace_daemon::{NodeServiceClient, NodeServiceImpl, NodeServiceServer};
 use tempfile::TempDir;
@@ -63,10 +64,11 @@ async fn spawn_test_daemon() -> (
     });
 
     // Give the server a brief moment to start accepting before we dial it.
-    // Connect with retries to remove timing flakiness on slow CI runners.
+    // Connect with retries to remove timing flakiness on slow CI runners
+    // (50 * 25ms = 1.25s budget — comfortable for heavily loaded shared CI).
     let endpoint = format!("http://{}", addr);
     let mut last_err = None;
-    for _ in 0..20 {
+    for _ in 0..50 {
         match NodeServiceClient::connect(endpoint.clone()).await {
             Ok(client) => return (client, shutdown_tx, tempdir),
             Err(e) => {
@@ -261,6 +263,51 @@ async fn delete_node_marks_existed() {
         .await
         .expect_err("expected not_found after delete");
     assert_eq!(err.code(), Code::NotFound);
+
+    let _ = shutdown.send(());
+}
+
+/// Locks in the graceful-disable contract: when the daemon starts without an
+/// `NodeEmbeddingService`, semantic search must report `Unavailable` rather
+/// than crashing or returning empty results. Catches future regressions where
+/// someone silently swaps the `Option<Arc<NodeEmbeddingService>>` to a panic
+/// or a default-empty implementation.
+#[tokio::test]
+async fn search_nodes_returns_unavailable_without_embedding_service() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let err = client
+        .search_nodes(SearchRequest {
+            query: "anything".into(),
+            ..SearchRequest::default()
+        })
+        .await
+        .expect_err("expected unavailable");
+
+    assert_eq!(err.code(), Code::Unavailable);
+
+    let _ = shutdown.send(());
+}
+
+/// Verifies CreateNode rejects malformed property JSON with InvalidArgument
+/// rather than letting the parse error reach the ops layer as `Internal`.
+#[tokio::test]
+async fn create_node_rejects_malformed_properties() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let err = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "irrelevant".into(),
+            parent_id: String::new(),
+            properties: "{not valid json".into(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect_err("expected invalid_argument");
+
+    assert_eq!(err.code(), Code::InvalidArgument);
 
     let _ = shutdown.send(());
 }

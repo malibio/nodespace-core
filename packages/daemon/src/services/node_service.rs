@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use nodespace_core::models::Node;
 use nodespace_core::ops::{
-    node_ops::{self, CreateNodeInput, DeleteNodeInput, GetNodeInput, UpdateNodeInput},
+    node_ops::{self, CreateNodeInput, DeleteNodeInput, UpdateNodeInput},
     search_ops::{self, SearchSemanticInput},
     OpsError,
 };
@@ -60,9 +60,9 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
 
         let input = CreateNodeInput {
-            node_type: req.node_type.clone(),
+            node_type: req.node_type,
             content: req.content,
-            parent_id: empty_to_none(req.parent_id.clone()),
+            parent_id: empty_to_none(req.parent_id),
             properties: parse_properties(&req.properties).map_err(properties_error)?,
             collection: empty_to_none(req.collection),
             lifecycle_status: empty_to_none(req.lifecycle_status),
@@ -73,18 +73,13 @@ impl GrpcNodeService for NodeServiceImpl {
             .map_err(ops_error_to_status)?;
 
         let node = fetch_node(&self.node_service, &output.node_id).await?;
-        let parent_id_for_data = output.parent_id.clone();
 
         Ok(Response::new(NodeResponse {
             node_id: output.node_id,
             node_type: output.node_type,
-            parent_id: output.parent_id.unwrap_or_default(),
+            parent_id: output.parent_id.clone().unwrap_or_default(),
             collection_id: output.collection_id.clone().unwrap_or_default(),
-            node_data: Some(node_to_proto(
-                node,
-                parent_id_for_data,
-                output.collection_id,
-            )),
+            node_data: Some(node_to_proto(node, output.parent_id, output.collection_id)),
         }))
     }
 
@@ -93,15 +88,6 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<GetNodeRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
         let req = request.into_inner();
-
-        node_ops::get_node(
-            &self.node_service,
-            GetNodeInput {
-                node_id: req.node_id.clone(),
-            },
-        )
-        .await
-        .map_err(ops_error_to_status)?;
 
         let node = fetch_node(&self.node_service, &req.node_id).await?;
         let node_type = node.node_type.clone();
@@ -186,7 +172,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .node_service
             .get_children(&req.node_id)
             .await
-            .map_err(|e| Status::internal(format!("get_children failed: {}", e)))?;
+            .map_err(|e| ops_error_to_status(OpsError::from(e)))?;
 
         let parent_id = req.node_id.clone();
         let nodes: Vec<NodeData> = children
@@ -213,9 +199,14 @@ impl GrpcNodeService for NodeServiceImpl {
             Status::unavailable("Embedding service not initialized — semantic search disabled")
         })?;
 
-        // `semantic` field reserved for a future structured-query mode. For
-        // now we always perform semantic search regardless of the flag.
-        let _ = req.semantic;
+        // `semantic` field reserved for a future structured-query mode. Until
+        // that lands the handler always performs semantic search. Log so
+        // clients can observe the discrepancy via tracing.
+        if !req.semantic {
+            tracing::debug!(
+                "SearchRequest.semantic=false ignored; structured query mode not yet implemented"
+            );
+        }
 
         let threshold = if req.threshold == 0.0 {
             None
