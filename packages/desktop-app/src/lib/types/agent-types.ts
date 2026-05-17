@@ -16,7 +16,7 @@
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 /** Family of language models. */
-export type ModelFamily = 'ministral';
+export type ModelFamily = 'ministral' | 'gemma4' | 'ollama';
 
 // ---------------------------------------------------------------------------
 // Tagged union enums (matching Rust #[serde(tag = "type/status/state/method")])

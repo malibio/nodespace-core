@@ -76,8 +76,39 @@ const MINISTRAL_8B: CatalogEntry = CatalogEntry {
     default_temperature: 0.3,
 };
 
+/// Gemma 4 E4B -- Google's efficient ~4B-effective model; stronger reasoning
+/// than Ministral 3B/8B at competitive speed (16GB+ Apple Silicon).
+const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
+    id: "gemma-4-e4b-q4km",
+    family: ModelFamily::Gemma4,
+    name: "Gemma 4 E4B Instruct Q4_K_M",
+    filename: "gemma-4-E4B-it-Q4_K_M.gguf",
+    size_bytes: 5_335_289_824, // ~5.0 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    context_window: 32_768,
+    default_temperature: 0.3,
+};
+
+/// Gemma 4 31B -- Google's larger dense quality-tier option (24GB+ Apple
+/// Silicon, e.g. M3 Pro/Max, M4 Pro). Issue #1094 originally referenced "27B"
+/// but Gemma 4's dense large variant is 31B; 27B was a Gemma 2 size.
+const GEMMA_4_31B: CatalogEntry = CatalogEntry {
+    id: "gemma-4-31b-q4km",
+    family: ModelFamily::Gemma4,
+    name: "Gemma 4 31B Instruct Q4_K_M",
+    filename: "gemma-4-31B-it-Q4_K_M.gguf",
+    size_bytes: 18_687_061_792, // ~18.7 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/ggml-org/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf",
+    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    context_window: 32_768,
+    default_temperature: 0.3,
+};
+
 /// All catalog entries, in preference order.
-const CATALOG: &[&CatalogEntry] = &[&MINISTRAL_3B, &MINISTRAL_8B];
+const CATALOG: &[&CatalogEntry] = &[&MINISTRAL_3B, &MINISTRAL_8B, &GEMMA_4_E4B, &GEMMA_4_31B];
 
 /// RAM threshold (in bytes) above which the 8B model is recommended.
 const RAM_THRESHOLD_8B: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
@@ -181,9 +212,16 @@ impl GgufModelManager {
         let entry = find_catalog_entry(id).expect("recommended model must exist in catalog");
         ChatModelSpec {
             model_id: entry.id.to_string(),
+            family: entry.family,
             context_window: entry.context_window,
             default_temperature: entry.default_temperature,
         }
+    }
+
+    /// Look up the [`ModelFamily`] for a given model id.
+    pub fn family_for(&self, model_id: &str) -> Result<ModelFamily, ModelError> {
+        let entry = find_catalog_entry(model_id)?;
+        Ok(entry.family)
     }
 
     /// Return the on-disk path for a model file.
@@ -801,9 +839,35 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 2);
+        assert_eq!(models.len(), 4);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
+        assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
+        assert!(models.iter().any(|m| m.id == "gemma-4-31b-q4km"));
+    }
+
+    #[tokio::test]
+    async fn list_includes_gemma4_entries_with_correct_metadata() {
+        let (mgr, _tmp) = test_manager();
+        let models = mgr.list().await.unwrap();
+
+        let e4b = models.iter().find(|m| m.id == "gemma-4-e4b-q4km").unwrap();
+        assert_eq!(e4b.family, ModelFamily::Gemma4);
+        assert_eq!(e4b.quantization, "Q4_K_M");
+        assert!(e4b.size_bytes > 5_000_000_000); // ~5.0 GB
+        assert!(e4b
+            .url
+            .as_ref()
+            .is_some_and(|u| u.contains("ggml-org/gemma-4-E4B-it-GGUF")));
+
+        let g31 = models.iter().find(|m| m.id == "gemma-4-31b-q4km").unwrap();
+        assert_eq!(g31.family, ModelFamily::Gemma4);
+        assert_eq!(g31.quantization, "Q4_K_M");
+        assert!(g31.size_bytes > 18_000_000_000); // ~18.7 GB
+        assert!(g31
+            .url
+            .as_ref()
+            .is_some_and(|u| u.contains("ggml-org/gemma-4-31B-it-GGUF")));
     }
 
     #[tokio::test]

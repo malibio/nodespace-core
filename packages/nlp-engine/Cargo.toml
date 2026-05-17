@@ -11,7 +11,8 @@ repository.workspace = true
 # llama.cpp for embeddings and chat via Rust bindings
 # Supports Metal (macOS), CUDA (NVIDIA), Vulkan (cross-platform)
 # v0.1.141 includes the pooling fix for nomic-embed-text (llama.cpp #12561)
-llama-cpp-2 = { version = ">=0.1.141", optional = true }
+# v0.1.146 ships apply_chat_template_oaicompat with Jinja support required for Gemma 4
+llama-cpp-2 = { version = ">=0.1.146", optional = true }
 
 # UTF-8 decoder for token_to_piece API (llama-cpp-2 >= 0.1.140)
 encoding_rs = { version = "0.8", optional = true }
@@ -53,4 +54,4 @@ vulkan = ["llama-cpp-2/vulkan"]
 
 # Platform-specific: Enable Metal acceleration on macOS by default
 [target.'cfg(target_os = "macos")'.dependencies]
-llama-cpp-2 = { version = ">=0.1.141", features = ["metal"], optional = true }
+llama-cpp-2 = { version = ">=0.1.146", features = ["metal"], optional = true }

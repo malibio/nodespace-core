@@ -33,7 +33,9 @@ use llama_cpp_2::context::LlamaContext;
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::model::params::LlamaModelParams;
 #[cfg(feature = "chat-service")]
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
+use llama_cpp_2::model::{AddBos, LlamaModel};
+#[cfg(feature = "chat-service")]
+use llama_cpp_2::openai::OpenAIChatTemplateParams;
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::sampling::LlamaSampler;
 
@@ -280,9 +282,11 @@ impl ChatEngine {
         );
 
         // --- Tokenize ---
+        // AddBos::Never -- the OAI-compat Jinja template above already injects
+        // BOS where appropriate, and adding it again here would double-BOS.
         let tokens = llama
             .model
-            .str_to_token(&prompt, AddBos::Always)
+            .str_to_token(&prompt, AddBos::Never)
             .map_err(|e| ChatError::TokenizationError(e.to_string()))?;
 
         let prompt_tokens = tokens.len() as u32;
@@ -494,80 +498,103 @@ impl ChatEngine {
 
     /// Apply the model's built-in chat template to the messages.
     ///
-    /// If tools are provided, they are formatted into the system prompt.
+    /// Routes through llama.cpp's OAI-compat Jinja machinery (`common_chat_*`),
+    /// which handles family-specific prompt and tool formatting natively for
+    /// Mistral, Gemma 4, and any other model with an embedded Jinja template.
+    /// The simple `apply_chat_template` C API does not work for Gemma 4 — its
+    /// chat template requires the full Jinja engine plus llama.cpp's chat
+    /// specialization layer.
     #[cfg(feature = "chat-service")]
     fn apply_chat_template(
         model: &LlamaModel,
         messages: &[ChatMessageInput],
         tools: &Option<Vec<ToolSpec>>,
     ) -> Result<String> {
-        // Build LlamaChatMessage list with optional tool definitions in the system prompt
-        let mut chat_messages = Vec::with_capacity(messages.len());
+        // Build OpenAI-format messages JSON. Tool-result messages carry
+        // `tool_call_id`; the Jinja template handles family-specific wrapping
+        // (Mistral [TOOL_RESULTS], Gemma 4 turn format, etc.).
+        let messages_value: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|msg| {
+                if msg.role == "tool" {
+                    serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": msg.call_id.as_deref().unwrap_or("unknown"),
+                        "content": msg.content,
+                    })
+                } else {
+                    serde_json::json!({
+                        "role": msg.role,
+                        "content": msg.content,
+                    })
+                }
+            })
+            .collect();
 
-        for (i, msg) in messages.iter().enumerate() {
-            let content = if i == 0 && msg.role == "system" && tools.is_some() {
-                // Inject tool definitions into the system prompt
-                let tools_json = serde_json::to_string_pretty(
-                    &tools
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|t| {
-                            serde_json::json!({
-                                "type": "function",
-                                "function": {
-                                    "name": &t.name,
-                                    "description": &t.description,
-                                    "parameters": &t.parameters_schema,
-                                }
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|e| ChatError::TemplateError(format!("Tool JSON error: {}", e)))?;
+        let messages_json = serde_json::to_string(&messages_value)
+            .map_err(|e| ChatError::TemplateError(format!("Message JSON error: {}", e)))?;
 
-                format!(
-                    "{}\n\n[AVAILABLE_TOOLS]{}[/AVAILABLE_TOOLS]",
-                    msg.content, tools_json
-                )
-            } else if msg.role == "tool" {
-                // Format tool results as structured JSON for the model's chat
-                // template. Mistral's Jinja template handles role="tool" messages
-                // and wraps them in [TOOL_RESULTS]...[/TOOL_RESULTS] tags.
-                // We provide the content as a JSON array of call results.
-                let call_id = msg.call_id.as_deref().unwrap_or("unknown");
-                // Try to parse content as JSON; if it fails, wrap as string
-                let content_value: serde_json::Value = serde_json::from_str(&msg.content)
-                    .unwrap_or_else(|_| serde_json::Value::String(msg.content.clone()));
-                serde_json::to_string(&serde_json::json!([{
-                    "call_id": call_id,
-                    "content": content_value,
-                }]))
-                .unwrap_or_else(|_| msg.content.clone())
+        // Build OpenAI tool-spec JSON if tools are provided. The Jinja template
+        // formats these per-family (Ministral [AVAILABLE_TOOLS], Gemma 4 <tools>).
+        let tools_json_string = if let Some(tool_specs) = tools.as_ref() {
+            if tool_specs.is_empty() {
+                None
             } else {
-                msg.content.clone()
-            };
-
-            // Tool results are already formatted with [TOOL_RESULTS] tags,
-            // so we set the role to "tool" and let the template pass it through.
-            let chat_msg = LlamaChatMessage::new(msg.role.clone(), content)
-                .map_err(|e| ChatError::TemplateError(format!("Invalid chat message: {}", e)))?;
-            chat_messages.push(chat_msg);
-        }
+                let tools_value: Vec<serde_json::Value> = tool_specs
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters_schema,
+                            }
+                        })
+                    })
+                    .collect();
+                Some(
+                    serde_json::to_string(&tools_value)
+                        .map_err(|e| ChatError::TemplateError(format!("Tool JSON error: {}", e)))?,
+                )
+            }
+        } else {
+            None
+        };
 
         // Retrieve the model's embedded chat template
         let tmpl = model
             .chat_template(None)
             .map_err(|e| ChatError::TemplateError(format!("No chat template in model: {}", e)))?;
 
-        // Apply template with add_ass=true so the output ends with the assistant opening tag
+        let params = OpenAIChatTemplateParams {
+            messages_json: &messages_json,
+            tools_json: tools_json_string.as_deref(),
+            tool_choice: None,
+            json_schema: None,
+            grammar: None,
+            reasoning_format: None,
+            chat_template_kwargs: None,
+            add_generation_prompt: true,
+            use_jinja: true,
+            parallel_tool_calls: false,
+            enable_thinking: false,
+            // The Jinja template injects BOS where appropriate; AddBos::Never
+            // at tokenization time avoids double-BOS.
+            add_bos: false,
+            add_eos: false,
+            // We want raw tokens out so our streaming parser can detect
+            // [TOOL_CALLS] sentinels itself.
+            parse_tool_calls: false,
+        };
+
         let result = model
-            .apply_chat_template(&tmpl, &chat_messages, true)
+            .apply_chat_template_oaicompat(&tmpl, &params)
             .map_err(|e| {
                 ChatError::TemplateError(format!("Failed to apply chat template: {}", e))
             })?;
 
-        Ok(result)
+        Ok(result.prompt)
     }
 
     /// Count the number of tokens in the given text.
