@@ -3,6 +3,7 @@ members = [
     "packages/core",
     "packages/nlp-engine",
     "packages/agent",
+    "packages/daemon",
     "packages/desktop-app/src-tauri",
     "packages/dev-tools"
 ]

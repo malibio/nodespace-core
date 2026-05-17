@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package nodespace;
+
+// NodeService exposes the core knowledge graph operations over gRPC.
+//
+// Field shapes mirror packages/core/src/ops/node_ops.rs:
+//   - node_id: string UUID (e.g. "550e8400-e29b-41d4-a716-446655440000")
+//   - node_type: string enum (e.g. "text", "task", "date", "header", "code-block")
+//   - content: string (plain text or markdown content of the node)
+//   - properties: JSON-encoded string (arbitrary key-value metadata); see NodeData.properties
+//   - version: int64 optimistic concurrency control counter
+//   - lifecycle_status: string enum ("active", "archived", "deleted")
+service NodeService {
+  rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
+  rpc GetNode(GetNodeRequest) returns (NodeResponse);
+  rpc UpdateNode(UpdateNodeRequest) returns (NodeResponse);
+  rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
+  rpc GetChildren(GetChildrenRequest) returns (NodeListResponse);
+  rpc SearchNodes(SearchRequest) returns (NodeListResponse);
+  rpc WatchNodes(WatchRequest) returns (stream NodeEvent);
+  rpc Chat(stream ChatRequest) returns (stream ChatResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Shared node representation
+// ---------------------------------------------------------------------------
+
+// NodeData is the canonical wire representation of a node.
+message NodeData {
+  string id = 1;
+  string node_type = 2;
+  string content = 3;
+  // parent_id is unset for root nodes. Use optional so callers can
+  // distinguish "no parent" (root) from an empty-string parent_id.
+  optional string parent_id = 4;
+  // properties is a JSON-encoded object matching the serde_json::Value shape
+  // used by the ops layer. We encode as a string rather than google.protobuf.Struct
+  // to avoid the well-known-types dependency and because schema validation
+  // happens server-side before the value reaches the wire.
+  string properties = 5;
+  int64 version = 6;
+  string lifecycle_status = 7; // "active" | "archived" | "deleted"
+  string created_at = 8;       // RFC 3339 timestamp
+  string modified_at = 9;      // RFC 3339 timestamp
+  string collection_id = 10;   // empty string when not in a collection
+}
+
+// ---------------------------------------------------------------------------
+// CreateNode
+// ---------------------------------------------------------------------------
+
+message CreateNodeRequest {
+  string node_type = 1;
+  string content = 2;
+  string parent_id = 3;        // empty string for root nodes
+  string properties = 4;       // JSON-encoded, may be empty string or "{}"
+  string collection = 5;       // optional collection path, e.g. "hr:policy"
+  string lifecycle_status = 6; // defaults to "active" when empty
+}
+
+message NodeResponse {
+  string node_id = 1;
+  string node_type = 2;
+  string parent_id = 3;
+  string collection_id = 4;
+  NodeData node_data = 5;
+}
+
+// ---------------------------------------------------------------------------
+// GetNode
+// ---------------------------------------------------------------------------
+
+message GetNodeRequest {
+  string node_id = 1;
+}
+
+// GetNode returns NodeResponse (node_id + node_data populated).
+
+// ---------------------------------------------------------------------------
+// UpdateNode
+// ---------------------------------------------------------------------------
+
+message UpdateNodeRequest {
+  string node_id = 1;
+  // version unset = auto-fetch current version; matches UpdateNodeInput
+  // in the ops layer. prost generates Option<i64>.
+  optional int64 version = 2;
+  string node_type = 3;              // empty string = no change (enum-like; empty is not legitimate)
+  // content and properties use optional so callers can distinguish
+  // "no change" (field absent) from "clear the value" (field present, empty/"{}")
+  optional string content = 4;       // unset = no change; "" is a legitimate value (clear content)
+  optional string properties = 5;    // unset = no change; "{}" is a legitimate value (clear props)
+  string add_to_collection = 6;      // collection path to add node to
+  string remove_from_collection = 7; // collection_id to remove node from
+  string lifecycle_status = 8;       // empty string = no change (enum-like; empty is not legitimate)
+}
+
+// UpdateNode returns NodeResponse.
+
+// ---------------------------------------------------------------------------
+// DeleteNode
+// ---------------------------------------------------------------------------
+
+message DeleteNodeRequest {
+  string node_id = 1;
+  // version unset = auto-fetch (matches ops-layer behaviour).
+  // optional int64 maps to Option<i64> in prost.
+  optional int64 version = 2;
+}
+
+message DeleteNodeResponse {
+  string node_id = 1;
+  bool existed = 2;
+}
+
+// ---------------------------------------------------------------------------
+// GetChildren
+// ---------------------------------------------------------------------------
+
+message GetChildrenRequest {
+  string node_id = 1;
+}
+
+message NodeListResponse {
+  repeated NodeData nodes = 1;
+  int32 count = 2;
+  string collection_id = 3; // empty string when not filtered by collection
+}
+
+// ---------------------------------------------------------------------------
+// SearchNodes (query / semantic)
+// ---------------------------------------------------------------------------
+
+// SearchRequest exposes a subset of SearchSemanticInput from
+// packages/core/src/ops/search_ops.rs. Fields not yet exposed (will be
+// added when consumers need them): exclude_collections, include_markdown,
+// include_archived, scope, include_edges, graph_boost, property_filters.
+message SearchRequest {
+  string query = 1;
+  // node_types filters results to any of the specified node types.
+  // Empty list = all types. Matches the repeated-string shape of
+  // SearchSemanticInput.node_type ([]string on the ops layer).
+  repeated string node_types = 2;
+  string collection = 3;      // optional collection path filter
+  string collection_id = 4;   // optional collection ID filter (alternative to path)
+  int32 limit = 5;            // 0 = use server default (20)
+  int32 offset = 6;
+  float threshold = 7;        // semantic similarity threshold; 0.0 = use default (0.7)
+  bool semantic = 8;          // true = semantic search, false = structured query
+  // JSON-encoded array of {field, operator, value} filter objects; empty = no filters
+  string filters = 9;
+}
+
+// SearchNodes returns NodeListResponse.
+
+// ---------------------------------------------------------------------------
+// WatchNodes — server-streaming change events
+// ---------------------------------------------------------------------------
+
+message WatchRequest {
+  // Filter which nodes to watch. Empty string = watch all nodes.
+  string node_type = 1;
+  // Watch only descendants of this node (empty = global watch)
+  string root_id = 2;
+}
+
+message NodeEvent {
+  oneof event {
+    NodeData created = 1;
+    NodeData updated = 2;
+    NodeDeleted deleted = 3;
+  }
+}
+
+message NodeDeleted {
+  string node_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Chat — bidirectional streaming
+// ---------------------------------------------------------------------------
+
+message ChatRequest {
+  string content = 1;
+  string session_id = 2; // client-chosen session identifier; empty = auto-assign
+}
+
+message ChatResponse {
+  string content = 1;
+  bool done = 2;          // true on the final chunk of a response
+  string session_id = 3;  // echoed back so client can correlate streams
+}
