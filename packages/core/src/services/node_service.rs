@@ -549,6 +549,43 @@ pub fn is_valid_node_id(node_id: &str) -> bool {
     false
 }
 
+/// Derive a stable schema node ID from the schema's display name.
+///
+/// Schema nodes use their normalized name as ID (e.g. "Invoice" → "invoice",
+/// "Customer Profile" → "customer-profile") so they can be referenced
+/// predictably by type name rather than an opaque UUID.
+pub(crate) fn normalize_schema_id(name: &str) -> String {
+    name.to_lowercase()
+        .replace([' ', '_'], "-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+#[cfg(test)]
+mod normalize_schema_id_tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_schema_id_basic() {
+        assert_eq!(normalize_schema_id("Invoice"), "invoice");
+        assert_eq!(normalize_schema_id("Customer Profile"), "customer-profile");
+        assert_eq!(normalize_schema_id("code_block"), "code-block");
+        assert_eq!(normalize_schema_id("My Widget"), "my-widget");
+    }
+
+    #[test]
+    fn test_normalize_schema_id_edge_cases() {
+        assert_eq!(normalize_schema_id("  spaces  "), "spaces");
+        assert_eq!(normalize_schema_id("already-kebab"), "already-kebab");
+        assert_eq!(normalize_schema_id("UPPER CASE"), "upper-case");
+    }
+}
+
 /// Extract nodespace:// mentions from content
 ///
 /// Supports both markdown format and plain URIs:
@@ -2118,6 +2155,15 @@ impl NodeService {
             }
         } else if params.node_type == "date" {
             params.content.clone()
+        } else if params.node_type == "schema" {
+            let id = normalize_schema_id(&params.content);
+            if id.is_empty() {
+                return Err(NodeServiceError::invalid_update(
+                    "Schema content must not be empty or contain only special characters"
+                        .to_string(),
+                ));
+            }
+            id
         } else {
             uuid::Uuid::new_v4().to_string()
         };

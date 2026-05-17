@@ -166,7 +166,7 @@ pub async fn handle_create_schema(
     let relationships = params.relationships.unwrap_or_default();
 
     // Generate schema ID
-    let schema_id = normalize_schema_id(&params.name);
+    let schema_id = crate::services::node_service::normalize_schema_id(&params.name);
 
     // Check if schema already exists — return a clear error so the agent knows
     // to use create_node instead of retrying create_schema.
@@ -196,9 +196,9 @@ pub async fn handle_create_schema(
         properties["propertiesHeaderSummaryTemplate"] = serde_json::Value::String(template.clone());
     }
 
-    // Create schema node params
+    // Create schema node params — no explicit ID; create_node_with_parent derives it from content
     let schema_node_params = CreateNodeParams {
-        id: Some(schema_id.clone()),
+        id: None,
         node_type: "schema".to_string(),
         content: params.name.clone(),
         parent_id: None,
@@ -1018,22 +1018,6 @@ fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<Sc
         .collect()
 }
 
-/// Normalize schema ID to kebab-case (e.g., "Customer Profile" → "customer-profile").
-///
-/// Schema IDs use kebab-case to match existing core type conventions
-/// (e.g., "code-block", "quote-block", "ordered-list").
-fn normalize_schema_id(entity_name: &str) -> String {
-    entity_name
-        .to_lowercase()
-        .replace([' ', '_'], "-")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 #[cfg(test)]
 #[path = "schema_test.rs"]
@@ -1166,6 +1150,7 @@ mod tests {
 
     #[test]
     fn test_normalize_schema_id() {
+        use crate::services::node_service::normalize_schema_id;
         assert_eq!(normalize_schema_id("Invoice"), "invoice");
         assert_eq!(normalize_schema_id("Customer Profile"), "customer-profile");
         assert_eq!(normalize_schema_id("code_block"), "code-block");
@@ -1311,6 +1296,7 @@ mod tests {
 
     #[test]
     fn test_integration_schema_id_generation() {
+        use crate::services::node_service::normalize_schema_id;
         let entity_name = "Customer Invoice";
         let schema_id = normalize_schema_id(entity_name);
         assert_eq!(schema_id, "customer-invoice");
