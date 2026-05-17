@@ -31,3 +31,6 @@ pub mod props;
 
 // ACP (Agent Communication Protocol) subsystem
 pub mod acp;
+
+// PTY-based agent session engine (ADR-032)
+pub mod pty;
