@@ -202,16 +202,12 @@ async fn switch_database_services(
     let new_config = crate::config::AppConfig {
         database_path: new_db_path,
         model_path: old_config.model_path,
-        mcp_port: old_config.mcp_port,
         tauri_client_id: old_config.tauri_client_id.clone(),
     };
 
     // Create new session token
     let shutdown_token: tauri::State<crate::ShutdownToken> = app.state();
     let new_session_token = shutdown_token.child_token();
-
-    // Extract embedding service Arc for MCP (before moving bundle.embedding_state)
-    let embedding_service_arc = bundle.embedding_state.as_ref().map(|es| es.service.clone());
 
     // Hot-swap services
     services
@@ -223,16 +219,6 @@ async fn switch_database_services(
             new_session_token.clone(),
         )
         .await;
-
-    // Restart MCP server — starts even without embeddings (node CRUD still works)
-    if let Err(e) = crate::initialize_mcp_server(
-        app.clone(),
-        bundle.node_service.clone(),
-        embedding_service_arc,
-        new_session_token.clone(),
-    ) {
-        tracing::error!("Failed to restart MCP server after switch: {}", e);
-    }
 
     if let Err(e) = crate::initialize_domain_event_forwarder(
         app.clone(),

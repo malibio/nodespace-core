@@ -225,9 +225,6 @@ async fn init_services(app: &AppHandle, config: &crate::config::AppConfig) -> Re
     let shutdown_token: tauri::State<crate::ShutdownToken> = app.state();
     let session_token = shutdown_token.child_token();
 
-    // Extract embedding service Arc for MCP (before moving bundle.embedding_state)
-    let embedding_service_arc = bundle.embedding_state.as_ref().map(|es| es.service.clone());
-
     // Populate AppServices container (Issue #894)
     tracing::info!("Populating AppServices container...");
     services
@@ -240,17 +237,6 @@ async fn init_services(app: &AppHandle, config: &crate::config::AppConfig) -> Re
         )
         .await;
     tracing::info!("AppServices container populated");
-
-    // Initialize MCP server — starts even without embeddings (node CRUD still works)
-    if let Err(e) = crate::initialize_mcp_server(
-        app.clone(),
-        bundle.node_service.clone(),
-        embedding_service_arc,
-        session_token.clone(),
-    ) {
-        tracing::error!("Failed to initialize MCP server: {}", e);
-        // Don't fail database init if MCP fails - MCP is optional
-    }
 
     // Initialize domain event forwarding with client filtering (#665)
     if let Err(e) = crate::initialize_domain_event_forwarder(
@@ -311,14 +297,8 @@ pub async fn initialize_database(app: AppHandle) -> Result<String, String> {
     // Resolve model path
     let model_path = resolve_bundled_model_path(&app)?;
 
-    // Determine MCP port
-    let mcp_port = std::env::var("MCP_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3100);
-
     // Build AppConfig
-    let config = crate::config::AppConfig::from_preferences(&prefs, model_path, mcp_port)?;
+    let config = crate::config::AppConfig::from_preferences(&prefs, model_path)?;
 
     // Show database path on startup
     let db_path_str = db_path.to_string_lossy().to_string();

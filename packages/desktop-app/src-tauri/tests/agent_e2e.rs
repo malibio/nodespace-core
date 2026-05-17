@@ -1,8 +1,8 @@
 //! End-to-end integration tests for the agent subsystems.
 //!
-//! Validates the complete agent pipeline: local agent conversation round-trip
-//! with tool execution, model lifecycle state machine, ACP protocol with mock
-//! subprocess, concurrent operations, and error scenarios.
+//! Validates the local agent pipeline: conversation round-trip with tool
+//! execution, model lifecycle state machine, concurrent operations, and
+//! error scenarios.
 //!
 //! All tests are CI-compatible: they use mock engines and tools, never require
 //! GPU or actual GGUF model files.
@@ -17,8 +17,6 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use nodespace_agent::acp::session::{AcpClientService, SessionError};
-use nodespace_agent::acp::transport::{StdioTransport, StdioTransportConfig};
 use nodespace_agent::agent_types::*;
 use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
@@ -226,88 +224,6 @@ impl AgentToolExecutor for MockToolExecutor {
             result,
             is_error,
         })
-    }
-}
-
-/// Mock agent registry returning pre-configured agents.
-struct MockRegistry {
-    agents: Vec<AcpAgentInfo>,
-}
-
-impl MockRegistry {
-    fn new(agents: Vec<AcpAgentInfo>) -> Self {
-        Self { agents }
-    }
-
-    fn with_echo_agent() -> Self {
-        Self::new(vec![echo_agent_info("echo-agent")])
-    }
-}
-
-#[async_trait]
-impl AgentRegistry for MockRegistry {
-    async fn discover_agents(&self) -> Result<Vec<AcpAgentInfo>, RegistryError> {
-        Ok(self.agents.clone())
-    }
-
-    async fn get_agent(&self, agent_id: &str) -> Result<AcpAgentInfo, RegistryError> {
-        self.agents
-            .iter()
-            .find(|a| a.id == agent_id)
-            .cloned()
-            .ok_or_else(|| RegistryError::NotFound(agent_id.to_string()))
-    }
-
-    async fn refresh(&self) -> Result<(), RegistryError> {
-        Ok(())
-    }
-}
-
-// ===========================================================================
-// Test helpers
-// ===========================================================================
-
-/// Create an AcpAgentInfo that uses a bash echo agent (reads JSON from stdin,
-/// echoes it back to stdout). This is the simplest valid ACP "agent" for testing.
-fn echo_agent_info(id: &str) -> AcpAgentInfo {
-    AcpAgentInfo {
-        id: id.to_string(),
-        name: format!("Echo Agent {}", id),
-        binary: "/bin/bash".to_string(),
-        args: vec![
-            "-c".to_string(),
-            // Echo agent: reads JSON-RPC requests and echoes them back as-is.
-            // The transport layer just needs valid NDJSON round-tripping.
-            r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-        ],
-        auth_method: AcpAuthMethod::AgentManaged,
-        available: true,
-        version: Some("1.0.0-test".to_string()),
-    }
-}
-
-/// Create an AcpAgentInfo pointing to a nonexistent binary.
-fn nonexistent_agent_info(id: &str) -> AcpAgentInfo {
-    AcpAgentInfo {
-        id: id.to_string(),
-        name: format!("Missing Agent {}", id),
-        binary: "/nonexistent/path/to/agent".to_string(),
-        args: vec![],
-        auth_method: AcpAuthMethod::AgentManaged,
-        available: true, // Registry says available, but binary doesn't exist
-        version: None,
-    }
-}
-
-/// Create a JSON-RPC request message.
-fn json_rpc_request(id: u64, method: &str) -> AcpMessage {
-    AcpMessage {
-        jsonrpc: "2.0".to_string(),
-        method: Some(method.to_string()),
-        params: Some(json!({})),
-        id: Some(json!(id)),
-        result: None,
-        error: None,
     }
 }
 
@@ -794,213 +710,8 @@ async fn model_lifecycle_not_found() {
 }
 
 // ===========================================================================
-// Category 3: ACP E2E
+// Category 3: Concurrent Operations
 // ===========================================================================
-
-/// ACP transport: spawn echo agent, send/receive NDJSON messages, shutdown.
-#[tokio::test]
-async fn acp_transport_echo_roundtrip() {
-    let config = StdioTransportConfig {
-        binary: "/bin/bash".to_string(),
-        args: vec![
-            "-c".to_string(),
-            r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-        ],
-        env: HashMap::new(),
-        working_dir: None,
-    };
-
-    let transport = StdioTransport::spawn(config).unwrap();
-    assert!(transport.is_alive().await);
-
-    // Send initialize request
-    let init_msg = json_rpc_request(1, "initialize");
-    transport.send(init_msg).await.unwrap();
-
-    // Receive echoed response
-    let response = tokio::time::timeout(std::time::Duration::from_secs(5), transport.receive())
-        .await
-        .expect("receive timed out")
-        .expect("receive failed");
-
-    assert_eq!(response.jsonrpc, "2.0");
-    assert_eq!(response.id, Some(json!(1)));
-    assert_eq!(response.method.as_deref(), Some("initialize"));
-
-    // Send session prompt
-    let prompt_msg = AcpMessage {
-        jsonrpc: "2.0".to_string(),
-        method: Some("session/prompt".to_string()),
-        params: Some(json!({"messages": [{"role": "user", "content": "Hello agent"}]})),
-        id: Some(json!(2)),
-        result: None,
-        error: None,
-    };
-    transport.send(prompt_msg).await.unwrap();
-
-    let response = tokio::time::timeout(std::time::Duration::from_secs(5), transport.receive())
-        .await
-        .expect("receive timed out")
-        .expect("receive failed");
-
-    assert_eq!(response.id, Some(json!(2)));
-    assert_eq!(response.method.as_deref(), Some("session/prompt"));
-
-    // Clean shutdown
-    transport.shutdown().await.unwrap();
-    assert!(!transport.is_alive().await);
-}
-
-/// ACP transport: verify multiple sequential messages maintain order.
-#[tokio::test]
-async fn acp_transport_sequential_messages() {
-    let config = StdioTransportConfig {
-        binary: "/bin/bash".to_string(),
-        args: vec![
-            "-c".to_string(),
-            r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-        ],
-        env: HashMap::new(),
-        working_dir: None,
-    };
-
-    let transport = StdioTransport::spawn(config).unwrap();
-
-    // Send 10 messages rapidly
-    for i in 1..=10u64 {
-        transport
-            .send(json_rpc_request(i, &format!("test/msg_{i}")))
-            .await
-            .unwrap();
-    }
-
-    // Receive all 10 in order
-    for i in 1..=10u64 {
-        let response = tokio::time::timeout(std::time::Duration::from_secs(5), transport.receive())
-            .await
-            .expect("receive timed out")
-            .expect("receive failed");
-
-        assert_eq!(response.id, Some(json!(i)));
-    }
-
-    transport.shutdown().await.unwrap();
-}
-
-/// ACP session lifecycle: start -> communicate -> end.
-///
-/// Uses AcpClientService with a mock registry pointing to an echo bash agent.
-/// The echo agent echoes all JSON-RPC messages back, which satisfies the
-/// initialization handshake (the echoed `initialize` response has no `error`
-/// field, so the session accepts it).
-#[tokio::test]
-async fn acp_session_lifecycle_with_echo_agent() {
-    let registry = Arc::new(MockRegistry::with_echo_agent());
-    let service = AcpClientService::new(registry);
-
-    // Start session
-    let session_id = service.start_session("echo-agent").await.unwrap();
-    assert!(!session_id.is_empty());
-    assert!(session_id.starts_with("acp-echo-agent-"));
-
-    // Verify session is active
-    let state = service.get_session_state("echo-agent").await.unwrap();
-    assert_eq!(state, AcpSessionState::Active);
-
-    // Send a message
-    let msg = json_rpc_request(10, "session/prompt");
-    service.send_message("echo-agent", msg).await.unwrap();
-
-    // Receive the echoed message
-    let response = service.receive_message("echo-agent").await.unwrap();
-    assert_eq!(response.jsonrpc, "2.0");
-    assert_eq!(response.id, Some(json!(10)));
-
-    // End session
-    service.end_session("echo-agent").await.unwrap();
-
-    // Session should be removed after ending
-    let active = service.active_sessions().await;
-    assert!(active.is_empty());
-}
-
-/// ACP: cannot start duplicate session for same agent.
-#[tokio::test]
-async fn acp_session_no_duplicate() {
-    let registry = Arc::new(MockRegistry::with_echo_agent());
-    let service = AcpClientService::new(registry);
-
-    // Start first session
-    service.start_session("echo-agent").await.unwrap();
-
-    // Attempt second session for same agent
-    let result = service.start_session("echo-agent").await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        SessionError::DuplicateSession(id) => assert_eq!(id, "echo-agent"),
-        other => panic!("Expected DuplicateSession, got: {:?}", other),
-    }
-
-    // Clean up
-    service.end_session("echo-agent").await.unwrap();
-}
-
-// ===========================================================================
-// Category 4: Concurrent Operations
-// ===========================================================================
-
-/// Local agent + ACP running simultaneously without interference.
-#[tokio::test]
-async fn concurrent_local_and_acp_no_interference() {
-    // Run both concurrently: local agent inference + ACP transport
-    let local_handle = tokio::spawn({
-        async move {
-            let engine = Arc::new(MockEngine::single_text("Concurrent local response."));
-            let executor = Arc::new(MockToolExecutor::new());
-            let service = LocalAgentService::new(engine, executor, None);
-            let sid = service.create_session(None).await;
-            service
-                .send_message(&sid, "Concurrent test", |_| {}, |_| {})
-                .await
-        }
-    });
-
-    let acp_handle = tokio::spawn({
-        async move {
-            let config = StdioTransportConfig {
-                binary: "/bin/bash".to_string(),
-                args: vec![
-                    "-c".to_string(),
-                    r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-                ],
-                env: HashMap::new(),
-                working_dir: None,
-            };
-            let transport = StdioTransport::spawn(config).unwrap();
-            transport
-                .send(json_rpc_request(1, "test/concurrent"))
-                .await
-                .unwrap();
-            let response =
-                tokio::time::timeout(std::time::Duration::from_secs(5), transport.receive())
-                    .await
-                    .expect("timed out")
-                    .expect("receive failed");
-            transport.shutdown().await.unwrap();
-            response
-        }
-    });
-
-    // Wait for both to complete
-    let local_result = local_handle.await.unwrap();
-    let acp_response = acp_handle.await.unwrap();
-
-    // Verify both succeeded
-    assert!(local_result.is_ok(), "Local agent should succeed");
-    assert_eq!(local_result.unwrap().response, "Concurrent local response.");
-    assert_eq!(acp_response.jsonrpc, "2.0");
-    assert_eq!(acp_response.id, Some(json!(1)));
-}
 
 /// Multiple local agent sessions running concurrently.
 #[tokio::test]
@@ -1061,64 +772,8 @@ async fn concurrent_multiple_local_sessions() {
     assert_ne!(s1.id, s2.id);
 }
 
-/// Multiple ACP transport connections running concurrently.
-#[tokio::test]
-async fn concurrent_multiple_acp_transports() {
-    let spawn_echo = || {
-        let config = StdioTransportConfig {
-            binary: "/bin/bash".to_string(),
-            args: vec![
-                "-c".to_string(),
-                r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-            ],
-            env: HashMap::new(),
-            working_dir: None,
-        };
-        StdioTransport::spawn(config).unwrap()
-    };
-
-    let t1 = spawn_echo();
-    let t2 = spawn_echo();
-    let t3 = spawn_echo();
-
-    // Send messages to all three concurrently
-    let (r1, r2, r3) = tokio::join!(
-        async {
-            t1.send(json_rpc_request(1, "transport/1")).await.unwrap();
-            tokio::time::timeout(std::time::Duration::from_secs(5), t1.receive())
-                .await
-                .expect("t1 timed out")
-                .expect("t1 receive failed")
-        },
-        async {
-            t2.send(json_rpc_request(2, "transport/2")).await.unwrap();
-            tokio::time::timeout(std::time::Duration::from_secs(5), t2.receive())
-                .await
-                .expect("t2 timed out")
-                .expect("t2 receive failed")
-        },
-        async {
-            t3.send(json_rpc_request(3, "transport/3")).await.unwrap();
-            tokio::time::timeout(std::time::Duration::from_secs(5), t3.receive())
-                .await
-                .expect("t3 timed out")
-                .expect("t3 receive failed")
-        }
-    );
-
-    assert_eq!(r1.id, Some(json!(1)));
-    assert_eq!(r2.id, Some(json!(2)));
-    assert_eq!(r3.id, Some(json!(3)));
-
-    // Shutdown all
-    let (r1, r2, r3) = tokio::join!(t1.shutdown(), t2.shutdown(), t3.shutdown());
-    r1.unwrap();
-    r2.unwrap();
-    r3.unwrap();
-}
-
 // ===========================================================================
-// Category 5: Error Scenarios
+// Category 4: Error Scenarios
 // ===========================================================================
 
 /// Send to nonexistent session returns clear error.
@@ -1163,133 +818,6 @@ async fn error_no_model_loaded() {
     }
 }
 
-/// ACP agent binary not found returns helpful error.
-#[tokio::test]
-async fn error_acp_agent_binary_not_found() {
-    let registry = Arc::new(MockRegistry::new(vec![nonexistent_agent_info(
-        "missing-agent",
-    )]));
-    let service = AcpClientService::new(registry);
-
-    let result = service.start_session("missing-agent").await;
-    assert!(result.is_err());
-
-    // Should be a transport error since the binary can't be spawned
-    match result.unwrap_err() {
-        SessionError::Transport(TransportError::SendFailed(msg)) => {
-            assert!(
-                msg.contains("spawn") || msg.contains("No such file"),
-                "Error should mention spawn failure, got: {msg}"
-            );
-        }
-        other => {
-            // Any transport error is acceptable
-            assert!(
-                matches!(other, SessionError::Transport(_)),
-                "Expected Transport error, got: {:?}",
-                other
-            );
-        }
-    }
-}
-
-/// ACP agent not found in registry.
-#[tokio::test]
-async fn error_acp_agent_not_in_registry() {
-    let registry = Arc::new(MockRegistry::new(vec![]));
-    let service = AcpClientService::new(registry);
-
-    let result = service.start_session("ghost-agent").await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        SessionError::AgentNotFound(id) => assert_eq!(id, "ghost-agent"),
-        other => panic!("Expected AgentNotFound, got: {:?}", other),
-    }
-}
-
-/// ACP agent marked unavailable returns appropriate error.
-#[tokio::test]
-async fn error_acp_agent_unavailable() {
-    let mut agent = echo_agent_info("unavailable-agent");
-    agent.available = false;
-
-    let registry = Arc::new(MockRegistry::new(vec![agent]));
-    let service = AcpClientService::new(registry);
-
-    let result = service.start_session("unavailable-agent").await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        SessionError::AgentNotAvailable(id) => assert_eq!(id, "unavailable-agent"),
-        other => panic!("Expected AgentNotAvailable, got: {:?}", other),
-    }
-}
-
-/// ACP send/receive on ended session fails gracefully.
-#[tokio::test]
-async fn error_acp_operation_on_nonexistent_session() {
-    let registry = Arc::new(MockRegistry::with_echo_agent());
-    let service = AcpClientService::new(registry);
-
-    // No sessions exist
-    let result = service
-        .send_message("no-such-agent", json_rpc_request(1, "test"))
-        .await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        SessionError::SessionNotFound(id) => assert_eq!(id, "no-such-agent"),
-        other => panic!("Expected SessionNotFound, got: {:?}", other),
-    }
-}
-
-/// Transport failure: agent process exits immediately -> detected as not alive.
-#[tokio::test]
-async fn error_transport_broken_pipe() {
-    let config = StdioTransportConfig {
-        binary: "/bin/bash".to_string(),
-        args: vec!["-c".to_string(), "exit 0".to_string()],
-        env: HashMap::new(),
-        working_dir: None,
-    };
-
-    let transport = StdioTransport::spawn(config).unwrap();
-
-    // Give the process a moment to exit
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Process should be dead
-    assert!(!transport.is_alive().await);
-
-    // Receive should fail with ProcessExited
-    let result = tokio::time::timeout(std::time::Duration::from_secs(2), transport.receive())
-        .await
-        .expect("timed out");
-
-    assert!(result.is_err());
-
-    transport.shutdown().await.unwrap();
-}
-
-/// Transport: send after shutdown returns NotConnected.
-#[tokio::test]
-async fn error_transport_send_after_shutdown() {
-    let config = StdioTransportConfig {
-        binary: "/bin/bash".to_string(),
-        args: vec![
-            "-c".to_string(),
-            r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-        ],
-        env: HashMap::new(),
-        working_dir: None,
-    };
-
-    let transport = StdioTransport::spawn(config).unwrap();
-    transport.shutdown().await.unwrap();
-
-    let result = transport.send(json_rpc_request(1, "test")).await;
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TransportError::NotConnected));
-}
-
 /// Cancellation stops an in-progress agent turn.
 #[tokio::test]
 async fn error_cancellation_mid_turn() {
@@ -1332,33 +860,6 @@ async fn error_model_operations_with_invalid_id() {
     // Cancel download
     let result = manager.cancel_download("fake-model-id").await;
     assert!(matches!(result.unwrap_err(), ModelError::NotFound(_)));
-}
-
-/// ACP session fail_session transitions to Failed state and removes session.
-#[tokio::test]
-async fn error_acp_fail_session() {
-    let registry = Arc::new(MockRegistry::with_echo_agent());
-    let service = AcpClientService::new(registry);
-
-    // Start a session
-    service.start_session("echo-agent").await.unwrap();
-
-    // Fail the session
-    service
-        .fail_session("echo-agent", "transport failure detected".to_string())
-        .await
-        .unwrap();
-
-    // Session should be removed
-    let active = service.active_sessions().await;
-    assert!(active.is_empty());
-
-    // Can start a new session for the same agent after failure
-    let new_session_id = service.start_session("echo-agent").await.unwrap();
-    assert!(!new_session_id.is_empty());
-
-    // Clean up
-    service.end_session("echo-agent").await.unwrap();
 }
 
 // ===========================================================================
@@ -1460,44 +961,6 @@ async fn benchmark_model_catalog_operations() {
         elapsed,
         elapsed / 100
     );
-}
-
-/// Benchmark: ACP transport message round-trip time.
-#[tokio::test]
-async fn benchmark_acp_transport_roundtrip() {
-    let config = StdioTransportConfig {
-        binary: "/bin/bash".to_string(),
-        args: vec![
-            "-c".to_string(),
-            r#"while IFS= read -r line; do echo "$line"; done"#.to_string(),
-        ],
-        env: HashMap::new(),
-        working_dir: None,
-    };
-
-    let transport = StdioTransport::spawn(config).unwrap();
-
-    let count = 50u64;
-    let start = std::time::Instant::now();
-    for i in 1..=count {
-        transport
-            .send(json_rpc_request(i, "bench/ping"))
-            .await
-            .unwrap();
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), transport.receive())
-            .await
-            .expect("timed out")
-            .expect("receive failed");
-    }
-    let elapsed = start.elapsed();
-
-    eprintln!(
-        "[BENCHMARK] {count} ACP round-trips: {:?} ({:?}/msg)",
-        elapsed,
-        elapsed / count as u32
-    );
-
-    transport.shutdown().await.unwrap();
 }
 
 // ===========================================================================
