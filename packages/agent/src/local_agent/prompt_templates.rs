@@ -16,6 +16,14 @@ use crate::agent_types::ToolDefinition;
 /// has not yet been wired to accept a `PromptAssembler` instance). The
 /// primary prompt path reads all content from graph nodes via `PromptAssembler`.
 ///
+/// The TOOL STRATEGY and RESPONSE RULES blocks below are an abbreviated,
+/// intentional duplication of the canonical rules in [`crate::agent_guidance`].
+/// They are kept inline here so the fallback path stays self-contained until
+/// `PromptAssembler` is wired in everywhere, at which point this function and
+/// its inline rules should be deleted entirely. Do not extend the rules here —
+/// add new guidance to [`crate::agent_guidance`] and let the primary
+/// `PromptAssembler` path pick it up via the seeded graph nodes.
+///
 /// `dynamic_context` is a pre-formatted string describing the workspace's
 /// entity types, collections, and active playbooks (built by
 /// `context_ops::build_workspace_context` + `format_for_prompt`).

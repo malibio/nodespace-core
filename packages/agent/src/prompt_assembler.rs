@@ -13,6 +13,7 @@ use nodespace_core::mcp::handlers::markdown::NodeTemplate;
 use nodespace_core::models::Node;
 use nodespace_core::services::NodeService;
 
+use crate::agent_guidance::{NODE_REFERENCE_FORMAT, SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES};
 use crate::agent_types::ToolDefinition;
 
 // ---------------------------------------------------------------------------
@@ -285,25 +286,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
-                markdown_content: "NODE MODEL: Everything in NodeSpace is a node. Built-in types (task, text, date) are always available. Custom types (e.g. 'project', 'customer') require a schema node to exist first — the schema defines the type's fields and title template. Once a schema exists, create instances with create_node(node_type=<schema_id>). Use create_schema only to define a new type; use create_node to create data.\n\n\
-                    TOOL STRATEGY:\n\
-                    - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
-                    - To find nodes by exact title or keyword (when you know the name): use search_nodes with query=<keyword>. To filter by type (e.g. \"show all tasks\"), pass node_type=\"task\" with query=\"\". To filter by property (e.g. \"open tasks\"), pass filters={\"status\":\"open\"}.\n\
-                    - To find nodes by meaning/topic (when the exact name is unknown): use search_semantic (natural language query)\n\
-                    - search_semantic results are ordered by relevance. Each result has: id, title, score (0-1), snippet, and optionally markdown (full content).\n\
-                    - search_semantic parameters: use 'collection' to scope to a namespace/folder, 'node_types' to filter by type (e.g. [\"task\"]), 'scope'='conversations' to search chat history, 'threshold' to tune precision (lower = broader recall), 'include_archived'=true to include archived content, 'exclude_collections' to suppress noisy collections, 'include_edges'=true to get relationship data with results, 'graph_boost'=true to rank well-connected nodes higher.\n\
-                    - If a search_semantic result has a non-empty 'markdown' field, that IS the full document — summarize from it directly. Only call get_node for results that lack markdown.\n\
-                    - To get full content for a known node ID: use get_node with format=markdown.\n\
-                    - To find what nodes are connected to a node: use get_related_nodes with the node ID.\n\
-                    - To update a task status: search_nodes for the task by name, then use update_task_status with the real ID.\n\
-                    - To update a node's title or content: search_nodes for it by name, then use update_node with the real ID.\n\
-                    - To create a new entity type: use create_schema (not create_node). If the type already appears in ENTITY TYPES above, the schema already exists — do not call create_schema again.\n\
-                    - To modify an existing entity type (add/remove fields, change title_template): use update_schema with the schema_id\n\
-                    - To create any node: use create_node with content=<name or text> and node_type. Pass 'properties' only if the schema has fields (shown in ENTITY TYPES).\n\
-                    - If ENTITY TYPES shows a title template for the schema (e.g. title: \"{name} ({status})\"), include those template fields in 'properties' — the service composes the displayed title from them.\n\
-                    - To connect nodes: use create_relationship with relationship names from the schemas above\n\
-                    - Tool call arguments must be valid JSON. Do NOT include comments (#) in JSON."
-                        .to_string(),
+                markdown_content: format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES),
             },
             NodeTemplate {
                 title: "Response Formatting Rules".to_string(),
@@ -312,18 +295,20 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
-                markdown_content: "RESPONSE RULES:\n\
+                markdown_content: format!(
+                    "RESPONSE RULES:\n\
                     - When the user's intent is clear, call the tool immediately — do NOT describe your plan first.\n\
                     - Do NOT narrate what you are about to do (\"I'll now create...\", \"Let me search...\", \"Next I will...\").\n\
                     - Do NOT show intermediate reasoning or self-corrections before a tool call.\n\
                     - After tool results: summarize in natural language. NEVER paste raw JSON as your response.\n\
-                    - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
+                    - {}\n\
                     - Enum values in tool calls: use exact schema values (\"done\", \"in_progress\"). In responses to user: use friendly labels (\"Done\", \"In Progress\").\n\
                     - When listing nodes: **Title** (nodespace://id) — brief description\n\
                     - When reporting search results: \"Found N nodes...\" then list top results\n\
                     - If tool returns empty results: say so clearly. Do NOT retry the same query.\n\
-                    - Keep responses concise — under 3 sentences unless user asks for detail."
-                        .to_string(),
+                    - Keep responses concise — under 3 sentences unless user asks for detail.",
+                    NODE_REFERENCE_FORMAT
+                ),
             },
             NodeTemplate {
                 title: "Tool Call Formatting".to_string(),
@@ -359,6 +344,63 @@ mod tests {
             assert!(!seed.title.is_empty(), "Seed title must not be empty");
             assert_eq!(seed.root_node_type, "prompt");
         }
+    }
+
+    /// Lock in the exact bytes of the two seeds composed from `agent_guidance`
+    /// constants. If a future edit to `agent_guidance.rs` or the surrounding
+    /// `format!()` glue silently changes the rendered seed body, this test
+    /// fails — preventing the local Ollama agent's prompt from drifting
+    /// unintentionally. Edit the expected strings deliberately when you change
+    /// agent guidance.
+    #[test]
+    fn seed_prompt_bodies_match_expected_bytes() {
+        let seeds = PromptAssembler::seed_prompt_nodes();
+        let by_title: std::collections::HashMap<&str, &str> = seeds
+            .iter()
+            .map(|s| (s.title.as_str(), s.markdown_content.as_str()))
+            .collect();
+
+        let expected_tool_strategy = "NODE MODEL: Everything in NodeSpace is a node. Built-in types (task, text, date) are always available. Custom types (e.g. 'project', 'customer') require a schema node to exist first — the schema defines the type's fields and title template. Once a schema exists, create instances with create_node(node_type=<schema_id>). Use create_schema only to define a new type; use create_node to create data.\n\n\
+            TOOL STRATEGY:\n\
+            - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
+            - To find nodes by exact title or keyword (when you know the name): use search_nodes with query=<keyword>. To filter by type (e.g. \"show all tasks\"), pass node_type=\"task\" with query=\"\". To filter by property (e.g. \"open tasks\"), pass filters={\"status\":\"open\"}.\n\
+            - To find nodes by meaning/topic (when the exact name is unknown): use search_semantic (natural language query)\n\
+            - search_semantic results are ordered by relevance. Each result has: id, title, score (0-1), snippet, and optionally markdown (full content).\n\
+            - search_semantic parameters: use 'collection' to scope to a namespace/folder, 'node_types' to filter by type (e.g. [\"task\"]), 'scope'='conversations' to search chat history, 'threshold' to tune precision (lower = broader recall), 'include_archived'=true to include archived content, 'exclude_collections' to suppress noisy collections, 'include_edges'=true to get relationship data with results, 'graph_boost'=true to rank well-connected nodes higher.\n\
+            - If a search_semantic result has a non-empty 'markdown' field, that IS the full document — summarize from it directly. Only call get_node for results that lack markdown.\n\
+            - To get full content for a known node ID: use get_node with format=markdown.\n\
+            - To find what nodes are connected to a node: use get_related_nodes with the node ID.\n\
+            - To update a task status: search_nodes for the task by name, then use update_task_status with the real ID.\n\
+            - To update a node's title or content: search_nodes for it by name, then use update_node with the real ID.\n\
+            - To create a new entity type: use create_schema (not create_node). If the type already appears in ENTITY TYPES above, the schema already exists — do not call create_schema again.\n\
+            - To modify an existing entity type (add/remove fields, change title_template): use update_schema with the schema_id\n\
+            - To create any node: use create_node with content=<name or text> and node_type. Pass 'properties' only if the schema has fields (shown in ENTITY TYPES).\n\
+            - If ENTITY TYPES shows a title template for the schema (e.g. title: \"{name} ({status})\"), include those template fields in 'properties' — the service composes the displayed title from them.\n\
+            - To connect nodes: use create_relationship with relationship names from the schemas above\n\
+            - Tool call arguments must be valid JSON. Do NOT include comments (#) in JSON.";
+
+        let expected_response_rules = "RESPONSE RULES:\n\
+            - When the user's intent is clear, call the tool immediately — do NOT describe your plan first.\n\
+            - Do NOT narrate what you are about to do (\"I'll now create...\", \"Let me search...\", \"Next I will...\").\n\
+            - Do NOT show intermediate reasoning or self-corrections before a tool call.\n\
+            - After tool results: summarize in natural language. NEVER paste raw JSON as your response.\n\
+            - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
+            - Enum values in tool calls: use exact schema values (\"done\", \"in_progress\"). In responses to user: use friendly labels (\"Done\", \"In Progress\").\n\
+            - When listing nodes: **Title** (nodespace://id) — brief description\n\
+            - When reporting search results: \"Found N nodes...\" then list top results\n\
+            - If tool returns empty results: say so clearly. Do NOT retry the same query.\n\
+            - Keep responses concise — under 3 sentences unless user asks for detail.";
+
+        assert_eq!(
+            by_title.get("Tool Strategy Guide").copied(),
+            Some(expected_tool_strategy),
+            "Tool Strategy Guide body drifted — review agent_guidance.rs edits"
+        );
+        assert_eq!(
+            by_title.get("Response Formatting Rules").copied(),
+            Some(expected_response_rules),
+            "Response Formatting Rules body drifted — review agent_guidance.rs edits"
+        );
     }
 
     #[test]
