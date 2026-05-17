@@ -83,9 +83,8 @@ message GetNodeRequest {
 
 message UpdateNodeRequest {
   string node_id = 1;
-  // version unset = auto-fetch current version (matches ops-layer behaviour).
-  // Use 0 / unset rather than a sentinel — optional i64 maps to Option<i64>
-  // in prost, which aligns with UpdateNodeInput in the ops layer.
+  // version unset = auto-fetch current version; matches UpdateNodeInput
+  // in the ops layer. prost generates Option<i64>.
   optional int64 version = 2;
   string node_type = 3;              // empty string = no change (enum-like; empty is not legitimate)
   // content and properties use optional so callers can distinguish
