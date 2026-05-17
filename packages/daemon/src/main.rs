@@ -71,29 +71,22 @@ fn main() -> Result<()> {
         return runtime.block_on(async { serve_headless().await });
     }
 
-    // The tray's seed closure runs synchronously when `tray::run` is called.
-    // We use it to launch the gRPC server on the tokio runtime so the daemon
-    // is serving as soon as the tray appears. The JoinHandle goes into a
-    // single-shot slot so the main thread can await it after the tray exits.
+    // The tray's seed closure runs synchronously when `tray::run` is called,
+    // launching the gRPC server on the tokio runtime so the daemon is
+    // serving as soon as the tray appears. The returned `JoinHandle` flows
+    // back out of `tray::run` once the user picks Quit.
     let runtime_handle = runtime.handle().clone();
-    let grpc_handle: std::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>> =
-        std::sync::Mutex::new(None);
-    let grpc_handle_ref = &grpc_handle;
-
-    tray::run(move |controller| {
-        let join = runtime_handle.spawn(async move { serve_grpc(controller).await });
-        *grpc_handle_ref.lock().expect("grpc handle slot poisoned") = Some(join);
+    let grpc_handle = tray::run(move |controller| {
+        runtime_handle.spawn(async move { serve_grpc(controller).await })
     })?;
 
     // `tray::run` returned, so the user picked Quit. Wait for the gRPC
     // server to finish draining before we drop the runtime — otherwise
     // in-flight RPCs would be killed mid-response.
-    if let Some(join) = grpc_handle.into_inner().expect("grpc handle slot poisoned") {
-        runtime
-            .block_on(join)
-            .context("gRPC task panicked")?
-            .context("gRPC server returned an error")?;
-    }
+    runtime
+        .block_on(grpc_handle)
+        .context("gRPC task panicked")?
+        .context("gRPC server returned an error")?;
 
     tracing::info!("nodespaced shutdown complete");
     Ok(())

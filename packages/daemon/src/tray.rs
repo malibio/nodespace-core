@@ -57,7 +57,7 @@ impl TrayController {
     /// Record that an RPC just started. Pair with [`Self::rpc_completed`] —
     /// the difference is what the Status menu shows.
     pub fn rpc_started(&self) {
-        self.active_rpcs.fetch_add(1, Ordering::SeqCst);
+        self.active_rpcs.fetch_add(1, Ordering::Relaxed);
         // Ignore send errors: the event loop may have exited during shutdown,
         // in which case the count update is irrelevant.
         let _ = self.proxy.send_event(TrayEvent::RpcStateChanged);
@@ -67,7 +67,7 @@ impl TrayController {
     /// matching decrement in the metrics layer, so underflow is impossible
     /// under normal operation.
     pub fn rpc_completed(&self) {
-        self.active_rpcs.fetch_sub(1, Ordering::SeqCst);
+        self.active_rpcs.fetch_sub(1, Ordering::Relaxed);
         let _ = self.proxy.send_event(TrayEvent::RpcStateChanged);
     }
 }
@@ -81,7 +81,6 @@ impl TrayController {
 struct TrayState {
     _tray: tray_icon::TrayIcon,
     status_item: MenuItem,
-    active_rpcs: Arc<AtomicUsize>,
     ui_binary: Option<PathBuf>,
     /// Spawned UI child, retained so its pipes stay attached.
     ui_child: Option<Child>,
@@ -134,9 +133,19 @@ fn resolve_ui_binary() -> Option<PathBuf> {
 ///
 /// `seed_controller` is invoked synchronously *before* the event loop starts,
 /// giving the caller a handle they can hand to the gRPC server (which runs
-/// on a separate runtime). This call blocks until "Quit" is selected.
-pub fn run(seed_controller: impl FnOnce(TrayController)) -> Result<()> {
-    let event_loop: EventLoop<TrayEvent> = EventLoopBuilder::with_user_event().build();
+/// on a separate runtime). The value returned by `seed_controller` is handed
+/// back from `run` once "Quit" is selected, so the caller can await any
+/// resources it created at seed time (e.g. a gRPC `JoinHandle`).
+///
+/// Uses `event_loop.run_return` rather than `event_loop.run`: tao's `run`
+/// calls `process::exit(0)` on macOS at `ControlFlow::Exit`, which would
+/// kill the daemon before the gRPC server finishes draining. `run_return`'s
+/// documented caveat (it may not return mid-window-resize) doesn't apply —
+/// the daemon has no window, only a tray icon.
+pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
+    use tao::platform::run_return::EventLoopExtRunReturn;
+
+    let mut event_loop: EventLoop<TrayEvent> = EventLoopBuilder::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
     // Forward muda's global menu channel into our tao loop. Without this the
@@ -149,7 +158,7 @@ pub fn run(seed_controller: impl FnOnce(TrayController)) -> Result<()> {
     let active_rpcs = Arc::new(AtomicUsize::new(0));
     let quit_notify = Arc::new(tokio::sync::Notify::new());
 
-    seed_controller(TrayController {
+    let seeded = seed_controller(TrayController {
         proxy: proxy.clone(),
         quit_notify: quit_notify.clone(),
         active_rpcs: active_rpcs.clone(),
@@ -158,12 +167,12 @@ pub fn run(seed_controller: impl FnOnce(TrayController)) -> Result<()> {
     let ui_binary = resolve_ui_binary();
     let mut state: Option<TrayState> = None;
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
             Event::NewEvents(tao::event::StartCause::Init) => {
-                match initialize_tray(active_rpcs.clone(), ui_binary.clone()) {
+                match initialize_tray(ui_binary.clone()) {
                     Ok(s) => state = Some(s),
                     Err(e) => {
                         tracing::error!(
@@ -191,7 +200,7 @@ pub fn run(seed_controller: impl FnOnce(TrayController)) -> Result<()> {
 
             Event::UserEvent(TrayEvent::RpcStateChanged) => {
                 if let Some(s) = state.as_ref() {
-                    let count = active_rpcs.load(Ordering::SeqCst);
+                    let count = active_rpcs.load(Ordering::Relaxed);
                     s.status_item
                         .set_text(format!("Status: {count} active calls"));
                 }
@@ -200,9 +209,11 @@ pub fn run(seed_controller: impl FnOnce(TrayController)) -> Result<()> {
             _ => {}
         }
     });
+
+    Ok(seeded)
 }
 
-fn initialize_tray(active_rpcs: Arc<AtomicUsize>, ui_binary: Option<PathBuf>) -> Result<TrayState> {
+fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
     let icon = load_icon()?;
     let (menu, status_item, open_id, quit_id) = build_menu()?;
     let tray = TrayIconBuilder::new()
@@ -215,7 +226,6 @@ fn initialize_tray(active_rpcs: Arc<AtomicUsize>, ui_binary: Option<PathBuf>) ->
     Ok(TrayState {
         _tray: tray,
         status_item,
-        active_rpcs,
         ui_binary,
         ui_child: None,
         open_id,
@@ -261,9 +271,6 @@ impl TrayState {
             .spawn()
             .with_context(|| format!("spawn UI binary {}", path.display()))?;
         self.ui_child = Some(child);
-        // Touch the counter purely so unused-field lints don't fire; the
-        // value isn't actually consumed here.
-        let _ = self.active_rpcs.load(Ordering::SeqCst);
         Ok(())
     }
 }
