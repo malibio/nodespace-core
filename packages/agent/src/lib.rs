@@ -14,6 +14,10 @@ pub mod local_agent;
 // Prompt assembly: hardcoded base + graph-stored overrides
 pub mod prompt_assembler;
 
+// Shared agent guidance rules: single source of truth for search-first,
+// schema creation, and node reference guidance (issue #1089)
+pub mod agent_guidance;
+
 // Intent extraction: pattern matching + filler stripping for skill discovery
 pub mod intent;
 
