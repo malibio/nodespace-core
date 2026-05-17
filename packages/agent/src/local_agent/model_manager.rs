@@ -110,8 +110,9 @@ const GEMMA_4_31B: CatalogEntry = CatalogEntry {
 /// All catalog entries, in preference order.
 const CATALOG: &[&CatalogEntry] = &[&MINISTRAL_3B, &MINISTRAL_8B, &GEMMA_4_E4B, &GEMMA_4_31B];
 
-/// RAM threshold (in bytes) above which the 8B model is recommended.
-const RAM_THRESHOLD_8B: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
+/// RAM threshold (in bytes) at or above which the large recommended model
+/// (Gemma 4 31B) is selected instead of the small one (Gemma 4 E4B).
+const RAM_THRESHOLD_LARGE: u64 = 32 * 1024 * 1024 * 1024; // 32 GB
 
 // ---------------------------------------------------------------------------
 // Download state (per-model)
@@ -197,12 +198,47 @@ impl GgufModelManager {
     }
 
     /// Get the recommended model based on system RAM.
+    ///
+    /// Family choice (Gemma vs Ministral) is a user decision; size within a
+    /// family is RAM-based. This default returns Gemma 4 — our flagship — for
+    /// first-launch when no user choice has been made. Callers that already
+    /// know the user's preferred family should use [`Self::recommended_model_id_for`].
     fn recommended_model_id() -> &'static str {
+        Self::recommended_model_id_for(ModelFamily::Gemma4)
+    }
+
+    /// Recommend the appropriately-sized model within a given family for the
+    /// current system's RAM.
+    ///
+    /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_LARGE`], otherwise 3B.
+    /// - `Gemma4`:    31B at or above [`RAM_THRESHOLD_LARGE`], otherwise E4B.
+    /// - `Ollama`:    has no GGUF catalog entries; falls back to the default
+    ///   Gemma 4 recommendation.
+    pub fn recommended_model_id_for(family: ModelFamily) -> &'static str {
         let total_ram = detect_system_ram();
-        if total_ram > RAM_THRESHOLD_8B {
-            MINISTRAL_8B.id
-        } else {
-            MINISTRAL_3B.id
+        let large = total_ram >= RAM_THRESHOLD_LARGE;
+        match family {
+            ModelFamily::Ministral => {
+                if large {
+                    MINISTRAL_8B.id
+                } else {
+                    MINISTRAL_3B.id
+                }
+            }
+            ModelFamily::Gemma4 => {
+                if large {
+                    GEMMA_4_31B.id
+                } else {
+                    GEMMA_4_E4B.id
+                }
+            }
+            ModelFamily::Ollama => {
+                if large {
+                    GEMMA_4_31B.id
+                } else {
+                    GEMMA_4_E4B.id
+                }
+            }
         }
     }
 
@@ -921,7 +957,7 @@ mod tests {
         let (mgr, _tmp) = test_manager();
         let rec = mgr.recommended_model().await.unwrap();
         assert!(
-            rec == "ministral-3b-q4km" || rec == "ministral-8b-q4km",
+            rec == "gemma-4-e4b-q4km" || rec == "gemma-4-31b-q4km",
             "unexpected recommendation: {}",
             rec
         );
@@ -930,9 +966,22 @@ mod tests {
     #[test]
     fn recommended_spec_has_valid_fields() {
         let spec = GgufModelManager::recommended_model_spec();
-        assert!(spec.model_id == "ministral-3b-q4km" || spec.model_id == "ministral-8b-q4km");
+        assert!(spec.model_id == "gemma-4-e4b-q4km" || spec.model_id == "gemma-4-31b-q4km");
+        assert_eq!(spec.family, ModelFamily::Gemma4);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
+    }
+
+    #[test]
+    fn recommended_model_id_for_family_returns_family_match() {
+        let ministral_rec = GgufModelManager::recommended_model_id_for(ModelFamily::Ministral);
+        assert!(ministral_rec.starts_with("ministral-"));
+
+        let gemma_rec = GgufModelManager::recommended_model_id_for(ModelFamily::Gemma4);
+        assert!(gemma_rec.starts_with("gemma-4-"));
+
+        // The two should never accidentally collide.
+        assert_ne!(ministral_rec, gemma_rec);
     }
 
     #[test]

@@ -543,10 +543,11 @@ async fn model_lifecycle_recommendation() {
 
     let recommended_id = manager.recommended_model().await.unwrap();
 
-    // Should recommend one of the two catalog models
+    // The default first-launch recommendation is Gemma 4 — size depends on
+    // system RAM (E4B on <32 GB, 31B on >=32 GB).
     assert!(
-        recommended_id == "ministral-3b-q4km" || recommended_id == "ministral-8b-q4km",
-        "Recommended model should be one of the catalog models, got: {}",
+        recommended_id == "gemma-4-e4b-q4km" || recommended_id == "gemma-4-31b-q4km",
+        "Recommended model should be a Gemma 4 catalog entry, got: {}",
         recommended_id
     );
 }
