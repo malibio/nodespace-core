@@ -2028,4 +2028,42 @@ mod property_filter_tests {
         let nodes = result["nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 0);
     }
+
+    // Regression test: schema nodes created via create_node must get a normalized name ID,
+    // not a UUID. Previously, only handle_create_schema applied normalization; create_node
+    // with node_type="schema" fell through to uuid::Uuid::new_v4().
+    #[tokio::test]
+    async fn test_create_node_schema_gets_normalized_id() {
+        use crate::mcp::handlers::nodes::handle_create_node;
+
+        let (ns, _dir) = setup_test_service().await.unwrap();
+
+        let result = handle_create_node(
+            &ns,
+            json!({
+                "node_type": "schema",
+                "content": "Customer Profile",
+                "properties": {
+                    "isCore": false,
+                    "schemaVersion": 1,
+                    "description": "Test",
+                    "fields": [],
+                    "relationships": []
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let node_id = result["node_id"].as_str().unwrap();
+        assert_eq!(
+            node_id, "customer-profile",
+            "Schema node ID should be normalized name, not UUID"
+        );
+
+        // Verify the node is retrievable by the normalized ID
+        let node = ns.get_node("customer-profile").await.unwrap();
+        assert!(node.is_some(), "Should be fetchable by normalized ID");
+        assert_eq!(node.unwrap().node_type, "schema");
+    }
 }

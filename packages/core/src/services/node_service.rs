@@ -566,6 +566,26 @@ pub(crate) fn normalize_schema_id(name: &str) -> String {
         .join("-")
 }
 
+#[cfg(test)]
+mod normalize_schema_id_tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_schema_id_basic() {
+        assert_eq!(normalize_schema_id("Invoice"), "invoice");
+        assert_eq!(normalize_schema_id("Customer Profile"), "customer-profile");
+        assert_eq!(normalize_schema_id("code_block"), "code-block");
+        assert_eq!(normalize_schema_id("My Widget"), "my-widget");
+    }
+
+    #[test]
+    fn test_normalize_schema_id_edge_cases() {
+        assert_eq!(normalize_schema_id("  spaces  "), "spaces");
+        assert_eq!(normalize_schema_id("already-kebab"), "already-kebab");
+        assert_eq!(normalize_schema_id("UPPER CASE"), "upper-case");
+    }
+}
+
 /// Extract nodespace:// mentions from content
 ///
 /// Supports both markdown format and plain URIs:
