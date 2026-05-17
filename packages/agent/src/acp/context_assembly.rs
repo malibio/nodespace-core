@@ -6,6 +6,7 @@
 //! The file is the only context-handoff mechanism in the PTY model — agents read
 //! it on startup, the same way `cd`-ing into a project does today.
 
+use crate::acp::registry::SystemAgentRegistry;
 use crate::agent_guidance::{NODE_REFERENCE_FORMAT, SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES};
 use crate::agent_types::{AgentType, ContextError, ContextFile};
 use nodespace_core::models::Node;
@@ -43,11 +44,17 @@ the nodes you (the agent) have been given and the immediate graph context
 around them. Treat the sections below as the authoritative starting point.
 ";
 
-fn map_agent_type_to_context_file(agent_type: AgentType) -> ContextFile {
-    match agent_type {
-        AgentType::ClaudeCode => ContextFile::ClaudeMd,
-        _ => ContextFile::AgentsMd,
-    }
+/// Look up the context-file convention for `agent_type` in [`AGENT_CATALOG`].
+///
+/// Falls back to [`ContextFile::AgentsMd`] only if `agent_type` is missing
+/// from the catalog — which `AgentType` being a closed enum makes impossible
+/// today, but the explicit default keeps `write_context_file` infallible if
+/// the catalog and enum ever drift.
+fn context_file_for(agent_type: AgentType) -> ContextFile {
+    SystemAgentRegistry::new()
+        .get(agent_type)
+        .map(|d| d.context_file)
+        .unwrap_or(ContextFile::AgentsMd)
 }
 
 fn estimate_tokens(text: &str) -> u32 {
@@ -233,10 +240,7 @@ impl GraphContextAssembler {
         agent_type: AgentType,
     ) -> Result<PathBuf, ContextError> {
         let content = self.assemble_context().await?;
-        let context_file = map_agent_type_to_context_file(agent_type);
-        let path = session_dir.join(context_file.filename());
-        tokio::fs::write(&path, content).await?;
-        Ok(path)
+        write_context_to_dir(session_dir, agent_type, &content).await
     }
 
     async fn fetch_node(&self, node_id: &str) -> Result<Node, ContextError> {
@@ -332,6 +336,20 @@ impl GraphContextAssembler {
 
         relationships
     }
+}
+
+/// Write `content` to the agent's context file inside `session_dir`. Pure
+/// file I/O — extracted from [`GraphContextAssembler::write_context_file`]
+/// so the naming + write behaviour can be tested without a `NodeService`.
+async fn write_context_to_dir(
+    session_dir: &Path,
+    agent_type: AgentType,
+    content: &str,
+) -> Result<PathBuf, ContextError> {
+    let context_file = context_file_for(agent_type);
+    let path = session_dir.join(context_file.filename());
+    tokio::fs::write(&path, content).await?;
+    Ok(path)
 }
 
 fn format_node_section(node: &Node, content_limit: usize) -> String {
@@ -465,7 +483,7 @@ mod tests {
     #[test]
     fn claude_code_maps_to_claude_md() {
         assert_eq!(
-            map_agent_type_to_context_file(AgentType::ClaudeCode),
+            context_file_for(AgentType::ClaudeCode),
             ContextFile::ClaudeMd
         );
         assert_eq!(ContextFile::ClaudeMd.filename(), "CLAUDE.md");
@@ -479,10 +497,7 @@ mod tests {
             AgentType::Pi,
             AgentType::OpenCode,
         ] {
-            assert_eq!(
-                map_agent_type_to_context_file(agent_type),
-                ContextFile::AgentsMd
-            );
+            assert_eq!(context_file_for(agent_type), ContextFile::AgentsMd);
         }
         assert_eq!(ContextFile::AgentsMd.filename(), "AGENTS.md");
     }
@@ -634,25 +649,50 @@ mod tests {
         assert!(section.contains("task.status: done"));
     }
 
-    // ---- write_context_file -----------------------------------------------
+    // ---- write_context_to_dir (the body of write_context_file) ------------
 
     #[tokio::test]
-    async fn write_context_file_uses_claude_md_for_claude_code() {
+    async fn write_context_to_dir_writes_claude_md_for_claude_code() {
         let temp = tempfile::tempdir().unwrap();
-        // Synthesize a markdown string and write it directly, mirroring the
-        // file-naming logic of `write_context_file`.
-        let path = temp.path().join(ContextFile::ClaudeMd.filename());
-        tokio::fs::write(&path, "hello").await.unwrap();
-        assert_eq!(path.file_name().unwrap(), "CLAUDE.md");
-        assert!(path.exists());
+        let path = write_context_to_dir(temp.path(), AgentType::ClaudeCode, "hello")
+            .await
+            .unwrap();
+
+        assert_eq!(path, temp.path().join("CLAUDE.md"));
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "hello");
     }
 
     #[tokio::test]
-    async fn write_context_file_uses_agents_md_for_other_agents() {
+    async fn write_context_to_dir_writes_agents_md_for_other_agents() {
+        for agent_type in [
+            AgentType::Codex,
+            AgentType::GeminiCli,
+            AgentType::Pi,
+            AgentType::OpenCode,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = write_context_to_dir(temp.path(), agent_type, "hello")
+                .await
+                .unwrap();
+
+            assert_eq!(
+                path,
+                temp.path().join("AGENTS.md"),
+                "{:?} should write AGENTS.md",
+                agent_type
+            );
+            assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "hello");
+        }
+    }
+
+    #[tokio::test]
+    async fn write_context_to_dir_returns_err_when_dir_missing() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join(ContextFile::AgentsMd.filename());
-        tokio::fs::write(&path, "hello").await.unwrap();
-        assert_eq!(path.file_name().unwrap(), "AGENTS.md");
-        assert!(path.exists());
+        let missing = temp.path().join("does-not-exist");
+        let err = write_context_to_dir(&missing, AgentType::ClaudeCode, "hello")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ContextError::WriteFailed(_)));
     }
 }
