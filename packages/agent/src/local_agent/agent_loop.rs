@@ -47,6 +47,11 @@ const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 /// Used by fallback responses that surface tool activity to the chat UI when
 /// the model fails to produce its own text. Unknown identifiers fall back to
 /// a generic phrase so a stray tool name never reaches the user.
+///
+/// Keep arms in sync with `GraphToolExecutor` in
+/// `packages/agent/src/local_agent/tools.rs`. The
+/// `humanize_tool_name_covers_all_registered_tools` test asserts that every
+/// registered tool has a non-generic mapping.
 fn humanize_tool_name(tool_name: &str) -> &'static str {
     match tool_name {
         "search_nodes" => "node search",
@@ -57,9 +62,9 @@ fn humanize_tool_name(tool_name: &str) -> &'static str {
         "delete_node" => "node deletion",
         "create_schema" => "schema creation",
         "update_schema" => "schema update",
-        "update_task_status" => "task status update",
+        "update_task_status" => "task update",
         "create_relationship" => "relationship creation",
-        "get_related_nodes" => "related-node lookup",
+        "get_related_nodes" => "related node lookup",
         "find_skills" => "skill lookup",
         "create_nodes_from_markdown" => "markdown import",
         _ => "the requested action",
@@ -470,16 +475,28 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
                 // Both final inference and last iteration returned empty — synthesize
                 // a summary from tool results so the UI always gets a response.
+                // Repeated calls to the same tool collapse to one bullet with a
+                // retry count so the diagnostic signal (the agent looped on the
+                // same operation until it ran out of iterations) survives.
                 let fallback = if !all_tool_executions.is_empty() {
-                    let mut seen: Vec<&'static str> = Vec::new();
+                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
                     for t in &all_tool_executions {
                         let label = humanize_tool_name(&t.name);
-                        if !seen.contains(&label) {
-                            seen.push(label);
+                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
+                            entry.1 += 1;
+                        } else {
+                            counts.push((label, 1));
                         }
                     }
-                    seen.into_iter()
-                        .map(|label| format!("• {} completed", label))
+                    counts
+                        .into_iter()
+                        .map(|(label, count)| {
+                            if count > 1 {
+                                format!("• {} completed ({}×)", label, count)
+                            } else {
+                                format!("• {} completed", label)
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join("\n")
                 } else {
@@ -1239,17 +1256,26 @@ mod tests {
             assert_eq!(tc.name, "search_nodes");
         }
 
-        // The fallback response must not surface the raw tool identifier to
-        // the UI — issue #1092.
+        // The fallback response must encode the invariant from issue #1092:
+        // no raw tool identifier reaches the UI. Tests on specific phrasing
+        // belong in `humanize_tool_name_known_tools` below, not here.
+        assert!(
+            !result.response.contains('_'),
+            "fallback response contains snake_case (likely a raw tool name): {:?}",
+            result.response
+        );
         assert!(
             !result.response.contains("search_nodes"),
             "fallback response leaked raw tool name: {:?}",
             result.response
         );
-        // …and the humanized label should be present instead.
+        // Repeated calls to the same tool collapse into one bullet with a
+        // retry count — verify the diagnostic signal is preserved.
         assert!(
-            result.response.contains("node search"),
-            "fallback response missing humanized label: {:?}",
+            result
+                .response
+                .contains(&format!("{}×", MAX_TOOL_ITERATIONS)),
+            "fallback response missing retry count: {:?}",
             result.response
         );
     }
@@ -1273,6 +1299,23 @@ mod tests {
             "the requested action"
         );
         assert_eq!(humanize_tool_name(""), "the requested action");
+    }
+
+    /// Drift detector: every tool the executor exposes must have a non-generic
+    /// mapping in `humanize_tool_name`. Without this test, adding a new tool to
+    /// `GraphToolExecutor` and forgetting to extend the humanizer would silently
+    /// degrade the chat UI to "the requested action" with no signal.
+    #[test]
+    fn humanize_tool_name_covers_all_registered_tools() {
+        let generic = humanize_tool_name("__definitely_not_a_real_tool__");
+        for def in crate::local_agent::tools::all_tool_definitions() {
+            let humanized = humanize_tool_name(&def.name);
+            assert_ne!(
+                humanized, generic,
+                "tool {:?} has no humanized mapping — add an arm to `humanize_tool_name`",
+                def.name
+            );
+        }
     }
 
     #[tokio::test]

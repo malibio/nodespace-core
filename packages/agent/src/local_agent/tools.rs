@@ -625,7 +625,7 @@ fn def_update_task_status() -> ToolDefinition {
 }
 
 /// All tool definitions for the graph executor.
-fn all_tool_definitions() -> Vec<ToolDefinition> {
+pub(crate) fn all_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         def_search_nodes(),
         def_search_semantic(),
