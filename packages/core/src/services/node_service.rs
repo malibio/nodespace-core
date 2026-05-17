@@ -549,6 +549,23 @@ pub fn is_valid_node_id(node_id: &str) -> bool {
     false
 }
 
+/// Derive a stable schema node ID from the schema's display name.
+///
+/// Schema nodes use their normalized name as ID (e.g. "Invoice" → "invoice",
+/// "Customer Profile" → "customer-profile") so they can be referenced
+/// predictably by type name rather than an opaque UUID.
+pub(crate) fn normalize_schema_id(name: &str) -> String {
+    name.to_lowercase()
+        .replace([' ', '_'], "-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Extract nodespace:// mentions from content
 ///
 /// Supports both markdown format and plain URIs:
@@ -2118,6 +2135,8 @@ impl NodeService {
             }
         } else if params.node_type == "date" {
             params.content.clone()
+        } else if params.node_type == "schema" {
+            normalize_schema_id(&params.content)
         } else {
             uuid::Uuid::new_v4().to_string()
         };
