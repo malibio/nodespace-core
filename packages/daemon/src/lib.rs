@@ -7,6 +7,7 @@
 //! tonic.
 
 pub mod services;
+pub mod tray;
 
 /// Re-exports of prost/tonic generated types for the `nodespace` proto package.
 ///
