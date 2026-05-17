@@ -8,7 +8,7 @@ package nodespace;
 //   - node_id: string UUID (e.g. "550e8400-e29b-41d4-a716-446655440000")
 //   - node_type: string enum (e.g. "text", "task", "date", "header", "code-block")
 //   - content: string (plain text or markdown content of the node)
-//   - properties: JSON-encoded string (arbitrary key-value metadata)
+//   - properties: JSON-encoded string (arbitrary key-value metadata); see NodeData.properties
 //   - version: int64 optimistic concurrency control counter
 //   - lifecycle_status: string enum ("active", "archived", "deleted")
 service NodeService {
@@ -31,8 +31,14 @@ message NodeData {
   string id = 1;
   string node_type = 2;
   string content = 3;
-  string parent_id = 4;        // empty string when no parent (root node)
-  string properties = 5;       // JSON-encoded properties object
+  // parent_id is unset for root nodes. Use optional so callers can
+  // distinguish "no parent" (root) from an empty-string parent_id.
+  optional string parent_id = 4;
+  // properties is a JSON-encoded object matching the serde_json::Value shape
+  // used by the ops layer. We encode as a string rather than google.protobuf.Struct
+  // to avoid the well-known-types dependency and because schema validation
+  // happens server-side before the value reaches the wire.
+  string properties = 5;
   int64 version = 6;
   string lifecycle_status = 7; // "active" | "archived" | "deleted"
   string created_at = 8;       // RFC 3339 timestamp
@@ -77,14 +83,18 @@ message GetNodeRequest {
 
 message UpdateNodeRequest {
   string node_id = 1;
-  // version = 0 means auto-fetch current version (matches ops-layer behaviour)
-  int64 version = 2;
-  string node_type = 3;         // empty string = no change
-  string content = 4;           // empty string = no change
-  string properties = 5;        // JSON-encoded; empty string = no change
-  string add_to_collection = 6; // collection path to add node to
+  // version unset = auto-fetch current version (matches ops-layer behaviour).
+  // Use 0 / unset rather than a sentinel — optional i64 maps to Option<i64>
+  // in prost, which aligns with UpdateNodeInput in the ops layer.
+  optional int64 version = 2;
+  string node_type = 3;              // empty string = no change (enum-like; empty is not legitimate)
+  // content and properties use optional so callers can distinguish
+  // "no change" (field absent) from "clear the value" (field present, empty/"{}")
+  optional string content = 4;       // unset = no change; "" is a legitimate value (clear content)
+  optional string properties = 5;    // unset = no change; "{}" is a legitimate value (clear props)
+  string add_to_collection = 6;      // collection path to add node to
   string remove_from_collection = 7; // collection_id to remove node from
-  string lifecycle_status = 8;  // empty string = no change
+  string lifecycle_status = 8;       // empty string = no change (enum-like; empty is not legitimate)
 }
 
 // UpdateNode returns NodeResponse.
@@ -95,8 +105,9 @@ message UpdateNodeRequest {
 
 message DeleteNodeRequest {
   string node_id = 1;
-  // version = 0 means auto-fetch (matches ops-layer behaviour)
-  int64 version = 2;
+  // version unset = auto-fetch (matches ops-layer behaviour).
+  // optional int64 maps to Option<i64> in prost.
+  optional int64 version = 2;
 }
 
 message DeleteNodeResponse {
@@ -122,9 +133,16 @@ message NodeListResponse {
 // SearchNodes (query / semantic)
 // ---------------------------------------------------------------------------
 
+// SearchRequest exposes a subset of SearchSemanticInput from
+// packages/core/src/ops/search_ops.rs. Fields not yet exposed (will be
+// added when consumers need them): exclude_collections, include_markdown,
+// include_archived, scope, include_edges, graph_boost, property_filters.
 message SearchRequest {
   string query = 1;
-  string node_type = 2;       // filter by node_type; empty = all types
+  // node_types filters results to any of the specified node types.
+  // Empty list = all types. Matches the repeated-string shape of
+  // SearchSemanticInput.node_type ([]string on the ops layer).
+  repeated string node_types = 2;
   string collection = 3;      // optional collection path filter
   string collection_id = 4;   // optional collection ID filter (alternative to path)
   int32 limit = 5;            // 0 = use server default (20)

@@ -139,7 +139,10 @@ message SessionInfo {
   repeated string args = 3;
   string cwd = 4;
   SessionStatus status = 5;
-  int32 exit_code = 6;  // meaningful only when status = SESSION_STATUS_EXITED
+  // exit_code is unset while the session is still running; set to the process
+  // exit code once status = SESSION_STATUS_EXITED. optional int32 lets callers
+  // distinguish "running, no exit code yet" from "exited with code 0".
+  optional int32 exit_code = 6;
   int64 created_at = 7; // Unix timestamp (seconds)
   int64 exited_at = 8;  // Unix timestamp (seconds); 0 if still running
   uint32 cols = 9;
