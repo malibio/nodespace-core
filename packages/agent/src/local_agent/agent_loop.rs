@@ -44,6 +44,20 @@ const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 /// are likely too vague to dispatch to the full 13-tool agent path.
 const AMBIGUOUS_MESSAGE_WORD_LIMIT: usize = 10;
 
+/// Returns the test-only system-prompt override on a session, or `None` in
+/// production. The two cfg variants let `run_turn` keep a single
+/// override → assembler → fallback chain without duplicating the assembler
+/// branch under each cfg arm. The `None`-returning variant is optimized
+/// away by the compiler.
+#[cfg(any(test, feature = "testing"))]
+fn session_prompt_override(session: &AgentSession) -> Option<&str> {
+    session.system_prompt_override.as_deref()
+}
+#[cfg(not(any(test, feature = "testing")))]
+fn session_prompt_override(_session: &AgentSession) -> Option<&str> {
+    None
+}
+
 /// Clarifying question returned when the skill pipeline finds no match and
 /// the user message is too short/vague to confidently invoke the full agent.
 const CLARIFYING_QUESTION: &str =
@@ -236,8 +250,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         };
 
         // Build base prompt: use override (tests), assembler (production), or fallback.
-        let base_prompt = if let Some(ref override_prompt) = session.system_prompt_override {
-            override_prompt.clone()
+        // `session_prompt_override` returns `None` in production builds — see the
+        // `testing` feature on the agent crate.
+        let base_prompt = if let Some(override_prompt) = session_prompt_override(session) {
+            override_prompt.to_string()
         } else if let Some(ref assembler) = self.prompt_assembler {
             assembler
                 .assemble(&template_ctx, all_tools.clone())
@@ -852,6 +868,7 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
             created_at: chrono::Utc::now(),
             tool_executions: Vec::new(),
             dynamic_context: None,
+            #[cfg(any(test, feature = "testing"))]
             system_prompt_override: None,
         };
 
@@ -884,6 +901,10 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
     /// When set, this bypasses both `PromptAssembler` and `fallback_system_prompt`.
     /// Intended for integration tests that want to inject a pre-built prompt
     /// (constructed via `PromptAssembler::assemble_static`) without a live database.
+    ///
+    /// Gated by the `testing` Cargo feature so it does not leak into the
+    /// production API surface.
+    #[cfg(any(test, feature = "testing"))]
     pub async fn set_system_prompt(&self, session_id: &str, prompt: String) {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {

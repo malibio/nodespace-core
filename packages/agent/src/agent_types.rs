@@ -541,7 +541,10 @@ pub struct AgentSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic_context: Option<String>,
     /// Full system prompt override (bypasses PromptAssembler / fallback).
-    /// Used in tests to inject a pre-built prompt without a live database.
+    /// Test-only: integration tests inject a pre-built prompt without a live
+    /// database. Gated by the `testing` feature so the field does not exist
+    /// in production builds and never reaches the Tauri serialization layer.
+    #[cfg(any(test, feature = "testing"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_override: Option<String>,
 }

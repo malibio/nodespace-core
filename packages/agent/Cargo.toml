@@ -31,6 +31,24 @@ which = "7"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[features]
+# Exposes test-only hooks (e.g. `LocalAgentService::set_system_prompt` and
+# `AgentSession::system_prompt_override`) so integration tests in `tests/`
+# can inject prebuilt prompts without a live database. The `tests/` binaries
+# link against the library in non-test mode, so `#[cfg(test)]` alone is not
+# enough — this feature gate is what keeps the hook out of production builds
+# while making it visible to integration tests run with `--features testing`.
+testing = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"
+
+# `ollama_integration.rs` calls `set_system_prompt`, which lives behind the
+# `testing` feature. Declaring it here means `cargo test -p nodespace-agent`
+# without features simply skips this binary instead of failing to compile,
+# while `cargo test -p nodespace-agent --features testing` builds and runs it.
+[[test]]
+name = "ollama_integration"
+path = "tests/ollama_integration.rs"
+required-features = ["testing"]
