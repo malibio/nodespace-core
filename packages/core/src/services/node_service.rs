@@ -2156,7 +2156,14 @@ impl NodeService {
         } else if params.node_type == "date" {
             params.content.clone()
         } else if params.node_type == "schema" {
-            normalize_schema_id(&params.content)
+            let id = normalize_schema_id(&params.content);
+            if id.is_empty() {
+                return Err(NodeServiceError::invalid_update(
+                    "Schema content must not be empty or contain only special characters"
+                        .to_string(),
+                ));
+            }
+            id
         } else {
             uuid::Uuid::new_v4().to_string()
         };

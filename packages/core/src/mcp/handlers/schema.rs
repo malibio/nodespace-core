@@ -196,9 +196,9 @@ pub async fn handle_create_schema(
         properties["propertiesHeaderSummaryTemplate"] = serde_json::Value::String(template.clone());
     }
 
-    // Create schema node params
+    // Create schema node params — no explicit ID; create_node_with_parent derives it from content
     let schema_node_params = CreateNodeParams {
-        id: Some(schema_id.clone()),
+        id: None,
         node_type: "schema".to_string(),
         content: params.name.clone(),
         parent_id: None,
