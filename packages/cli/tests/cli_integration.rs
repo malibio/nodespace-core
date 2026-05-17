@@ -164,7 +164,9 @@ async fn create_get_update_children_delete_round_trip() {
         "parent updated via CLI"
     );
 
-    // list children
+    // list children — exercise the CLI handler, then verify via raw gRPC
+    // that the response shape the handler renders is correct. The handler
+    // itself only prints, so we cross-check the underlying state.
     commands::node::run(
         &mut client,
         commands::node::NodeAction::Children(commands::node::ChildrenArgs {
@@ -174,6 +176,32 @@ async fn create_get_update_children_delete_round_trip() {
     )
     .await
     .expect("list children");
+
+    let children = raw_client
+        .get_children(nodespace_daemon::nodespace::GetChildrenRequest {
+            node_id: parent_id.clone(),
+        })
+        .await
+        .expect("children fetch")
+        .into_inner();
+    assert_eq!(
+        children.count, 1,
+        "expected exactly one child seeded via CLI"
+    );
+    assert_eq!(
+        children.nodes.len(),
+        1,
+        "nodes len must match count for non-paginated results"
+    );
+    assert_eq!(
+        children.nodes[0].content, "child via CLI",
+        "child content should match what the CLI handler created"
+    );
+    assert_eq!(
+        children.nodes[0].parent_id.as_deref(),
+        Some(parent_id.as_str()),
+        "child must link back to the seeded parent"
+    );
 
     // delete the parent
     commands::node::run(

@@ -12,8 +12,8 @@ use crate::output;
 pub struct SearchArgs {
     /// Free-text query.
     pub query: String,
-    /// Maximum number of results to return (default: server-side, currently 20).
-    #[arg(long, default_value_t = 0)]
+    /// Maximum number of results to return (0 = server default, currently 20).
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(i32).range(0..))]
     pub limit: i32,
 }
 

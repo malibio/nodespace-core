@@ -85,10 +85,13 @@ fn write_human_node(node: &NodeData) {
     }
 }
 
-fn node_to_json(node: &NodeData) -> serde_json::Value {
-    // properties is already a JSON-encoded string on the wire — try to inline
-    // it as nested JSON, falling back to the raw string when malformed so we
-    // never silently swallow daemon-side issues.
+pub(crate) fn node_to_json(node: &NodeData) -> serde_json::Value {
+    // properties is a JSON-encoded string on the wire — inline it as nested
+    // JSON so scripts can `jq '.properties.foo'` without a second parse.
+    // Falls back to the raw string if it doesn't parse; in practice this
+    // branch is unreachable because the daemon serializes via
+    // serde_json::Value::to_string, but we'd rather degrade than panic if
+    // that contract ever breaks.
     let properties = serde_json::from_str::<serde_json::Value>(&node.properties)
         .unwrap_or_else(|_| serde_json::Value::String(node.properties.clone()));
 
@@ -104,4 +107,48 @@ fn node_to_json(node: &NodeData) -> serde_json::Value {
         "modified_at": node.modified_at,
         "collection_id": node.collection_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_node() -> NodeData {
+        NodeData {
+            id: "abc-123".into(),
+            node_type: "text".into(),
+            content: "hello".into(),
+            parent_id: Some("parent-id".into()),
+            properties: r#"{"foo":"bar","n":42}"#.into(),
+            version: 7,
+            lifecycle_status: "active".into(),
+            created_at: "2026-05-17T12:00:00Z".into(),
+            modified_at: "2026-05-17T12:00:01Z".into(),
+            collection_id: "hr:policy".into(),
+        }
+    }
+
+    #[test]
+    fn node_to_json_inlines_properties_as_nested_object() {
+        let json = node_to_json(&sample_node());
+        // Scripts pipe `nodespace node get --json ID | jq '.properties.foo'`;
+        // if this regresses to a JSON-encoded string they'd need a double
+        // decode. Lock the inlined shape in.
+        assert_eq!(json["properties"]["foo"], "bar");
+        assert_eq!(json["properties"]["n"], 42);
+        assert_eq!(json["id"], "abc-123");
+        assert_eq!(json["version"], 7);
+        assert_eq!(json["parent_id"], "parent-id");
+        assert_eq!(json["collection_id"], "hr:policy");
+    }
+
+    #[test]
+    fn node_to_json_falls_back_to_raw_string_for_malformed_properties() {
+        let mut node = sample_node();
+        node.properties = "{not valid json".into();
+        let json = node_to_json(&node);
+        // Unreachable in practice (daemon always serializes via serde), but
+        // we degrade rather than panic if that contract ever breaks.
+        assert_eq!(json["properties"], "{not valid json");
+    }
 }
