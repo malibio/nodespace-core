@@ -161,7 +161,7 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
                         Some(e) => e,
                         None => {
                             return ParseResult::Error(
-                                "Unbalanced brackets in tool call array".to_string(),
+                                "Unbalanced brackets after [TOOL_CALLS]".to_string(),
                             );
                         }
                     };
@@ -218,14 +218,14 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
                 // Format B: [TOOL_CALLS]name{json}
                 match parse_format_b(after_sentinel) {
                     Ok(v) => v,
-                    Err(e) => return e,
+                    Err(msg) => return ParseResult::Error(msg),
                 }
             }
         } else if has_json_start.is_some() {
             // No [ARGS] sentinel, but JSON found — Format B
             match parse_format_b(after_sentinel) {
                 Ok(v) => v,
-                Err(e) => return e,
+                Err(msg) => return ParseResult::Error(msg),
             }
         } else if has_args_sentinel.is_some() {
             // [ARGS] found but no JSON — malformed
@@ -275,22 +275,22 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
 /// The function name is everything before the first `{`.
 /// The JSON extends from `{` to the matching `}` (brace-balanced).
 ///
-/// Returns `(function_name, json_str, remaining)` or an error.
-/// Returns `Ok((name, json, remaining))` or `Err(ParseResult::Error(...))`.
-fn parse_format_b(after_sentinel: &str) -> std::result::Result<(String, &str, &str), ParseResult> {
+/// Returns `Ok((function_name, json_str, remaining))` on success. On failure
+/// returns a plain error string; the caller wraps it into `ParseResult::Error`.
+fn parse_format_b(after_sentinel: &str) -> std::result::Result<(String, &str, &str), String> {
     let json_start = after_sentinel
         .find('{')
-        .ok_or_else(|| ParseResult::Error("No JSON found after function name".to_string()))?;
+        .ok_or_else(|| "No JSON found after function name".to_string())?;
 
     let function_name = after_sentinel[..json_start].trim().to_string();
 
     // Find the end of the JSON object by brace-balancing
     let json_region = &after_sentinel[json_start..];
     let json_end = find_balanced_brace(json_region).ok_or_else(|| {
-        ParseResult::Error(format!(
+        format!(
             "Unbalanced braces in tool call arguments for '{}'",
             function_name
-        ))
+        )
     })?;
 
     let json_str = json_region[..json_end].trim();
@@ -307,11 +307,16 @@ fn parse_format_b(after_sentinel: &str) -> std::result::Result<(String, &str, &s
     Ok((function_name, json_str, advance_to))
 }
 
-/// Find the end of a bracket-balanced JSON array starting at `[`.
+/// Find the end of a delimiter-balanced span starting at `open` in `s`.
 ///
-/// Returns the byte offset just past the closing `]`, or `None` if brackets
-/// are unbalanced. Handles strings and skips `[`/`]` inside quoted strings.
-fn find_balanced_bracket(s: &str) -> Option<usize> {
+/// Returns the byte offset just past the matching `close`, or `None` if the
+/// delimiters are unbalanced. Handles JSON strings: `open`/`close` chars that
+/// appear inside `"..."` are ignored, and backslash-escapes inside strings
+/// are honoured.
+///
+/// Caller is expected to position the slice so the first character is `open`;
+/// the function does not validate that.
+fn find_balanced(s: &str, open: char, close: char) -> Option<usize> {
     let mut depth = 0i32;
     let mut in_string = false;
     let mut escape_next = false;
@@ -332,9 +337,9 @@ fn find_balanced_bracket(s: &str) -> Option<usize> {
         if in_string {
             continue;
         }
-        if ch == '[' {
+        if ch == open {
             depth += 1;
-        } else if ch == ']' {
+        } else if ch == close {
             depth -= 1;
             if depth == 0 {
                 return Some(i + 1);
@@ -344,41 +349,14 @@ fn find_balanced_bracket(s: &str) -> Option<usize> {
     None
 }
 
-/// Find the end of a brace-balanced JSON object starting at `{`.
-///
-/// Returns the byte offset just past the closing `}`, or `None` if braces
-/// are unbalanced. Handles strings (skips `{`/`}` inside quoted strings).
-fn find_balanced_brace(s: &str) -> Option<usize> {
-    let mut depth = 0i32;
-    let mut in_string = false;
-    let mut escape_next = false;
+/// Find the end of a bracket-balanced JSON array starting at `[`.
+fn find_balanced_bracket(s: &str) -> Option<usize> {
+    find_balanced(s, '[', ']')
+}
 
-    for (i, ch) in s.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        if ch == '\\' && in_string {
-            escape_next = true;
-            continue;
-        }
-        if ch == '"' {
-            in_string = !in_string;
-            continue;
-        }
-        if in_string {
-            continue;
-        }
-        if ch == '{' {
-            depth += 1;
-        } else if ch == '}' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(i + 1); // past the closing }
-            }
-        }
-    }
-    None
+/// Find the end of a brace-balanced JSON object starting at `{`.
+fn find_balanced_brace(s: &str) -> Option<usize> {
+    find_balanced(s, '{', '}')
 }
 
 // ---------------------------------------------------------------------------

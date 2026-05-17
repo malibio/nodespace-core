@@ -76,17 +76,23 @@ struct ChatLlamaState {
     model_path: String,
     context_size: u32,
     n_threads: i32,
+    /// Cached `[TOOL_CALLS]` control token id, resolved once at load time.
+    /// `None` if the model's vocab does not contain such a token (e.g. Gemma 4,
+    /// which emits tool calls as plain text rather than a control token).
+    tool_calls_token_id: Option<llama_cpp_2::token::LlamaToken>,
 }
 
 #[cfg(feature = "chat-service")]
 impl ChatLlamaState {
     fn new(model: LlamaModel, model_path: String, context_size: u32, n_threads: i32) -> Self {
+        let tool_calls_token_id = detect_tool_calls_token(&model);
         Self {
             model,
             context: None,
             model_path,
             context_size,
             n_threads,
+            tool_calls_token_id,
         }
     }
 
@@ -129,6 +135,31 @@ impl ChatLlamaState {
 unsafe impl Send for ChatLlamaState {}
 #[cfg(feature = "chat-service")]
 unsafe impl Sync for ChatLlamaState {}
+
+/// Find the model token id whose textual piece is exactly `[TOOL_CALLS]`.
+///
+/// Ministral 2512 emits this as a control token (typically id 9). At inference
+/// time we need the id so we can re-inject the sentinel text into the streaming
+/// parser even though `token_to_piece(..., special=false)` would strip it.
+/// Gemma 4 does not have such a control token — it streams the literal
+/// characters — and this returns `None` for that case.
+///
+/// Resolved once per model load; called from `ChatLlamaState::new`.
+#[cfg(feature = "chat-service")]
+fn detect_tool_calls_token(model: &LlamaModel) -> Option<llama_cpp_2::token::LlamaToken> {
+    let mut decoder = encoding_rs::UTF_8.new_decoder();
+    // The token is typically at a low ID in Mistral-family vocabularies, but
+    // scan the full vocab so we are not coupled to that assumption.
+    for id in 0..model.n_vocab() {
+        let token = llama_cpp_2::token::LlamaToken(id);
+        if let Ok(text) = model.token_to_piece(token, &mut decoder, true, None) {
+            if text.contains("[TOOL_CALLS]") {
+                return Some(token);
+            }
+        }
+    }
+    None
+}
 
 impl ChatEngine {
     /// Create a new chat engine with the given configuration.
@@ -331,27 +362,8 @@ impl ChatEngine {
         // get_or_create_context() ensured the context exists, so we can safely
         // split the struct fields.
         let model_ref = &llama.model;
+        let tool_calls_token_id = llama.tool_calls_token_id;
         let ctx = llama.context.as_mut().expect("context was just created");
-
-        // Detect the [TOOL_CALLS] control token by trying to find it in the vocab.
-        // Ministral 2512 models use control token ID 9 for [TOOL_CALLS].
-        // We detect it by ID so we can inject the sentinel text into the parser
-        // even though token_to_piece with special=false would strip it.
-        let tool_calls_token_id = {
-            let mut found = None;
-            let mut detect_decoder = encoding_rs::UTF_8.new_decoder();
-            // The token is typically at a low ID. Check the model's special tokens.
-            for id in 0..20i32 {
-                let token = llama_cpp_2::token::LlamaToken(id);
-                if let Ok(text) = model_ref.token_to_piece(token, &mut detect_decoder, true, None) {
-                    if text.contains("[TOOL_CALLS]") {
-                        found = Some(token);
-                        break;
-                    }
-                }
-            }
-            found
-        };
 
         let mut streaming_parser = StreamingToolCallParser::new();
         let mut piece_decoder = encoding_rs::UTF_8.new_decoder();

@@ -245,7 +245,7 @@ pub enum LocalAgentStatus {
 pub enum ModelFamily {
     /// Ministral -- Mistral AI's small model series (Ministral 3B, Ministral 8B).
     Ministral,
-    /// Gemma 4 -- Google's multimodal model series (E4B, 27B).
+    /// Gemma 4 -- Google's multimodal model series (E4B, 31B).
     Gemma4,
     /// Model served via Ollama (family determined by Ollama).
     Ollama,

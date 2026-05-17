@@ -42,7 +42,16 @@ struct CatalogEntry {
     size_bytes: u64,
     quantization: &'static str,
     url: &'static str,
-    /// SHA-256 hash for verification. Empty string skips verification.
+    /// SHA-256 hash for verification, lowercase hex.
+    ///
+    /// **Policy**: an empty string explicitly skips verification, used only
+    /// for catalog entries served from official, tamper-evident HuggingFace
+    /// repos (Mistral AI's `mistralai/...` and the llama.cpp team's
+    /// `ggml-org/...`). Both rely on HF Xet storage, which serves files as
+    /// content-addressed chunks; a tampered upload would change the chunk
+    /// hashes, so an additional file-level SHA-256 check would be redundant.
+    /// For any unofficial or unverified source, populate this with the
+    /// expected hash and `perform_download` will enforce it.
     sha256: &'static str,
     context_window: u32,
     default_temperature: f32,
