@@ -1,11 +1,12 @@
-//! Generated protobuf types and gRPC service definitions for `nodespaced`.
+//! `nodespaced` library surface.
 //!
-//! All types are generated at build time from:
-//!   - `proto/node_service.proto`      — NodeService
-//!   - `proto/agent_session_service.proto` — AgentSessionService
-//!
-//! Both proto files declare `package nodespace`, so all generated types
-//! land in the same module.
+//! The daemon crate ships both a binary (`nodespaced`) and a library so
+//! integration tests can spin the gRPC server up in-process without shelling
+//! out. The library is intentionally thin: it exposes the generated proto
+//! module and the service implementations that adapt `nodespace-core` to
+//! tonic.
+
+pub mod services;
 
 /// Re-exports of prost/tonic generated types for the `nodespace` proto package.
 ///
@@ -27,3 +28,5 @@ pub use nodespace::agent_session_service_server::AgentSessionServiceServer;
 pub use nodespace::node_service_client::NodeServiceClient;
 pub use nodespace::node_service_server::NodeServiceServer;
 pub use nodespace::{NodeData, SessionInfo};
+
+pub use services::NodeServiceImpl;

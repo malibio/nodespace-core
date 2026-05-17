@@ -4190,10 +4190,19 @@ dependencies = [
 name = "nodespace-daemon"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "nodespace-core",
  "prost 0.13.5",
  "protoc-bin-vendored",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
  "tonic 0.12.3",
  "tonic-build",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
