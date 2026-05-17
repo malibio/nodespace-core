@@ -236,9 +236,21 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         };
 
         // Build base prompt: use override (tests), assembler (production), or fallback.
+        // The override branch is compiled out of production builds — see the
+        // `testing` feature on the agent crate.
+        #[cfg(any(test, feature = "testing"))]
         let base_prompt = if let Some(ref override_prompt) = session.system_prompt_override {
             override_prompt.clone()
         } else if let Some(ref assembler) = self.prompt_assembler {
+            assembler
+                .assemble(&template_ctx, all_tools.clone())
+                .await
+                .system_prompt
+        } else {
+            prompt_templates::fallback_system_prompt(dynamic_ctx)
+        };
+        #[cfg(not(any(test, feature = "testing")))]
+        let base_prompt = if let Some(ref assembler) = self.prompt_assembler {
             assembler
                 .assemble(&template_ctx, all_tools.clone())
                 .await
@@ -852,6 +864,7 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
             created_at: chrono::Utc::now(),
             tool_executions: Vec::new(),
             dynamic_context: None,
+            #[cfg(any(test, feature = "testing"))]
             system_prompt_override: None,
         };
 
@@ -884,6 +897,10 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
     /// When set, this bypasses both `PromptAssembler` and `fallback_system_prompt`.
     /// Intended for integration tests that want to inject a pre-built prompt
     /// (constructed via `PromptAssembler::assemble_static`) without a live database.
+    ///
+    /// Gated by the `testing` Cargo feature so it does not leak into the
+    /// production API surface.
+    #[cfg(any(test, feature = "testing"))]
     pub async fn set_system_prompt(&self, session_id: &str, prompt: String) {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
