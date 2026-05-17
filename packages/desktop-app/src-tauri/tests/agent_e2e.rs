@@ -134,6 +134,7 @@ impl ChatInferenceEngine for MockEngine {
     async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
         Ok(Some(ChatModelSpec {
             model_id: "test-model-e2e".into(),
+            family: ModelFamily::Ministral,
             context_window: 8192,
             default_temperature: 0.1,
         }))
@@ -507,10 +508,10 @@ async fn model_lifecycle_list_catalog() {
 
     let models = manager.list().await.unwrap();
 
-    // Should have 2 models in catalog (Ministral 3B and 8B)
-    assert_eq!(models.len(), 2);
+    // Catalog now contains Ministral 3B/8B + Gemma 4 E4B/31B.
+    assert_eq!(models.len(), 4);
 
-    // Verify first model (3B)
+    // Verify Ministral 3B
     let model_3b = models.iter().find(|m| m.id == "ministral-3b-q4km");
     assert!(model_3b.is_some(), "Ministral 3B should be in catalog");
     let model_3b = model_3b.unwrap();
@@ -518,11 +519,20 @@ async fn model_lifecycle_list_catalog() {
     assert_eq!(model_3b.quantization, "Q4_K_M");
     assert!(matches!(model_3b.status, ModelStatus::NotDownloaded));
 
-    // Verify second model (8B)
+    // Verify Ministral 8B
     let model_8b = models.iter().find(|m| m.id == "ministral-8b-q4km");
     assert!(model_8b.is_some(), "Ministral 8B should be in catalog");
     let model_8b = model_8b.unwrap();
     assert!(model_8b.size_bytes > model_3b.size_bytes);
+
+    // Verify Gemma 4 E4B and 31B
+    let e4b = models.iter().find(|m| m.id == "gemma-4-e4b-q4km");
+    assert!(e4b.is_some(), "Gemma 4 E4B should be in catalog");
+    assert_eq!(e4b.unwrap().family, ModelFamily::Gemma4);
+
+    let g31 = models.iter().find(|m| m.id == "gemma-4-31b-q4km");
+    assert!(g31.is_some(), "Gemma 4 31B should be in catalog");
+    assert_eq!(g31.unwrap().family, ModelFamily::Gemma4);
 }
 
 /// Model recommendation: returns a valid model based on system RAM.
@@ -533,10 +543,11 @@ async fn model_lifecycle_recommendation() {
 
     let recommended_id = manager.recommended_model().await.unwrap();
 
-    // Should recommend one of the two catalog models
+    // The default first-launch recommendation is Gemma 4 — size depends on
+    // system RAM (E4B on <32 GB, 31B on >=32 GB).
     assert!(
-        recommended_id == "ministral-3b-q4km" || recommended_id == "ministral-8b-q4km",
-        "Recommended model should be one of the catalog models, got: {}",
+        recommended_id == "gemma-4-e4b-q4km" || recommended_id == "gemma-4-31b-q4km",
+        "Recommended model should be a Gemma 4 catalog entry, got: {}",
         recommended_id
     );
 }
@@ -1009,6 +1020,7 @@ impl ChatInferenceEngine for CapturingMockEngine {
     async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
         Ok(Some(ChatModelSpec {
             model_id: "test-capture".into(),
+            family: ModelFamily::Ministral,
             context_window: 32768,
             default_temperature: 0.1,
         }))
@@ -1542,8 +1554,12 @@ async fn test_real_inference_loads_and_runs() {
         ..Default::default()
     };
 
-    let engine = LlamaChatInferenceEngine::load(&model_path.to_string_lossy(), config)
-        .expect("Failed to initialize Llama inference engine with Ministral-3");
+    let engine = LlamaChatInferenceEngine::load(
+        &model_path.to_string_lossy(),
+        ModelFamily::Ministral,
+        config,
+    )
+    .expect("Failed to initialize Llama inference engine with Ministral-3");
 
     // Verify model info is available
     let model_info = engine.model_info().await.expect("Failed to get model info");

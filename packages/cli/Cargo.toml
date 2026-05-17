@@ -1,0 +1,24 @@
+[package]
+name = "nodespace-cli"
+version = "0.1.0"
+description = "Command-line interface for NodeSpace — a gRPC client for nodespaced"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nodespace"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+tonic = "0.12"
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+nodespace-daemon = { path = "../daemon" }
+
+[dev-dependencies]
+nodespace-core = { workspace = true }
+tempfile = "3.0"
+tokio-stream = "0.1"

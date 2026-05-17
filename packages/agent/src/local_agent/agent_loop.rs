@@ -994,7 +994,7 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_types::{ChatModelSpec, ToolDefinition, ToolError, ToolResult};
+    use crate::agent_types::{ChatModelSpec, ModelFamily, ToolDefinition, ToolError, ToolResult};
     use async_trait::async_trait;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1109,6 +1109,7 @@ mod tests {
         async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
             Ok(Some(ChatModelSpec {
                 model_id: "test-model".into(),
+                family: ModelFamily::Ministral,
                 context_window: 8192,
                 default_temperature: 0.1,
             }))

@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
-    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceRequest, ModelManager, Role,
-    StreamingChunk, ToolDefinition, ToolError, ToolResult,
+    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceRequest, ModelFamily,
+    ModelManager, Role, StreamingChunk, ToolDefinition, ToolError, ToolResult,
 };
 use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
@@ -320,7 +320,7 @@ async fn resolve_engine(test_name: &str) -> Option<Arc<dyn ChatInferenceEngine>>
 
     let path_str = model_path.to_string_lossy().to_string();
     let engine = match tokio::task::spawn_blocking(move || {
-        LlamaChatInferenceEngine::load(&path_str, ChatConfig::default())
+        LlamaChatInferenceEngine::load(&path_str, ModelFamily::Ministral, ChatConfig::default())
     })
     .await
     .expect("spawn_blocking join error")

@@ -1,6 +1,6 @@
 use crate::agent_types::{
-    ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage, Role,
-    StreamingChunk,
+    ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
+    ModelFamily, Role, StreamingChunk,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -282,6 +282,7 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
 
                     Ok(Some(ChatModelSpec {
                         model_id: self.model_name.clone(),
+                        family: ModelFamily::Ollama,
                         context_window,
                         default_temperature: 0.7,
                     }))

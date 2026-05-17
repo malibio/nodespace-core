@@ -1,23 +1,68 @@
-/// Tool-call parser for Mistral raw GGUF format.
+/// Tool-call parser for raw GGUF tool-call formats.
 ///
-/// Mistral models (when loaded as raw GGUF without API wrapping) emit tool calls
-/// in a non-standard format:
+/// Handles two model families' wire formats, both of which use the
+/// `[TOOL_CALLS]` sentinel but disagree on what follows it:
+///
+/// **Mistral / Ministral** -- function name precedes the JSON args:
 ///
 /// ```text
-/// [TOOL_CALLS]function_name[ARGS]{"param": "value"}
+/// [TOOL_CALLS]function_name[ARGS]{"param": "value"}   (Format A, legacy)
+/// [TOOL_CALLS]function_name{"param": "value"}         (Format B, Ministral 2512+)
 /// ```
 ///
-/// Multiple calls can appear in one response:
+/// Multiple calls chain naturally:
 ///
 /// ```text
 /// [TOOL_CALLS]search_nodes[ARGS]{"query": "embeddings"}[TOOL_CALLS]search_nodes[ARGS]{"query": "vector search"}
 /// ```
 ///
+/// **Gemma 4** -- function name lives inside the JSON object, keyed `tool_name`
+/// and `tool_args` instead of Mistral's `name`/`arguments`:
+///
+/// ```text
+/// [TOOL_CALLS]{"tool_name": "search_nodes", "tool_args": {"query": "embeddings"}}     (Format C, object)
+/// [TOOL_CALLS][{"tool_name": "x", "tool_args": {...}}, {...}]                         (Format C, array)
+/// ```
+///
 /// This module provides both a complete-text parser and a streaming parser that
 /// handles partial sentinels split across token boundaries.
-/// Sentinel markers in Mistral tool-call format.
+/// Sentinel markers shared by both formats.
 const TOOL_CALLS_SENTINEL: &str = "[TOOL_CALLS]";
 const ARGS_SENTINEL: &str = "[ARGS]";
+
+/// Mistral-style tool call object: `{"name": ..., "arguments": ...}`.
+#[derive(serde::Deserialize)]
+struct MistralCallObject {
+    name: String,
+    arguments: serde_json::Value,
+}
+
+/// Gemma 4 tool call object: `{"tool_name": ..., "tool_args": ...}`.
+#[derive(serde::Deserialize)]
+struct GemmaCallObject {
+    tool_name: String,
+    tool_args: serde_json::Value,
+}
+
+/// Try to deserialize a JSON object as either Mistral or Gemma 4 tool call.
+///
+/// Both families wrap a single function invocation but use different field
+/// names. We try Mistral first (the original format) and fall back to Gemma 4.
+fn parse_tool_call_object(json_str: &str) -> Option<ParsedToolCall> {
+    if let Ok(c) = serde_json::from_str::<MistralCallObject>(json_str) {
+        return Some(ParsedToolCall {
+            name: c.name,
+            args: c.arguments,
+        });
+    }
+    if let Ok(c) = serde_json::from_str::<GemmaCallObject>(json_str) {
+        return Some(ParsedToolCall {
+            name: c.tool_name,
+            args: c.tool_args,
+        });
+    }
+    None
+}
 
 /// A single parsed tool call extracted from model output.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,7 +117,88 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
     while let Some(tc_start) = remaining.find(TOOL_CALLS_SENTINEL) {
         let after_sentinel = &remaining[tc_start + TOOL_CALLS_SENTINEL.len()..];
 
-        // Determine format: check if [ARGS] comes before the first `{`
+        // Format C (Gemma 4 / OpenAI-style): the function name lives inside the
+        // JSON object as `tool_name` (Gemma) or `name` (OpenAI), so the JSON
+        // appears directly after [TOOL_CALLS] with no name prefix. Detect by
+        // looking at the first non-whitespace byte after the sentinel.
+        let trimmed = after_sentinel.trim_start();
+        let leading_ws = after_sentinel.len() - trimmed.len();
+        match trimmed.as_bytes().first() {
+            Some(b'{') => {
+                let json_region = &after_sentinel[leading_ws..];
+                let json_end = match find_balanced_brace(json_region) {
+                    Some(e) => e,
+                    None => {
+                        return ParseResult::Error(
+                            "Unbalanced braces in tool call object".to_string(),
+                        );
+                    }
+                };
+                let json_str = json_region[..json_end].trim();
+                match parse_tool_call_object(json_str) {
+                    Some(call) => calls.push(call),
+                    None => {
+                        return ParseResult::Error(format!(
+                            "Tool call object did not match Mistral or Gemma 4 schema (raw: {:?})",
+                            json_str
+                        ));
+                    }
+                }
+                let after_json = &json_region[json_end..];
+                remaining = match after_json.find(TOOL_CALLS_SENTINEL) {
+                    Some(idx) => &after_json[idx..],
+                    None => "",
+                };
+                continue;
+            }
+            Some(b'[') => {
+                let arr_region = &after_sentinel[leading_ws..];
+                // [ARGS] is a sentinel, not a JSON array — fall through to
+                // the legacy Format-A path so we report it as "empty function
+                // name" rather than a misleading "invalid JSON array" error.
+                if !arr_region.starts_with(ARGS_SENTINEL) {
+                    let arr_end = match find_balanced_bracket(arr_region) {
+                        Some(e) => e,
+                        None => {
+                            return ParseResult::Error(
+                                "Unbalanced brackets after [TOOL_CALLS]".to_string(),
+                            );
+                        }
+                    };
+                    let arr_str = arr_region[..arr_end].trim();
+                    let arr: Vec<serde_json::Value> = match serde_json::from_str(arr_str) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return ParseResult::Error(format!(
+                                "Invalid JSON array of tool calls: {} (raw: {:?})",
+                                e, arr_str
+                            ));
+                        }
+                    };
+                    for elem in arr {
+                        let elem_str = elem.to_string();
+                        match parse_tool_call_object(&elem_str) {
+                            Some(call) => calls.push(call),
+                            None => {
+                                return ParseResult::Error(format!(
+                                    "Array element did not match Mistral or Gemma 4 schema (raw: {})",
+                                    elem_str
+                                ));
+                            }
+                        }
+                    }
+                    let after_arr = &arr_region[arr_end..];
+                    remaining = match after_arr.find(TOOL_CALLS_SENTINEL) {
+                        Some(idx) => &after_arr[idx..],
+                        None => "",
+                    };
+                    continue;
+                }
+            }
+            _ => {}
+        }
+
+        // Format A/B: function name precedes the JSON (Mistral / Ministral).
         let has_args_sentinel = after_sentinel.find(ARGS_SENTINEL);
         let has_json_start = after_sentinel.find('{');
 
@@ -92,14 +218,14 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
                 // Format B: [TOOL_CALLS]name{json}
                 match parse_format_b(after_sentinel) {
                     Ok(v) => v,
-                    Err(e) => return e,
+                    Err(msg) => return ParseResult::Error(msg),
                 }
             }
         } else if has_json_start.is_some() {
             // No [ARGS] sentinel, but JSON found — Format B
             match parse_format_b(after_sentinel) {
                 Ok(v) => v,
-                Err(e) => return e,
+                Err(msg) => return ParseResult::Error(msg),
             }
         } else if has_args_sentinel.is_some() {
             // [ARGS] found but no JSON — malformed
@@ -149,22 +275,22 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
 /// The function name is everything before the first `{`.
 /// The JSON extends from `{` to the matching `}` (brace-balanced).
 ///
-/// Returns `(function_name, json_str, remaining)` or an error.
-/// Returns `Ok((name, json, remaining))` or `Err(ParseResult::Error(...))`.
-fn parse_format_b(after_sentinel: &str) -> std::result::Result<(String, &str, &str), ParseResult> {
+/// Returns `Ok((function_name, json_str, remaining))` on success. On failure
+/// returns a plain error string; the caller wraps it into `ParseResult::Error`.
+fn parse_format_b(after_sentinel: &str) -> std::result::Result<(String, &str, &str), String> {
     let json_start = after_sentinel
         .find('{')
-        .ok_or_else(|| ParseResult::Error("No JSON found after function name".to_string()))?;
+        .ok_or_else(|| "No JSON found after function name".to_string())?;
 
     let function_name = after_sentinel[..json_start].trim().to_string();
 
     // Find the end of the JSON object by brace-balancing
     let json_region = &after_sentinel[json_start..];
     let json_end = find_balanced_brace(json_region).ok_or_else(|| {
-        ParseResult::Error(format!(
+        format!(
             "Unbalanced braces in tool call arguments for '{}'",
             function_name
-        ))
+        )
     })?;
 
     let json_str = json_region[..json_end].trim();
@@ -181,11 +307,16 @@ fn parse_format_b(after_sentinel: &str) -> std::result::Result<(String, &str, &s
     Ok((function_name, json_str, advance_to))
 }
 
-/// Find the end of a brace-balanced JSON object starting at `{`.
+/// Find the end of a delimiter-balanced span starting at `open` in `s`.
 ///
-/// Returns the byte offset just past the closing `}`, or `None` if braces
-/// are unbalanced. Handles strings (skips `{`/`}` inside quoted strings).
-fn find_balanced_brace(s: &str) -> Option<usize> {
+/// Returns the byte offset just past the matching `close`, or `None` if the
+/// delimiters are unbalanced. Handles JSON strings: `open`/`close` chars that
+/// appear inside `"..."` are ignored, and backslash-escapes inside strings
+/// are honoured.
+///
+/// Caller is expected to position the slice so the first character is `open`;
+/// the function does not validate that.
+fn find_balanced(s: &str, open: char, close: char) -> Option<usize> {
     let mut depth = 0i32;
     let mut in_string = false;
     let mut escape_next = false;
@@ -206,16 +337,26 @@ fn find_balanced_brace(s: &str) -> Option<usize> {
         if in_string {
             continue;
         }
-        if ch == '{' {
+        if ch == open {
             depth += 1;
-        } else if ch == '}' {
+        } else if ch == close {
             depth -= 1;
             if depth == 0 {
-                return Some(i + 1); // past the closing }
+                return Some(i + 1);
             }
         }
     }
     None
+}
+
+/// Find the end of a bracket-balanced JSON array starting at `[`.
+fn find_balanced_bracket(s: &str) -> Option<usize> {
+    find_balanced(s, '[', ']')
+}
+
+/// Find the end of a brace-balanced JSON object starting at `{`.
+fn find_balanced_brace(s: &str) -> Option<usize> {
+    find_balanced(s, '{', '}')
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +681,129 @@ mod tests {
             }
             other => panic!("Expected ToolCalls, got {:?}", other),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Format C (Gemma 4 / OpenAI-style object after [TOOL_CALLS]) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_gemma4_single_tool_call_object() {
+        let input =
+            r#"[TOOL_CALLS]{"tool_name":"search_nodes","tool_args":{"query":"embeddings"}}"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "search_nodes");
+                assert_eq!(calls[0].args, json!({"query": "embeddings"}));
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemma4_object_with_leading_whitespace() {
+        let input = "[TOOL_CALLS]   \n  {\"tool_name\":\"get_node\",\"tool_args\":{\"id\":\"n1\"}}";
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "get_node");
+                assert_eq!(calls[0].args, json!({"id": "n1"}));
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_openai_style_object_after_sentinel() {
+        // OpenAI-style payload: {"name": ..., "arguments": ...} as a bare object
+        // following [TOOL_CALLS]. Format C dual-deserialization should accept it.
+        let input = r#"[TOOL_CALLS]{"name":"create_node","arguments":{"type":"task","title":"X"}}"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "create_node");
+                assert_eq!(calls[0].args, json!({"type": "task", "title": "X"}));
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemma4_array_of_tool_calls() {
+        let input = r#"[TOOL_CALLS][{"tool_name":"a","tool_args":{"x":1}},{"tool_name":"b","tool_args":{"y":2}}]"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].name, "a");
+                assert_eq!(calls[0].args, json!({"x": 1}));
+                assert_eq!(calls[1].name, "b");
+                assert_eq!(calls[1].args, json!({"y": 2}));
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemma4_mixed_schema_array() {
+        // Defensive: array contains one Mistral-style and one Gemma-style entry.
+        let input = r#"[TOOL_CALLS][{"name":"a","arguments":{"x":1}},{"tool_name":"b","tool_args":{"y":2}}]"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].name, "a");
+                assert_eq!(calls[1].name, "b");
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemma4_object_with_nested_json_args() {
+        let input = r#"[TOOL_CALLS]{"tool_name":"create_node","tool_args":{"type":"task","title":"Buy groceries","tags":["food","errands"]}}"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "create_node");
+                assert_eq!(
+                    calls[0].args,
+                    json!({
+                        "type": "task",
+                        "title": "Buy groceries",
+                        "tags": ["food", "errands"]
+                    })
+                );
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemma4_object_followed_by_another_tool_call() {
+        let input = r#"[TOOL_CALLS]{"tool_name":"a","tool_args":{"x":1}}[TOOL_CALLS]{"tool_name":"b","tool_args":{"y":2}}"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].name, "a");
+                assert_eq!(calls[1].name, "b");
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemma4_object_unknown_schema_errors() {
+        // Object after [TOOL_CALLS] that matches neither schema.
+        let input = r#"[TOOL_CALLS]{"foo":"bar"}"#;
+        let result = parse_tool_calls(input);
+        assert!(matches!(result, ParseResult::Error(_)));
     }
 
     // -----------------------------------------------------------------------

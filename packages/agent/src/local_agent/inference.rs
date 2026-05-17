@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use nodespace_nlp_engine::chat::{ChatChunk, ChatConfig, ChatEngine, ChatMessageInput, ToolSpec};
 
 use crate::agent_types::{
-    ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage, Role,
-    StreamingChunk, ToolDefinition,
+    ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
+    ModelFamily, Role, StreamingChunk, ToolDefinition,
 };
 
 /// Chat inference engine backed by llama.cpp via `nlp-engine::ChatEngine`.
@@ -21,6 +21,7 @@ use crate::agent_types::{
 /// via a tokio Mutex, preventing Metal command-buffer collisions.
 pub struct LlamaChatInferenceEngine {
     engine: Arc<ChatEngine>,
+    family: ModelFamily,
     context_window: u32,
     default_temperature: f32,
 }
@@ -30,7 +31,11 @@ impl LlamaChatInferenceEngine {
     ///
     /// This is a blocking operation (model load + Metal kernel compilation)
     /// and should be called from a context that can tolerate latency.
-    pub fn load(model_path: &str, config: ChatConfig) -> Result<Self, InferenceError> {
+    pub fn load(
+        model_path: &str,
+        family: ModelFamily,
+        config: ChatConfig,
+    ) -> Result<Self, InferenceError> {
         let context_window = config.n_ctx;
         let default_temperature = config.default_temperature;
 
@@ -43,6 +48,7 @@ impl LlamaChatInferenceEngine {
 
         Ok(Self {
             engine: Arc::new(engine),
+            family,
             context_window,
             default_temperature,
         })
@@ -127,6 +133,7 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
                 .model_info()
                 .map(|info| info.model_path.clone())
                 .unwrap_or_default(),
+            family: self.family,
             context_window: self.context_window,
             default_temperature: self.default_temperature,
         }))
