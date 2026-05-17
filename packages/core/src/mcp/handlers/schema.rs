@@ -1018,7 +1018,6 @@ fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<Sc
         .collect()
 }
 
-
 #[cfg(test)]
 #[path = "schema_test.rs"]
 mod schema_test;

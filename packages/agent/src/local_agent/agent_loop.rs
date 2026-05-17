@@ -39,6 +39,39 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 
 // ---------------------------------------------------------------------------
+// Tool name humanization
+// ---------------------------------------------------------------------------
+
+/// Convert an internal tool identifier into user-facing prose.
+///
+/// Used by fallback responses that surface tool activity to the chat UI when
+/// the model fails to produce its own text. Unknown identifiers fall back to
+/// a generic phrase so a stray tool name never reaches the user.
+///
+/// Keep arms in sync with `GraphToolExecutor` in
+/// `packages/agent/src/local_agent/tools.rs`. The
+/// `humanize_tool_name_covers_all_registered_tools` test asserts that every
+/// registered tool has a non-generic mapping.
+fn humanize_tool_name(tool_name: &str) -> &'static str {
+    match tool_name {
+        "search_nodes" => "node search",
+        "search_semantic" => "semantic search",
+        "get_node" => "node lookup",
+        "create_node" => "node creation",
+        "update_node" => "node update",
+        "delete_node" => "node deletion",
+        "create_schema" => "schema creation",
+        "update_schema" => "schema update",
+        "update_task_status" => "task update",
+        "create_relationship" => "relationship creation",
+        "get_related_nodes" => "related node lookup",
+        "find_skills" => "skill lookup",
+        "create_nodes_from_markdown" => "markdown import",
+        _ => "the requested action",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LocalAgentLoop
 // ---------------------------------------------------------------------------
 
@@ -268,7 +301,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // brief confirmation so the UI always shows something meaningful.
                 let final_response = if normalized.is_empty() && !all_tool_executions.is_empty() {
                     let tool_name = &all_tool_executions.last().unwrap().name;
-                    format!("Done — {} completed successfully.", tool_name)
+                    format!(
+                        "Done — {} completed successfully.",
+                        humanize_tool_name(tool_name)
+                    )
                 } else if normalized.is_empty() {
                     // Model returned nothing at all — no tools, no text. Surface a
                     // visible error so the UI doesn't go blank.
@@ -439,12 +475,30 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
                 // Both final inference and last iteration returned empty — synthesize
                 // a summary from tool results so the UI always gets a response.
+                // Repeated calls to the same tool collapse to one bullet with a
+                // retry count so the diagnostic signal (the agent looped on the
+                // same operation until it ran out of iterations) survives.
                 let fallback = if !all_tool_executions.is_empty() {
-                    let summary: Vec<String> = all_tool_executions
-                        .iter()
-                        .map(|t| format!("• {} completed", t.name))
-                        .collect();
-                    summary.join("\n")
+                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+                    for t in &all_tool_executions {
+                        let label = humanize_tool_name(&t.name);
+                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
+                            entry.1 += 1;
+                        } else {
+                            counts.push((label, 1));
+                        }
+                    }
+                    counts
+                        .into_iter()
+                        .map(|(label, count)| {
+                            if count > 1 {
+                                format!("• {} completed ({}×)", label, count)
+                            } else {
+                                format!("• {} completed", label)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 } else {
                     normalize_response(&response_text)
                 };
@@ -1200,6 +1254,67 @@ mod tests {
         // All should be search_nodes
         for tc in &result.tool_calls_made {
             assert_eq!(tc.name, "search_nodes");
+        }
+
+        // The fallback response must encode the invariant from issue #1092:
+        // no raw tool identifier reaches the UI. Tests on specific phrasing
+        // belong in `humanize_tool_name_known_tools` below, not here.
+        assert!(
+            !result.response.contains('_'),
+            "fallback response contains snake_case (likely a raw tool name): {:?}",
+            result.response
+        );
+        assert!(
+            !result.response.contains("search_nodes"),
+            "fallback response leaked raw tool name: {:?}",
+            result.response
+        );
+        // Repeated calls to the same tool collapse into one bullet with a
+        // retry count — verify the diagnostic signal is preserved.
+        assert!(
+            result
+                .response
+                .contains(&format!("{}×", MAX_TOOL_ITERATIONS)),
+            "fallback response missing retry count: {:?}",
+            result.response
+        );
+    }
+
+    // -- humanize_tool_name ------------------------------------------------
+
+    #[test]
+    fn humanize_tool_name_known_tools() {
+        assert_eq!(humanize_tool_name("create_schema"), "schema creation");
+        assert_eq!(humanize_tool_name("update_node"), "node update");
+        assert_eq!(humanize_tool_name("search_semantic"), "semantic search");
+        assert_eq!(humanize_tool_name("delete_node"), "node deletion");
+    }
+
+    #[test]
+    fn humanize_tool_name_unknown_falls_back_to_generic() {
+        // Unknown identifiers must NOT leak through verbatim — they map to a
+        // generic phrase so the chat UI never displays an internal name.
+        assert_eq!(
+            humanize_tool_name("some_future_tool"),
+            "the requested action"
+        );
+        assert_eq!(humanize_tool_name(""), "the requested action");
+    }
+
+    /// Drift detector: every tool the executor exposes must have a non-generic
+    /// mapping in `humanize_tool_name`. Without this test, adding a new tool to
+    /// `GraphToolExecutor` and forgetting to extend the humanizer would silently
+    /// degrade the chat UI to "the requested action" with no signal.
+    #[test]
+    fn humanize_tool_name_covers_all_registered_tools() {
+        let generic = humanize_tool_name("__definitely_not_a_real_tool__");
+        for def in crate::local_agent::tools::all_tool_definitions() {
+            let humanized = humanize_tool_name(&def.name);
+            assert_ne!(
+                humanized, generic,
+                "tool {:?} has no humanized mapping — add an arm to `humanize_tool_name`",
+                def.name
+            );
         }
     }
 
