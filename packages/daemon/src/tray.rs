@@ -193,6 +193,12 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
                     }
                 } else if menu_event.id == s.quit_id {
                     tracing::info!("Tray Quit selected — initiating shutdown");
+                    // `notify_waiters` wakes only currently-registered waiters.
+                    // The gRPC server's `shutdown().await` is registered at
+                    // server-build time (synchronously inside the seed closure
+                    // above), so it's guaranteed to be parked here before the
+                    // user can click Quit. New consumers of `shutdown()` must
+                    // be registered with the same lifetime discipline.
                     quit_notify.notify_waiters();
                     *control_flow = ControlFlow::Exit;
                 }
