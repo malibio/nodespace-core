@@ -39,6 +39,34 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 
 // ---------------------------------------------------------------------------
+// Tool name humanization
+// ---------------------------------------------------------------------------
+
+/// Convert an internal tool identifier into user-facing prose.
+///
+/// Used by fallback responses that surface tool activity to the chat UI when
+/// the model fails to produce its own text. Unknown identifiers fall back to
+/// a generic phrase so a stray tool name never reaches the user.
+fn humanize_tool_name(tool_name: &str) -> &'static str {
+    match tool_name {
+        "search_nodes" => "node search",
+        "search_semantic" => "semantic search",
+        "get_node" => "node lookup",
+        "create_node" => "node creation",
+        "update_node" => "node update",
+        "delete_node" => "node deletion",
+        "create_schema" => "schema creation",
+        "update_schema" => "schema update",
+        "update_task_status" => "task status update",
+        "create_relationship" => "relationship creation",
+        "get_related_nodes" => "related-node lookup",
+        "find_skills" => "skill lookup",
+        "create_nodes_from_markdown" => "markdown import",
+        _ => "the requested action",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LocalAgentLoop
 // ---------------------------------------------------------------------------
 
@@ -268,7 +296,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // brief confirmation so the UI always shows something meaningful.
                 let final_response = if normalized.is_empty() && !all_tool_executions.is_empty() {
                     let tool_name = &all_tool_executions.last().unwrap().name;
-                    format!("Done — {} completed successfully.", tool_name)
+                    format!(
+                        "Done — {} completed successfully.",
+                        humanize_tool_name(tool_name)
+                    )
                 } else if normalized.is_empty() {
                     // Model returned nothing at all — no tools, no text. Surface a
                     // visible error so the UI doesn't go blank.
@@ -440,11 +471,17 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // Both final inference and last iteration returned empty — synthesize
                 // a summary from tool results so the UI always gets a response.
                 let fallback = if !all_tool_executions.is_empty() {
-                    let summary: Vec<String> = all_tool_executions
-                        .iter()
-                        .map(|t| format!("• {} completed", t.name))
-                        .collect();
-                    summary.join("\n")
+                    let mut seen: Vec<&'static str> = Vec::new();
+                    for t in &all_tool_executions {
+                        let label = humanize_tool_name(&t.name);
+                        if !seen.contains(&label) {
+                            seen.push(label);
+                        }
+                    }
+                    seen.into_iter()
+                        .map(|label| format!("• {} completed", label))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 } else {
                     normalize_response(&response_text)
                 };
@@ -1201,6 +1238,41 @@ mod tests {
         for tc in &result.tool_calls_made {
             assert_eq!(tc.name, "search_nodes");
         }
+
+        // The fallback response must not surface the raw tool identifier to
+        // the UI — issue #1092.
+        assert!(
+            !result.response.contains("search_nodes"),
+            "fallback response leaked raw tool name: {:?}",
+            result.response
+        );
+        // …and the humanized label should be present instead.
+        assert!(
+            result.response.contains("node search"),
+            "fallback response missing humanized label: {:?}",
+            result.response
+        );
+    }
+
+    // -- humanize_tool_name ------------------------------------------------
+
+    #[test]
+    fn humanize_tool_name_known_tools() {
+        assert_eq!(humanize_tool_name("create_schema"), "schema creation");
+        assert_eq!(humanize_tool_name("update_node"), "node update");
+        assert_eq!(humanize_tool_name("search_semantic"), "semantic search");
+        assert_eq!(humanize_tool_name("delete_node"), "node deletion");
+    }
+
+    #[test]
+    fn humanize_tool_name_unknown_falls_back_to_generic() {
+        // Unknown identifiers must NOT leak through verbatim — they map to a
+        // generic phrase so the chat UI never displays an internal name.
+        assert_eq!(
+            humanize_tool_name("some_future_tool"),
+            "the requested action"
+        );
+        assert_eq!(humanize_tool_name(""), "the requested action");
     }
 
     #[tokio::test]
