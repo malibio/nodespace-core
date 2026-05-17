@@ -245,6 +245,8 @@ pub enum LocalAgentStatus {
 pub enum ModelFamily {
     /// Ministral -- Mistral AI's small model series (Ministral 3B, Ministral 8B).
     Ministral,
+    /// Gemma 4 -- Google's multimodal model series (E4B, 31B).
+    Gemma4,
     /// Model served via Ollama (family determined by Ollama).
     Ollama,
 }
@@ -393,6 +395,9 @@ pub struct ModelInfo {
 pub struct ChatModelSpec {
     /// Identifier of the model this spec describes.
     pub model_id: String,
+    /// Family the model belongs to (drives any per-family behavior, e.g. UI
+    /// hardware-requirement labels).
+    pub family: ModelFamily,
     /// Maximum number of tokens the model can process.
     pub context_window: u32,
     /// Default sampling temperature.

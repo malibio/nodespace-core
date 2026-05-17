@@ -402,6 +402,11 @@ pub async fn ensure_model_ready(
 
     let model_path_str = model_path.to_string_lossy().to_string();
 
+    let family = manager
+        .gguf_manager()
+        .family_for(&model_id)
+        .map_err(|e| agent_error(format!("Failed to look up model family: {e}")))?;
+
     // Mark as loaded in the model manager
     manager
         .load(&model_id)
@@ -411,7 +416,7 @@ pub async fn ensure_model_ready(
     // Create the real inference engine (blocking: loads GGUF + compiles Metal kernels)
     let engine = tokio::task::spawn_blocking(move || {
         use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
-        LlamaChatInferenceEngine::load(&model_path_str, ChatConfig::default())
+        LlamaChatInferenceEngine::load(&model_path_str, family, ChatConfig::default())
     })
     .await
     .map_err(|e| agent_error(format!("Task join error: {e}")))?
