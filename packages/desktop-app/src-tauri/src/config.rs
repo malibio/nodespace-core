@@ -21,9 +21,6 @@ pub struct AppConfig {
     /// Resolved path to the GGUF embedding model file
     pub model_path: PathBuf,
 
-    /// MCP server port (from MCP_PORT env var or default 3100)
-    pub mcp_port: u16,
-
     /// Stable client ID for domain event filtering (prevents UI feedback loops)
     pub tauri_client_id: String,
 }
@@ -35,7 +32,6 @@ impl AppConfig {
     pub fn from_preferences(
         prefs: &crate::preferences::AppPreferences,
         model_path: PathBuf,
-        mcp_port: u16,
     ) -> Result<Self, String> {
         let database_path = match &prefs.database_path {
             Some(p) => p.clone(),
@@ -45,7 +41,6 @@ impl AppConfig {
         Ok(AppConfig {
             database_path,
             model_path,
-            mcp_port,
             tauri_client_id: crate::constants::TAURI_CLIENT_ID.to_string(),
         })
     }

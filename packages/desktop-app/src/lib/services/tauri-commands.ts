@@ -361,48 +361,32 @@ export async function ensureModelReady(modelId: string): Promise<boolean> {
 }
 
 // ============================================================================
-// ACP Commands (Issue #1008)
+// ACP Commands — temporarily disabled
 // ============================================================================
+//
+// The ACP transport and Tauri command bridge were removed in #1117 ahead of
+// the PTY-based agent rewrite (ADR-032). The wrappers below stay so callers
+// in the chat store / agent store don't need to be edited mid-transition,
+// but they no longer invoke any Tauri command. The follow-up PTY-UI issue
+// replaces these with real PTY-spawn commands.
 
-/**
- * List all discovered ACP agents.
- */
 export async function acpListAgents(): Promise<AcpAgentInfo[]> {
-  if (!isTauri()) return [];
-  return invoke<AcpAgentInfo[]>('acp_list_agents');
+  return [];
 }
 
-/**
- * Start a new ACP session with the specified agent.
- * @returns Session ID
- */
-export async function acpStartSession(agentId: string): Promise<string> {
-  if (!isTauri()) return `mock-acp-session-${Date.now()}`;
-  return invoke<string>('acp_start_session', { agentId });
+export async function acpStartSession(_agentId: string): Promise<string> {
+  return `pty-session-pending-${Date.now()}`;
 }
 
-/**
- * Send a message to an active ACP session.
- * The agent's response is emitted via acp://agent-message event.
- */
-export async function acpSendMessage(sessionId: string, message: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('acp_send_message', { sessionId, message });
+export async function acpSendMessage(_sessionId: string, _message: string): Promise<void> {
+  return;
 }
 
-/**
- * End an ACP session gracefully.
- */
-export async function acpEndSession(sessionId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('acp_end_session', { sessionId });
+export async function acpEndSession(_sessionId: string): Promise<void> {
+  return;
 }
 
-/**
- * Refresh the agent registry and return the updated list.
- */
 export async function acpRefreshAgents(): Promise<AcpAgentInfo[]> {
-  if (!isTauri()) return [];
-  return invoke<AcpAgentInfo[]>('acp_refresh_agents');
+  return [];
 }
 

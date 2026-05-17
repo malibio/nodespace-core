@@ -17,9 +17,6 @@ pub mod config;
 // Centralized services container (Issue #894)
 pub mod app_services;
 
-// MCP Tauri integration (wraps core MCP with event emissions)
-pub mod mcp_integration;
-
 // Background services
 pub mod services;
 
@@ -166,67 +163,6 @@ pub fn initialize_skill_updater(
         match result {
             Ok(_) => tracing::info!("✅ Skill updater exited normally"),
             Err(panic_info) => tracing::error!("💥 Skill updater panicked: {:?}", panic_info),
-        }
-    });
-
-    Ok(())
-}
-
-/// Initialize MCP server with shared services
-///
-/// Takes Arc<NodeService> and Arc<NodeEmbeddingService> directly rather than
-/// reading from Tauri state. This supports hot-swapping via AppServices.
-///
-/// The `cancel_token` is used for graceful shutdown - when cancelled, the MCP
-/// server task will be aborted before the Tokio runtime drops.
-pub fn initialize_mcp_server(
-    app: tauri::AppHandle,
-    node_service: std::sync::Arc<nodespace_core::NodeService>,
-    embedding_service: Option<std::sync::Arc<nodespace_core::services::NodeEmbeddingService>>,
-    cancel_token: tokio_util::sync::CancellationToken,
-) -> anyhow::Result<()> {
-    use futures::FutureExt;
-
-    tracing::info!("🔧 Initializing MCP server service...");
-
-    // Create MCP service with Tauri event callback
-    let (mcp_service, callback) = mcp_integration::create_mcp_service_with_events(
-        node_service,
-        embedding_service,
-        app.clone(),
-    );
-
-    tracing::info!(
-        "✅ McpServerService created on port {}, spawning background task...",
-        mcp_service.port()
-    );
-
-    // Spawn MCP server task with Tauri event emissions
-    // Uses panic protection to prevent silent background task failures
-    // Monitors cancel_token for graceful shutdown before runtime drops
-    tauri::async_runtime::spawn(async move {
-        let result = std::panic::AssertUnwindSafe(async {
-            tokio::select! {
-                res = mcp_service.start_with_callback(callback) => res,
-                _ = cancel_token.cancelled() => {
-                    tracing::info!("MCP server received shutdown signal");
-                    Ok(())
-                }
-            }
-        })
-        .catch_unwind()
-        .await;
-
-        match result {
-            Ok(Ok(_)) => {
-                tracing::info!("✅ MCP server exited normally");
-            }
-            Ok(Err(e)) => {
-                tracing::error!("❌ MCP server error: {}", e);
-            }
-            Err(panic_info) => {
-                tracing::error!("💥 MCP server panicked: {:?}", panic_info);
-            }
         }
     });
 
@@ -381,7 +317,6 @@ pub fn run() {
             {
                 use crate::commands::local_agent::ManagedAgentState;
                 use nodespace_agent::acp::registry::SystemAgentRegistry;
-                use nodespace_agent::acp::session::AcpClientService;
                 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
                 use nodespace_agent::local_agent::model_manager::GgufModelManager;
                 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
@@ -404,16 +339,10 @@ pub fn run() {
                 let app_services = app.state::<app_services::AppServices>().inner().clone();
                 app.manage(std::sync::Arc::new(ManagedAgentState::new(app_services)));
 
-                // Agent registry for discovering external ACP agents.
-                // Wrapped in Arc so it can be shared between Tauri state and AcpClientService.
+                // PTY-based agent registry (ADR-032). Catalogs known external agents
+                // (Claude Code, Codex, Gemini CLI, Pi, OpenCode) for PTY-spawned sessions.
                 let registry: std::sync::Arc<SystemAgentRegistry> =
                     std::sync::Arc::new(SystemAgentRegistry::new());
-
-                // ACP client service for managing external agent sessions
-                let acp_service = AcpClientService::new(registry.clone());
-                app.manage(acp_service);
-
-                // Store the Arc<SystemAgentRegistry> as managed state for direct queries
                 app.manage(registry);
 
                 tracing::info!("Agent services registered as independent managed state");
@@ -542,12 +471,6 @@ pub fn run() {
             commands::chat_models::chat_model_load,
             commands::chat_models::chat_model_unload,
             commands::chat_models::ollama_available,
-            // ACP commands (Issue #1008)
-            commands::acp::acp_list_agents,
-            commands::acp::acp_start_session,
-            commands::acp::acp_send_message,
-            commands::acp::acp_end_session,
-            commands::acp::acp_refresh_agents,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

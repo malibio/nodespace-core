@@ -90,61 +90,16 @@ pub enum ToolError {
     Other(#[from] anyhow::Error),
 }
 
-/// Errors returned by [`AcpTransport`] methods.
-#[derive(Debug, Error)]
-pub enum TransportError {
-    /// The connection to the agent process is not alive.
-    #[error("transport not connected")]
-    NotConnected,
-
-    /// Sending a message failed.
-    #[error("send failed: {0}")]
-    SendFailed(String),
-
-    /// Receiving a message timed out.
-    #[error("receive timed out")]
-    ReceiveTimeout,
-
-    /// The agent process exited unexpectedly.
-    #[error("agent process exited: {0}")]
-    ProcessExited(String),
-
-    /// Catch-all for unexpected errors.
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
-/// Errors returned by [`AgentRegistry`] methods.
-#[derive(Debug, Error)]
-pub enum RegistryError {
-    /// The requested agent ID was not found.
-    #[error("agent not found: {0}")]
-    NotFound(String),
-
-    /// Discovery of agents failed.
-    #[error("discovery failed: {0}")]
-    DiscoveryFailed(String),
-
-    /// Catch-all for unexpected errors.
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
-/// Errors returned by [`ContextAssembler`] methods.
+/// Errors returned when writing a context file for a PTY agent session (ADR-032).
 #[derive(Debug, Error)]
 pub enum ContextError {
     /// The requested node could not be found.
     #[error("node not found: {0}")]
     NodeNotFound(String),
 
-    /// Assembling the context exceeded the token budget.
-    #[error("token budget exceeded: requested {requested}, budget {budget}")]
-    TokenBudgetExceeded {
-        /// Tokens requested.
-        requested: u32,
-        /// Token budget limit.
-        budget: u32,
-    },
+    /// Writing the context file to disk failed.
+    #[error("context file write failed: {0}")]
+    WriteFailed(#[from] std::io::Error),
 
     /// Catch-all for unexpected errors.
     #[error(transparent)]
@@ -232,25 +187,34 @@ pub enum ModelStatus {
     },
 }
 
-/// State of an ACP (Agent Communication Protocol) session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum AcpSessionState {
-    /// No active session.
-    Idle,
-    /// Session is being set up (process spawn, handshake).
-    Initializing,
-    /// Session is active and processing messages.
-    Active,
-    /// The agent is producing its final response.
-    Completing,
-    /// Session ended successfully.
-    Completed,
-    /// Session ended with an error.
-    Failed {
-        /// Explanation of the failure.
-        reason: String,
-    },
+/// External agent CLI catalogued for PTY spawning (ADR-032).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentType {
+    ClaudeCode,
+    Codex,
+    GeminiCli,
+    Pi,
+    OpenCode,
+}
+
+/// Context file convention an external agent expects on launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ContextFile {
+    /// Claude Code reads `CLAUDE.md` from its working directory.
+    ClaudeMd,
+    /// All other supported agents read `AGENTS.md`.
+    AgentsMd,
+}
+
+impl ContextFile {
+    /// Filename written to the session directory.
+    pub fn filename(self) -> &'static str {
+        match self {
+            ContextFile::ClaudeMd => "CLAUDE.md",
+            ContextFile::AgentsMd => "AGENTS.md",
+        }
+    }
 }
 
 /// Current status of the local agent.
@@ -272,19 +236,6 @@ pub enum LocalAgentStatus {
     Error {
         /// Human-readable error description.
         message: String,
-    },
-}
-
-/// How an ACP agent authenticates with external services.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "method", rename_all = "snake_case")]
-pub enum AcpAuthMethod {
-    /// The agent manages its own credentials internally.
-    AgentManaged,
-    /// Credentials are provided via an environment variable.
-    EnvApiKey {
-        /// Name of the environment variable holding the API key.
-        var_name: String,
     },
 }
 
@@ -408,62 +359,6 @@ pub struct ToolExecutionRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Structs -- ACP (Agent Communication Protocol)
-// ---------------------------------------------------------------------------
-
-/// A JSON-RPC 2.0 message used by the Agent Communication Protocol.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpMessage {
-    /// JSON-RPC version string (always "2.0").
-    pub jsonrpc: String,
-    /// Method name for requests/notifications; absent for responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<String>,
-    /// Parameters for the method.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
-    /// Request identifier; absent for notifications.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<serde_json::Value>,
-    /// Result payload for successful responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    /// Error payload for failed responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<AcpError>,
-}
-
-/// Error object in a JSON-RPC response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpError {
-    /// Numeric error code (follows JSON-RPC conventions).
-    pub code: i32,
-    /// Human-readable error description.
-    pub message: String,
-    /// Optional structured error data.
-    pub data: Option<serde_json::Value>,
-}
-
-/// Information about an ACP-compatible agent discovered by the registry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpAgentInfo {
-    /// Unique identifier for this agent.
-    pub id: String,
-    /// Human-readable display name.
-    pub name: String,
-    /// Path to the agent binary.
-    pub binary: String,
-    /// Command-line arguments to pass when spawning the agent.
-    pub args: Vec<String>,
-    /// How the agent authenticates with external services.
-    pub auth_method: AcpAuthMethod,
-    /// Whether the agent is currently reachable.
-    pub available: bool,
-    /// Semantic version of the agent, if reported.
-    pub version: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // Structs -- Model Management
 // ---------------------------------------------------------------------------
 
@@ -564,45 +459,6 @@ pub struct AgentTurnResult {
 }
 
 // ---------------------------------------------------------------------------
-// Structs -- Context Assembly
-// ---------------------------------------------------------------------------
-
-/// Assembled context packet ready for injection into a system prompt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextPacket {
-    /// The assembled system prompt incorporating node context.
-    pub system_prompt: String,
-    /// Nodes included in the context window.
-    pub context_nodes: Vec<ContextNode>,
-    /// Estimated token count for the entire packet.
-    pub token_count: u32,
-}
-
-/// A single node included in an assembled context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextNode {
-    /// Node identifier.
-    pub node_id: String,
-    /// Type of the node (e.g. "text", "task").
-    pub node_type: String,
-    /// Text content of the node.
-    pub content: String,
-    /// Relationships from this node to other nodes.
-    pub relationships: Vec<ContextRelationship>,
-}
-
-/// A relationship from a context node to another node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextRelationship {
-    /// Identifier of the target node.
-    pub target_id: String,
-    /// Type of relationship (e.g. "mentions", "child_of").
-    pub relationship_type: String,
-    /// Human-readable label for the target node.
-    pub target_label: String,
-}
-
-// ---------------------------------------------------------------------------
 // Traits
 // ---------------------------------------------------------------------------
 
@@ -663,49 +519,4 @@ pub trait AgentToolExecutor: Send + Sync {
 
     /// Execute a tool by name with the given JSON arguments.
     async fn execute(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, ToolError>;
-}
-
-/// Transport layer for communicating with ACP agent processes.
-///
-/// Manages the stdio/JSON-RPC connection to a spawned agent binary.
-#[async_trait]
-pub trait AcpTransport: Send + Sync {
-    /// Send a JSON-RPC message to the agent.
-    async fn send(&self, message: AcpMessage) -> Result<(), TransportError>;
-
-    /// Receive the next JSON-RPC message from the agent.
-    async fn receive(&self) -> Result<AcpMessage, TransportError>;
-
-    /// Check whether the agent process is still alive.
-    async fn is_alive(&self) -> bool;
-
-    /// Gracefully shut down the transport and the underlying agent process.
-    async fn shutdown(&self) -> Result<(), TransportError>;
-}
-
-/// Registry for discovering and managing ACP-compatible agents.
-#[async_trait]
-pub trait AgentRegistry: Send + Sync {
-    /// Discover all available agents (scans configured directories).
-    async fn discover_agents(&self) -> Result<Vec<AcpAgentInfo>, RegistryError>;
-
-    /// Get information about a specific agent by its identifier.
-    async fn get_agent(&self, agent_id: &str) -> Result<AcpAgentInfo, RegistryError>;
-
-    /// Refresh the agent catalog by re-scanning discovery paths.
-    async fn refresh(&self) -> Result<(), RegistryError>;
-}
-
-/// Assembler for building context packets from the knowledge graph.
-///
-/// Gathers relevant nodes, relationships, and system prompt fragments
-/// into a single [`ContextPacket`] that fits within a token budget.
-#[async_trait]
-pub trait ContextAssembler: Send + Sync {
-    /// Assemble a context packet for the given node IDs within the token budget.
-    async fn assemble(
-        &self,
-        node_ids: Vec<String>,
-        token_budget: u32,
-    ) -> Result<ContextPacket, ContextError>;
 }
