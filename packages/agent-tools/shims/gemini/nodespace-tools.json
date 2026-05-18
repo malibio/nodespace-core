@@ -17,7 +17,7 @@
         },
         "required": ["query"]
       },
-      "handler": "./nodespace-handler.js"
+      "handler": "./nodespace-handler.ts"
     },
     {
       "name": "nodespace_get_node",
@@ -32,7 +32,7 @@
         },
         "required": ["node_id"]
       },
-      "handler": "./nodespace-handler.js"
+      "handler": "./nodespace-handler.ts"
     },
     {
       "name": "nodespace_create_node",
@@ -55,7 +55,7 @@
         },
         "required": ["type", "content"]
       },
-      "handler": "./nodespace-handler.js"
+      "handler": "./nodespace-handler.ts"
     },
     {
       "name": "nodespace_update_node",
@@ -74,7 +74,7 @@
         },
         "required": ["node_id", "content"]
       },
-      "handler": "./nodespace-handler.js"
+      "handler": "./nodespace-handler.ts"
     },
     {
       "name": "nodespace_get_children",
@@ -89,7 +89,7 @@
         },
         "required": ["node_id"]
       },
-      "handler": "./nodespace-handler.js"
+      "handler": "./nodespace-handler.ts"
     }
   ]
 }
