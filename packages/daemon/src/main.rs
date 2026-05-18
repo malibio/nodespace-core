@@ -22,8 +22,8 @@ use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
-    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, NodeServiceImpl,
-    NodeServiceServer,
+    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, LocalAgentServiceImpl,
+    LocalAgentServiceServer, NodeServiceImpl, NodeServiceServer,
 };
 use nodespace_nlp_engine::EmbeddingService;
 use tonic::transport::Server;
@@ -105,7 +105,8 @@ async fn serve_headless() -> Result<()> {
     let builder = Server::builder()
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import));
+        .add_service(ImportServiceServer::new(bundle.import))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -147,7 +148,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         .layer(TrayMetricsLayer::new(controller))
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import));
+        .add_service(ImportServiceServer::new(bundle.import))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -166,6 +168,7 @@ struct ServiceBundle {
     node_service_grpc: NodeServiceImpl,
     agent_session: AgentSessionHandler,
     import: ImportServiceImpl,
+    local_agent: LocalAgentServiceImpl,
     /// `None` when the NLP model is absent — the daemon starts without semantic
     /// search rather than refusing to run. The `EmbeddingsService` gRPC endpoint
     /// is simply not registered in that case.
@@ -219,12 +222,14 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     let assembler = Arc::new(assembler);
     let agent_session = AgentSessionHandler::new(manager, assembler);
 
-    let import = ImportServiceImpl::new(node_service);
+    let import = ImportServiceImpl::new(node_service.clone());
+    let local_agent = LocalAgentServiceImpl::new(node_service);
 
     Ok(ServiceBundle {
         node_service_grpc,
         agent_session,
         import,
+        local_agent,
         embeddings_service_grpc,
         embedding_state,
     })

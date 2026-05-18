@@ -31,7 +31,8 @@ use std::time::Duration;
 use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeService};
 use nodespace_daemon::{
     EmbeddingsServiceClient, EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceClient,
-    ImportServiceImpl, ImportServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
+    ImportServiceImpl, ImportServiceServer, LocalAgentServiceClient, LocalAgentServiceImpl,
+    LocalAgentServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
 };
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -55,6 +56,7 @@ struct GrpcClientInner {
     node: NodeServiceClient<Channel>,
     import: ImportServiceClient<Channel>,
     embeddings: Option<EmbeddingsServiceClient<Channel>>,
+    local_agent: LocalAgentServiceClient<Channel>,
 }
 
 /// Managed Tauri state wrapping the gRPC clients.
@@ -119,6 +121,7 @@ impl GrpcClient {
         let node_service_impl =
             NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
         let import_impl = ImportServiceImpl::new(node_service.clone());
+        let local_agent_impl = LocalAgentServiceImpl::new(node_service.clone());
         let incoming = TcpListenerStream::new(listener);
 
         // Compute whether embeddings will be registered before moving the impl
@@ -135,7 +138,8 @@ impl GrpcClient {
         tokio::spawn(async move {
             let builder = Server::builder()
                 .add_service(NodeServiceServer::new(node_service_impl))
-                .add_service(ImportServiceServer::new(import_impl));
+                .add_service(ImportServiceServer::new(import_impl))
+                .add_service(LocalAgentServiceServer::new(local_agent_impl));
             let result = if let Some(emb) = embeddings_impl {
                 builder
                     .add_service(EmbeddingsServiceServer::new(emb))
@@ -168,8 +172,9 @@ impl GrpcClient {
 
         Ok(GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
-            import: ImportServiceClient::new(channel),
+            import: ImportServiceClient::new(channel.clone()),
             embeddings: embeddings_client,
+            local_agent: LocalAgentServiceClient::new(channel),
         })
     }
 
@@ -186,6 +191,11 @@ impl GrpcClient {
     /// Borrow a clone of the `EmbeddingsServiceClient`, if available.
     pub async fn embeddings_client(&self) -> Option<EmbeddingsServiceClient<Channel>> {
         self.inner.read().await.embeddings.clone()
+    }
+
+    /// Borrow a clone of the `LocalAgentServiceClient`.
+    pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
+        self.inner.read().await.local_agent.clone()
     }
 }
 

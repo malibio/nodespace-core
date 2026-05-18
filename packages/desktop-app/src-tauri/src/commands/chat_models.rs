@@ -117,20 +117,18 @@ pub async fn chat_model_load(
 
 /// Unload the currently loaded model, freeing resources.
 ///
-/// Also clears the agent's active_model_id so that reloading the same model
-/// afterwards correctly re-installs the inference engine.
+/// Unloads the currently-loaded chat model from memory.
+///
+/// The local agent inference engine now lives in the daemon (Issue #1137);
+/// active model state is managed there, not in Tauri.
 #[tauri::command]
 pub async fn chat_model_unload(
     manager: State<'_, Arc<CompositeModelManager>>,
-    agent_state: State<'_, Arc<crate::commands::local_agent::ManagedAgentState>>,
 ) -> Result<(), CommandError> {
     manager
         .unload()
         .await
-        .map_err(|e| model_error(format!("Failed to unload model: {e}")))?;
-
-    agent_state.clear_active_model().await;
-    Ok(())
+        .map_err(|e| model_error(format!("Failed to unload model: {e}")))
 }
 
 /// Check whether the Ollama daemon is running and reachable.
