@@ -257,6 +257,15 @@ pub struct RemoveSchemaRelationshipParams {
     pub relationship_name: String,
 }
 
+/// A single field rename operation within update_schema
+#[derive(Debug, Deserialize)]
+pub struct FieldRename {
+    /// Current field name
+    pub from: String,
+    /// New field name
+    pub to: String,
+}
+
 /// Parameters for update_schema (batch operations)
 #[derive(Debug, Deserialize)]
 pub struct UpdateSchemaParams {
@@ -268,6 +277,10 @@ pub struct UpdateSchemaParams {
     /// Field names to remove
     #[serde(default)]
     pub remove_fields: Option<Vec<String>>,
+    /// Field renames — rekeys property data on all existing nodes of this type
+    /// and updates the schema definition atomically.
+    #[serde(default)]
+    pub rename_fields: Option<Vec<FieldRename>>,
     /// Relationships to add
     #[serde(default)]
     pub add_relationships: Option<Vec<crate::models::schema::SchemaRelationship>>,
@@ -303,6 +316,8 @@ pub struct SchemaUpdateOutput {
     pub fields_added: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields_removed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields_renamed: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relationships_added: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -475,7 +490,43 @@ pub async fn handle_update_schema(
     let params: UpdateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
-    // Get existing schema
+    // --- Phase 1: Process renames first (each rename migrates data + updates schema definition) ---
+    let mut fields_renamed = 0;
+    if let Some(ref renames) = params.rename_fields {
+        // Validate all renames upfront before executing any
+        for rename in renames {
+            if rename.from.trim().is_empty() || rename.to.trim().is_empty() {
+                return Err(MCPError::invalid_params(
+                    "rename_fields entries must have non-empty 'from' and 'to'".to_string(),
+                ));
+            }
+            if rename.from == rename.to {
+                return Err(MCPError::invalid_params(format!(
+                    "rename_fields: 'from' and 'to' are the same: '{}'",
+                    rename.from
+                )));
+            }
+        }
+        // Check for duplicate destinations within the rename list itself
+        let mut seen_destinations = std::collections::HashSet::new();
+        for rename in renames {
+            if !seen_destinations.insert(&rename.to) {
+                return Err(MCPError::invalid_params(format!(
+                    "rename_fields: duplicate destination field name '{}'",
+                    rename.to
+                )));
+            }
+        }
+        for rename in renames {
+            node_service
+                .rename_schema_field(&params.schema_id, &rename.from, &rename.to)
+                .await
+                .map_err(|e| MCPError::invalid_params(format!("Field rename failed: {}", e)))?;
+            fields_renamed += 1;
+        }
+    }
+
+    // --- Phase 2: Re-fetch schema (may have been updated by renames above) ---
     let schema = node_service
         .get_schema_node(&params.schema_id)
         .await
@@ -620,6 +671,11 @@ pub async fn handle_update_schema(
         },
         fields_removed: if fields_removed > 0 {
             Some(fields_removed)
+        } else {
+            None
+        },
+        fields_renamed: if fields_renamed > 0 {
+            Some(fields_renamed)
         } else {
             None
         },
