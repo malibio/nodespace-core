@@ -925,6 +925,54 @@ impl NodeEmbeddingService {
         Ok(nodes_with_scores)
     }
 
+    /// Linear-scan cosine search restricted to a single node type.
+    ///
+    /// Bypasses the HNSW index and scans every embedding whose backing node
+    /// has the given type. Intended for highly-selective types where the
+    /// candidate set is small (e.g. ~10s of skill nodes) — there a linear
+    /// scan is faster *and* exact, unlike HNSW + post-filter which over-fetches
+    /// and may miss matches that didn't make the global top-K.
+    ///
+    /// Returns `(Node, score)` pairs sorted by descending composite score.
+    pub async fn semantic_search_nodes_of_type(
+        &self,
+        query: &str,
+        node_type: &str,
+        limit: usize,
+        threshold: f32,
+    ) -> Result<Vec<(Node, f64)>, NodeServiceError> {
+        if query.trim().is_empty() {
+            return Err(NodeServiceError::invalid_update(
+                "Search query cannot be empty",
+            ));
+        }
+
+        let query_vector = self.nlp_engine.generate_embedding(query).map_err(|e| {
+            NodeServiceError::SerializationError(format!(
+                "Failed to generate query embedding: {}",
+                e
+            ))
+        })?;
+
+        let results = self
+            .store
+            .search_embeddings_by_node_type(
+                &query_vector,
+                node_type,
+                limit as i64,
+                Some(threshold as f64),
+            )
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Typed embedding search failed: {}", e))
+            })?;
+
+        Ok(results
+            .into_iter()
+            .filter_map(|r| r.node.map(|node| (node, r.score)))
+            .collect())
+    }
+
     // =========================================================================
     // Cleanup
     // =========================================================================

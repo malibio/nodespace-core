@@ -27,6 +27,7 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything in NodeSpace is 
 /// search_semantic, get_node, and get_related_nodes, plus the canonical
 /// create_node / create_schema / create_relationship usage patterns.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
+    - To discover whether a registered skill matches the user's intent: call search_skills with a natural-language query describing what you want to do. Returns up to N matches with name, description, confidence (0-1), and tools. Empty matches mean no skill is related — judge whether to respond directly, ask the user, or proceed with general tools. Skip for purely conversational replies (greetings, thanks, small talk).\n\
     - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
     - To find nodes by exact title or keyword (when you know the name): use search_nodes with query=<keyword>. To filter by type (e.g. \"show all tasks\"), pass node_type=\"task\" with query=\"\". To filter by property (e.g. \"open tasks\"), pass filters={\"status\":\"open\"}.\n\
     - To find nodes by meaning/topic (when the exact name is unknown): use search_semantic (natural language query)\n\

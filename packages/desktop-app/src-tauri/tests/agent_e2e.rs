@@ -239,7 +239,7 @@ async fn local_agent_simple_conversation_roundtrip() {
         "NodeSpace is a knowledge management system.",
     ));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     // Create session
     let session_id = service.create_session(Some("test-model".into())).await;
@@ -275,7 +275,7 @@ async fn local_agent_conversation_with_tool_call() {
         "Found 2 nodes about architecture.",
     ));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(Some("test-model".into())).await;
 
@@ -383,7 +383,7 @@ async fn local_agent_multi_step_tool_chain() {
         ],
     ]));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(None).await;
     let result = service
@@ -437,7 +437,7 @@ async fn local_agent_multi_turn_history_persistence() {
         ],
     ]));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(None).await;
 
@@ -474,7 +474,7 @@ async fn local_agent_multi_turn_history_persistence() {
 async fn local_agent_session_lifecycle() {
     let engine = Arc::new(MockEngine::single_text("Hello!"));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     // Create multiple sessions
     let id1 = service.create_session(Some("model-a".into())).await;
@@ -754,7 +754,7 @@ async fn concurrent_multiple_local_sessions() {
         ],
     ]));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = Arc::new(LocalAgentService::new(engine, executor, None));
+    let service = Arc::new(LocalAgentService::new(engine, executor));
 
     let id1 = service.create_session(None).await;
     let id2 = service.create_session(None).await;
@@ -792,7 +792,7 @@ async fn concurrent_multiple_local_sessions() {
 async fn error_send_to_nonexistent_session() {
     let engine = Arc::new(MockEngine::single_text("unused"));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let result = service
         .send_message("nonexistent-session-id", "Hello", |_| {}, |_| {})
@@ -815,7 +815,7 @@ async fn error_send_to_nonexistent_session() {
 async fn error_no_model_loaded() {
     let engine = Arc::new(NoModelEngine);
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(None).await;
     let result = service
@@ -834,7 +834,7 @@ async fn error_no_model_loaded() {
 async fn error_cancellation_mid_turn() {
     let engine = Arc::new(MockEngine::single_text("Should not complete"));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(None).await;
 
@@ -885,7 +885,7 @@ async fn error_model_operations_with_invalid_id() {
 async fn benchmark_local_agent_turn_latency() {
     let engine = Arc::new(MockEngine::single_text("Quick response"));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(None).await;
 
@@ -919,7 +919,7 @@ async fn benchmark_tool_execution_overhead() {
         "Done.",
     ));
     let executor = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
 
     let session_id = service.create_session(None).await;
 
@@ -1036,11 +1036,7 @@ impl ChatInferenceEngine for CapturingMockEngine {
 async fn system_prompt_includes_dynamic_context() {
     let engine = Arc::new(CapturingMockEngine::new("Here are your tasks."));
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(
-        engine.clone() as Arc<dyn ChatInferenceEngine>,
-        executor,
-        None,
-    );
+    let service = LocalAgentService::new(engine.clone() as Arc<dyn ChatInferenceEngine>, executor);
 
     let session_id = service.create_session(Some("test-model".into())).await;
 
@@ -1085,7 +1081,7 @@ async fn response_normalizer_fixes_uri_formatting() {
         "Found your task: [nodespace://abc-123](nodespace://abc-123) with status in_progress",
     ));
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine as Arc<dyn ChatInferenceEngine>, executor, None);
+    let service = LocalAgentService::new(engine as Arc<dyn ChatInferenceEngine>, executor);
 
     let session_id = service.create_session(None).await;
     let result = service
@@ -1117,11 +1113,7 @@ async fn response_normalizer_fixes_uri_formatting() {
 async fn tool_definitions_included_in_inference_request() {
     let engine = Arc::new(CapturingMockEngine::new("No tasks found."));
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(
-        engine.clone() as Arc<dyn ChatInferenceEngine>,
-        executor,
-        None,
-    );
+    let service = LocalAgentService::new(engine.clone() as Arc<dyn ChatInferenceEngine>, executor);
 
     let session_id = service.create_session(None).await;
     let _result = service
@@ -1160,7 +1152,7 @@ async fn tool_call_round_trip_with_normalizer() {
         "Found 2 results: `nodespace://e2e-node-1` and `nodespace://e2e-node-2` are in_progress",
     ));
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(MockToolExecutor::new());
-    let service = LocalAgentService::new(engine as Arc<dyn ChatInferenceEngine>, executor, None);
+    let service = LocalAgentService::new(engine as Arc<dyn ChatInferenceEngine>, executor);
 
     let session_id = service.create_session(None).await;
     let result = service
@@ -1317,7 +1309,6 @@ async fn structured_query_tasks_uses_search_nodes() {
     let service = LocalAgentService::new(
         engine as Arc<dyn ChatInferenceEngine>,
         executor.clone() as Arc<dyn AgentToolExecutor>,
-        None,
     );
 
     let session_id = service.create_session(Some("test".into())).await;
@@ -1368,7 +1359,6 @@ async fn semantic_query_uses_search_semantic() {
     let service = LocalAgentService::new(
         engine as Arc<dyn ChatInferenceEngine>,
         executor.clone() as Arc<dyn AgentToolExecutor>,
-        None,
     );
 
     let session_id = service.create_session(Some("test".into())).await;
@@ -1474,7 +1464,6 @@ async fn multi_turn_mixed_tool_calls() {
     let service = LocalAgentService::new(
         engine as Arc<dyn ChatInferenceEngine>,
         executor.clone() as Arc<dyn AgentToolExecutor>,
-        None,
     );
 
     let session_id = service.create_session(Some("test".into())).await;
@@ -1575,7 +1564,6 @@ async fn test_real_inference_loads_and_runs() {
     let service = LocalAgentService::new(
         Arc::new(engine) as Arc<dyn ChatInferenceEngine>,
         Arc::new(executor) as Arc<dyn AgentToolExecutor>,
-        None,
     );
 
     // Create session
@@ -1619,599 +1607,4 @@ async fn test_real_inference_loads_and_runs() {
     // - Verification that second turn sees the new schema in the prompt
     // But this is complex to set up in unit tests and is better validated
     // through integration tests with a full database stack.
-}
-
-// ===========================================================================
-// Category 8: Skill Pipeline Mock E2E Tests (Issue #1057)
-// ===========================================================================
-
-/// Helper: create a MockToolExecutor with all 8 skill-related tools.
-fn skill_test_executor() -> MockToolExecutor {
-    use std::collections::HashMap;
-    let mut results = HashMap::new();
-    results.insert(
-        "search_nodes".to_string(),
-        json!({"count": 1, "nodes": [{"id": "node-1", "title": "Test Node", "type": "text"}]}),
-    );
-    results.insert(
-        "search_semantic".to_string(),
-        json!({"count": 1, "results": [{"id": "node-1", "title": "Test Node", "score": 0.9}]}),
-    );
-    results.insert(
-        "get_node".to_string(),
-        json!({"id": "node-1", "title": "Test Node", "body": "Content here"}),
-    );
-    results.insert("create_node".to_string(), json!({"id": "new-node-123"}));
-    results.insert(
-        "update_node".to_string(),
-        json!({"id": "node-1", "updated": true}),
-    );
-    results.insert(
-        "create_schema".to_string(),
-        json!({"id": "project", "name": "Project"}),
-    );
-    results.insert(
-        "update_task_status".to_string(),
-        json!({"id": "node-1", "status": "done", "updated": true}),
-    );
-    results.insert(
-        "create_relationship".to_string(),
-        json!({"from_id": "node-1", "to_id": "node-2", "type": "relates_to", "created": true}),
-    );
-    results.insert(
-        "get_related_nodes".to_string(),
-        json!({"count": 1, "nodes": [{"id": "node-2", "title": "Related", "type": "text"}]}),
-    );
-    results.insert(
-        "delete_node".to_string(),
-        json!({"node_id": "node-1", "deleted": true}),
-    );
-    results.insert(
-        "create_nodes_from_markdown".to_string(),
-        json!({"nodes": [{"id": "imported-1", "title": "Imported Node"}]}),
-    );
-
-    let tools = vec![
-        ToolDefinition {
-            name: "search_nodes".into(),
-            description: "Search nodes".into(),
-            parameters_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
-        },
-        ToolDefinition {
-            name: "search_semantic".into(),
-            description: "Semantic search".into(),
-            parameters_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
-        },
-        ToolDefinition {
-            name: "get_node".into(),
-            description: "Get a node".into(),
-            parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
-        },
-        ToolDefinition {
-            name: "create_node".into(),
-            description: "Create a node".into(),
-            parameters_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "node_type": {"type": "string"}}, "required": ["title", "node_type"]}),
-        },
-        ToolDefinition {
-            name: "update_node".into(),
-            description: "Update a node".into(),
-            parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
-        },
-        ToolDefinition {
-            name: "create_schema".into(),
-            description: "Create a schema".into(),
-            parameters_schema: json!({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}),
-        },
-        ToolDefinition {
-            name: "update_task_status".into(),
-            description: "Update task status".into(),
-            parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}, "status": {"type": "string"}}, "required": ["id", "status"]}),
-        },
-        ToolDefinition {
-            name: "create_relationship".into(),
-            description: "Create relationship".into(),
-            parameters_schema: json!({"type": "object", "properties": {"from_id": {"type": "string"}, "to_id": {"type": "string"}, "relationship_type": {"type": "string"}}, "required": ["from_id", "to_id", "relationship_type"]}),
-        },
-        ToolDefinition {
-            name: "get_related_nodes".into(),
-            description: "Get related nodes".into(),
-            parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
-        },
-        ToolDefinition {
-            name: "delete_node".into(),
-            description: "Delete a node".into(),
-            parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
-        },
-        ToolDefinition {
-            name: "create_nodes_from_markdown".into(),
-            description: "Import markdown as nodes".into(),
-            parameters_schema: json!({"type": "object", "properties": {"markdown": {"type": "string"}}, "required": ["markdown"]}),
-        },
-    ];
-
-    MockToolExecutor { tools, results }
-}
-
-/// Extract tool_whitelist from a skill NodeTemplate's root_properties.
-/// Adapter for the NodeTemplate API change in #1096 (fields moved to root_properties).
-fn tmpl_tool_whitelist(
-    tmpl: &nodespace_core::mcp::handlers::markdown::NodeTemplate,
-) -> Vec<String> {
-    tmpl.root_properties
-        .get("tool_whitelist")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Extract max_iterations from a skill NodeTemplate's root_properties.
-/// Adapter for the NodeTemplate API change in #1096 (fields moved to root_properties).
-fn tmpl_max_iterations(tmpl: &nodespace_core::mcp::handlers::markdown::NodeTemplate) -> usize {
-    tmpl.root_properties
-        .get("max_iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize
-}
-
-/// Build a Node from a NodeTemplate using prepare_nodes_from_template.
-/// Adapter for the NodeTemplate API change in #1096 (to_node() removed, replaced by prepare_nodes_from_template).
-fn tmpl_to_node(
-    tmpl: &nodespace_core::mcp::handlers::markdown::NodeTemplate,
-) -> nodespace_core::Node {
-    let nodes = nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template(tmpl).unwrap();
-    nodespace_core::Node::new(
-        nodes[0].node_type.clone(),
-        nodes[0].content.clone(),
-        nodes[0].properties.clone(),
-    )
-}
-
-/// Skill pipeline: Research & Search skill scopes to only search tools via MockEngine.
-#[tokio::test]
-async fn skill_pipeline_research_search_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds
-        .iter()
-        .find(|s| s.title == "Research & Search")
-        .unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "search".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"search_semantic") || scoped_names.contains(&"search_nodes"),
-        "Research skill should include search tools"
-    );
-    assert!(
-        !scoped_names.contains(&"delete_node"),
-        "Research skill should NOT include delete_node"
-    );
-    assert!(
-        !scoped_names.contains(&"create_node"),
-        "Research skill should NOT include create_node"
-    );
-}
-
-/// Skill pipeline: Node Creation skill scopes to create_node tool via MockEngine.
-#[tokio::test]
-async fn skill_pipeline_node_creation_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds.iter().find(|s| s.title == "Node Creation").unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "create".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"create_node"),
-        "Node Creation should include create_node"
-    );
-    assert!(
-        !scoped_names.contains(&"delete_node"),
-        "Node Creation should NOT include delete_node"
-    );
-    assert!(
-        !scoped_names.contains(&"search_semantic"),
-        "Node Creation should NOT include search_semantic"
-    );
-}
-
-/// Skill pipeline: Schema Creation skill scopes to create_schema tool.
-#[tokio::test]
-async fn skill_pipeline_schema_creation_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds.iter().find(|s| s.title == "Schema Creation").unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "create schema".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"create_schema"),
-        "Schema Creation should include create_schema"
-    );
-    assert!(
-        !scoped_names.contains(&"create_node"),
-        "Schema Creation should NOT include create_node"
-    );
-}
-
-/// Skill pipeline: Graph Editing skill scopes to update tools.
-#[tokio::test]
-async fn skill_pipeline_graph_editing_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds.iter().find(|s| s.title == "Graph Editing").unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "update".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"update_node"),
-        "Graph Editing should include update_node"
-    );
-    assert!(
-        scoped_names.contains(&"update_task_status"),
-        "Graph Editing should include update_task_status"
-    );
-    assert!(
-        !scoped_names.contains(&"create_schema"),
-        "Graph Editing should NOT include create_schema"
-    );
-}
-
-/// Skill pipeline: Relationship Management skill scopes to relationship tools.
-#[tokio::test]
-async fn skill_pipeline_relationship_management_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds
-        .iter()
-        .find(|s| s.title == "Relationship Management")
-        .unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "relate".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"create_relationship"),
-        "Relationship Mgmt should include create_relationship"
-    );
-    assert!(
-        scoped_names.contains(&"get_related_nodes"),
-        "Relationship Mgmt should include get_related_nodes"
-    );
-    assert!(
-        !scoped_names.contains(&"delete_node"),
-        "Relationship Mgmt should NOT include delete_node"
-    );
-}
-
-/// Skill pipeline: Node Deletion skill scopes to delete_node only.
-#[tokio::test]
-async fn skill_pipeline_node_deletion_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds.iter().find(|s| s.title == "Node Deletion").unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "delete".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"delete_node"),
-        "Node Deletion should include delete_node"
-    );
-    assert!(
-        scoped_names.contains(&"get_node"),
-        "Node Deletion should include get_node"
-    );
-    assert!(
-        !scoped_names.contains(&"create_node"),
-        "Node Deletion should NOT include create_node"
-    );
-    assert!(
-        !scoped_names.contains(&"update_node"),
-        "Node Deletion should NOT include update_node"
-    );
-
-    // Verify exactly 2 tools scoped
-    assert_eq!(
-        scoped.len(),
-        2,
-        "Node Deletion should scope to exactly 2 tools (delete_node + get_node)"
-    );
-}
-
-/// Skill pipeline: Bulk Import skill scopes to create_nodes_from_markdown only.
-#[tokio::test]
-async fn skill_pipeline_bulk_import_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds.iter().find(|s| s.title == "Bulk Import").unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "import".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"create_nodes_from_markdown"),
-        "Bulk Import should include create_nodes_from_markdown"
-    );
-    assert!(
-        !scoped_names.contains(&"create_node"),
-        "Bulk Import should NOT include create_node"
-    );
-
-    // Verify exactly 1 tool scoped
-    assert_eq!(
-        scoped.len(),
-        1,
-        "Bulk Import should scope to exactly 1 tool"
-    );
-}
-
-/// Skill pipeline: Organization skill scopes to create_relationship + get_node.
-#[tokio::test]
-async fn skill_pipeline_organization_scoping() {
-    use nodespace_agent::intent::ExtractedIntent;
-    use nodespace_agent::skill_pipeline::{SkillMatch, SkillPipeline};
-
-    let pipeline = Arc::new(SkillPipeline::new(None));
-    let seeds = SkillPipeline::seed_skill_nodes();
-    let skill = seeds.iter().find(|s| s.title == "Organization").unwrap();
-
-    let executor = Arc::new(skill_test_executor());
-    let all_tools = executor.available_tools().await.unwrap();
-
-    let skill_match = SkillMatch {
-        skill: tmpl_to_node(skill),
-        confidence: 0.9,
-        intent: ExtractedIntent {
-            query: "organize".to_string(),
-            from_pattern: true,
-        },
-        tool_whitelist: tmpl_tool_whitelist(skill),
-        max_iterations: tmpl_max_iterations(skill),
-    };
-
-    let scoped = pipeline.scope_tools(&all_tools, &skill_match);
-    let scoped_names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        scoped_names.contains(&"create_relationship"),
-        "Organization should include create_relationship"
-    );
-    assert!(
-        scoped_names.contains(&"get_node"),
-        "Organization should include get_node"
-    );
-    assert!(
-        !scoped_names.contains(&"delete_node"),
-        "Organization should NOT include delete_node"
-    );
-    assert!(
-        !scoped_names.contains(&"create_nodes_from_markdown"),
-        "Organization should NOT include create_nodes_from_markdown"
-    );
-
-    // Verify exactly 2 tools scoped
-    assert_eq!(
-        scoped.len(),
-        2,
-        "Organization should scope to exactly 2 tools"
-    );
-}
-
-/// Full pipeline: Node Deletion MockEngine → tool call → delete_node result.
-#[tokio::test]
-async fn skill_pipeline_node_deletion_full_pipeline() {
-    let engine = Arc::new(MockEngine::tool_then_text(
-        "delete_node",
-        r#"{"id":"old-meeting-node-123"}"#,
-        "Successfully deleted the old meeting notes.",
-    ));
-    let executor = Arc::new(skill_test_executor());
-    let service = LocalAgentService::new(engine, executor, None);
-
-    let session_id = service.create_session(None).await;
-    let result = service
-        .send_message(
-            &session_id,
-            "Delete the old meeting notes node",
-            |_| {},
-            |_| {},
-        )
-        .await
-        .unwrap();
-
-    assert!(
-        !result.response.is_empty() || !result.tool_calls_made.is_empty(),
-        "Should get a response or tool call"
-    );
-    assert_eq!(result.tool_calls_made.len(), 1);
-    assert_eq!(result.tool_calls_made[0].name, "delete_node");
-}
-
-/// Full pipeline: Bulk Import MockEngine → tool call → create_nodes_from_markdown result.
-#[tokio::test]
-async fn skill_pipeline_bulk_import_full_pipeline() {
-    let engine = Arc::new(MockEngine::tool_then_text(
-        "create_nodes_from_markdown",
-        "{\"markdown\":\"# My Document\\n\\nSome content here.\"}",
-        "Successfully imported the document as nodes.",
-    ));
-    let executor = Arc::new(skill_test_executor());
-    let service = LocalAgentService::new(engine, executor, None);
-
-    let session_id = service.create_session(None).await;
-    let result = service
-        .send_message(
-            &session_id,
-            "Import this markdown document into my knowledge base",
-            |_| {},
-            |_| {},
-        )
-        .await
-        .unwrap();
-
-    assert!(
-        !result.response.is_empty() || !result.tool_calls_made.is_empty(),
-        "Should get a response or tool call"
-    );
-    assert_eq!(result.tool_calls_made.len(), 1);
-    assert_eq!(result.tool_calls_made[0].name, "create_nodes_from_markdown");
-}
-
-/// Full pipeline: Organization MockEngine → tool call → create_relationship result.
-#[tokio::test]
-async fn skill_pipeline_organization_full_pipeline() {
-    let engine = Arc::new(MockEngine::tool_then_text(
-        "create_relationship",
-        r#"{"from_id":"node-1","to_id":"collection-1","relationship_type":"member_of"}"#,
-        "Added the node to the collection.",
-    ));
-    let executor = Arc::new(skill_test_executor());
-    let service = LocalAgentService::new(engine, executor, None);
-
-    let session_id = service.create_session(None).await;
-    let result = service
-        .send_message(
-            &session_id,
-            "Organize this node into the Projects collection",
-            |_| {},
-            |_| {},
-        )
-        .await
-        .unwrap();
-
-    assert!(
-        !result.response.is_empty() || !result.tool_calls_made.is_empty(),
-        "Should get a response or tool call"
-    );
-    assert_eq!(result.tool_calls_made.len(), 1);
-    assert_eq!(result.tool_calls_made[0].name, "create_relationship");
 }

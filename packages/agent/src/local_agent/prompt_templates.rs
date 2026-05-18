@@ -39,6 +39,7 @@ pub fn fallback_system_prompt(dynamic_context: &str) -> String {
          knowledge graph — creating, finding, updating, and connecting nodes.\
          {ctx_block}\n\
          TOOL STRATEGY:\n\
+         - To discover whether a registered skill matches the user's intent: call search_skills(query) with a natural-language description of what you want to do. Empty matches mean no skill is related — judge whether to respond directly, ask the user, or proceed with general tools. Skip for purely conversational replies.\n\
          - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
          - To find nodes by meaning/topic: use search_semantic (natural language query)\n\
          - To find nodes by exact fields: use search_nodes (keyword + type filter)\n\

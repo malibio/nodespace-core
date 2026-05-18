@@ -15,7 +15,7 @@ use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_inference::OllamaInferenceEngine;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
-use nodespace_agent::skill_pipeline::SkillPipeline;
+use nodespace_agent::skill_pipeline::seed_skill_nodes;
 use nodespace_nlp_engine::chat::ChatConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -337,7 +337,7 @@ async fn resolve_engine(test_name: &str) -> Option<Arc<dyn ChatInferenceEngine>>
 
 /// Build a scoped tool list for a skill (from the skill library).
 fn tools_for_skill(skill_name: &str, all_tools: &[ToolDefinition]) -> Vec<ToolDefinition> {
-    let seeds = SkillPipeline::seed_skill_nodes();
+    let seeds = seed_skill_nodes();
     let tmpl = seeds
         .iter()
         .find(|s| s.title == skill_name)
@@ -801,7 +801,7 @@ async fn test_skill_pipeline_organization_real_model() {
 /// Mirrors what the live app sends to Ollama:
 ///   1. Base prompt from `PromptAssembler::seed_prompt_nodes()` (with entity types
 ///      rendered into the Workspace Context Template)
-///   2. Active skill header + description (from `SkillPipeline::seed_skill_nodes()`)
+///   2. Active skill header + description (from `seed_skill_nodes()`)
 ///   3. Skill guidance content
 ///
 /// Using the real seed sources means any change to prompt content or skill guidance
@@ -813,7 +813,7 @@ fn schema_creation_context(entity_types: &str) -> String {
     let base = PromptAssembler::assemble_static(entity_types, None);
 
     // 2. Skill name, description, and guidance from the seeded skill definition.
-    let skill = nodespace_agent::skill_pipeline::SkillPipeline::seed_skill_nodes()
+    let skill = nodespace_agent::skill_pipeline::seed_skill_nodes()
         .into_iter()
         .find(|s| s.title == "Schema Creation");
 
@@ -1143,7 +1143,7 @@ async fn test_pipeline_task_status_update() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(
@@ -1178,7 +1178,7 @@ async fn test_pipeline_schema_creation() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(
@@ -1209,7 +1209,7 @@ async fn test_pipeline_schema_creation_with_relationship() {
     // Use schema-scoped executor (create_schema + get_node only) to mirror the
     // tool scoping the skill pipeline applies when Schema Creation skill matches.
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(SchemaSkillToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     // Inject the full skill context: entity types + skill name/desc + guidance.
@@ -1279,7 +1279,7 @@ async fn test_pipeline_schema_creation_project_task_relationship() {
     // Use schema-scoped executor (create_schema + get_node only) to mirror the
     // tool scoping the skill pipeline applies when Schema Creation skill matches.
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(SchemaSkillToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     // Inject the full skill context: entity types + skill name/desc + guidance.
@@ -1342,7 +1342,7 @@ async fn test_pipeline_multi_turn_session_persistence() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     // Turn 1: task update
@@ -1383,7 +1383,7 @@ async fn test_pipeline_search_nodes_keyword() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(
@@ -1411,7 +1411,7 @@ async fn test_pipeline_get_related_nodes() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(
@@ -1440,7 +1440,7 @@ async fn test_pipeline_update_node_content() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(
@@ -1468,7 +1468,7 @@ async fn test_pipeline_get_node_by_id() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(
@@ -1499,7 +1499,7 @@ async fn test_pipeline_schema_creation_title_template_fields() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(SchemaSkillToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     service
@@ -1584,7 +1584,7 @@ async fn test_pipeline_search_nodes_with_type_filter() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(&service, &session_id, "Find all my open tasks").await;
@@ -1607,7 +1607,7 @@ async fn test_pipeline_delete_node() {
     };
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(StubToolExecutor::new());
-    let service = LocalAgentService::new(engine, executor, None);
+    let service = LocalAgentService::new(engine, executor);
     let session_id = service.create_session(None).await;
 
     let tools = run_turn_get_tools(

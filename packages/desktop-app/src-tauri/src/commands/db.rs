@@ -60,11 +60,11 @@ pub(crate) async fn create_service_bundle(
     // exist are skipped.
     {
         use nodespace_agent::prompt_assembler::PromptAssembler;
-        use nodespace_agent::skill_pipeline::SkillPipeline;
+        use nodespace_agent::skill_pipeline::seed_skill_nodes;
         use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
 
         let prompt_templates = PromptAssembler::seed_prompt_nodes();
-        let skill_templates = SkillPipeline::seed_skill_nodes();
+        let skill_templates = seed_skill_nodes();
 
         // Expand all templates into PreparedNode lists.
         let mut all_template_nodes: Vec<

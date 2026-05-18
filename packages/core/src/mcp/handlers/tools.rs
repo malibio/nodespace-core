@@ -1462,17 +1462,17 @@ fn get_tool_schemas(schemas: &[SchemaNode]) -> Value {
         },
         {
             "name": "find_skills",
-            "description": "Search for agent skills by describing what you need to accomplish. Returns skill descriptions with available tools and guidance.",
+            "description": "Search registered skills by describing what you want to accomplish. Returns up to 3 matches by default (max 10), sorted by relevance, each with id, name, description, confidence (0-1), and tools. Empty matches mean no skill is even loosely related — judge whether to proceed without one, ask the user, or respond directly.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "What you need to accomplish"
+                        "description": "Natural-language description of what you need to do"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum skills to return (default 3)"
+                        "description": "Maximum skills to return (default 3, max 10)"
                     }
                 },
                 "required": ["query"]

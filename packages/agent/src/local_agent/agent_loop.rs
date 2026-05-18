@@ -38,12 +38,6 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 /// Tokens available for conversation history.
 const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 
-/// Maximum word count for a message to be considered "ambiguous".
-///
-/// Short messages without clear intent (e.g. "help", "what about that?")
-/// are likely too vague to dispatch to the full 13-tool agent path.
-const AMBIGUOUS_MESSAGE_WORD_LIMIT: usize = 10;
-
 /// Returns the test-only system-prompt override on a session, or `None` in
 /// production. The two cfg variants let `run_turn` keep a single
 /// override → assembler → fallback chain without duplicating the assembler
@@ -56,79 +50,6 @@ fn session_prompt_override(session: &AgentSession) -> Option<&str> {
 #[cfg(not(any(test, feature = "testing")))]
 fn session_prompt_override(_session: &AgentSession) -> Option<&str> {
     None
-}
-
-/// Clarifying question returned when the skill pipeline finds no match and
-/// the user message is too short/vague to confidently invoke the full agent.
-const CLARIFYING_QUESTION: &str =
-    "I'm not sure what you'd like me to do. Could you give me a bit more detail \
-     about what you're trying to accomplish?";
-
-// ---------------------------------------------------------------------------
-// Ambiguity heuristic
-// ---------------------------------------------------------------------------
-
-/// Detect whether a user message is too ambiguous to confidently dispatch.
-///
-/// Returns `true` when the message is short AND contains no signals that
-/// would indicate a clearly actionable intent — namely:
-///   - URLs (http/https/www)
-///   - Proper nouns (capitalized non-leading words, e.g. "GitHub", "Slack")
-///   - Numbers or dates (which usually indicate a specific reference)
-///   - Code/path-like tokens (containing `(`, `)`, `/`, `.`, `:`, `_`, `-`)
-///     such as `console.log('x')` or `path/to/file.rs` — these are clearly
-///     intentional inputs the user wants the model to process.
-///
-/// The first word is ignored for capitalization because sentence-initial
-/// capitalization carries no signal. Common pronouns and stop-words at the
-/// start are not treated as proper nouns either.
-fn is_ambiguous(message: &str) -> bool {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-
-    // URL signal: clearly references an external resource.
-    let lower = trimmed.to_lowercase();
-    if lower.contains("http://") || lower.contains("https://") || lower.contains("www.") {
-        return false;
-    }
-
-    let words: Vec<&str> = trimmed.split_whitespace().collect();
-    if words.len() >= AMBIGUOUS_MESSAGE_WORD_LIMIT {
-        return false;
-    }
-
-    // Look for specific signals: digits, code/path punctuation, or
-    // proper nouns (capitalized non-leading word).
-    for (idx, word) in words.iter().enumerate() {
-        // Numbers/dates → specific reference, not ambiguous.
-        if word.chars().any(|c| c.is_ascii_digit()) {
-            return false;
-        }
-        // Code/path-like tokens (function calls, file paths, namespaced
-        // identifiers, kebab/snake case). Conservative — errs toward
-        // letting the model handle the input rather than asking for
-        // clarification on something that looks like intentional input.
-        if word
-            .chars()
-            .any(|c| matches!(c, '(' | ')' | '/' | '.' | ':' | '_' | '-'))
-        {
-            return false;
-        }
-        if idx == 0 {
-            // Sentence-initial capitalization is not a proper-noun signal.
-            continue;
-        }
-        let first = word.chars().next();
-        if let Some(c) = first {
-            if c.is_uppercase() {
-                return false;
-            }
-        }
-    }
-
-    true
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +79,7 @@ fn humanize_tool_name(tool_name: &str) -> &'static str {
         "update_task_status" => "task update",
         "create_relationship" => "relationship creation",
         "get_related_nodes" => "related node lookup",
-        "find_skills" => "skill lookup",
+        "search_skills" => "skill search",
         "create_nodes_from_markdown" => "markdown import",
         _ => "the requested action",
     }
@@ -176,20 +97,14 @@ fn humanize_tool_name(tool_name: &str) -> &'static str {
 pub struct LocalAgentLoop<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> {
     engine: Arc<E>,
     tool_executor: Arc<T>,
-    skill_pipeline: Option<Arc<crate::skill_pipeline::SkillPipeline>>,
     prompt_assembler: Option<Arc<PromptAssembler>>,
 }
 
 impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentLoop<E, T> {
-    pub fn new(
-        engine: Arc<E>,
-        tool_executor: Arc<T>,
-        skill_pipeline: Option<Arc<crate::skill_pipeline::SkillPipeline>>,
-    ) -> Self {
+    pub fn new(engine: Arc<E>, tool_executor: Arc<T>) -> Self {
         Self {
             engine,
             tool_executor,
-            skill_pipeline,
             prompt_assembler: None,
         }
     }
@@ -228,20 +143,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             name: None,
         });
 
-        // Get available tools
-        let all_tools = self
+        // Get available tools. The full tool set (including `search_skills`)
+        // is exposed every turn — the model decides whether to search for a
+        // skill, invoke one directly, or respond without one.
+        let tools = self
             .tool_executor
             .available_tools()
             .await
             .unwrap_or_default();
 
-        // Run push-based skill pipeline (pre-turn intent detection).
-        // If a skill matches above the confidence threshold, inject the skill's
-        // context into the prompt and scope tools to only the skill's whitelist.
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
-
-        // Helper: build the base system prompt either from PromptAssembler (graph nodes)
-        // or from the fallback hardcoded template when the assembler isn't available.
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
         let template_ctx = TemplateContext {
             current_date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
@@ -249,102 +160,21 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             workspace_context: dynamic_ctx.to_string(),
         };
 
-        // Build base prompt: use override (tests), assembler (production), or fallback.
-        // `session_prompt_override` returns `None` in production builds — see the
-        // `testing` feature on the agent crate.
-        let base_prompt = if let Some(override_prompt) = session_prompt_override(session) {
+        // Build the system prompt: test override > graph assembler > fallback.
+        // `session_prompt_override` returns `None` in production builds (see
+        // the `testing` feature on the agent crate).
+        let system_content = if let Some(override_prompt) = session_prompt_override(session) {
             override_prompt.to_string()
         } else if let Some(ref assembler) = self.prompt_assembler {
             assembler
-                .assemble(&template_ctx, all_tools.clone())
+                .assemble(&template_ctx, tools.clone())
                 .await
                 .system_prompt
         } else {
             prompt_templates::fallback_system_prompt(dynamic_ctx)
         };
 
-        // Resolve the skill match (if any) once, so we can branch on it for
-        // both the clarification short-circuit and prompt/tool scoping.
-        // Carry the pipeline reference alongside the match so the scoping
-        // branch below has a locally-provable handle to it (no need to
-        // re-unwrap `self.skill_pipeline` and rely on a far-away invariant).
-        let skill_match: Option<(
-            &Arc<crate::skill_pipeline::SkillPipeline>,
-            crate::skill_pipeline::SkillMatch,
-        )> = match self.skill_pipeline.as_ref() {
-            Some(pipeline) => pipeline
-                .find_skill(user_message)
-                .await
-                .map(|m| (pipeline, m)),
-            None => None,
-        };
-
-        // Short-circuit: when no skill matched AND the message is ambiguous,
-        // return a clarifying question without invoking the model. This avoids
-        // overwhelming the model with the full 13-tool path on a vague prompt
-        // and replaces the post-inference "empty response" fallback for the
-        // ambiguous case (which previously surfaced as a blank/poor response).
-        if skill_match.is_none() && is_ambiguous(user_message) {
-            tracing::info!(
-                user_message_preview = %user_message.chars().take(80).collect::<String>(),
-                "Ambiguous message with no skill match — returning clarifying question"
-            );
-
-            let clarification = CLARIFYING_QUESTION.to_string();
-
-            session.messages.push(ChatMessage {
-                role: Role::Assistant,
-                content: clarification.clone(),
-                tool_call_id: None,
-                name: None,
-            });
-
-            on_status(LocalAgentStatus::Idle);
-            session.status = LocalAgentStatus::Idle;
-
-            return Ok(AgentTurnResult {
-                response: clarification,
-                tool_calls_made: Vec::new(),
-                usage: InferenceUsage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                },
-            });
-        }
-
-        let (system_content, tools, effective_max_iterations) = if let Some((
-            pipeline,
-            ref skill_match,
-        )) = skill_match
-        {
-            tracing::info!(
-                skill = %skill_match.skill.content,
-                confidence = skill_match.confidence,
-                intent = %skill_match.intent.query,
-                max_iterations = skill_match.max_iterations,
-                "Skill matched via push pipeline"
-            );
-
-            // Scope tools to skill's whitelist. We have the pipeline
-            // reference locally (carried alongside the match), so no
-            // runtime invariant check is needed.
-            let scoped_tools = pipeline.scope_tools(&all_tools, skill_match);
-            let skill_max_iter = skill_match.max_iterations;
-
-            let skill_name = &skill_match.skill.content;
-            let skill_desc =
-                crate::props::get_prop_str(&skill_match.skill.properties, "skill", "description")
-                    .unwrap_or("");
-
-            let system = format!(
-                    "{}\n\nACTIVE SKILL: {}\n{}\nFocus on this skill's capabilities. Use only the tools provided.",
-                    base_prompt, skill_name, skill_desc
-                );
-
-            (system, scoped_tools, skill_max_iter)
-        } else {
-            (base_prompt, all_tools, MAX_TOOL_ITERATIONS)
-        };
+        let effective_max_iterations = MAX_TOOL_ITERATIONS;
 
         tracing::info!(
             tools_count = tools.len(),
@@ -447,12 +277,31 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         humanize_tool_name(tool_name)
                     )
                 } else if normalized.is_empty() {
-                    // Model returned nothing at all — no tools, no text. Fall
-                    // back to the same clarifying question used for ambiguous
-                    // pre-inference messages so we have a single, consistent
-                    // "I need more info" response across the agent.
-                    tracing::warn!("Agent returned empty response with no tool calls");
-                    CLARIFYING_QUESTION.to_string()
+                    // Model returned nothing at all — no tools, no text. This is
+                    // an inference bug, not a routing decision: the model should
+                    // either call a tool or produce text. Surface as an error so
+                    // it shows up in logs/metrics rather than being masked by a
+                    // canned UX string. Structured fields below let the
+                    // production dashboards group these by model and surface
+                    // session/iteration for replay.
+                    tracing::error!(
+                        session_id = %session.id,
+                        model = %session.model_id.as_deref().unwrap_or("unknown"),
+                        iteration = iteration,
+                        prompt_tokens = total_usage.prompt_tokens,
+                        completion_tokens = total_usage.completion_tokens,
+                        user_message_preview = %session
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|m| matches!(m.role, Role::User))
+                            .map(|m| m.content.chars().take(80).collect::<String>())
+                            .unwrap_or_default(),
+                        "Agent returned empty response with no tool calls"
+                    );
+                    return Err(InferenceError::Engine(
+                        "model produced empty response with no tool calls".into(),
+                    ));
                 } else {
                     normalized
                 };
@@ -829,21 +678,16 @@ pub struct LocalAgentService<E: ChatInferenceEngine + ?Sized, T: AgentToolExecut
 impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 'static>
     LocalAgentService<E, T>
 {
-    pub fn new(
-        engine: Arc<E>,
-        tool_executor: Arc<T>,
-        skill_pipeline: Option<Arc<crate::skill_pipeline::SkillPipeline>>,
-    ) -> Self {
-        Self::new_with_assembler(engine, tool_executor, skill_pipeline, None)
+    pub fn new(engine: Arc<E>, tool_executor: Arc<T>) -> Self {
+        Self::new_with_assembler(engine, tool_executor, None)
     }
 
     pub fn new_with_assembler(
         engine: Arc<E>,
         tool_executor: Arc<T>,
-        skill_pipeline: Option<Arc<crate::skill_pipeline::SkillPipeline>>,
         prompt_assembler: Option<Arc<PromptAssembler>>,
     ) -> Self {
-        let mut agent_loop = LocalAgentLoop::new(engine, tool_executor, skill_pipeline);
+        let mut agent_loop = LocalAgentLoop::new(engine, tool_executor);
         if let Some(assembler) = prompt_assembler {
             agent_loop = agent_loop.with_prompt_assembler(assembler);
         }
@@ -999,6 +843,19 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // Compile-time coupling check: `multi_skill_turn_invokes_skill_tools_between_searches`
+    // feeds exactly 5 inference rounds (search_skills → search_semantic →
+    // search_skills → create_node → final text) and expects the loop to make
+    // it through all of them without hitting the iteration-cap fallback.
+    // If `MAX_TOOL_ITERATIONS` is ever reduced below 5, that test would
+    // silently start asserting on the fallback path instead of the multi-skill
+    // chain — fail loudly here at compile time rather than mysteriously at
+    // test time.
+    const _: () = assert!(
+        MAX_TOOL_ITERATIONS >= 5,
+        "multi_skill_turn_invokes_skill_tools_between_searches requires MAX_TOOL_ITERATIONS >= 5",
+    );
+
     // -- Mock inference engine -------------------------------------------
 
     /// Mock engine that returns pre-configured responses.
@@ -1131,34 +988,43 @@ mod tests {
 
     impl MockToolExecutor {
         fn new() -> Self {
-            let mut results = HashMap::new();
-            results.insert(
-                "search_nodes".to_string(),
+            Self {
+                tools: Vec::new(),
+                results: HashMap::new(),
+            }
+            .with_tool(
+                "search_nodes",
+                json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
                 json!({"count": 2, "nodes": [
                     {"id": "abc123", "title": "Billing Architecture", "type": "text"},
                     {"id": "def456", "title": "Payment Processing", "type": "text"},
                 ]}),
-            );
-            results.insert(
-                "get_node".to_string(),
+            )
+            .with_tool(
+                "get_node",
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
                 json!({"id": "abc123", "title": "Billing Architecture", "body": "Content here"}),
-            );
+            )
+        }
 
-            Self {
-                tools: vec![
-                    ToolDefinition {
-                        name: "search_nodes".into(),
-                        description: "Search for nodes".into(),
-                        parameters_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
-                    },
-                    ToolDefinition {
-                        name: "get_node".into(),
-                        description: "Get a node by ID".into(),
-                        parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
-                    },
-                ],
-                results,
-            }
+        /// Register an additional tool with its JSON schema and canned result.
+        ///
+        /// Lets tests express "I expect the agent to call X with shape Y, and
+        /// when it does, return Z" in one call instead of poking at the
+        /// internal `tools` / `results` fields directly.
+        fn with_tool(
+            mut self,
+            name: &str,
+            parameters_schema: serde_json::Value,
+            result: serde_json::Value,
+        ) -> Self {
+            self.tools.push(ToolDefinition {
+                name: name.into(),
+                description: format!("Mock tool: {name}"),
+                parameters_schema,
+            });
+            self.results.insert(name.to_string(), result);
+            self
         }
     }
 
@@ -1209,7 +1075,7 @@ mod tests {
     async fn single_turn_no_tools() {
         let engine = Arc::new(MockEngine::single_text("Hello! How can I help?"));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let statuses: Arc<std::sync::Mutex<Vec<LocalAgentStatus>>> =
@@ -1253,7 +1119,7 @@ mod tests {
             "Found 2 nodes about billing.",
         ));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let result = agent_loop
@@ -1331,7 +1197,7 @@ mod tests {
             ],
         ]));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let result = agent_loop
@@ -1384,7 +1250,7 @@ mod tests {
         let rounds: Vec<_> = (0..MAX_TOOL_ITERATIONS + 2).map(|_| tool_round()).collect();
         let engine = Arc::new(MockEngine::new(rounds));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let result = agent_loop
@@ -1471,7 +1337,7 @@ mod tests {
     async fn cancellation_stops_generation() {
         let engine = Arc::new(MockEngine::single_text("Should not complete"));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let cancel = CancellationToken::new();
@@ -1555,7 +1421,7 @@ mod tests {
     async fn service_create_and_list_sessions() {
         let engine = Arc::new(MockEngine::single_text("Hello"));
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         let id1 = service.create_session(Some("model-a".into())).await;
         let id2 = service.create_session(None).await;
@@ -1574,7 +1440,7 @@ mod tests {
     async fn service_end_session() {
         let engine = Arc::new(MockEngine::single_text("Hello"));
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         let id = service.create_session(None).await;
         assert!(service.get_session(&id).await.is_some());
@@ -1588,7 +1454,7 @@ mod tests {
     async fn service_send_message() {
         let engine = Arc::new(MockEngine::single_text("I can help with that!"));
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         let id = service.create_session(None).await;
         let result = service
@@ -1612,7 +1478,7 @@ mod tests {
     async fn service_send_message_unknown_session() {
         let engine = Arc::new(MockEngine::single_text("Hello"));
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         let result = service
             .send_message("nonexistent", "Hello", |_| {}, |_| {})
@@ -1625,7 +1491,7 @@ mod tests {
     async fn service_cancel_session() {
         let engine = Arc::new(MockEngine::single_text("Hello"));
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         let id = service.create_session(None).await;
 
@@ -1641,7 +1507,7 @@ mod tests {
     async fn status_transitions_single_turn() {
         let engine = Arc::new(MockEngine::single_text("Response"));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let statuses: Arc<std::sync::Mutex<Vec<String>>> =
@@ -1683,7 +1549,7 @@ mod tests {
             "Done",
         ));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let statuses: Arc<std::sync::Mutex<Vec<String>>> =
@@ -1748,7 +1614,7 @@ mod tests {
             ],
         ]));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
 
@@ -1834,7 +1700,7 @@ mod tests {
     async fn session_persistence_after_inference_error() {
         let engine = Arc::new(FailingEngine);
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         let id = service.create_session(Some("test-model".into())).await;
 
@@ -1921,7 +1787,7 @@ mod tests {
             count: Arc::clone(&call_count),
         });
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let result = agent_loop
@@ -2018,7 +1884,7 @@ mod tests {
             cancel: cancel.clone(),
             call_count: AtomicUsize::new(0),
         });
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let result = agent_loop
@@ -2069,7 +1935,7 @@ mod tests {
             ],
         ]));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(Arc::clone(&engine), executor, None);
+        let agent_loop = LocalAgentLoop::new(Arc::clone(&engine), executor);
 
         let mut session = new_session();
 
@@ -2150,7 +2016,7 @@ mod tests {
             ],
         ]));
         let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
 
         let mut session = new_session();
         let result = agent_loop
@@ -2207,7 +2073,7 @@ mod tests {
             ],
         ]));
         let executor = Arc::new(MockToolExecutor::new());
-        let service = LocalAgentService::new(engine, executor, None);
+        let service = LocalAgentService::new(engine, executor);
 
         // Create two independent sessions
         let id_a = service.create_session(Some("model-a".into())).await;
@@ -2254,157 +2120,366 @@ mod tests {
         assert_eq!(sessions.len(), 1);
     }
 
-    // -- is_ambiguous heuristic ------------------------------------------
+    // -- search_skills as a regular tool ---------------------------------
 
-    #[test]
-    fn is_ambiguous_classifies_short_vague_messages() {
-        assert!(is_ambiguous("help"));
-        assert!(is_ambiguous("what about that?"));
-        assert!(is_ambiguous("can you do it"));
-        assert!(is_ambiguous("hi"));
-        assert!(is_ambiguous("")); // empty trims → ambiguous
-        assert!(is_ambiguous("   ")); // whitespace only → ambiguous
-    }
-
-    #[test]
-    fn is_ambiguous_treats_proper_nouns_as_actionable() {
-        // Capitalized non-leading words signal a specific reference.
-        assert!(!is_ambiguous("open GitHub"));
-        assert!(!is_ambiguous("ping Slack channel"));
-        assert!(!is_ambiguous("show me Notion"));
-    }
-
-    #[test]
-    fn is_ambiguous_treats_urls_as_actionable() {
-        assert!(!is_ambiguous("check https://example.com"));
-        assert!(!is_ambiguous("fetch http://api.test"));
-        assert!(!is_ambiguous("look at www.example.org"));
-    }
-
-    #[test]
-    fn is_ambiguous_treats_numbers_as_actionable() {
-        // Numbers usually indicate specific references (IDs, dates, counts).
-        assert!(!is_ambiguous("issue 1090"));
-        assert!(!is_ambiguous("show top 5"));
-        assert!(!is_ambiguous("on 2026-05-17"));
-    }
-
-    #[test]
-    fn is_ambiguous_treats_code_and_paths_as_actionable() {
-        // Tokens containing '(', ')', '/', '.', ':', '_', or '-' are
-        // clearly intentional code/path inputs — not ambiguous.
-        assert!(!is_ambiguous("console.log('x')"));
-        assert!(!is_ambiguous("path/to/file.rs"));
-        assert!(!is_ambiguous("foo::bar"));
-        assert!(!is_ambiguous("my_var"));
-        assert!(!is_ambiguous("kebab-case-name"));
-        assert!(!is_ambiguous("fn main()"));
-        // Even short single-token inputs are treated as specific.
-        assert!(!is_ambiguous("README.md"));
-    }
-
-    #[test]
-    fn is_ambiguous_long_messages_not_ambiguous() {
-        // Messages at or above AMBIGUOUS_MESSAGE_WORD_LIMIT (10) are
-        // considered actionable enough to dispatch even without
-        // proper nouns/URLs/numbers.
-        let long = "please tell me more about the way things work around here today";
-        assert!(long.split_whitespace().count() >= AMBIGUOUS_MESSAGE_WORD_LIMIT);
-        assert!(!is_ambiguous(long));
-    }
-
-    #[test]
-    fn is_ambiguous_ignores_sentence_initial_capitalization() {
-        // First word capitalization is not a proper-noun signal.
-        assert!(is_ambiguous("Help me"));
-        assert!(is_ambiguous("What do you do"));
-    }
-
-    // -- Low-confidence clarification path -------------------------------
-
-    /// Engine that panics if `generate` is ever called. Used to verify the
-    /// clarification path short-circuits before invoking the model.
-    struct PanicEngine;
-
-    #[async_trait]
-    impl ChatInferenceEngine for PanicEngine {
-        async fn generate(
-            &self,
-            _request: InferenceRequest,
-            _on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
-        ) -> Result<InferenceUsage, InferenceError> {
-            panic!("inference should not be invoked for ambiguous, low-confidence messages");
-        }
-
-        async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
-            Ok(None)
-        }
-
-        async fn token_count(&self, text: &str) -> Result<u32, InferenceError> {
-            Ok((text.len() as f32 / 4.0).ceil() as u32)
-        }
-    }
-
-    /// When the skill pipeline is absent (so no match) AND the user message
-    /// is ambiguous, the loop must return a clarifying question without
-    /// invoking inference at all.
+    /// Issue #1130: the model decides when to search for skills by calling
+    /// the `search_skills` tool, then invokes a matching skill (if any) like
+    /// any other tool. There's no pre-LLM dispatch — the loop always runs the
+    /// full tool set against the model.
     #[tokio::test]
-    async fn ambiguous_message_returns_clarification_without_inference() {
-        let engine = Arc::new(PanicEngine);
-        let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+    async fn model_calls_search_skills_then_invokes_matched_skill() {
+        // Round 1: model calls search_skills
+        // Round 2: model invokes create_node (a "skill" tool) after seeing the match
+        // Round 3: model produces a text summary
+        let engine = Arc::new(MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"query":"create a new task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_2".to_string(),
+                    name: "create_node".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_2".to_string(),
+                    args_json: r#"{"content":"new task","node_type":"task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 8,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: "Created the task.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+        ]));
 
+        let executor = MockToolExecutor::new()
+            .with_tool(
+                "search_skills",
+                json!({"type": "object"}),
+                json!({
+                    "query": "create a new task",
+                    "matches": [
+                        {"id": "skill-1", "name": "Node Creation", "confidence": 0.91,
+                         "description": "Create new nodes", "tools": ["create_node"]}
+                    ]
+                }),
+            )
+            .with_tool(
+                "create_node",
+                json!({"type": "object"}),
+                json!({"id": "nodespace://task-1"}),
+            );
+
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
         let mut session = new_session();
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "help",
+                "create a new task to review the GitHub release notes",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
             )
             .await
-            .expect("clarification path should succeed without inference");
+            .unwrap();
 
-        // Response is the clarifying question.
-        assert_eq!(result.response, CLARIFYING_QUESTION);
+        assert_eq!(result.response, "Created the task.");
+        assert_eq!(result.tool_calls_made.len(), 2);
+        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[1].name, "create_node");
+    }
+
+    /// When the model decides no skill is needed, it responds directly —
+    /// no clarification short-circuit, no canned string.
+    #[tokio::test]
+    async fn model_can_respond_without_calling_search_skills() {
+        let engine = Arc::new(MockEngine::single_text("Hi there — how can I help?"));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(&mut session, "hi", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(result.response, "Hi there — how can I help?");
         assert!(result.tool_calls_made.is_empty());
-        assert_eq!(result.usage.prompt_tokens, 0);
-        assert_eq!(result.usage.completion_tokens, 0);
-
-        // Session should hold: user message + assistant clarification.
-        assert_eq!(session.messages.len(), 2);
-        assert_eq!(session.messages[0].role, Role::User);
-        assert_eq!(session.messages[0].content, "help");
-        assert_eq!(session.messages[1].role, Role::Assistant);
-        assert_eq!(session.messages[1].content, CLARIFYING_QUESTION);
-        assert_eq!(session.status, LocalAgentStatus::Idle);
+        // Crucially: the model was actually invoked (no pre-LLM short-circuit).
+        assert!(result.usage.prompt_tokens > 0);
     }
 
-    /// Counter-example: a clearly actionable message (long, contains proper
-    /// nouns) should NOT short-circuit — it must proceed to inference even
-    /// when no skill matches.
+    /// Multi-skill turn from issue #1130 AC: the model calls `search_skills`
+    /// for each sub-task, then invokes the matched skill's tool. This test
+    /// exercises a full chain — search_skills (notes) → search_semantic →
+    /// search_skills (task) → create_node — not just two back-to-back
+    /// searches, so a regression that breaks tool dispatch after a second
+    /// `search_skills` call is caught here.
     #[tokio::test]
-    async fn actionable_message_proceeds_to_inference_without_skill_match() {
-        let engine = Arc::new(MockEngine::single_text("Here is the GitHub status."));
-        let executor = Arc::new(MockToolExecutor::new());
-        let agent_loop = LocalAgentLoop::new(engine, executor, None);
+    async fn multi_skill_turn_invokes_skill_tools_between_searches() {
+        let engine = Arc::new(MockEngine::new(vec![
+            // Round 1: search_skills for "find notes"
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"query":"find notes"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 2: invoke search_semantic (the matched skill's tool)
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_2".to_string(),
+                    name: "search_semantic".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_2".to_string(),
+                    args_json: r#"{"query":"Q2 budget notes"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 15,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 3: search_skills for "create task"
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_3".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_3".to_string(),
+                    args_json: r#"{"query":"create task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 18,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 4: invoke create_node (the matched skill's tool)
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_4".to_string(),
+                    name: "create_node".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_4".to_string(),
+                    args_json: r#"{"content":"Review Q2 notes","node_type":"task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 22,
+                        completion_tokens: 6,
+                    },
+                },
+            ],
+            // Round 5: final summary
+            vec![
+                StreamingChunk::Token {
+                    text: "Found the notes and created the review task.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 25,
+                        completion_tokens: 9,
+                    },
+                },
+            ],
+        ]));
 
+        let executor = MockToolExecutor::new()
+            .with_tool(
+                "search_skills",
+                json!({"type": "object"}),
+                // Same canned response works for both calls; in production
+                // the embeddings would distinguish them, but the agent loop
+                // doesn't introspect the match payload — it just relays it
+                // back to the model.
+                json!({
+                    "query": "x",
+                    "matches": [
+                        {"id": "skill-1", "name": "Match", "confidence": 0.9,
+                         "description": "matched skill", "tools": ["search_semantic"]}
+                    ]
+                }),
+            )
+            .with_tool(
+                "search_semantic",
+                json!({"type": "object"}),
+                json!({"count": 1, "results": [
+                    {"id": "note-1", "title": "Q2 Budget", "score": 0.87,
+                     "snippet": "Quarterly budget summary…"}
+                ]}),
+            )
+            .with_tool(
+                "create_node",
+                json!({"type": "object"}),
+                json!({"id": "nodespace://task-1"}),
+            );
+
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
         let mut session = new_session();
+        // Loosen the iteration cap since this turn legitimately needs 4 tool
+        // rounds (2 searches + 2 invocations) plus a text round. MAX_TOOL_ITERATIONS
+        // is 5, so we're at the boundary on purpose.
         let result = agent_loop
             .run_turn(
                 &mut session,
-                "show me the GitHub issue tracker",
+                "find my Q2 budget notes and create a task to review them",
                 |_| {},
                 |_| {},
                 CancellationToken::new(),
             )
             .await
-            .expect("inference should run for actionable messages");
+            .unwrap();
 
-        // Should NOT be the clarifying question — the model was actually called.
-        assert_eq!(result.response, "Here is the GitHub status.");
-        assert_ne!(result.response, CLARIFYING_QUESTION);
-        assert!(result.usage.prompt_tokens > 0);
+        assert_eq!(
+            result.tool_calls_made.len(),
+            4,
+            "{:?}",
+            result.tool_calls_made
+        );
+        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[1].name, "search_semantic");
+        assert_eq!(result.tool_calls_made[2].name, "search_skills");
+        assert_eq!(result.tool_calls_made[3].name, "create_node");
+        assert_eq!(
+            result.response,
+            "Found the notes and created the review task."
+        );
+    }
+
+    /// Empty `search_skills` matches → model judges and produces a contextual
+    /// clarification (referencing what it searched), rather than the prior
+    /// hardcoded `CLARIFYING_QUESTION` string. This is the "no relevant skill"
+    /// path from issue #1130 AC.
+    #[tokio::test]
+    async fn empty_search_skills_matches_let_model_clarify_with_context() {
+        let engine = Arc::new(MockEngine::new(vec![
+            // Round 1: model calls search_skills
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"query":"send carrier pigeons"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 2: model produces a contextual clarification referencing
+            // the search it just performed. The exact wording isn't checked —
+            // only that the model gets to respond after seeing matches=[].
+            vec![
+                StreamingChunk::Token {
+                    text: "I searched for skills related to that but didn't find anything relevant. Could you describe what you'd like to do?".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 18,
+                    },
+                },
+            ],
+        ]));
+
+        let executor = MockToolExecutor::new().with_tool(
+            "search_skills",
+            json!({"type": "object"}),
+            // Empty matches array — the meaningful "no skill applies" signal.
+            json!({"query": "send carrier pigeons", "matches": []}),
+        );
+
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "can you send carrier pigeons",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        // Crucially: the response is the model's contextual text, not a
+        // canned constant. Just check it's non-empty and acknowledges the
+        // search — exact wording belongs to the model.
+        assert!(!result.response.is_empty());
+        assert!(
+            result.response.to_lowercase().contains("search")
+                || result.response.to_lowercase().contains("didn't find"),
+            "model response should reference what it searched: {:?}",
+            result.response
+        );
+    }
+
+    /// Per #1130: an empty response with no tool calls is an inference bug
+    /// (model should always produce text or a tool call), not a UX surface.
+    /// Surface as an error so it lands in logs/metrics rather than being
+    /// silently masked.
+    #[tokio::test]
+    async fn empty_model_response_with_no_tools_returns_error() {
+        let engine = Arc::new(MockEngine::single_text(""));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(&mut session, "hi", |_| {}, |_| {}, CancellationToken::new())
+            .await;
+
+        let err = result.expect_err("empty model response should surface as an error");
+        match err {
+            InferenceError::Engine(msg) => assert!(msg.contains("empty response")),
+            other => panic!("Expected Engine error, got {:?}", other),
+        }
     }
 }

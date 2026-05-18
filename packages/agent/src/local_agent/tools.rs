@@ -79,9 +79,9 @@ struct GetRelatedNodesParams {
     pub direction: Option<String>,
 }
 
-/// Parameters for the find_skills tool
+/// Parameters for the search_skills tool
 #[derive(Debug, Deserialize)]
-struct FindSkillsParams {
+struct SearchSkillsParams {
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
@@ -405,20 +405,23 @@ fn def_get_related_nodes() -> ToolDefinition {
     }
 }
 
-fn def_find_skills() -> ToolDefinition {
+fn def_search_skills() -> ToolDefinition {
     ToolDefinition {
-        name: "find_skills".into(),
-        description: "Search for agent skills by describing what you need to accomplish. Returns skill descriptions with available tools and guidance.".into(),
+        name: "search_skills".into(),
+        description: "Search registered skills by describing what you want to accomplish. \
+            Returns up to 3 matches by default (max 10), sorted by relevance, each with name, description, confidence (0-1), and tools. \
+            Empty matches mean no skill is even loosely related — judge whether to proceed without one, ask the user, or respond directly. \
+            Call this when a request might be served by a known skill; skip it for conversational replies.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "What you need to accomplish"
+                    "description": "Natural-language description of what you need to do (can differ from the user's exact wording)"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum skills to return (default 3)"
+                    "description": "Maximum skills to return (default 3, max 10)"
                 }
             },
             "required": ["query"]
@@ -637,7 +640,7 @@ pub(crate) fn all_tool_definitions() -> Vec<ToolDefinition> {
         def_update_task_status(),
         def_create_relationship(),
         def_get_related_nodes(),
-        def_find_skills(),
+        def_search_skills(),
         def_delete_node(),
         def_create_nodes_from_markdown(),
     ]
@@ -1140,14 +1143,14 @@ impl GraphToolExecutor {
         ))
     }
 
-    async fn exec_find_skills(
+    async fn exec_search_skills(
         &self,
         tool_call_id: &str,
         args: Value,
     ) -> Result<ToolResult, ToolError> {
-        let params: FindSkillsParams =
+        let params: SearchSkillsParams =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments {
-                tool: "find_skills".to_string(),
+                tool: "search_skills".to_string(),
                 reason: e.to_string(),
             })?;
         let limit = params.limit.unwrap_or(3);
@@ -1157,7 +1160,7 @@ impl GraphToolExecutor {
             None => {
                 return Ok(error_result(
                     tool_call_id,
-                    "find_skills",
+                    "search_skills",
                     "Skill search unavailable: embedding service not loaded",
                 ))
             }
@@ -1172,28 +1175,19 @@ impl GraphToolExecutor {
             },
         )
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("find_skills failed: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("search_skills failed: {}", e)))?;
 
-        if output.skills.is_empty() {
-            Ok(ok_result(
-                tool_call_id,
-                "find_skills",
-                json!({
-                    "message": "No matching skills found. Proceed with general capabilities.",
-                    "query": output.query
-                }),
-            ))
-        } else {
-            Ok(ok_result(
-                tool_call_id,
-                "find_skills",
-                json!({
-                    "count": output.skills.len(),
-                    "skills": output.skills,
-                    "query": output.query
-                }),
-            ))
-        }
+        // Always return `matches` (possibly empty). An empty array is a real
+        // signal — let the model decide what to do, rather than hardcoding a
+        // "Proceed with general capabilities" string.
+        Ok(ok_result(
+            tool_call_id,
+            "search_skills",
+            json!({
+                "query": output.query,
+                "matches": output.skills,
+            }),
+        ))
     }
 
     async fn exec_create_schema(
@@ -1400,7 +1394,7 @@ impl AgentToolExecutor for GraphToolExecutor {
             "update_task_status" => self.exec_update_task_status(&tool_call_id, args).await,
             "create_relationship" => self.exec_create_relationship(&tool_call_id, args).await,
             "get_related_nodes" => self.exec_get_related_nodes(&tool_call_id, args).await,
-            "find_skills" => self.exec_find_skills(&tool_call_id, args).await,
+            "search_skills" => self.exec_search_skills(&tool_call_id, args).await,
             "delete_node" => self.exec_delete_node(&tool_call_id, args).await,
             "create_nodes_from_markdown" => {
                 self.exec_create_nodes_from_markdown(&tool_call_id, args)
@@ -1769,13 +1763,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_skills_missing_query() {
+    async fn search_skills_missing_query() {
         let executor = test_executor();
-        let result = executor.execute("find_skills", json!({})).await;
+        let result = executor.execute("search_skills", json!({})).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             ToolError::InvalidArguments { tool, reason } => {
-                assert_eq!(tool, "find_skills");
+                assert_eq!(tool, "search_skills");
                 assert!(reason.contains("query"));
             }
             other => panic!("Expected InvalidArguments, got {:?}", other),
@@ -1783,10 +1777,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_skills_no_embedding_service_returns_error_result() {
+    async fn search_skills_no_embedding_service_returns_error_result() {
         let executor = test_executor();
         let result = executor
-            .execute("find_skills", json!({"query": "manage tasks"}))
+            .execute("search_skills", json!({"query": "manage tasks"}))
             .await;
         // Should succeed (Ok) but with is_error=true since no embedding service
         let tool_result = result.unwrap();
@@ -1798,12 +1792,41 @@ mod tests {
     }
 
     #[test]
-    fn find_skills_schema_requires_query() {
-        let def = def_find_skills();
+    fn search_skills_schema_requires_query() {
+        let def = def_search_skills();
         let required = def.parameters_schema["required"]
             .as_array()
             .expect("required must be array");
         assert!(required.contains(&json!("query")));
+    }
+
+    #[test]
+    fn search_skills_schema_exposes_optional_limit() {
+        let def = def_search_skills();
+        let props = def.parameters_schema["properties"]
+            .as_object()
+            .expect("properties must be object");
+        assert!(props.contains_key("limit"), "limit must be in schema");
+        // limit must NOT be required — the tool defaults sensibly when omitted
+        let required = def.parameters_schema["required"]
+            .as_array()
+            .expect("required must be array");
+        assert!(!required.contains(&json!("limit")));
+    }
+
+    #[test]
+    fn search_skills_description_mentions_empty_signal() {
+        // Per #1130, the description must teach the model that an empty
+        // `matches` array is a meaningful signal, not an error. This wording
+        // is load-bearing — without it, a small model tends to retry the
+        // tool with rephrased queries instead of judging "no skill applies".
+        let def = def_search_skills();
+        let desc = def.description.to_lowercase();
+        assert!(
+            desc.contains("empty") || desc.contains("no skill"),
+            "search_skills description should call out the empty-result signal: {:?}",
+            def.description
+        );
     }
 
     #[tokio::test]
@@ -1840,7 +1863,7 @@ mod tests {
         assert!(names.contains(&"update_node"));
         assert!(names.contains(&"create_relationship"));
         assert!(names.contains(&"get_related_nodes"));
-        assert!(names.contains(&"find_skills"));
+        assert!(names.contains(&"search_skills"));
         assert!(names.contains(&"create_schema"));
         assert!(names.contains(&"update_schema"));
         assert!(names.contains(&"update_task_status"));
