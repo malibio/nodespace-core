@@ -111,6 +111,13 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
     // batch by created_at descending before slicing. O(n log n) on n ≤
     // QUERY_LIMIT is fine for a developer tool; doing it here keeps the
     // user-visible "recent" label honest.
+    //
+    // Invariant: `created_at` is an RFC3339 string emitted by chrono's
+    // `DateTime<Utc>::to_rfc3339()` in `node_to_proto` (daemon). All values
+    // share the `+00:00` suffix and consistent variable-precision format,
+    // so lexicographic comparison is equivalent to chronological order. If
+    // a second serialization path appears (e.g. `Z` suffix, local TZ),
+    // parse to `DateTime` here instead.
     all_nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     let recent_node_ids: Vec<String> = all_nodes
         .iter()
