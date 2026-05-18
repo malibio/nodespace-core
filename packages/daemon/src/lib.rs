@@ -51,13 +51,13 @@ pub use nodespace::embeddings_service_client::EmbeddingsServiceClient;
 pub use nodespace::embeddings_service_server::EmbeddingsServiceServer;
 pub use nodespace::import_service_client::ImportServiceClient;
 pub use nodespace::import_service_server::ImportServiceServer;
-pub use nodespace::local_agent_service_client::LocalAgentServiceClient;
-pub use nodespace::local_agent_service_server::LocalAgentServiceServer;
 pub use nodespace::node_service_client::NodeServiceClient;
 pub use nodespace::node_service_server::NodeServiceServer;
+pub use nodespace::settings_service_client::SettingsServiceClient;
+pub use nodespace::settings_service_server::SettingsServiceServer;
 pub use nodespace::{NodeData, SessionInfo};
 
 pub use services::{
-    AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl,
-    NodeServiceImpl,
+    AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, NodeServiceImpl,
+    SettingsServiceImpl,
 };

@@ -1,22 +1,22 @@
-//! Settings commands for reading and updating app preferences
+//! Settings commands for reading and updating app preferences.
 //!
-//! These commands expose the preferences system to the frontend.
-//! Display settings (theme, markdown rendering) take effect immediately.
-//! Database settings now hot-swap services without requiring a restart.
+//! Daemon config (database path, gRPC address) is owned by `nodespaced` and
+//! fetched/updated via the `SettingsService` gRPC RPC.
+//!
+//! Display preferences (theme, render_markdown) are UI-only state that remain
+//! in Tauri local storage and are never sent to the daemon.
 
-use crate::app_services::AppServices;
 use crate::services::GrpcClient;
+use nodespace_daemon::nodespace::{GetDaemonConfigRequest, UpdateDaemonConfigRequest};
 use tauri::{AppHandle, Manager};
 
-/// Settings response sent to the frontend
+/// Settings response sent to the frontend.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
-    /// Currently active database path (from runtime AppConfig)
+    /// Currently active database path (from daemon config via gRPC).
     pub active_database_path: String,
-    /// User's saved database path preference (may differ if restart pending)
-    pub saved_database_path: Option<String>,
-    /// Display preferences
+    /// Display preferences.
     pub display: DisplaySettingsResponse,
 }
 
@@ -27,26 +27,36 @@ pub struct DisplaySettingsResponse {
     pub theme: String,
 }
 
-/// Result of a database switch operation
+/// Result of a database path update.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DatabaseSwitchResult {
+pub struct DatabaseUpdateResult {
     pub new_path: String,
     pub success: bool,
+    /// Whether the app needs a restart for the change to take effect.
+    pub restart_required: bool,
 }
 
-/// Get current app settings for the Settings UI
+/// Get current app settings for the Settings UI.
+///
+/// Daemon config (database path) is fetched via gRPC; display preferences
+/// are read from local Tauri storage.
 #[tauri::command]
 pub async fn get_settings(
     app: AppHandle,
-    services: tauri::State<'_, AppServices>,
+    grpc_client: tauri::State<'_, GrpcClient>,
 ) -> Result<SettingsResponse, String> {
     let prefs = crate::preferences::load_preferences(&app).await?;
-    let config = services.config().await.map_err(|e| e.message)?;
+
+    let mut client = grpc_client.settings_client().await;
+    let daemon_config = client
+        .get_daemon_config(GetDaemonConfigRequest {})
+        .await
+        .map_err(|e| format!("Failed to fetch daemon config: {}", e))?
+        .into_inner();
 
     Ok(SettingsResponse {
-        active_database_path: config.database_path.to_string_lossy().to_string(),
-        saved_database_path: prefs.database_path.map(|p| p.to_string_lossy().to_string()),
+        active_database_path: daemon_config.active_database_path,
         display: DisplaySettingsResponse {
             render_markdown: prefs.display.render_markdown,
             theme: prefs.display.theme,
@@ -54,7 +64,7 @@ pub async fn get_settings(
     })
 }
 
-/// Update display settings (takes effect immediately, no restart required)
+/// Update display settings (takes effect immediately, no restart required).
 ///
 /// Saves to preferences.json and emits a "settings-changed" Tauri event
 /// so all open panes can react to the change.
@@ -83,7 +93,6 @@ pub async fn update_display_settings(
 
     crate::preferences::save_preferences(&app, &prefs).await?;
 
-    // Emit settings-changed event to frontend for reactive updates
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.emit(
             "settings-changed",
@@ -97,13 +106,15 @@ pub async fn update_display_settings(
     Ok(())
 }
 
-/// Open native folder picker, save chosen database path, and hot-swap services.
+/// Open native folder picker and save the chosen database path to daemon config.
+///
+/// The change is persisted to `~/.nodespace/daemon.toml` via gRPC. The daemon
+/// must be restarted for the new path to take effect.
 #[tauri::command]
 pub async fn select_new_database(
     app: tauri::AppHandle,
-    services: tauri::State<'_, AppServices>,
-) -> Result<DatabaseSwitchResult, String> {
-    use tauri::Emitter;
+    grpc_client: tauri::State<'_, GrpcClient>,
+) -> Result<DatabaseUpdateResult, String> {
     use tauri_plugin_dialog::{DialogExt, FilePath};
 
     let folder = app
@@ -117,22 +128,21 @@ pub async fn select_new_database(
         FilePath::Url(url) => std::path::PathBuf::from(url.path()),
     };
 
-    let db_path = folder_path;
+    let path_str = folder_path.to_string_lossy().to_string();
 
-    let mut prefs = crate::preferences::load_preferences(&app).await?;
-    prefs.database_path = Some(db_path.clone());
-    crate::preferences::save_preferences(&app, &prefs).await?;
+    let mut client = grpc_client.settings_client().await;
+    client
+        .update_daemon_config(UpdateDaemonConfigRequest {
+            active_database_path: path_str.clone(),
+            grpc_address: String::new(),
+        })
+        .await
+        .map_err(|e| format!("Failed to update daemon config: {}", e))?;
 
-    // Hot-swap database services
-    switch_database_services(&app, &services, db_path.clone()).await?;
-
-    // Emit database-changed event to frontend
-    let path_str = db_path.to_string_lossy().to_string();
-    let _ = app.emit("database-changed", &path_str);
-
-    Ok(DatabaseSwitchResult {
+    Ok(DatabaseUpdateResult {
         new_path: path_str,
         success: true,
+        restart_required: true,
     })
 }
 
@@ -150,109 +160,24 @@ pub fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
-/// Reset database path to default and hot-swap to the default database.
+/// Reset database path to default by updating daemon config.
+///
+/// The daemon must be restarted for the change to take effect.
 #[tauri::command]
 pub async fn reset_database_to_default(
-    app: tauri::AppHandle,
-    services: tauri::State<'_, AppServices>,
+    grpc_client: tauri::State<'_, GrpcClient>,
 ) -> Result<String, String> {
-    use tauri::Emitter;
-
-    let mut prefs = crate::preferences::load_preferences(&app).await?;
-    prefs.database_path = None;
-    crate::preferences::save_preferences(&app, &prefs).await?;
-
     let default_path = crate::preferences::get_default_database_path()?;
-
-    // Hot-swap to default database
-    switch_database_services(&app, &services, default_path.clone()).await?;
-
     let path_str = default_path.to_string_lossy().to_string();
-    let _ = app.emit("database-changed", &path_str);
+
+    let mut client = grpc_client.settings_client().await;
+    client
+        .update_daemon_config(UpdateDaemonConfigRequest {
+            active_database_path: path_str.clone(),
+            grpc_address: String::new(),
+        })
+        .await
+        .map_err(|e| format!("Failed to reset daemon config: {}", e))?;
 
     Ok(path_str)
-}
-
-/// Hot-swap database services: create new store, node service, and embeddings,
-/// then atomically replace the running services and restart background tasks.
-///
-/// Uses the shared `create_service_bundle()` helper for consistent tiered init.
-async fn switch_database_services(
-    app: &AppHandle,
-    services: &AppServices,
-    new_db_path: std::path::PathBuf,
-) -> Result<(), String> {
-    // Get current config for model path etc.
-    let old_config = services.config().await.map_err(|e| e.message)?;
-
-    tracing::info!("Switching database to: {:?}", new_db_path);
-
-    // Ensure directory exists
-    if let Some(parent) = new_db_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create database directory: {}", e))?;
-    }
-
-    // Create core services via shared helper (tiered NLP init)
-    let bundle =
-        super::db::create_service_bundle(new_db_path.clone(), old_config.model_path.clone())
-            .await?;
-
-    // Build new config
-    let new_config = crate::config::AppConfig {
-        database_path: new_db_path,
-        model_path: old_config.model_path,
-        tauri_client_id: old_config.tauri_client_id.clone(),
-    };
-
-    // Create new session token
-    let shutdown_token: tauri::State<crate::ShutdownToken> = app.state();
-    let new_session_token = shutdown_token.child_token();
-
-    // Hot-swap services
-    services
-        .switch_database(
-            bundle.store.clone(),
-            bundle.node_service.clone(),
-            bundle.embedding_service.clone(),
-            new_config.clone(),
-            new_session_token.clone(),
-        )
-        .await;
-
-    if let Err(e) = crate::initialize_domain_event_forwarder(
-        app.clone(),
-        bundle.node_service.clone(),
-        new_config.tauri_client_id.clone(),
-        new_session_token,
-    ) {
-        tracing::error!(
-            "Failed to restart domain event forwarder after switch: {}",
-            e
-        );
-    }
-
-    // Restart the in-process gRPC server with the new database services so
-    // all subsequent embedding/node/collection RPCs target the new database.
-    // The managed GrpcClient uses interior mutability (RwLock) for this swap.
-    let grpc_client: tauri::State<GrpcClient> = app.state();
-    if let Err(e) = grpc_client
-        .restart(
-            bundle.node_service.clone(),
-            bundle.embedding_service.clone(),
-            bundle.processor.clone(),
-        )
-        .await
-    {
-        tracing::error!(
-            "Failed to restart in-process gRPC server after database switch: {}",
-            e
-        );
-        return Err(format!("Failed to restart gRPC server: {}", e));
-    }
-    tracing::info!("In-process gRPC server restarted with new database");
-
-    tracing::info!("Database switch complete");
-    Ok(())
 }

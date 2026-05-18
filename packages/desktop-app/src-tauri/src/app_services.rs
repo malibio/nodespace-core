@@ -1,8 +1,7 @@
-//! Centralized application services container with interior mutability.
+//! Centralized application services container.
 //!
 //! `AppServices` wraps all runtime services (database, node service) behind
-//! `Arc<RwLock<>>` so they can be hot-swapped at runtime when the user
-//! switches databases — without restarting the entire application.
+//! `Arc<RwLock<>>` for shared ownership across Tauri commands.
 //!
 //! Registered as a single Tauri managed state via `app.manage(AppServices::new())`.
 //! All commands access services through `State<'_, AppServices>`.
@@ -22,9 +21,6 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 /// Active services that are initialized after database connection.
-///
-/// All fields are populated during `initialize()` and can be
-/// replaced atomically during `switch_database()`.
 struct ActiveServices {
     store: Arc<SurrealStore>,
     node_service: Arc<NodeService>,
@@ -34,7 +30,7 @@ struct ActiveServices {
     config: AppConfig,
 }
 
-/// Centralized services container with interior mutability for hot-swapping.
+/// Centralized services container.
 ///
 /// Registered as Tauri managed state. Commands access services via accessor methods
 /// that return `Result<Arc<T>, CommandError>` — returning a clear error if services
@@ -42,8 +38,6 @@ struct ActiveServices {
 #[derive(Clone)]
 pub struct AppServices {
     inner: Arc<RwLock<Option<ActiveServices>>>,
-    /// Per-session cancellation token for background tasks (MCP, domain event forwarder).
-    /// Cancelled and replaced on each `switch_database()` call.
     session_token: Arc<RwLock<Option<CancellationToken>>>,
 }
 
@@ -140,46 +134,6 @@ impl AppServices {
         {
             let mut token_guard = self.session_token.write().await;
             *token_guard = Some(session_cancel_token);
-        }
-    }
-
-    /// Hot-swap database: cancel session tasks and replace services.
-    ///
-    /// GPU drain is handled by the in-process gRPC server shutdown (Issue #1135).
-    pub async fn switch_database(
-        &self,
-        store: Arc<SurrealStore>,
-        node_service: Arc<NodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
-        config: AppConfig,
-        new_session_token: CancellationToken,
-    ) {
-        // Cancel current session token
-        {
-            let token_guard = self.session_token.read().await;
-            if let Some(token) = token_guard.as_ref() {
-                token.cancel();
-            }
-        }
-
-        // Brief pause for background tasks (MCP, forwarder) to exit
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Replace services
-        {
-            let mut guard = self.inner.write().await;
-            *guard = Some(ActiveServices {
-                store,
-                node_service,
-                embedding_service,
-                config,
-            });
-        }
-
-        // Set new session token
-        {
-            let mut token_guard = self.session_token.write().await;
-            *token_guard = Some(new_session_token);
         }
     }
 

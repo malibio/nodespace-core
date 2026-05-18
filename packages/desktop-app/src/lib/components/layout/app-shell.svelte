@@ -18,15 +18,12 @@
   import { browserSyncService } from '$lib/services/browser-sync-service';
   import { MCP_EVENTS } from '$lib/constants';
   import type { Node } from '$lib/types';
-  import { collectionsData, collectionsState } from '$lib/stores/collections';
-  import { loadPersistedState, addTab, tabState, setActiveTab, clearAllTabs, DAILY_JOURNAL_TAB_ID, DEFAULT_PANE_ID } from '$lib/stores/navigation';
-  import { loadSettings } from '$lib/stores/settings';
-  import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
+  import { collectionsData } from '$lib/stores/collections';
+  import { loadPersistedState, addTab, tabState, setActiveTab } from '$lib/stores/navigation';
   import { get } from 'svelte/store';
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
-  import { formatDateISO } from '$lib/utils/date-formatting';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -161,7 +158,6 @@
     let unlistenStatusBar: Promise<() => void> | null = null;
     let unlistenImport: Promise<() => void> | null = null;
     let unlistenDatabase: Promise<() => void> | null = null;
-    let unlistenDatabaseChanged: Promise<() => void> | null = null;
     let unlistenSettings: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
@@ -171,7 +167,7 @@
       (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
     ) {
       // Sync theme from backend preferences (overrides localStorage if different)
-      invoke<{ activeDatabasePath: string; savedDatabasePath: string | null; display: { renderMarkdown: boolean; theme: string } }>('get_settings')
+      invoke<{ activeDatabasePath: string; display: { renderMarkdown: boolean; theme: string } }>('get_settings')
         .then((settings) => {
           const savedTheme = settings.display.theme;
           if (['system', 'light', 'dark'].includes(savedTheme)) {
@@ -285,65 +281,21 @@
         }
       });
 
-      // Listen for database selection from menu (hot-swap, no restart needed)
+      // Listen for database selection from menu — saves new path to daemon config,
+      // restart required for the change to take effect.
       unlistenDatabase = listen('menu-select-database', async () => {
         try {
-          const result = await invoke<{ newPath: string; success: boolean }>(
+          const result = await invoke<{ newPath: string; success: boolean; restartRequired: boolean }>(
             'select_new_database'
           );
           if (result.success) {
-            log.info('Database switched to:', result.newPath);
+            log.info('Database path saved:', result.newPath);
+            statusBar.success(`Database path saved — restart to apply: ${result.newPath}`);
           }
         } catch (err) {
           if (err !== 'No folder selected') {
             log.error('Database selection failed:', err);
           }
-        }
-      });
-
-      // Listen for database-changed event after hot-swap (Issue #894, #900)
-      // Reset all frontend state so UI reflects the new database
-      unlistenDatabaseChanged = listen<string>('database-changed', async (event) => {
-        log.info('Database changed, resetting frontend state...', event.payload);
-
-        try {
-          const sharedNodeStore = SharedNodeStore.getInstance();
-
-          // 1. Flush pending writes to OLD database
-          await sharedNodeStore.flushAllPending();
-
-          // 2. Clear node cache
-          sharedNodeStore.clearAll();
-
-          // 3. Clear structure tree
-          structureTree.clear();
-
-          // 4. Reset and reload collections
-          collectionsData.reset();
-          collectionsState.reset();
-          await collectionsData.loadCollections();
-
-          // 5. Close all stale tabs and open fresh Today tab
-          clearAllTabs();
-          addTab({
-            id: DAILY_JOURNAL_TAB_ID,
-            title: '',
-            type: 'node',
-            content: { nodeId: formatDateISO(new Date()), nodeType: 'date' },
-            closeable: true,
-            paneId: DEFAULT_PANE_ID
-          });
-
-          // 6. Reload settings (updates activeDatabasePath display)
-          await loadSettings();
-
-          // 7. Show new database path in status bar
-          statusBar.success(`Database: ${event.payload}`);
-
-          log.info('Frontend state reset complete for new database');
-        } catch (error) {
-          log.error('Failed to reset frontend state after database change:', error);
-          statusBar.error('Database switched but UI reset failed — restart recommended');
         }
       });
 
@@ -501,9 +453,6 @@
       }
       if (unlistenDatabase) {
         (await unlistenDatabase)();
-      }
-      if (unlistenDatabaseChanged) {
-        (await unlistenDatabaseChanged)();
       }
       if (unlistenSettings) {
         (await unlistenSettings)();

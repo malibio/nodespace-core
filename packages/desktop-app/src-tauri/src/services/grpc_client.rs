@@ -1,28 +1,16 @@
 //! In-process gRPC client for the embedded `nodespaced` service.
 //!
-//! During the gRPC migration (Issue #1113) the Tauri app proxies node /
-//! collection / schema commands through tonic instead of calling
-//! `packages/core` directly. To avoid running a separate `nodespaced` process
-//! while migration is in flight, this module:
+//! The Tauri app proxies node / collection / schema / settings commands through
+//! tonic instead of calling `packages/core` directly. This module:
 //!
-//!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, and `EmbeddingsServiceImpl`
-//!      from `nodespace-daemon` on a localhost port.
+//!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, `EmbeddingsServiceImpl`,
+//!      and `SettingsServiceImpl` from `nodespace-daemon` on a localhost port.
 //!   2. Connects clients to that endpoint and stashes the `Channel`
 //!      so commands can clone the client cheaply.
 //!
 //! The same `Arc<NodeService>` AppServices already initializes is reused as
 //! the backing implementation, so there is no second database open and no
-//! RocksDB lock contention. Once all command files migrate (#1135–#1138)
-//! the in-process server can be replaced by a real `nodespaced` subprocess
-//! without touching the Tauri command handlers.
-//!
-//! ## Database hot-swap
-//!
-//! `GrpcClient` uses interior mutability (`Arc<RwLock<Inner>>`) so its channels
-//! can be replaced atomically when `switch_database_services` restarts the
-//! in-process server. All Tauri commands hold `State<'_, GrpcClient>` and call
-//! `.client()` / `.embeddings_client()` per invocation, so they always pick up
-//! the current channels without any signature changes.
+//! RocksDB lock contention.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -31,8 +19,8 @@ use std::time::Duration;
 use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeService};
 use nodespace_daemon::{
     EmbeddingsServiceClient, EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceClient,
-    ImportServiceImpl, ImportServiceServer, LocalAgentServiceClient, LocalAgentServiceImpl,
-    LocalAgentServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
+    ImportServiceImpl, ImportServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
+    SettingsServiceClient, SettingsServiceImpl, SettingsServiceServer,
 };
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -50,24 +38,17 @@ const BIND_ADDR_TEMPLATE: &str = "127.0.0.1:0";
 /// finished binding, so we give tonic a brief window to retry.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The live channel pair inside `GrpcClient`. Replaced atomically on
-/// `switch_database_services` via the wrapping `RwLock`.
 struct GrpcClientInner {
     node: NodeServiceClient<Channel>,
     import: ImportServiceClient<Channel>,
+    settings: SettingsServiceClient<Channel>,
     embeddings: Option<EmbeddingsServiceClient<Channel>>,
-    local_agent: LocalAgentServiceClient<Channel>,
 }
 
 /// Managed Tauri state wrapping the gRPC clients.
 ///
 /// `Channel` is cheap to clone (it is an `Arc` internally). Commands clone
 /// clients per call since tonic's generated methods take `&mut self`.
-///
-/// The inner state is guarded by a `RwLock` so `switch_database_services` can
-/// restart the in-process gRPC server and replace the channels while commands
-/// are in flight. Reader locks are held only for the duration of the `.clone()`
-/// call, so contention is negligible.
 pub struct GrpcClient {
     inner: Arc<RwLock<GrpcClientInner>>,
 }
@@ -90,22 +71,7 @@ impl GrpcClient {
         })
     }
 
-    /// Restart the in-process server with new service instances and atomically
-    /// replace the channels. Called by `switch_database_services` so subsequent
-    /// RPCs hit the new database rather than the old one.
-    pub async fn restart(
-        &self,
-        node_service: Arc<NodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
-        processor: Option<Arc<EmbeddingProcessor>>,
-    ) -> Result<(), GrpcClientError> {
-        let new_inner = Self::start_server(node_service, embedding_service, processor).await?;
-        let mut guard = self.inner.write().await;
-        *guard = new_inner;
-        Ok(())
-    }
-
-    /// Core server-start logic shared by `start` and `restart`.
+    /// Core server-start logic.
     async fn start_server(
         node_service: Arc<NodeService>,
         embedding_service: Option<Arc<NodeEmbeddingService>>,
@@ -121,11 +87,10 @@ impl GrpcClient {
         let node_service_impl =
             NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
         let import_impl = ImportServiceImpl::new(node_service.clone());
-        let local_agent_impl = LocalAgentServiceImpl::new(node_service.clone());
+        let settings_impl =
+            SettingsServiceImpl::with_default_path().map_err(GrpcClientError::InvalidEndpoint)?;
         let incoming = TcpListenerStream::new(listener);
 
-        // Compute whether embeddings will be registered before moving the impl
-        // into the spawn closure (it is not Copy/Clone).
         let embeddings_impl =
             embedding_service
                 .as_ref()
@@ -139,7 +104,7 @@ impl GrpcClient {
             let builder = Server::builder()
                 .add_service(NodeServiceServer::new(node_service_impl))
                 .add_service(ImportServiceServer::new(import_impl))
-                .add_service(LocalAgentServiceServer::new(local_agent_impl));
+                .add_service(SettingsServiceServer::new(settings_impl));
             let result = if let Some(emb) = embeddings_impl {
                 builder
                     .add_service(EmbeddingsServiceServer::new(emb))
@@ -159,9 +124,6 @@ impl GrpcClient {
 
         let channel = endpoint.connect().await.map_err(GrpcClientError::Connect)?;
 
-        // Base the embeddings client on whether the server actually registered
-        // the EmbeddingsService, not just on whether an embedding_service Arc
-        // was supplied — they must agree.
         let embeddings_client = if has_embeddings {
             Some(EmbeddingsServiceClient::new(channel.clone()))
         } else {
@@ -173,8 +135,8 @@ impl GrpcClient {
         Ok(GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
             import: ImportServiceClient::new(channel.clone()),
+            settings: SettingsServiceClient::new(channel),
             embeddings: embeddings_client,
-            local_agent: LocalAgentServiceClient::new(channel),
         })
     }
 
@@ -188,14 +150,14 @@ impl GrpcClient {
         self.inner.read().await.import.clone()
     }
 
+    /// Borrow a clone of the `SettingsServiceClient`.
+    pub async fn settings_client(&self) -> SettingsServiceClient<Channel> {
+        self.inner.read().await.settings.clone()
+    }
+
     /// Borrow a clone of the `EmbeddingsServiceClient`, if available.
     pub async fn embeddings_client(&self) -> Option<EmbeddingsServiceClient<Channel>> {
         self.inner.read().await.embeddings.clone()
-    }
-
-    /// Borrow a clone of the `LocalAgentServiceClient`.
-    pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
-        self.inner.read().await.local_agent.clone()
     }
 }
 
