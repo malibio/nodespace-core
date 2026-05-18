@@ -20,10 +20,9 @@ pub mod agent_guidance;
 // Prompt assembly: hardcoded base + graph-stored overrides
 pub mod prompt_assembler;
 
-// Intent extraction: pattern matching + filler stripping for skill discovery
-pub mod intent;
-
-// Pre-turn skill discovery pipeline: intent → semantic search → threshold
+// Skill seeding templates: default skill nodes inserted on first run.
+// Skill discovery itself is LLM-orchestrated via the `search_skills` tool
+// (issue #1130) — there is no longer a pre-turn intent pipeline.
 pub mod skill_pipeline;
 
 // Property access helpers for namespaced node properties

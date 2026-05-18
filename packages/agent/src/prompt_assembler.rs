@@ -362,6 +362,7 @@ mod tests {
 
         let expected_tool_strategy = "NODE MODEL: Everything in NodeSpace is a node. Built-in types (task, text, date) are always available. Custom types (e.g. 'project', 'customer') require a schema node to exist first — the schema defines the type's fields and title template. Once a schema exists, create instances with create_node(node_type=<schema_id>). Use create_schema only to define a new type; use create_node to create data.\n\n\
             TOOL STRATEGY:\n\
+            - To discover whether a registered skill matches the user's intent: call search_skills with a natural-language query describing what you want to do. Returns up to N matches with name, description, confidence (0-1), and tools. Empty matches mean no skill is related — judge whether to respond directly, ask the user, or proceed with general tools. Skip for purely conversational replies (greetings, thanks, small talk).\n\
             - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
             - To find nodes by exact title or keyword (when you know the name): use search_nodes with query=<keyword>. To filter by type (e.g. \"show all tasks\"), pass node_type=\"task\" with query=\"\". To filter by property (e.g. \"open tasks\"), pass filters={\"status\":\"open\"}.\n\
             - To find nodes by meaning/topic (when the exact name is unknown): use search_semantic (natural language query)\n\

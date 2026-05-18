@@ -4513,6 +4513,107 @@ impl SurrealStore {
         Ok(results)
     }
 
+    /// Linear-scan cosine similarity search restricted to a single node type.
+    ///
+    /// Skips the HNSW index entirely and scans every embedding whose backing
+    /// node has `node_type = $node_type`. For high-selectivity types (skills:
+    /// ~8-20 nodes with ~1-3 chunks each) this is faster than HNSW + post-filter
+    /// — the cosine ops are cheap on a small set and results are exact rather
+    /// than approximate.
+    ///
+    /// Mirrors the chunk-aggregation + density-ratio scoring from
+    /// `search_embeddings` so callers get the same composite_score shape.
+    ///
+    /// # Arguments
+    /// * `query_vector` - The query embedding vector
+    /// * `node_type` - Restrict to embeddings whose node has this type
+    /// * `limit` - Maximum number of results
+    /// * `threshold` - Minimum composite score threshold (0.0-1.0)
+    pub async fn search_embeddings_by_node_type(
+        &self,
+        query_vector: &[f32],
+        node_type: &str,
+        limit: i64,
+        threshold: Option<f64>,
+    ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
+        let min_score = threshold.unwrap_or(0.5);
+
+        #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
+        struct RawSearchResult {
+            node: SurrealNode,
+            max_similarity: f64,
+            matching_chunks: i64,
+            total_chunks: i64,
+            composite_score: f64,
+        }
+
+        // Filter by node.node_type first (record-link traversal — cheap because
+        // every embedding row carries a `node` link and the node table is keyed
+        // on id). Then compute cosine similarity directly on the filtered set.
+        // No HNSW operator: with a highly-selective type filter (e.g. skill),
+        // a linear scan beats HNSW + post-filter both on latency and accuracy.
+        let query = r#"
+            SELECT * FROM (
+                SELECT
+                    node,
+                    max_similarity,
+                    matching_chunks,
+                    total_chunks,
+                    max_similarity * (1.0 + 0.3 * (<float>matching_chunks / total_chunks)) AS composite_score
+                FROM (
+                    SELECT
+                        node,
+                        math::max(similarity) AS max_similarity,
+                        count() AS matching_chunks,
+                        math::max(total_chunks) AS total_chunks
+                    FROM (
+                        SELECT
+                            node,
+                            total_chunks,
+                            vector::similarity::cosine(vector, $query_vector) AS similarity
+                        FROM embedding
+                        WHERE stale = false AND node.node_type = $node_type
+                    )
+                    GROUP BY node
+                )
+            )
+            WHERE composite_score > $threshold
+            ORDER BY composite_score DESC
+            LIMIT $limit
+            FETCH node;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("query_vector", query_vector.to_vec()))
+            .bind(("node_type", node_type.to_string()))
+            .bind(("threshold", min_score))
+            .bind(("limit", limit))
+            .await
+            .context("Failed to execute typed embedding search")?;
+
+        let raw_results: Vec<RawSearchResult> = response
+            .take(0)
+            .context("Failed to extract typed embedding search results")?;
+
+        let results: Vec<crate::models::EmbeddingSearchResult> = raw_results
+            .into_iter()
+            .map(|r| {
+                let node: Node = r.node.into();
+                crate::models::EmbeddingSearchResult {
+                    node_id: node.id.clone(),
+                    score: r.composite_score,
+                    max_similarity: r.max_similarity,
+                    matching_chunks: r.matching_chunks,
+                    node: Some(node),
+                }
+            })
+            .collect();
+
+        Ok(results)
+    }
+
     /// BM25 full-text search on node content, resolving each match to its root node ID.
     ///
     /// Issue #951 - Hybrid Search: This is the BM25 leg of the hybrid search algorithm.
