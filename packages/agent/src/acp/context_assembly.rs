@@ -48,16 +48,34 @@ the nodes you (the agent) have been given and the immediate graph context
 around them. Treat the sections below as the authoritative starting point.
 ";
 
-/// Markdown section appended to the context file when NodeSpace tools are registered.
-const TOOLS_SECTION: &str = "\
-## NodeSpace Tools
+/// Shared tool list included in every agent's activation section.
+const TOOLS_LIST: &str = "Tools available: `nodespace_search_semantic`, `nodespace_get_node`, \
+`nodespace_create_node`, `nodespace_update_node`, `nodespace_get_children`";
 
-NodeSpace knowledge graph tools are available. Use them to search documentation,
-create notes, and update the graph during this session.
+/// Build the markdown section appended to the context file when NodeSpace tools are registered.
+///
+/// Claude Code needs an explicit path to the hook file so its hooks runtime can
+/// load it; other agents discover shim files via their own plugin/tool directories.
+fn tools_section(agent_type: AgentType) -> String {
+    let mut section = String::from(
+        "## NodeSpace Tools\n\
+         \n\
+         NodeSpace knowledge graph tools are available. Use them to search documentation,\n\
+         create notes, and update the graph during this session.\n\
+         \n",
+    );
 
-Tools available: `nodespace_search_semantic`, `nodespace_get_node`, \
-`nodespace_create_node`, `nodespace_update_node`, `nodespace_get_children`
-";
+    if agent_type == AgentType::ClaudeCode {
+        section.push_str(
+            "Hook file: `./nodespace-hook.ts` (written to this directory — \
+             Claude Code will load it automatically via hooks discovery).\n\n",
+        );
+    }
+
+    section.push_str(TOOLS_LIST);
+    section.push('\n');
+    section
+}
 
 /// Files (relative to the per-agent shim subdirectory) that must be copied into
 /// the session directory for each agent type.
@@ -302,7 +320,7 @@ impl GraphContextAssembler {
         if let Some(ref shim_dir) = self.shim_source_dir {
             write_shim_files(session_dir, agent_type, shim_dir).await?;
             content.push('\n');
-            content.push_str(TOOLS_SECTION);
+            content.push_str(&tools_section(agent_type));
         }
 
         write_context_to_dir(session_dir, agent_type, &content).await
@@ -424,11 +442,7 @@ async fn write_shim_files(
         tokio::fs::copy(&src, &dst).await.map_err(|e| {
             ContextError::WriteFailed(std::io::Error::new(
                 e.kind(),
-                format!(
-                    "failed to copy shim file '{}' to session dir: {}",
-                    src.display(),
-                    e
-                ),
+                format!("failed to copy shim '{}': {e}", src.display()),
             ))
         })?;
     }
@@ -895,17 +909,48 @@ mod tests {
 
     #[test]
     fn tools_section_mentions_all_five_tool_names() {
-        for tool in [
-            "nodespace_search_semantic",
-            "nodespace_get_node",
-            "nodespace_create_node",
-            "nodespace_update_node",
-            "nodespace_get_children",
+        for agent_type in [
+            AgentType::ClaudeCode,
+            AgentType::Codex,
+            AgentType::GeminiCli,
+            AgentType::Pi,
+            AgentType::OpenCode,
         ] {
+            let section = tools_section(agent_type);
+            for tool in [
+                "nodespace_search_semantic",
+                "nodespace_get_node",
+                "nodespace_create_node",
+                "nodespace_update_node",
+                "nodespace_get_children",
+            ] {
+                assert!(
+                    section.contains(tool),
+                    "tools_section({:?}) missing tool: {}",
+                    agent_type,
+                    tool
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tools_section_claude_code_includes_hook_file_path() {
+        let section = tools_section(AgentType::ClaudeCode);
+        assert!(
+            section.contains("nodespace-hook.ts"),
+            "Claude Code tools section should reference the hook file path"
+        );
+    }
+
+    #[test]
+    fn tools_section_non_claude_does_not_include_hook_path() {
+        for agent_type in [AgentType::Codex, AgentType::GeminiCli, AgentType::Pi, AgentType::OpenCode] {
+            let section = tools_section(agent_type);
             assert!(
-                TOOLS_SECTION.contains(tool),
-                "TOOLS_SECTION missing tool: {}",
-                tool
+                !section.contains("nodespace-hook.ts"),
+                "{:?} tools section should not reference the Claude Code hook file",
+                agent_type
             );
         }
     }

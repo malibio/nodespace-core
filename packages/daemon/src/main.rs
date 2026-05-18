@@ -205,7 +205,15 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     let manager = Arc::new(PtySessionManager::new());
     let mut assembler = GraphContextAssembler::new(node_service.clone(), embedding_service_opt);
     if let Ok(shim_dir) = std::env::var("NODESPACED_SHIM_DIR") {
-        assembler = assembler.with_shim_dir(std::path::PathBuf::from(shim_dir));
+        let shim_path = std::path::PathBuf::from(&shim_dir);
+        if !shim_path.is_dir() {
+            tracing::warn!(
+                "NODESPACED_SHIM_DIR '{}' does not exist or is not a directory; \
+                 per-agent shim files will not be written",
+                shim_dir
+            );
+        }
+        assembler = assembler.with_shim_dir(shim_path);
     }
     let assembler = Arc::new(assembler);
     let agent_session = AgentSessionHandler::new(manager, assembler);
