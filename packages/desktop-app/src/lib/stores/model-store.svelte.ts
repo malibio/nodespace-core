@@ -123,6 +123,7 @@ class ModelStore {
         await new Promise((resolve) => setTimeout(resolve, 200));
         if (this.models.length === 0) {
           this.models = createMockModels();
+          this.systemRamGb = 8; // Simulate a low-RAM machine so the warning chip is visible in dev
         }
       }
       log.info('Models refreshed', { count: this.models.length });
