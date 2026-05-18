@@ -13,7 +13,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "shims"
   ],
   "scripts": {
     "preinstall": "node ../../enforce-bun.js",

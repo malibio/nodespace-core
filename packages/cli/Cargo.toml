@@ -11,7 +11,9 @@ name = "nodespace"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.28"
 tonic = "0.12"
 tokio = { workspace = true }
 tokio-stream = "0.1"

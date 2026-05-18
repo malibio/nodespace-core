@@ -78,7 +78,8 @@ pub async fn generate_root_embedding(
     root_id: String,
 ) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -127,7 +128,8 @@ pub async fn search_roots(
     }
 
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     let response = client
@@ -157,7 +159,8 @@ pub async fn update_root_embedding(
     root_id: String,
 ) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -175,7 +178,8 @@ pub async fn on_root_closed(
     root_id: String,
 ) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -193,7 +197,8 @@ pub async fn on_root_idle(
     root_id: String,
 ) -> Result<bool, CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -211,7 +216,8 @@ pub async fn on_root_idle(
 #[tauri::command]
 pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -226,7 +232,8 @@ pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandE
 #[tauri::command]
 pub async fn get_stale_root_count(grpc: State<'_, GrpcClient>) -> Result<usize, CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     let response = client
@@ -260,7 +267,8 @@ pub async fn batch_generate_embeddings(
     root_ids: Vec<String>,
 ) -> Result<BatchEmbeddingResult, CommandError> {
     let mut client = grpc
-        .embeddings_client().await
+        .embeddings_client()
+        .await
         .ok_or_else(embeddings_unavailable)?;
 
     let response = client
