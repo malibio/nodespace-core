@@ -246,6 +246,27 @@
     }
   }
 
+  function handleAgentSessionsClick() {
+    const currentState = $tabState;
+    const existingTab = currentState.tabs.find((tab) => tab.type === 'agent-sessions');
+
+    if (existingTab) {
+      setActiveTab(existingTab.id, existingTab.paneId);
+    } else {
+      const targetPaneId = getTargetPaneId();
+      addTab(
+        {
+          id: 'agent-sessions',
+          title: 'Agent Sessions',
+          type: 'agent-sessions',
+          closeable: true,
+          paneId: targetPaneId
+        },
+        true
+      );
+    }
+  }
+
   // Handle navigation item clicks
   function handleNavItemClick(itemId: string) {
     // Close sub-panels when clicking non-collection nav items
@@ -261,6 +282,11 @@
     // Special handling for AI Chat
     if (itemId === 'ai-chat') {
       handleAiChatClick();
+    }
+
+    // Special handling for Agent Sessions
+    if (itemId === 'agent-sessions') {
+      handleAgentSessionsClick();
     }
 
     // Update active state in navigation items

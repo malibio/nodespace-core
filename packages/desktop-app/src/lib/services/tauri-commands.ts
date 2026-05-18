@@ -390,3 +390,59 @@ export async function acpRefreshAgents(): Promise<AcpAgentInfo[]> {
   return [];
 }
 
+// ============================================================================
+// PTY Agent Session Commands (Issue #1120)
+// ============================================================================
+
+export interface PtyLaunchInput {
+  agentType: string;
+  prompt?: string | null;
+  cols: number;
+  rows: number;
+}
+
+export interface PtyLaunchResult {
+  sessionId: string;
+  createdAt: number;
+}
+
+export interface PtySessionInfo {
+  sessionId: string;
+  agentType: string;
+  startedAt: number;
+}
+
+export interface PtyListSessionsResult {
+  sessions: PtySessionInfo[];
+  count: number;
+}
+
+export interface PtyTerminateResult {
+  sessionId: string;
+  wasRunning: boolean;
+}
+
+export async function ptyLaunchSession(input: PtyLaunchInput): Promise<PtyLaunchResult> {
+  return invoke<PtyLaunchResult>('launch_session', { input });
+}
+
+export async function ptyWriteInput(sessionId: string, data: number[]): Promise<number> {
+  return invoke<number>('write_input', { sessionId, data });
+}
+
+export async function ptyResizeTerminal(
+  sessionId: string,
+  cols: number,
+  rows: number
+): Promise<void> {
+  return invoke<void>('resize_terminal', { sessionId, cols, rows });
+}
+
+export async function ptyTerminateSession(sessionId: string): Promise<PtyTerminateResult> {
+  return invoke<PtyTerminateResult>('terminate_session', { sessionId });
+}
+
+export async function ptyListSessions(): Promise<PtyListSessionsResult> {
+  return invoke<PtyListSessionsResult>('list_sessions');
+}
+

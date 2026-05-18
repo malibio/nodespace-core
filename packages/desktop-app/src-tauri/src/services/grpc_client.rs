@@ -4,7 +4,7 @@
 //! tonic instead of calling `packages/core` directly. This module:
 //!
 //!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, `EmbeddingsServiceImpl`,
-//!      and `SettingsServiceImpl` from `nodespace-daemon` on a localhost port.
+//!      `SettingsServiceImpl`, and `AgentSessionHandler` from `nodespace-daemon` on a localhost port.
 //!   2. Connects clients to that endpoint and stashes the `Channel`
 //!      so commands can clone the client cheaply.
 //!
@@ -16,8 +16,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::pty::PtySessionManager;
 use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeService};
 use nodespace_daemon::{
+    AgentSessionHandler, AgentSessionServiceClient, AgentSessionServiceServer,
     EmbeddingsServiceClient, EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceClient,
     ImportServiceImpl, ImportServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
     SettingsServiceClient, SettingsServiceImpl, SettingsServiceServer,
@@ -43,6 +46,7 @@ struct GrpcClientInner {
     import: ImportServiceClient<Channel>,
     settings: SettingsServiceClient<Channel>,
     embeddings: Option<EmbeddingsServiceClient<Channel>>,
+    agent_session: AgentSessionServiceClient<Channel>,
 }
 
 /// Managed Tauri state wrapping the gRPC clients.
@@ -100,11 +104,19 @@ impl GrpcClient {
                 });
         let has_embeddings = embeddings_impl.is_some();
 
+        let pty_manager = Arc::new(PtySessionManager::new());
+        let assembler = Arc::new(GraphContextAssembler::new(
+            node_service.clone(),
+            embedding_service.clone(),
+        ));
+        let agent_session_impl = AgentSessionHandler::new(pty_manager, assembler);
+
         tokio::spawn(async move {
             let builder = Server::builder()
                 .add_service(NodeServiceServer::new(node_service_impl))
                 .add_service(ImportServiceServer::new(import_impl))
-                .add_service(SettingsServiceServer::new(settings_impl));
+                .add_service(SettingsServiceServer::new(settings_impl))
+                .add_service(AgentSessionServiceServer::new(agent_session_impl));
             let result = if let Some(emb) = embeddings_impl {
                 builder
                     .add_service(EmbeddingsServiceServer::new(emb))
@@ -135,8 +147,9 @@ impl GrpcClient {
         Ok(GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
             import: ImportServiceClient::new(channel.clone()),
-            settings: SettingsServiceClient::new(channel),
+            settings: SettingsServiceClient::new(channel.clone()),
             embeddings: embeddings_client,
+            agent_session: AgentSessionServiceClient::new(channel),
         })
     }
 
@@ -158,6 +171,11 @@ impl GrpcClient {
     /// Borrow a clone of the `EmbeddingsServiceClient`, if available.
     pub async fn embeddings_client(&self) -> Option<EmbeddingsServiceClient<Channel>> {
         self.inner.read().await.embeddings.clone()
+    }
+
+    /// Borrow a clone of the `AgentSessionServiceClient`.
+    pub async fn agent_session_client(&self) -> AgentSessionServiceClient<Channel> {
+        self.inner.read().await.agent_session.clone()
     }
 }
 

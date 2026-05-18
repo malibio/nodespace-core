@@ -91,6 +91,13 @@ export const navigationItems = writable<NavigationItem[]>([
     type: 'link'
   },
   {
+    id: 'agent-sessions',
+    label: 'Agent Sessions',
+    icon: 'M4 17L10 11L4 5M12 19H20', // terminal icon
+    active: false,
+    type: 'link'
+  },
+  {
     id: 'search',
     label: 'Search',
     icon: 'M11 11m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0M21 21l-4.35-4.35', // search icon

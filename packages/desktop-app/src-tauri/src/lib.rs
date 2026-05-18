@@ -472,6 +472,12 @@ pub fn run() {
             commands::chat_models::chat_model_load,
             commands::chat_models::chat_model_unload,
             commands::chat_models::ollama_available,
+            // PTY agent session commands (Issue #1120)
+            commands::agent_session::launch_session,
+            commands::agent_session::write_input,
+            commands::agent_session::resize_terminal,
+            commands::agent_session::terminate_session,
+            commands::agent_session::list_sessions,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
