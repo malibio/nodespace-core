@@ -47,6 +47,8 @@ pub enum Command {
     },
     /// Semantic search across the knowledge graph.
     Search(commands::search::SearchArgs),
+    /// Developer diagnostics: database path, size, node counts, schema count.
+    Diagnostics(commands::diagnostics::DiagnosticsArgs),
 }
 
 /// Resolve the configured endpoint, falling back to `DEFAULT_ENDPOINT`.
@@ -81,5 +83,6 @@ pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Node { action } => commands::node::run(&mut client, action, json).await,
         Command::Search(args) => commands::search::run(&mut client, args, json).await,
+        Command::Diagnostics(args) => commands::diagnostics::run(&mut client, args, json).await,
     }
 }

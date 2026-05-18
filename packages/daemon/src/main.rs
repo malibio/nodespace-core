@@ -12,7 +12,6 @@
 //!   6. Tear down cleanly on `SIGTERM`, `SIGINT`, or "Quit" from the tray.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -21,27 +20,14 @@ use nodespace_agent::pty::PtySessionManager;
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
-    tray, AgentSessionHandler, AgentSessionServiceServer, NodeServiceImpl, NodeServiceServer,
+    resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, NodeServiceImpl,
+    NodeServiceServer,
 };
 use tonic::transport::Server;
 
 /// Default address the daemon binds to. ADR-031 standardizes on
 /// `localhost:50051` for the loopback-only gRPC endpoint.
 const DEFAULT_ADDR: &str = "[::1]:50051";
-
-/// Resolve the on-disk database path. Honors `NODESPACED_DB_PATH` if set so
-/// integration tests and alternate deployments can redirect storage without
-/// recompiling.
-fn db_path() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("NODESPACED_DB_PATH") {
-        return Ok(PathBuf::from(custom));
-    }
-
-    let home = std::env::var("HOME").context(
-        "Cannot determine database path: $HOME is unset and NODESPACED_DB_PATH not provided",
-    )?;
-    Ok(PathBuf::from(home).join(".nodespace").join("daemon-db"))
-}
 
 /// Resolve the daemon's bind address. Honors `NODESPACED_ADDR`.
 fn bind_addr() -> Result<SocketAddr> {
@@ -105,7 +91,7 @@ fn headless() -> bool {
 /// no tray.
 async fn serve_headless() -> Result<()> {
     let addr = bind_addr()?;
-    let db_path = db_path()?;
+    let db_path = resolve_db_path()?;
 
     tracing::info!(db_path = %db_path.display(), %addr, "Starting nodespaced (headless)");
 
@@ -127,7 +113,7 @@ async fn serve_headless() -> Result<()> {
 /// daemon without going through the menu.
 async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let addr = bind_addr()?;
-    let db_path = db_path()?;
+    let db_path = resolve_db_path()?;
 
     tracing::info!(db_path = %db_path.display(), %addr, "Starting nodespaced (tray)");
 

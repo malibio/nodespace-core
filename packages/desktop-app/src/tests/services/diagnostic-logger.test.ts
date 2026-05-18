@@ -9,10 +9,6 @@ vi.mock('$lib/utils/logger', () => ({
   })
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn()
-}));
-
 import {
   setDiagnosticLoggingEnabled,
   isDiagnosticLoggingEnabled,
@@ -21,9 +17,7 @@ import {
   clearLogEntries,
   getDiagnosticStats,
   exportLogsAsJson,
-  withDiagnosticLogging,
-  getDatabaseDiagnostics,
-  testNodePersistence
+  withDiagnosticLogging
 } from '$lib/services/diagnostic-logger';
 
 describe('Diagnostic Logger', () => {
@@ -201,15 +195,4 @@ describe('Diagnostic Logger', () => {
     });
   });
 
-  describe('Tauri-dependent functions in non-Tauri env', () => {
-    it('getDatabaseDiagnostics should return null', async () => {
-      const result = await getDatabaseDiagnostics();
-      expect(result).toBeNull();
-    });
-
-    it('testNodePersistence should return null', async () => {
-      const result = await testNodePersistence();
-      expect(result).toBeNull();
-    });
-  });
 });

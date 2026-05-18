@@ -9,6 +9,27 @@
 pub mod services;
 pub mod tray;
 
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+
+/// Resolve the on-disk database path the daemon (and any in-process clients
+/// such as the CLI's `diagnostics` subcommand) should consult.
+///
+/// Honors `NODESPACED_DB_PATH` if set so integration tests and alternate
+/// deployments can redirect storage without recompiling; otherwise defaults
+/// to `$HOME/.nodespace/daemon-db`.
+pub fn resolve_db_path() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var("NODESPACED_DB_PATH") {
+        return Ok(PathBuf::from(custom));
+    }
+
+    let home = std::env::var("HOME").context(
+        "Cannot determine database path: $HOME is unset and NODESPACED_DB_PATH not provided",
+    )?;
+    Ok(PathBuf::from(home).join(".nodespace").join("daemon-db"))
+}
+
 /// Re-exports of prost/tonic generated types for the `nodespace` proto package.
 ///
 /// Includes:

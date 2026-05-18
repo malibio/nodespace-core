@@ -279,6 +279,91 @@ async fn search_without_embedding_service_reports_unavailable() {
 }
 
 #[tokio::test]
+async fn diagnostics_collect_reports_counts_and_recency() {
+    let (endpoint, shutdown, tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&endpoint).await.expect("connect");
+    let mut raw_client = nodespace_daemon::NodeServiceClient::connect(endpoint.clone())
+        .await
+        .expect("raw client connect");
+
+    // Capture the pre-seed baseline. NodeService::new auto-seeds core
+    // schema records on first open, so a fresh daemon already has nodes —
+    // we assert deltas against this baseline rather than absolute totals.
+    let db_path = tempdir.path().join("daemon-db");
+    let baseline = commands::diagnostics::collect(&mut client, &db_path).await;
+    assert!(
+        baseline.errors.is_empty(),
+        "baseline collect must not produce errors: {:?}",
+        baseline.errors
+    );
+
+    // Seed one root and two children. The diagnostics report should reflect
+    // +3 total and rank the newest-created child first.
+    let root = raw_client
+        .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
+            node_type: "text".into(),
+            content: "root".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
+        })
+        .await
+        .expect("seed root")
+        .into_inner();
+
+    let mut last_child_id = String::new();
+    for label in ["child-1", "child-2"] {
+        // Brief sleep so created_at timestamps differ — gives the
+        // created_at DESC sort a stable, observable order.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        last_child_id = raw_client
+            .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
+                node_type: "text".into(),
+                content: label.into(),
+                parent_id: root.node_id.clone(),
+                properties: String::new(),
+                collection: String::new(),
+                lifecycle_status: String::new(),
+                id: String::new(),
+                insert_after_node_id: String::new(),
+            })
+            .await
+            .unwrap_or_else(|e| panic!("seed {label}: {e}"))
+            .into_inner()
+            .node_id;
+    }
+
+    let report = commands::diagnostics::collect(&mut client, &db_path).await;
+    assert_eq!(
+        report.total_node_count,
+        baseline.total_node_count + 3,
+        "expected three additional nodes vs baseline"
+    );
+    assert!(
+        report.database_exists,
+        "daemon-db directory must exist after node creation"
+    );
+    assert!(
+        report.database_size_bytes.unwrap_or(0) > 0,
+        "non-empty database should report a non-zero size"
+    );
+    assert_eq!(
+        report.recent_node_ids[0], last_child_id,
+        "newest-created node must appear first under created_at DESC ordering"
+    );
+    assert!(
+        report.errors.is_empty(),
+        "happy-path collect must not surface errors: {:?}",
+        report.errors
+    );
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
 async fn connect_refused_returns_friendly_error() {
     // A port reserved by IANA that no daemon should be on. The CLI's `connect`
     // helper must surface a friendly message rather than a raw transport error.
