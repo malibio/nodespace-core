@@ -47,10 +47,12 @@ pub mod nodespace {
 // to re-export and simultaneously verify that generated symbols exist.
 pub use nodespace::agent_session_service_client::AgentSessionServiceClient;
 pub use nodespace::agent_session_service_server::AgentSessionServiceServer;
+pub use nodespace::embeddings_service_client::EmbeddingsServiceClient;
+pub use nodespace::embeddings_service_server::EmbeddingsServiceServer;
 pub use nodespace::import_service_client::ImportServiceClient;
 pub use nodespace::import_service_server::ImportServiceServer;
 pub use nodespace::node_service_client::NodeServiceClient;
 pub use nodespace::node_service_server::NodeServiceServer;
 pub use nodespace::{NodeData, SessionInfo};
 
-pub use services::{AgentSessionHandler, ImportServiceImpl, NodeServiceImpl};
+pub use services::{AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, NodeServiceImpl};

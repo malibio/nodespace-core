@@ -27,7 +27,7 @@ use crate::services::GrpcClient;
 pub async fn get_all_schemas(
     client: State<'_, GrpcClient>,
 ) -> Result<Vec<SchemaNode>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_all_schemas(Request::new(GetAllSchemasRequest {}))
         .await
@@ -67,7 +67,7 @@ pub async fn get_schema_definition(
     client: State<'_, GrpcClient>,
     schema_id: String,
 ) -> Result<SchemaNode, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_schema_definition(Request::new(GetSchemaDefinitionRequest {
             schema_id: schema_id.clone(),

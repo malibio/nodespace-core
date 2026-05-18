@@ -524,3 +524,75 @@ message DeleteCollectionRequest {
   string collection_id = 1;
   int64 version = 2;
 }
+
+// ---------------------------------------------------------------------------
+// EmbeddingsService — semantic search and embedding management
+// ---------------------------------------------------------------------------
+
+service EmbeddingsService {
+  rpc GetEmbeddingStatus(GetEmbeddingStatusRequest)     returns (EmbeddingStatusResponse);
+  rpc SearchSemantic(SearchSemanticRequest)             returns (SearchSemanticResponse);
+  rpc RegenerateEmbedding(RegenerateEmbeddingRequest)   returns (RegenerateEmbeddingResponse);
+  rpc QueueEmbedding(QueueEmbeddingRequest)             returns (QueueEmbeddingResponse);
+  rpc TriggerBatchEmbed(TriggerBatchEmbedRequest)       returns (TriggerBatchEmbedResponse);
+  rpc GetStaleCount(GetStaleCountRequest)               returns (GetStaleCountResponse);
+  rpc BatchQueueEmbeddings(BatchQueueEmbeddingsRequest) returns (BatchQueueEmbeddingsResponse);
+}
+
+// ---------------------------------------------------------------------------
+// EmbeddingsService messages
+// ---------------------------------------------------------------------------
+
+message GetEmbeddingStatusRequest {}
+
+message EmbeddingStatusResponse {
+  bool available = 1;        // true when NLP engine loaded and ready
+  int32 stale_count = 2;     // number of root nodes awaiting (re-)embedding
+}
+
+message SearchSemanticRequest {
+  string query = 1;
+  float threshold = 2;       // 0.0 = use server default (0.7)
+  int32 limit = 3;           // 0 = use server default (20)
+  bool exact = 4;            // reserved for future use
+}
+
+message SearchSemanticResponse {
+  repeated NodeData nodes = 1;
+}
+
+message RegenerateEmbeddingRequest {
+  string node_id = 1;
+}
+
+message RegenerateEmbeddingResponse {}
+
+message QueueEmbeddingRequest {
+  string node_id = 1;
+}
+
+message QueueEmbeddingResponse {}
+
+message TriggerBatchEmbedRequest {}
+
+message TriggerBatchEmbedResponse {}
+
+message GetStaleCountRequest {}
+
+message GetStaleCountResponse {
+  int32 count = 1;
+}
+
+message BatchQueueEmbeddingsRequest {
+  repeated string node_ids = 1;
+}
+
+message BatchEmbeddingFailure {
+  string node_id = 1;
+  string error = 2;
+}
+
+message BatchQueueEmbeddingsResponse {
+  int32 success_count = 1;
+  repeated BatchEmbeddingFailure failures = 2;
+}

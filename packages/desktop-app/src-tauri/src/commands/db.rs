@@ -4,7 +4,7 @@
 //! As of Issue #690, SchemaService is removed - schema operations use NodeService directly.
 //! As of Issue #894, services are registered via AppServices container for hot-swappable DB.
 
-use crate::app_services::{AppServices, EmbeddingState};
+use crate::app_services::AppServices;
 use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
 use nodespace_core::{NodeService, SurrealStore};
 use nodespace_nlp_engine::{EmbeddingConfig, EmbeddingService};
@@ -23,14 +23,15 @@ use crate::constants::EMBEDDING_MODEL_FILENAME;
 pub(crate) struct ServiceBundle {
     pub store: Arc<SurrealStore>,
     pub node_service: Arc<NodeService>,
-    pub embedding_state: Option<EmbeddingState>,
+    pub embedding_service: Option<Arc<NodeEmbeddingService>>,
+    pub processor: Option<Arc<EmbeddingProcessor>>,
 }
 
 /// Create core services for a given database + model path.
 ///
 /// Tiered initialization:
 /// - Store and NodeService failures are fatal (returned as `Err`).
-/// - NLP/embedding failures are non-fatal: `embedding_state` is set to `None`
+/// - NLP/embedding failures are non-fatal: embedding fields are set to `None`
 ///   and a warning is logged, allowing the app to run without semantic search.
 pub(crate) async fn create_service_bundle(
     db_path: PathBuf,
@@ -66,7 +67,6 @@ pub(crate) async fn create_service_bundle(
         let prompt_templates = PromptAssembler::seed_prompt_nodes();
         let skill_templates = seed_skill_nodes();
 
-        // Expand all templates into PreparedNode lists.
         let mut all_template_nodes: Vec<
             Vec<nodespace_core::mcp::handlers::markdown::PreparedNode>,
         > = Vec::new();
@@ -89,38 +89,37 @@ pub(crate) async fn create_service_bundle(
 
     // Tiered NLP init: failure here is non-fatal
     tracing::info!("Initializing NLP engine (model: {:?})...", model_path);
-    let embedding_state = match create_embedding_state(&store, &mut node_service, &model_path) {
-        Ok(state) => {
-            tracing::info!("Embedding services initialized");
-            Some(state)
-        }
-        Err(e) => {
-            tracing::warn!(
-                "NLP/embedding init failed (semantic search disabled): {}",
-                e
-            );
-            None
-        }
-    };
+    let (embedding_service, processor) =
+        match create_embedding_services(&store, &mut node_service, &model_path) {
+            Ok((svc, proc)) => {
+                tracing::info!("Embedding services initialized");
+                (Some(svc), Some(proc))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "NLP/embedding init failed (semantic search disabled): {}",
+                    e
+                );
+                (None, None)
+            }
+        };
 
     let node_service_arc = Arc::new(node_service);
 
     Ok(ServiceBundle {
         store,
         node_service: node_service_arc,
-        embedding_state,
+        embedding_service,
+        processor,
     })
 }
 
-/// Attempt to create embedding state (NLP engine + embedding service + processor).
-///
-/// Separated so the caller can treat the entire block as fallible without
-/// cluttering the happy path with nested matches.
-fn create_embedding_state(
+/// Attempt to create embedding services (NLP engine + embedding service + processor).
+fn create_embedding_services(
     store: &Arc<SurrealStore>,
     node_service: &mut NodeService,
     model_path: &Path,
-) -> Result<EmbeddingState, String> {
+) -> Result<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>), String> {
     let embedding_config = EmbeddingConfig {
         model_path: Some(model_path.to_path_buf()),
         ..Default::default()
@@ -154,10 +153,7 @@ fn create_embedding_state(
     processor.wake();
     tracing::info!("EmbeddingProcessor waker connected and woken for stale embeddings");
 
-    Ok(EmbeddingState {
-        service: embedding_service,
-        processor: Arc::new(processor),
-    })
+    Ok((embedding_service, Arc::new(processor)))
 }
 
 /// Resolve the path to the bundled NLP model (GGUF format for llama.cpp)
@@ -231,7 +227,7 @@ async fn init_services(app: &AppHandle, config: &crate::config::AppConfig) -> Re
         .initialize(
             bundle.store.clone(),
             bundle.node_service.clone(),
-            bundle.embedding_state,
+            bundle.embedding_service.clone(),
             config.clone(),
             session_token.clone(),
         )
@@ -265,11 +261,16 @@ async fn init_services(app: &AppHandle, config: &crate::config::AppConfig) -> Re
     }
 
     // Start in-process gRPC server and register the client as managed state
-    // so the migrated nodes/collections/schemas commands can proxy via tonic
-    // (Issue #1113). Reuses the same NodeService/embedding services so there
-    // is no second database open.
-    let embedding_service = services.embedding_service().await.ok();
-    match crate::services::GrpcClient::start(bundle.node_service.clone(), embedding_service).await {
+    // so the migrated nodes/collections/schemas/embeddings commands can proxy
+    // via tonic (Issue #1113, #1135). Reuses the same NodeService/embedding
+    // services so there is no second database open.
+    match crate::services::GrpcClient::start(
+        bundle.node_service.clone(),
+        bundle.embedding_service.clone(),
+        bundle.processor.clone(),
+    )
+    .await
+    {
         Ok(client) => {
             app.manage(client);
             tracing::info!("In-process gRPC client registered");

@@ -25,6 +25,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 nodespace-core = { workspace = true }
 nodespace-agent = { workspace = true }
+nodespace-nlp-engine = { workspace = true }
 
 # System tray (ADR-031): the daemon owns the tray icon, not the Tauri app.
 # tray-icon ships an event loop via `tao`; we run it on the main thread on

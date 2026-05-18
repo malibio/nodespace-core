@@ -1101,7 +1101,11 @@ async fn fetch_node(service: &Arc<CoreNodeService>, node_id: &str) -> Result<Nod
         .ok_or_else(|| Status::not_found(format!("Node not found: {}", node_id)))
 }
 
-fn node_to_proto(node: Node, parent_id: Option<String>, collection_id: Option<String>) -> NodeData {
+pub(crate) fn node_to_proto(
+    node: Node,
+    parent_id: Option<String>,
+    collection_id: Option<String>,
+) -> NodeData {
     NodeData {
         id: node.id,
         node_type: node.node_type,

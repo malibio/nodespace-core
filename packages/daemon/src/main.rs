@@ -17,12 +17,15 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::pty::PtySessionManager;
+use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
-    resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, ImportServiceImpl,
-    ImportServiceServer, NodeServiceImpl, NodeServiceServer,
+    resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
+    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, NodeServiceImpl,
+    NodeServiceServer,
 };
+use nodespace_nlp_engine::EmbeddingService;
 use tonic::transport::Server;
 
 /// Default address the daemon binds to. ADR-031 standardizes on
@@ -96,16 +99,23 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(db_path = %db_path.display(), %addr, "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
-    let services = build_services(&db_path).await?;
+    let bundle = build_services(&db_path).await?;
 
     tracing::info!(%addr, "gRPC server listening");
-    Server::builder()
-        .add_service(NodeServiceServer::new(services.node))
-        .add_service(AgentSessionServiceServer::new(services.agent_session))
-        .add_service(ImportServiceServer::new(services.import))
-        .serve_with_shutdown(addr, shutdown)
-        .await
-        .context("gRPC server terminated with error")?;
+    let builder = Server::builder()
+        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
+        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
+        .add_service(ImportServiceServer::new(bundle.import));
+    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
+        builder
+            .add_service(EmbeddingsServiceServer::new(emb))
+            .serve_with_shutdown(addr, shutdown)
+    } else {
+        builder.serve_with_shutdown(addr, shutdown)
+    };
+
+    serve.await.context("gRPC server terminated with error")?;
+    drain_gpu(bundle.embedding_state).await;
     Ok(())
 }
 
@@ -120,7 +130,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
-    let services = build_services(&db_path).await?;
+    let bundle = build_services(&db_path).await?;
 
     // `TrayController` is `Clone`; one copy goes to the metrics layer, the
     // other drives the shutdown future.
@@ -133,27 +143,39 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     };
 
     tracing::info!(%addr, "gRPC server listening");
-    Server::builder()
+    let builder = Server::builder()
         .layer(TrayMetricsLayer::new(controller))
-        .add_service(NodeServiceServer::new(services.node))
-        .add_service(AgentSessionServiceServer::new(services.agent_session))
-        .add_service(ImportServiceServer::new(services.import))
-        .serve_with_shutdown(addr, combined_shutdown)
-        .await
-        .context("gRPC server terminated with error")?;
+        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
+        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
+        .add_service(ImportServiceServer::new(bundle.import));
+    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
+        builder
+            .add_service(EmbeddingsServiceServer::new(emb))
+            .serve_with_shutdown(addr, combined_shutdown)
+    } else {
+        builder.serve_with_shutdown(addr, combined_shutdown)
+    };
+
+    serve.await.context("gRPC server terminated with error")?;
+    drain_gpu(bundle.embedding_state).await;
     Ok(())
 }
 
-/// Bundle of gRPC service implementations registered by both server loops.
-struct DaemonServices {
-    node: NodeServiceImpl,
+/// All initialized service handles for a daemon startup.
+struct ServiceBundle {
+    node_service_grpc: NodeServiceImpl,
     agent_session: AgentSessionHandler,
     import: ImportServiceImpl,
+    /// `None` when the NLP model is absent — the daemon starts without semantic
+    /// search rather than refusing to run. The `EmbeddingsService` gRPC endpoint
+    /// is simply not registered in that case.
+    embeddings_service_grpc: Option<EmbeddingsServiceImpl>,
+    /// Held so we can drain GPU resources after the server shuts down.
+    embedding_state: Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)>,
 }
 
-/// Open the database and assemble every gRPC service implementation the
-/// daemon exposes.
-async fn build_services(db_path: &std::path::Path) -> Result<DaemonServices> {
+/// Open the database and assemble the gRPC service implementations.
+async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     if let Some(parent) = db_path.parent() {
         tokio::fs::create_dir_all(parent).await.with_context(|| {
             format!("Failed to create database parent dir: {}", parent.display())
@@ -166,35 +188,109 @@ async fn build_services(db_path: &std::path::Path) -> Result<DaemonServices> {
             .context("Failed to initialize SurrealStore")?,
     );
 
-    let node_service = Arc::new(
-        CoreNodeService::new(&mut store)
-            .await
-            .context("Failed to initialize NodeService")?,
-    );
+    let mut node_service = CoreNodeService::new(&mut store)
+        .await
+        .context("Failed to initialize NodeService")?;
 
-    // Embedding service is wired by a follow-up issue. The gRPC `SearchNodes`
-    // handler returns `Unavailable` until it is provided. The same handle
-    // would feed semantic expansion in [`GraphContextAssembler`]; for now the
-    // assembler runs without semantic neighbours (it logs and skips).
-    let embedding_service = None;
+    let embedding_state = build_embedding_state(&store, &mut node_service);
+    let node_service = Arc::new(node_service);
 
-    let node = NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
+    let embedding_service_opt = embedding_state.as_ref().map(|(svc, _)| svc.clone());
+    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
 
-    // The PTY engine and context assembler are shared across every
-    // `AgentSessionService` RPC call. `PtySessionManager` is `Clone` but
-    // wrapping in `Arc` keeps the manager itself a single instance so all
-    // sessions live in one map.
+    let embeddings_service_grpc = embedding_state.as_ref().map(|(svc, proc)| {
+        EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
+    });
+
     let manager = Arc::new(PtySessionManager::new());
-    let assembler = Arc::new(GraphContextAssembler::new(node_service.clone(), embedding_service));
+    let assembler = Arc::new(GraphContextAssembler::new(node_service.clone(), embedding_service_opt));
     let agent_session = AgentSessionHandler::new(manager, assembler);
 
     let import = ImportServiceImpl::new(node_service);
 
-    Ok(DaemonServices {
-        node,
+    Ok(ServiceBundle {
+        node_service_grpc,
         agent_session,
         import,
+        embeddings_service_grpc,
+        embedding_state,
     })
+}
+
+/// Try to initialize NLP engine and embedding services. Non-fatal: returns
+/// `None` when the model is absent or fails to load.
+fn build_embedding_state(
+    store: &Arc<SurrealStore>,
+    node_service: &mut CoreNodeService,
+) -> Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)> {
+    let model_path = {
+        // Allow override via env var so CI and alternate deployments can redirect.
+        let p = if let Ok(custom) = std::env::var("NODESPACED_MODEL_PATH") {
+            std::path::PathBuf::from(custom)
+        } else {
+            let home = std::env::var("HOME").ok()?;
+            std::path::PathBuf::from(home)
+                .join(".nodespace")
+                .join("models")
+                .join("nomic-embed-text-v1.5.Q8_0.gguf")
+        };
+        if !p.exists() {
+            tracing::warn!(path = %p.display(), "NLP model not found — semantic search disabled");
+            return None;
+        }
+        p
+    };
+
+    let config = nodespace_nlp_engine::EmbeddingConfig {
+        model_path: Some(model_path),
+        ..Default::default()
+    };
+
+    let mut nlp = match EmbeddingService::new(config) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to create NLP engine — semantic search disabled");
+            return None;
+        }
+    };
+    if let Err(e) = nlp.initialize() {
+        tracing::warn!(error = %e, "Failed to load NLP model — semantic search disabled");
+        return None;
+    }
+    let nlp = Arc::new(nlp);
+
+    let node_accessor: Arc<dyn NodeAccessor> = Arc::new(node_service.clone());
+    let behaviors = node_service.behaviors().clone();
+    let embedding_service = Arc::new(NodeEmbeddingService::new(
+        nlp,
+        store.clone(),
+        node_accessor,
+        behaviors,
+    ));
+
+    let processor = match EmbeddingProcessor::new(embedding_service.clone()) {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to init EmbeddingProcessor — semantic search disabled");
+            return None;
+        }
+    };
+    node_service.set_embedding_waker(processor.waker());
+    processor.wake();
+
+    Some((embedding_service, processor))
+}
+
+/// GPU drain protocol: drop processor first (shuts down background task),
+/// then release the GPU context from the NLP engine.
+async fn drain_gpu(state: Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)>) {
+    if let Some((svc, proc)) = state {
+        drop(proc);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tracing::info!("Releasing GPU context...");
+        svc.nlp_engine().release_gpu_context();
+        tracing::info!("GPU context released");
+    }
 }
 
 /// Install the shutdown signal future at boot time so a failure to register
