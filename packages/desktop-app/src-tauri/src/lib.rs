@@ -316,8 +316,8 @@ pub fn run() {
             app.manage(app_services::AppServices::new());
 
             // Register agent services as independent managed state (Issue #1008)
-            // These live OUTSIDE AppServices and survive database hot-swaps.
-            // They obtain NodeService/NodeEmbeddingService per-operation from AppServices.
+            // These live OUTSIDE AppServices and obtain NodeService/NodeEmbeddingService
+            // per-operation from AppServices.
             {
                 use crate::commands::local_agent::ManagedAgentState;
                 use nodespace_agent::acp::registry::SystemAgentRegistry;

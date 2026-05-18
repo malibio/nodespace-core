@@ -21,7 +21,6 @@ import type { AppSettings } from '$lib/stores/settings';
 describe('Settings Store', () => {
   const mockSettings: AppSettings = {
     activeDatabasePath: '/tmp/test.db',
-    savedDatabasePath: null,
     display: {
       renderMarkdown: true,
       theme: 'light'

@@ -2,7 +2,7 @@
 //!
 //! As of Issue #676, NodeOperations layer is removed - NodeService contains all business logic.
 //! As of Issue #690, SchemaService is removed - schema operations use NodeService directly.
-//! As of Issue #894, services are registered via AppServices container for hot-swappable DB.
+//! As of Issue #894, services are registered via AppServices container.
 
 use crate::app_services::AppServices;
 use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
@@ -17,9 +17,6 @@ use tokio::fs;
 use crate::constants::EMBEDDING_MODEL_FILENAME;
 
 /// Result of creating core services (store, node service, optional embeddings).
-///
-/// Extracted as a shared helper so both `init_services()` and
-/// `switch_database_services()` use identical tiered-init logic.
 pub(crate) struct ServiceBundle {
     pub store: Arc<SurrealStore>,
     pub node_service: Arc<NodeService>,
@@ -208,9 +205,7 @@ async fn init_services(app: &AppHandle, config: &crate::config::AppConfig) -> Re
     let services: tauri::State<AppServices> = app.state();
     if services.is_initialized().await {
         eprintln!("⚠️  [init_services] Database already initialized");
-        return Err(
-            "Database already initialized. Use switch_database for hot-swapping.".to_string(),
-        );
+        return Err("Database already initialized.".to_string());
     }
 
     // Create core services via shared helper (tiered NLP init)

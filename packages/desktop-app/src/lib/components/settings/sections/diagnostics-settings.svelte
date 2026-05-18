@@ -15,11 +15,6 @@
             <span class="info-label">Database Path</span>
             <span class="info-value mono">{$appSettings?.activeDatabasePath ?? 'Unknown'}</span>
         </div>
-
-        <div class="info-item">
-            <span class="info-label">Saved Database Path</span>
-            <span class="info-value mono">{$appSettings?.savedDatabasePath ?? 'Default'}</span>
-        </div>
     </div>
 </div>
 

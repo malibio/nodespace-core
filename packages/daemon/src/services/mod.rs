@@ -7,8 +7,10 @@ pub mod agent_session_service;
 pub mod embeddings_service;
 pub mod import_service;
 pub mod node_service;
+pub mod settings_service;
 
 pub use agent_session_service::AgentSessionHandler;
 pub use embeddings_service::EmbeddingsServiceImpl;
 pub use import_service::ImportServiceImpl;
 pub use node_service::NodeServiceImpl;
+pub use settings_service::SettingsServiceImpl;

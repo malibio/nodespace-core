@@ -6,7 +6,6 @@ const log = createLogger('SettingsStore');
 
 export interface AppSettings {
     activeDatabasePath: string;
-    savedDatabasePath: string | null;
     display: {
         renderMarkdown: boolean;
         theme: string;

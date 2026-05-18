@@ -23,7 +23,7 @@ use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
     EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, NodeServiceImpl,
-    NodeServiceServer,
+    NodeServiceServer, SettingsServiceImpl, SettingsServiceServer,
 };
 use nodespace_nlp_engine::EmbeddingService;
 use tonic::transport::Server;
@@ -105,7 +105,8 @@ async fn serve_headless() -> Result<()> {
     let builder = Server::builder()
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import));
+        .add_service(ImportServiceServer::new(bundle.import))
+        .add_service(SettingsServiceServer::new(bundle.settings));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -147,7 +148,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         .layer(TrayMetricsLayer::new(controller))
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import));
+        .add_service(ImportServiceServer::new(bundle.import))
+        .add_service(SettingsServiceServer::new(bundle.settings));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -166,6 +168,7 @@ struct ServiceBundle {
     node_service_grpc: NodeServiceImpl,
     agent_session: AgentSessionHandler,
     import: ImportServiceImpl,
+    settings: SettingsServiceImpl,
     /// `None` when the NLP model is absent — the daemon starts without semantic
     /// search rather than refusing to run. The `EmbeddingsService` gRPC endpoint
     /// is simply not registered in that case.
@@ -196,22 +199,30 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     let node_service = Arc::new(node_service);
 
     let embedding_service_opt = embedding_state.as_ref().map(|(svc, _)| svc.clone());
-    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
+    let node_service_grpc =
+        NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
 
     let embeddings_service_grpc = embedding_state.as_ref().map(|(svc, proc)| {
         EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
     });
 
     let manager = Arc::new(PtySessionManager::new());
-    let assembler = Arc::new(GraphContextAssembler::new(node_service.clone(), embedding_service_opt));
+    let assembler = Arc::new(GraphContextAssembler::new(
+        node_service.clone(),
+        embedding_service_opt,
+    ));
     let agent_session = AgentSessionHandler::new(manager, assembler);
 
     let import = ImportServiceImpl::new(node_service);
+
+    let settings = SettingsServiceImpl::with_default_path()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize SettingsService: {}", e))?;
 
     Ok(ServiceBundle {
         node_service_grpc,
         agent_session,
         import,
+        settings,
         embeddings_service_grpc,
         embedding_state,
     })

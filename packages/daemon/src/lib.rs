@@ -53,6 +53,11 @@ pub use nodespace::import_service_client::ImportServiceClient;
 pub use nodespace::import_service_server::ImportServiceServer;
 pub use nodespace::node_service_client::NodeServiceClient;
 pub use nodespace::node_service_server::NodeServiceServer;
+pub use nodespace::settings_service_client::SettingsServiceClient;
+pub use nodespace::settings_service_server::SettingsServiceServer;
 pub use nodespace::{NodeData, SessionInfo};
 
-pub use services::{AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, NodeServiceImpl};
+pub use services::{
+    AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, NodeServiceImpl,
+    SettingsServiceImpl,
+};
