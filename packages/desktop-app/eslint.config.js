@@ -72,7 +72,10 @@ export default [
         Response: 'readonly',
         fetch: 'readonly',
         crypto: 'readonly',
-        CSS: 'readonly'
+        CSS: 'readonly',
+        ResizeObserver: 'readonly',
+        TextEncoder: 'readonly',
+        TextDecoder: 'readonly'
       }
     },
     plugins: {
@@ -213,6 +216,9 @@ export default [
         Response: 'readonly',
         BeforeUnloadEvent: 'readonly',
         btoa: 'readonly',
+        ResizeObserver: 'readonly',
+        TextEncoder: 'readonly',
+        TextDecoder: 'readonly',
       }
     },
     plugins: {

@@ -352,6 +352,9 @@ pub fn run() {
                 tracing::info!("Agent services registered as independent managed state");
             }
 
+            // Streaming task registry for PTY session cancellation (Issue #1120)
+            app.manage(commands::agent_session::StreamingTaskRegistry::default());
+
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -472,6 +475,12 @@ pub fn run() {
             commands::chat_models::chat_model_load,
             commands::chat_models::chat_model_unload,
             commands::chat_models::ollama_available,
+            // PTY agent session commands (Issue #1120)
+            commands::agent_session::launch_session,
+            commands::agent_session::write_input,
+            commands::agent_session::resize_terminal,
+            commands::agent_session::terminate_session,
+            commands::agent_session::list_sessions,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

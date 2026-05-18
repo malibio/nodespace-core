@@ -67,8 +67,8 @@ describe('Layout Store - Layout State Management', () => {
       const items = get(navigationItems);
 
       // Note: Collections section is rendered separately in NavigationSidebar, not in this store
-      // Items: daily-journal, ai-chat, search, favorites (Dashboard removed)
-      expect(items).toHaveLength(4);
+      // Items: daily-journal, ai-chat, agent-sessions, search, favorites (Dashboard removed)
+      expect(items).toHaveLength(5);
       expect(items[0].id).toBe('daily-journal');
       expect(items[0].active).toBe(false); // No default active state - nav items just navigate
       expect(items[0].type).toBe('link');

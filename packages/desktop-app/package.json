@@ -46,6 +46,8 @@
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
     "@thisux/sveltednd": "^0.0.20",
+    "@xterm/addon-fit": "^0.10",
+    "@xterm/xterm": "^5.5",
     "baseline-browser-mapping": "^2.9.18",
     "clsx": "^2.1.1",
     "core-js-compat": "^3.48.0",
