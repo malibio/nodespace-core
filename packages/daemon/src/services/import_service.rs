@@ -531,12 +531,27 @@ async fn run_batch_import(
         )
         .await;
 
-        match node_service_clone
+        let bulk_insert_failed = match node_service_clone
             .bulk_create_hierarchy_trusted(all_nodes)
             .await
         {
-            Ok(ids) => tracing::info!("Bulk created {} nodes", ids.len()),
-            Err(e) => tracing::error!("Failed to bulk create nodes: {:?}", e),
+            Ok(ids) => {
+                tracing::info!("Bulk created {} nodes", ids.len());
+                false
+            }
+            Err(e) => {
+                tracing::error!("Failed to bulk create nodes: {:?}", e);
+                true
+            }
+        };
+
+        // When the bulk insert fails, surface it to the caller rather than
+        // silently reporting success — mark all phase1 results as failed.
+        if bulk_insert_failed {
+            for r in &mut phase1_results {
+                r.success = false;
+                r.error = Some("Bulk node insertion failed; see daemon logs".to_string());
+            }
         }
 
         send_progress(
@@ -550,7 +565,7 @@ async fn run_batch_import(
         )
         .await;
 
-        if !collection_assignments.is_empty() {
+        if !bulk_insert_failed && !collection_assignments.is_empty() {
             match store.bulk_add_to_collections(&collection_assignments).await {
                 Ok(count) => tracing::info!("Bulk assigned {} collection memberships", count),
                 Err(e) => tracing::error!("Failed to bulk add to collections: {:?}", e),
@@ -568,24 +583,26 @@ async fn run_batch_import(
         )
         .await;
 
-        if !all_mentions.is_empty() {
+        if !bulk_insert_failed && !all_mentions.is_empty() {
             match store.bulk_create_mentions(&all_mentions).await {
                 Ok(count) => tracing::info!("Bulk created {} mentions", count),
                 Err(e) => tracing::error!("Failed to bulk create mentions: {:?}", e),
             }
         }
 
-        for prepared in &prepared_files {
-            if prepared.is_archived {
-                if let Err(e) = store
-                    .update_lifecycle_status(&prepared.root_id, "archived")
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to set lifecycle_status for {}: {}",
-                        prepared.root_id,
-                        e
-                    );
+        if !bulk_insert_failed {
+            for prepared in &prepared_files {
+                if prepared.is_archived {
+                    if let Err(e) = store
+                        .update_lifecycle_status(&prepared.root_id, "archived")
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to set lifecycle_status for {}: {}",
+                            prepared.root_id,
+                            e
+                        );
+                    }
                 }
             }
         }
