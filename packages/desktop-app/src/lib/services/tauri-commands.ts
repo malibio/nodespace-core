@@ -478,12 +478,34 @@ export async function updateCaptureSettings(
       enabled: false,
       sync: false,
       content: 'metadata_only',
-      ...settings
+      ...settings,
     } as CaptureSettings;
   }
   return invoke<CaptureSettings>('update_capture_settings', {
     enabled: settings.enabled ?? null,
     sync: settings.sync ?? null,
-    content: settings.content ?? null
+    content: settings.content ?? null,
   });
 }
+
+// ============================================================================
+// PTY Agent Availability Commands (Issue #1124)
+// ============================================================================
+
+export interface AgentAvailabilityInfo {
+  agentType: string;
+  binary: string;
+  binaryFound: boolean;
+  authFound: boolean;
+  binaryPath: string | null;
+  installHint: string | null;
+}
+
+export interface CheckAvailabilityResult {
+  agents: AgentAvailabilityInfo[];
+}
+
+export async function ptyCheckAgentAvailability(): Promise<CheckAvailabilityResult> {
+  return invoke<CheckAvailabilityResult>('check_agent_availability');
+}
+

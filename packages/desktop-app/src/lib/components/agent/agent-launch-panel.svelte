@@ -1,12 +1,14 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
-    ptyLaunchSession,
     getCaptureSettings,
+    ptyCheckAgentAvailability,
+    ptyLaunchSession,
     updateCaptureSettings,
-    type CaptureContentLevel
+    type AgentAvailabilityInfo,
+    type CaptureContentLevel,
   } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
-  import { onMount } from 'svelte';
 
   const log = createLogger('AgentLaunchPanel');
 
@@ -15,17 +17,24 @@
     { id: 'codex', label: 'Codex' },
     { id: 'gemini-cli', label: 'Gemini CLI' },
     { id: 'pi', label: 'Pi' },
-    { id: 'open-code', label: 'Open Code' }
+    { id: 'open-code', label: 'Open Code' },
   ];
 
   const CONTENT_LEVELS: { value: CaptureContentLevel; label: string }[] = [
     { value: 'metadata_only', label: 'Metadata only' },
     { value: 'summary', label: 'Summary' },
-    { value: 'full', label: 'Full transcript' }
+    { value: 'full', label: 'Full transcript' },
   ];
 
+  type AgentStatus =
+    | 'ready'
+    | 'binary_missing'
+    | 'auth_missing'
+    | 'binary_missing_and_auth_missing'
+    | 'unknown';
+
   let {
-    onSessionLaunched
+    onSessionLaunched,
   }: {
     onSessionLaunched: (_sessionId: string) => void;
   } = $props();
@@ -39,14 +48,27 @@
   let captureSync = $state(false);
   let captureContent = $state<CaptureContentLevel>('metadata_only');
 
+  let availability = $state<Record<string, AgentAvailabilityInfo>>({});
+  let availabilityLoading = $state(true);
+
   onMount(async () => {
     try {
-      const settings = await getCaptureSettings();
+      const [settings, availResult] = await Promise.all([
+        getCaptureSettings(),
+        ptyCheckAgentAvailability(),
+      ]);
       captureEnabled = settings.enabled;
       captureSync = settings.sync;
       captureContent = settings.content;
+      const map: Record<string, AgentAvailabilityInfo> = {};
+      for (const agent of availResult.agents) {
+        map[agent.agentType] = agent;
+      }
+      availability = map;
     } catch (e) {
-      log.warn('Failed to load capture settings', e);
+      log.warn('Failed to load panel settings', e);
+    } finally {
+      availabilityLoading = false;
     }
   });
 
@@ -55,11 +77,25 @@
       await updateCaptureSettings({
         enabled: captureEnabled,
         sync: captureSync,
-        content: captureContent
+        content: captureContent,
       });
     } catch (e) {
       log.error('Failed to save capture settings', e);
     }
+  }
+
+  function selectedAvailability(): AgentAvailabilityInfo | undefined {
+    return availability[selectedAgent];
+  }
+
+
+  function agentStatus(agentId: string): AgentStatus {
+    const av = availability[agentId];
+    if (!av) return 'unknown';
+    if (!av.binaryFound && !av.authFound) return 'binary_missing_and_auth_missing';
+    if (!av.binaryFound) return 'binary_missing';
+    if (!av.authFound) return 'auth_missing';
+    return 'ready';
   }
 
   async function launch() {
@@ -70,7 +106,7 @@
         agentType: selectedAgent,
         prompt: prompt.trim() || null,
         cols: 80,
-        rows: 24
+        rows: 24,
       });
       prompt = '';
       onSessionLaunched(result.sessionId);
@@ -104,10 +140,43 @@
         disabled={launching}
       >
         {#each AGENT_OPTIONS as option (option.id)}
-          <option value={option.id}>{option.label}</option>
+          {@const status = agentStatus(option.id)}
+          <option value={option.id}>
+            {option.label}{status === 'ready' || status === 'unknown' ? '' : ' ⚠'}
+          </option>
         {/each}
       </select>
     </div>
+
+    {#if !availabilityLoading}
+      {@const av = selectedAvailability()}
+      {@const status = agentStatus(selectedAgent)}
+      {#if av && status !== 'ready' && status !== 'unknown'}
+        <div class="availability-banner availability-banner--warning" role="alert">
+          {#if status === 'binary_missing' || status === 'binary_missing_and_auth_missing'}
+            <div class="availability-row">
+              <span class="availability-icon">⚠</span>
+              <span>
+                <strong>{av.binary}</strong> not found on PATH.
+                {#if av.installHint}
+                  <span class="install-hint">{av.installHint}</span>
+                {/if}
+              </span>
+            </div>
+          {/if}
+          {#if status === 'auth_missing' || status === 'binary_missing_and_auth_missing'}
+            <div class="availability-row">
+              <span class="availability-icon">⚠</span>
+              <span>Auth credential not configured for this agent.</span>
+            </div>
+          {/if}
+        </div>
+      {:else if av && status === 'ready'}
+        <div class="availability-banner availability-banner--ready" role="status">
+          <span class="availability-icon">✓</span> Ready
+        </div>
+      {/if}
+    {/if}
 
     <div class="field">
       <label class="field-label" for="prompt-input">
@@ -260,6 +329,51 @@
     font-size: 0.6875rem;
     color: hsl(var(--muted-foreground));
     align-self: flex-end;
+  }
+
+  .availability-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.8125rem;
+  }
+
+  .availability-banner--warning {
+    background: hsl(38 92% 50% / 0.1);
+    border: 1px solid hsl(38 92% 50% / 0.35);
+    color: hsl(32 95% 44%);
+  }
+
+  .availability-banner--ready {
+    background: hsl(142 71% 45% / 0.1);
+    border: 1px solid hsl(142 71% 45% / 0.3);
+    color: hsl(142 71% 35%);
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .availability-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+
+  .availability-icon {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    margin-top: 0.05rem;
+  }
+
+  .install-hint {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+    opacity: 0.85;
+    font-family: ui-monospace, monospace;
+    word-break: break-all;
   }
 
   .capture-section {

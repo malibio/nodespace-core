@@ -473,6 +473,7 @@ pub fn run() {
             commands::agent_session::resize_terminal,
             commands::agent_session::terminate_session,
             commands::agent_session::list_sessions,
+            commands::agent_session::check_agent_availability,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -18,17 +18,18 @@ use std::sync::Arc;
 use chrono::Utc;
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::agent_types::AgentType;
-use nodespace_agent::pty::{PtySession, PtySessionManager};
+use nodespace_agent::pty::{detect_all_agents, PtySession, PtySessionManager};
 use nodespace_core::services::NodeService as CoreNodeService;
 use tokio::sync::broadcast::error::RecvError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::nodespace::{
-    agent_session_service_server::AgentSessionService, LaunchSessionRequest, LaunchSessionResponse,
-    ListSessionsRequest, ListSessionsResponse, OutputChunk, ResizeRequest, ResizeResponse,
-    SessionInfo, StreamOutputRequest, TerminateSessionRequest, TerminateSessionResponse,
-    WriteInputRequest, WriteInputResponse,
+    agent_session_service_server::AgentSessionService, AgentAvailability, CheckAvailabilityRequest,
+    CheckAvailabilityResponse, LaunchSessionRequest, LaunchSessionResponse, ListSessionsRequest,
+    ListSessionsResponse, OutputChunk, ResizeRequest, ResizeResponse, SessionInfo,
+    StreamOutputRequest, TerminateSessionRequest, TerminateSessionResponse, WriteInputRequest,
+    WriteInputResponse,
 };
 use crate::services::capture_service::{finalize_capture, CompletedSession};
 use crate::services::settings_service::{read_capture_settings, CaptureConfig};
@@ -67,6 +68,48 @@ impl AgentSessionService for AgentSessionHandler {
 
         let agent_type = parse_agent_type(&req.agent_type).map_err(Status::invalid_argument)?;
         let agent_type_str = agent_type_to_string(agent_type);
+
+        // Defense-in-depth: reject the launch if the agent is not ready.
+        // The UI calls CheckAgentAvailability before showing the Launch button,
+        // but the RPC guard ensures the daemon never spawns a doomed process
+        // even if the UI check is skipped or stale.
+        //
+        // detect_all_agents() spawns /usr/libexec/path_helper via
+        // std::process::Command on macOS — a blocking call that must not run
+        // on a Tokio executor thread.
+        let availability = tokio::task::spawn_blocking(move || {
+            detect_all_agents()
+                .into_iter()
+                .find(|a| a.agent_type == agent_type)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("agent detection task panicked: {e}")))?;
+        if let Some(av) = availability {
+            if !av.binary_found || !av.auth_found {
+                let reason = match (av.binary_found, av.auth_found) {
+                    (false, false) => format!(
+                        "agent '{}' is not ready: binary '{}' not found and auth not configured",
+                        req.agent_type, av.binary
+                    ),
+                    (false, _) => format!(
+                        "agent '{}' is not ready: binary '{}' not found on PATH{}",
+                        req.agent_type,
+                        av.binary,
+                        av.install_hint
+                            .map(|h| format!(" — {h}"))
+                            .unwrap_or_default()
+                    ),
+                    (_, false) => format!(
+                        "agent '{}' is not ready: auth credential not configured",
+                        req.agent_type
+                    ),
+                    _ => unreachable!(),
+                };
+                return Err(Status::failed_precondition(reason));
+            }
+        }
+
+
         let id = self
             .manager
             .launch(agent_type, req.prompt, &self.assembler)
@@ -318,6 +361,30 @@ impl AgentSessionService for AgentSessionHandler {
         // for clients that compare snapshots.
         let count = u32::try_from(sessions.len()).unwrap_or(u32::MAX);
         Ok(Response::new(ListSessionsResponse { sessions, count }))
+    }
+
+    async fn check_agent_availability(
+        &self,
+        _request: Request<CheckAvailabilityRequest>,
+    ) -> Result<Response<CheckAvailabilityResponse>, Status> {
+        // detect_all_agents() spawns /usr/libexec/path_helper via
+        // std::process::Command on macOS — a blocking call that must not run
+        // on a Tokio executor thread.
+        let results = tokio::task::spawn_blocking(detect_all_agents)
+            .await
+            .map_err(|e| Status::internal(format!("agent detection task panicked: {e}")))?;
+        let agents: Vec<AgentAvailability> = results
+            .into_iter()
+            .map(|av| AgentAvailability {
+                agent_type: agent_type_to_string(av.agent_type),
+                binary: av.binary.to_string(),
+                binary_found: av.binary_found,
+                auth_found: av.auth_found,
+                binary_path: av.binary_path.map(|p| p.to_string_lossy().into_owned()),
+                install_hint: av.install_hint.map(str::to_string),
+            })
+            .collect();
+        Ok(Response::new(CheckAvailabilityResponse { agents }))
     }
 }
 

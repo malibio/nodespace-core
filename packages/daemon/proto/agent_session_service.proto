@@ -15,6 +15,7 @@ service AgentSessionService {
   rpc ResizeTerminal(ResizeRequest) returns (ResizeResponse);
   rpc TerminateSession(TerminateSessionRequest) returns (TerminateSessionResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc CheckAgentAvailability(CheckAvailabilityRequest) returns (CheckAvailabilityResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -134,4 +135,29 @@ message SessionInfo {
 message ListSessionsResponse {
   repeated SessionInfo sessions = 1;
   uint32 count = 2;
+}
+
+// ---------------------------------------------------------------------------
+// CheckAgentAvailability
+// ---------------------------------------------------------------------------
+
+message CheckAvailabilityRequest {}
+
+message AgentAvailability {
+  // Catalogued agent identifier (kebab-case), e.g. "claude-code".
+  string agent_type = 1;
+  // Binary name that was searched on PATH (e.g. "claude").
+  string binary = 2;
+  // True when the binary was found on the augmented PATH.
+  bool binary_found = 3;
+  // True when an auth credential (env var or config file) was found.
+  bool auth_found = 4;
+  // Absolute path to the binary, when found.
+  optional string binary_path = 5;
+  // Human-readable install instruction shown when binary_found is false.
+  optional string install_hint = 6;
+}
+
+message CheckAvailabilityResponse {
+  repeated AgentAvailability agents = 1;
 }

@@ -17,8 +17,8 @@ use std::sync::Mutex;
 
 use futures::StreamExt;
 use nodespace_daemon::{
-    LaunchSessionRequest, ListSessionsRequest, ResizeRequest, TerminateSessionRequest,
-    WriteInputRequest,
+    CheckAvailabilityRequest, LaunchSessionRequest, ListSessionsRequest, ResizeRequest,
+    TerminateSessionRequest, WriteInputRequest,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -96,6 +96,23 @@ pub struct TerminateSessionResult {
     pub was_running: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAvailabilityInfo {
+    pub agent_type: String,
+    pub binary: String,
+    pub binary_found: bool,
+    pub auth_found: bool,
+    pub binary_path: Option<String>,
+    pub install_hint: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckAvailabilityResult {
+    pub agents: Vec<AgentAvailabilityInfo>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchSessionInput {
@@ -113,6 +130,7 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
     let code = match status.code() {
         tonic::Code::NotFound => "SESSION_NOT_FOUND",
         tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        tonic::Code::FailedPrecondition => "AGENT_NOT_READY",
         _ => "GRPC_ERROR",
     }
     .to_string();
@@ -316,4 +334,30 @@ pub async fn list_sessions(
         sessions,
         count: inner.count,
     })
+}
+
+/// Check which PTY agents have their binary and auth credentials configured.
+#[tauri::command]
+pub async fn check_agent_availability(
+    client: State<'_, GrpcClient>,
+) -> Result<CheckAvailabilityResult, CommandError> {
+    let mut c = client.agent_session_client().await;
+    let resp = c
+        .check_agent_availability(Request::new(CheckAvailabilityRequest {}))
+        .await
+        .map_err(status_to_command_error)?;
+    let inner = resp.into_inner();
+    let agents = inner
+        .agents
+        .into_iter()
+        .map(|a| AgentAvailabilityInfo {
+            agent_type: a.agent_type,
+            binary: a.binary,
+            binary_found: a.binary_found,
+            auth_found: a.auth_found,
+            binary_path: a.binary_path,
+            install_hint: a.install_hint,
+        })
+        .collect();
+    Ok(CheckAvailabilityResult { agents })
 }
