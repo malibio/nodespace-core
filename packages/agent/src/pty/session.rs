@@ -109,7 +109,7 @@ pub struct PtySession {
 
     /// Ring buffer that accumulates output for capture. Shared with the
     /// reader task so all chunks land here without extra subscriptions.
-    pub capture: Arc<Mutex<SessionCapture>>,
+    capture: Arc<Mutex<SessionCapture>>,
 
     // Held only for its Drop side effect — deletes the temp dir on disk when
     // this session is dropped. Never read directly.
@@ -249,6 +249,11 @@ impl PtySession {
     /// while it is still running.
     pub fn exit_status(&self) -> Option<ExitStatus> {
         *self.exit_tx.borrow()
+    }
+
+    /// Return a cloned snapshot of the capture buffer, briefly locking it.
+    pub async fn snapshot_capture(&self) -> SessionCapture {
+        self.capture.lock().await.clone()
     }
 
     /// Write `data` to the PTY's stdin.

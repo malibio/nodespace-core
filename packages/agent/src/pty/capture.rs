@@ -19,6 +19,7 @@ pub const SUMMARY_MAX_BYTES: usize = 500;
 ///
 /// The buffer evicts the *oldest* chunks when `max_bytes` is exceeded, so
 /// the most recent output is always retained.
+#[derive(Clone)]
 pub struct SessionCapture {
     buffer: VecDeque<OutputChunk>,
     max_bytes: usize,

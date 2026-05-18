@@ -6,7 +6,7 @@
     type PtySessionInfo
   } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
 
   const log = createLogger('SessionsPanel');
 
@@ -117,6 +117,13 @@
       log.warn('Failed to load capture settings', e);
     }
     refresh();
+  });
+
+  onDestroy(() => {
+    for (const unlisten of closedListeners.values()) {
+      unlisten();
+    }
+    closedListeners.clear();
   });
 
   $effect(() => {

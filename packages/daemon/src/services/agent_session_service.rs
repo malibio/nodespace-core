@@ -31,6 +31,7 @@ use crate::nodespace::{
     WriteInputRequest, WriteInputResponse,
 };
 use crate::services::capture_service::{finalize_capture, CompletedSession};
+use crate::services::settings_service::{read_capture_settings, CaptureConfig};
 
 /// gRPC adapter that owns shared handles to the PTY engine.
 pub struct AgentSessionHandler {
@@ -110,6 +111,10 @@ impl AgentSessionService for AgentSessionHandler {
         // Spawn a capture task that waits for the session to exit, then
         // creates an ai-chat node if capture is enabled. This runs after
         // the launch response is returned — it does not block session start.
+        //
+        // Capture config is read once here (at launch time) so finalize_capture
+        // doesn't re-hit the filesystem on every session end. Sessions started
+        // before the handler initializes are not covered (no manager.get hit).
         if let Some(ref session) = self.manager.get(&id).await {
             let session = session.clone();
             let node_service = self.node_service.clone();
@@ -117,6 +122,14 @@ impl AgentSessionService for AgentSessionHandler {
             let started_at = session.started_at;
 
             tokio::spawn(async move {
+                let config = match read_capture_settings(&config_path).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "capture: failed to read config, skipping");
+                        CaptureConfig::default()
+                    }
+                };
+
                 // Wait for the child process to exit.
                 let mut exit_rx = session.subscribe_exit();
                 let exit_status = loop {
@@ -129,7 +142,7 @@ impl AgentSessionService for AgentSessionHandler {
                     }
                 };
 
-                let capture = session.capture.lock().await;
+                let capture = session.snapshot_capture().await;
                 let completed = CompletedSession {
                     id: session.id,
                     agent_type: agent_type_str,
@@ -138,8 +151,7 @@ impl AgentSessionService for AgentSessionHandler {
                     exit_status,
                 };
 
-                if let Err(e) =
-                    finalize_capture(&completed, &capture, &node_service, &config_path).await
+                if let Err(e) = finalize_capture(&completed, &capture, &node_service, &config).await
                 {
                     tracing::warn!(
                         session_id = %session.id,
