@@ -291,6 +291,8 @@ export interface ModelInfo {
 	readonly url: string;
 	readonly sha256: string;
 	readonly status: ModelStatus;
+	/** Minimum system RAM (GiB) required to run this model. 0 means unknown. */
+	readonly min_memory_gb: number;
 }
 
 /** Specification of a chat model's capabilities. */

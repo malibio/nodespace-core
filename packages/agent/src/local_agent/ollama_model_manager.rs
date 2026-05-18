@@ -175,6 +175,7 @@ impl ModelManager for OllamaModelManager {
                 sha256: None,
                 backend: ModelBackend::Ollama,
                 status: ModelStatus::Ready,
+                min_memory_gb: 0,
             })
             .collect();
 

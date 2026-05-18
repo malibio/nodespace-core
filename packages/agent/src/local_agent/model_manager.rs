@@ -55,6 +55,8 @@ struct CatalogEntry {
     sha256: &'static str,
     context_window: u32,
     default_temperature: f32,
+    /// Minimum system RAM (in GiB) required to run this model comfortably.
+    min_memory_gb: u8,
 }
 
 /// Ministral 3B -- fast, lightweight, identical tool reliability.
@@ -69,6 +71,7 @@ const MINISTRAL_3B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official Mistral repo, Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    min_memory_gb: 8,
 };
 
 /// Ministral 8B -- deeper reasoning, vision capable.
@@ -83,6 +86,7 @@ const MINISTRAL_8B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official Mistral repo, Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    min_memory_gb: 16,
 };
 
 /// Gemma 4 E4B -- Google's efficient ~4B-effective model; stronger reasoning
@@ -98,6 +102,7 @@ const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    min_memory_gb: 16,
 };
 
 /// Gemma 4 31B -- Google's larger dense quality-tier option (24GB+ Apple
@@ -114,6 +119,7 @@ const GEMMA_4_31B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    min_memory_gb: 24,
 };
 
 /// All catalog entries, in preference order.
@@ -303,6 +309,7 @@ impl ModelManager for GgufModelManager {
                 sha256: Some(entry.sha256.to_string()),
                 backend: ModelBackend::Gguf,
                 status,
+                min_memory_gb: entry.min_memory_gb,
             });
         }
 
@@ -826,7 +833,7 @@ fn find_catalog_entry(model_id: &str) -> Result<&'static CatalogEntry, ModelErro
 }
 
 /// Detect total system RAM in bytes using `sysinfo`.
-fn detect_system_ram() -> u64 {
+pub fn detect_system_ram() -> u64 {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     sys.total_memory()
@@ -904,6 +911,7 @@ mod tests {
             .url
             .as_ref()
             .is_some_and(|u| u.contains("ggml-org/gemma-4-E4B-it-GGUF")));
+        assert_eq!(e4b.min_memory_gb, 16);
 
         let g31 = models.iter().find(|m| m.id == "gemma-4-31b-q4km").unwrap();
         assert_eq!(g31.family, ModelFamily::Gemma4);
@@ -913,6 +921,7 @@ mod tests {
             .url
             .as_ref()
             .is_some_and(|u| u.contains("ggml-org/gemma-4-31B-it-GGUF")));
+        assert_eq!(g31.min_memory_gb, 24);
     }
 
     #[tokio::test]
@@ -926,6 +935,10 @@ mod tests {
         assert!(m3b.url.as_ref().is_some_and(|u| !u.is_empty()));
         // sha256 may be empty when verification is skipped (official repos)
         assert!(m3b.size_bytes > 0);
+        assert_eq!(m3b.min_memory_gb, 8);
+
+        let m8b = models.iter().find(|m| m.id == "ministral-8b-q4km").unwrap();
+        assert_eq!(m8b.min_memory_gb, 16);
     }
 
     #[tokio::test]
