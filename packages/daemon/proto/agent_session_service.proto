@@ -30,9 +30,11 @@ message LaunchSessionRequest {
   // (e.g. `claude "<prompt>"`). Omit to launch the agent in its default
   // interactive mode.
   optional string prompt = 2;
-  // Initial terminal dimensions. Values of 0 fall back to the engine default
-  // (80x24); callers are expected to resize as soon as they know the real
-  // terminal geometry.
+  // Initial terminal dimensions. Valid range: [1, 65535]. Zero on either
+  // axis falls back to the engine default (80x24); callers are expected to
+  // call ResizeTerminal as soon as they know the real terminal geometry.
+  // (ResizeTerminal, by contrast, rejects zero — its semantics are "apply
+  // exactly this size", not "use the default".)
   uint32 cols = 3;
   uint32 rows = 4;
 }
@@ -79,8 +81,10 @@ message WriteInputRequest {
 message WriteInputResponse {
   // Number of bytes accepted by the PTY writer. The PTY engine writes the
   // entire buffer atomically and flushes, so this always equals
-  // `data.len()` on success.
-  int32 bytes_written = 1;
+  // `data.len()` on success. `int64` because `data` is unbounded and a
+  // `usize → int32` cast could wrap on a 2 GiB+ payload (unlikely for a
+  // PTY, but the contract is the contract).
+  int64 bytes_written = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +93,9 @@ message WriteInputResponse {
 
 message ResizeRequest {
   string session_id = 1;
+  // Terminal dimensions. Valid range: [1, 65535] (the underlying PTY uses
+  // u16). Zero is rejected with InvalidArgument — unlike LaunchSession,
+  // ResizeTerminal has no "default" semantic.
   uint32 cols = 2;
   uint32 rows = 3;
 }
@@ -126,5 +133,5 @@ message SessionInfo {
 
 message ListSessionsResponse {
   repeated SessionInfo sessions = 1;
-  int32 count = 2;
+  uint32 count = 2;
 }

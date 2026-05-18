@@ -260,6 +260,39 @@ async fn resize_terminal_succeeds_for_active_session() {
 }
 
 #[tokio::test]
+async fn resize_terminal_rejects_zero_dimensions() {
+    // Unlike LaunchSession (where 0 means "use engine default"), ResizeTerminal
+    // rejects zero on either axis. Pins the API-boundary contract documented
+    // on ResizeRequest.proto.
+    let (mut client, manager, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let session = PtySession::launch_for_test("sh", vec!["-c".into(), "sleep 5".into()])
+        .expect("launch sleep");
+    let id = manager.insert(session).await;
+
+    for (cols, rows) in [(0u32, 40u32), (120, 0), (0, 0)] {
+        let err = client
+            .resize_terminal(ResizeRequest {
+                session_id: id.to_string(),
+                cols,
+                rows,
+            })
+            .await
+            .expect_err(&format!("resize with cols={cols}, rows={rows} should fail"));
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    client
+        .terminate_session(TerminateSessionRequest {
+            session_id: id.to_string(),
+        })
+        .await
+        .expect("terminate rpc");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
 async fn stream_output_disconnect_does_not_kill_session() {
     let (mut client, manager, shutdown, _tempdir) = spawn_test_daemon().await;
 

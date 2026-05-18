@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::agent_types::AgentType;
-use nodespace_agent::pty::PtySessionManager;
+use nodespace_agent::pty::{PtySession, PtySessionManager};
 use tokio::sync::broadcast::error::RecvError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -55,14 +55,29 @@ impl AgentSessionService for AgentSessionHandler {
             .await
             .map_err(|e| Status::internal(format!("launch session failed: {e}")))?;
 
-        // Apply requested dimensions if the caller passed non-zero values.
-        // The engine defaults to 80x24 at spawn — callers resize as soon as
-        // they know the real terminal geometry.
+        // Pin the session via one lookup so (a) `started_at` comes from the
+        // authoritative PtySession value (matching what ListSessions reports)
+        // and (b) the optional initial resize cannot race the auto-prune
+        // watcher into a spurious NotFound for a session we just created.
+        // `unwrap_or` fallback covers the vanishingly unlikely case where the
+        // spawned child has already exited and the auto-prune watcher has
+        // already removed the entry.
+        let session = self.manager.get(&id).await;
+        let created_at = session
+            .as_ref()
+            .map(|s| s.started_at.timestamp())
+            .unwrap_or_else(current_unix_secs);
+
+        // Apply requested dimensions when the caller passed non-zero values.
+        // Zero on either axis means "keep the engine default" (80x24);
+        // ResizeTerminal, in contrast, rejects zero outright — see its proto
+        // comment.
         if req.cols != 0 && req.rows != 0 {
-            apply_resize(&self.manager, &id, req.cols, req.rows).await?;
+            if let Some(session) = session {
+                resize_session(&session, req.cols, req.rows).await?;
+            }
         }
 
-        let created_at = current_unix_secs();
         Ok(Response::new(LaunchSessionResponse {
             session_id: id.to_string(),
             created_at,
@@ -101,6 +116,15 @@ impl AgentSessionService for AgentSessionHandler {
                         // buffer. Continue draining rather than tearing the
                         // stream down — losing a render frame is preferable
                         // to losing the whole session view.
+                        //
+                        // TODO(#1119 review): Lag is invisible to the client
+                        // today (only a server-side tracing::warn). Options
+                        // for surfacing it: a sentinel OutputChunk with an
+                        // in-band "[N bytes dropped]" notice, or a session-
+                        // level metric on ListSessions. Deferred — current
+                        // behavior matches what a real terminal does when
+                        // the kernel buffer overflows (silent drop).
+                        debug_assert!(skipped > 0, "RecvError::Lagged with zero skipped chunks");
                         tracing::warn!(
                             session_id = %id,
                             skipped,
@@ -136,8 +160,11 @@ impl AgentSessionService for AgentSessionHandler {
 
         // PtySession::write_input writes the entire buffer atomically and
         // flushes, so on success bytes_written always equals the input length.
+        // The proto field is int64 (widened from int32 during PR #1119 review)
+        // so a 64-bit `usize` cannot truncate — fits the full `data.len()`
+        // range on every realistic platform.
         Ok(Response::new(WriteInputResponse {
-            bytes_written: len as i32,
+            bytes_written: len as i64,
         }))
     }
 
@@ -147,7 +174,24 @@ impl AgentSessionService for AgentSessionHandler {
     ) -> Result<Response<ResizeResponse>, Status> {
         let req = request.into_inner();
         let id = parse_session_id(&req.session_id).map_err(Status::invalid_argument)?;
-        apply_resize(&self.manager, &id, req.cols, req.rows).await?;
+
+        // Unlike LaunchSession, ResizeTerminal has no "0 means default"
+        // semantic. Reject zero at the API boundary so the underlying
+        // portable_pty call never sees PtySize { rows: 0, cols: 0, .. }
+        // (which is platform-dependent and reliably surprising).
+        if req.cols == 0 || req.rows == 0 {
+            return Err(Status::invalid_argument(format!(
+                "ResizeTerminal requires non-zero dimensions; got cols={}, rows={}",
+                req.cols, req.rows
+            )));
+        }
+
+        let session = self
+            .manager
+            .get(&id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("session not found: {id}")))?;
+        resize_session(&session, req.cols, req.rows).await?;
         Ok(Response::new(ResizeResponse {}))
     }
 
@@ -184,7 +228,11 @@ impl AgentSessionService for AgentSessionHandler {
             })
             .collect();
 
-        let count = sessions.len() as i32;
+        // Saturating cast: the manager's HashMap is `usize`-keyed, but `u32`
+        // (~4.2B) is well above any realistic session count for a single
+        // daemon. Saturating instead of wrapping keeps the count monotonic
+        // for clients that compare snapshots.
+        let count = u32::try_from(sessions.len()).unwrap_or(u32::MAX);
         Ok(Response::new(ListSessionsResponse { sessions, count }))
     }
 }
@@ -205,13 +253,12 @@ fn parse_session_id(raw: &str) -> Result<Uuid, String> {
 
 /// Convert the proto's `agent_type` string into the canonical [`AgentType`].
 ///
-/// The proto field is the kebab-case serde form of [`AgentType`]
-/// (`"claude-code"`, `"codex"`, `"gemini-cli"`, `"pi"`, `"open-code"`). For
-/// historical/UX reasons we also accept the snake_case forms named in the
-/// proto comment (`"claude_code"`, `"gemini_cli"`, `"open_code"`).
+/// The only accepted form is the kebab-case serde representation of
+/// [`AgentType`] (`"claude-code"`, `"codex"`, `"gemini-cli"`, `"pi"`,
+/// `"open-code"`). Snake-case is rejected — CLAUDE.md is explicit that
+/// greenfield code carries no backward-compat aliases.
 fn parse_agent_type(raw: &str) -> Result<AgentType, String> {
-    let normalized = raw.replace('_', "-");
-    serde_json::from_value::<AgentType>(serde_json::Value::String(normalized)).map_err(|_| {
+    serde_json::from_value::<AgentType>(serde_json::Value::String(raw.to_string())).map_err(|_| {
         format!(
             "unknown agent_type '{raw}'; expected one of: claude-code, codex, gemini-cli, pi, open-code"
         )
@@ -229,17 +276,15 @@ fn agent_type_to_string(agent_type: AgentType) -> String {
         .unwrap_or_else(|| format!("{agent_type:?}"))
 }
 
-async fn apply_resize(
-    manager: &PtySessionManager,
-    id: &Uuid,
-    cols: u32,
-    rows: u32,
-) -> Result<(), Status> {
-    let session = manager
-        .get(id)
-        .await
-        .ok_or_else(|| Status::not_found(format!("session not found: {id}")))?;
-
+/// Apply a resize to an already-located [`PtySession`].
+///
+/// Takes an `&Arc<PtySession>` rather than a session id so callers that
+/// already hold the session (e.g. `launch_session` after its initial
+/// lookup) don't take the manager's lock a second time. The `Arc` also
+/// guarantees the underlying session can't be auto-pruned between this
+/// call and the actual resize — eliminating a small race that would
+/// otherwise return `NotFound` for a session we just created.
+async fn resize_session(session: &Arc<PtySession>, cols: u32, rows: u32) -> Result<(), Status> {
     let cols = u16::try_from(cols)
         .map_err(|_| Status::invalid_argument(format!("cols {cols} exceeds u16 range")))?;
     let rows = u16::try_from(rows)
@@ -260,13 +305,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_agent_type_accepts_kebab_and_snake_case() {
+    fn parse_agent_type_accepts_kebab_case() {
         assert_eq!(
             parse_agent_type("claude-code").unwrap(),
-            AgentType::ClaudeCode
-        );
-        assert_eq!(
-            parse_agent_type("claude_code").unwrap(),
             AgentType::ClaudeCode
         );
         assert_eq!(parse_agent_type("codex").unwrap(), AgentType::Codex);
@@ -274,13 +315,22 @@ mod tests {
             parse_agent_type("gemini-cli").unwrap(),
             AgentType::GeminiCli
         );
-        assert_eq!(
-            parse_agent_type("gemini_cli").unwrap(),
-            AgentType::GeminiCli
-        );
         assert_eq!(parse_agent_type("pi").unwrap(), AgentType::Pi);
         assert_eq!(parse_agent_type("open-code").unwrap(), AgentType::OpenCode);
-        assert_eq!(parse_agent_type("open_code").unwrap(), AgentType::OpenCode);
+    }
+
+    #[test]
+    fn parse_agent_type_rejects_snake_case() {
+        // Snake-case is the proto-comment form from the original #1111 spec
+        // but was dropped in the #1119 review per CLAUDE.md's no-backwards-
+        // compat directive. Pin the rejection so a future refactor can't
+        // silently restore the dual-accept path.
+        for snake in ["claude_code", "gemini_cli", "open_code"] {
+            assert!(
+                parse_agent_type(snake).is_err(),
+                "snake_case agent_type '{snake}' must be rejected"
+            );
+        }
     }
 
     #[test]

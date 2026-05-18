@@ -34,12 +34,26 @@ tempfile = "3"
 libc = "0.2"
 
 [features]
-# Exposes test-only hooks (e.g. `LocalAgentService::set_system_prompt` and
-# `AgentSession::system_prompt_override`) so integration tests in `tests/`
-# can inject prebuilt prompts without a live database. The `tests/` binaries
-# link against the library in non-test mode, so `#[cfg(test)]` alone is not
-# enough — this feature gate is what keeps the hook out of production builds
-# while making it visible to integration tests run with `--features testing`.
+# Exposes test-only hooks (e.g. `LocalAgentService::set_system_prompt`,
+# `AgentSession::system_prompt_override`, `PtySession::launch_for_test`) so
+# integration tests in `tests/` can inject prebuilt prompts and spawn shell
+# utilities without a real agent binary on PATH. The `tests/` binaries link
+# against the library in non-test mode, so `#[cfg(test)]` alone is not
+# enough — this feature gate is what keeps the hooks out of production
+# builds while making them visible to integration tests run with
+# `--features testing`.
+#
+# Footgun: Cargo unifies features across dep/dev-dep within a single
+# downstream package. If a sibling crate (e.g. nodespace-daemon) depends on
+# nodespace-agent as a regular dependency *and* as a dev-dependency with
+# `features = ["testing"]`, then during `cargo test -p that-crate` the
+# downstream's *production* code links against this crate with the
+# `testing` feature enabled. That is currently safe — every gate behind
+# `testing` only widens visibility (pub(crate) → pub) without changing
+# runtime behavior. Keep it that way: do not put `#[cfg(feature =
+# "testing")]` on code that mutates state, swaps implementations, or skips
+# safety checks. Test-only stubs belong in test-only modules in the
+# downstream crate, not behind this feature flag.
 testing = []
 
 [dev-dependencies]
