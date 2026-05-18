@@ -107,7 +107,7 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
         })
         .await
     {
-        Ok(response) => response.into_inner().nodes.len(),
+        Ok(response) => response.into_inner().count as usize,
         Err(e) => {
             errors.push(format!("GetRoots failed: {e}"));
             0

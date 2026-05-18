@@ -3603,6 +3603,7 @@ impl NodeService {
         Ok(children)
     }
 
+    /// Returns all root nodes — nodes with no parent edge in the graph.
     pub async fn get_roots(&self) -> Result<Vec<Node>, NodeServiceError> {
         self.store
             .get_children(None)
