@@ -17,11 +17,14 @@ use super::OpsError;
 
 /// Similarity threshold for skill search.
 ///
-/// Set to zero so the model sees every match the vector store can return —
-/// including weak ones — and decides for itself which (if any) skill is
-/// relevant. Issue #1130 explicitly removed server-side bucketing in favour
-/// of letting the LLM judge confidence from the raw score; a non-zero floor
-/// here would partially undo that by silently hiding the long tail.
+/// Set to zero so the model sees every match with strictly positive cosine
+/// similarity, including weak ones, and decides for itself which (if any)
+/// skill is relevant. The underlying store filter is `composite_score >
+/// $threshold`, so a zero match (orthogonal vector) is still excluded — but
+/// that's the cosine noise floor, not a confidence judgment call. Issue
+/// #1130 explicitly removed server-side bucketing in favour of letting the
+/// LLM judge confidence from the raw score; a non-zero floor here would
+/// partially undo that by silently hiding the long tail.
 const SKILL_SEARCH_THRESHOLD: f32 = 0.0;
 
 /// Upper bound on `limit` requested by the caller.
@@ -49,8 +52,8 @@ pub struct FindSkillsOutput {
 
 /// Search for skill nodes via semantic search and return flat results.
 ///
-/// Returns up to `limit` matches (default 3) with `name`, `confidence`,
-/// `description`, and `tools`. No filtering or bucketing — the caller (model
+/// Returns up to `limit` matches (default 3) with `id`, `name`, `description`,
+/// `confidence`, and `tools`. No filtering or bucketing — the caller (model
 /// or MCP client) inspects the raw confidence score and decides how to act.
 /// An empty `skills` array is a meaningful signal: "no skill is even loosely
 /// related to this query."

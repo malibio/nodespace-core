@@ -843,6 +843,19 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // Compile-time coupling check: `multi_skill_turn_invokes_skill_tools_between_searches`
+    // feeds exactly 5 inference rounds (search_skills → search_semantic →
+    // search_skills → create_node → final text) and expects the loop to make
+    // it through all of them without hitting the iteration-cap fallback.
+    // If `MAX_TOOL_ITERATIONS` is ever reduced below 5, that test would
+    // silently start asserting on the fallback path instead of the multi-skill
+    // chain — fail loudly here at compile time rather than mysteriously at
+    // test time.
+    const _: () = assert!(
+        MAX_TOOL_ITERATIONS >= 5,
+        "multi_skill_turn_invokes_skill_tools_between_searches requires MAX_TOOL_ITERATIONS >= 5",
+    );
+
     // -- Mock inference engine -------------------------------------------
 
     /// Mock engine that returns pre-configured responses.
