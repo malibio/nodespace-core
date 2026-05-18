@@ -409,8 +409,8 @@ fn def_search_skills() -> ToolDefinition {
     ToolDefinition {
         name: "search_skills".into(),
         description: "Search registered skills by describing what you want to accomplish. \
-            Returns up to N matches sorted by relevance, each with name, description, confidence (0-1), and tools. \
-            Empty results mean no skill is even loosely related — judge whether to proceed without one, ask the user, or respond directly. \
+            Returns up to 3 matches by default (max 10), sorted by relevance, each with name, description, confidence (0-1), and tools. \
+            Empty matches mean no skill is even loosely related — judge whether to proceed without one, ask the user, or respond directly. \
             Call this when a request might be served by a known skill; skip it for conversational replies.".into(),
         parameters_schema: json!({
             "type": "object",

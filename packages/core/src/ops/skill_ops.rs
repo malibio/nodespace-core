@@ -15,15 +15,21 @@ use std::sync::Arc;
 
 use super::OpsError;
 
-/// Minimum similarity threshold for skill search.
+/// Similarity threshold for skill search.
 ///
-/// Set at the cosine-similarity noise floor so the model sees the full signal
-/// — including weak matches — and decides for itself which (if any) skill is
-/// relevant. Server-side bucketing has been removed (issue #1130) so the LLM
-/// can judge confidence using the raw score.
-const SKILL_SEARCH_THRESHOLD: f32 = 0.3;
+/// Set to zero so the model sees every match the vector store can return —
+/// including weak ones — and decides for itself which (if any) skill is
+/// relevant. Issue #1130 explicitly removed server-side bucketing in favour
+/// of letting the LLM judge confidence from the raw score; a non-zero floor
+/// here would partially undo that by silently hiding the long tail.
+const SKILL_SEARCH_THRESHOLD: f32 = 0.0;
 
-/// Maximum limit for skill search results.
+/// Upper bound on `limit` requested by the caller.
+///
+/// Skill libraries are small in practice (~8-20 seeded skills plus a handful
+/// of user-defined ones). A cap of 10 is large enough to expose every skill
+/// in a typical workspace yet keeps the response token-cheap for small local
+/// models. Revisit if user-defined skill libraries grow past ~30 skills.
 const MAX_SKILL_LIMIT: usize = 10;
 
 /// Input for find_skills operation.

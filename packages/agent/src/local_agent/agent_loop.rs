@@ -281,8 +281,24 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     // an inference bug, not a routing decision: the model should
                     // either call a tool or produce text. Surface as an error so
                     // it shows up in logs/metrics rather than being masked by a
-                    // canned UX string.
-                    tracing::error!("Agent returned empty response with no tool calls");
+                    // canned UX string. Structured fields below let the
+                    // production dashboards group these by model and surface
+                    // session/iteration for replay.
+                    tracing::error!(
+                        session_id = %session.id,
+                        model = %session.model_id.as_deref().unwrap_or("unknown"),
+                        iteration = iteration,
+                        prompt_tokens = total_usage.prompt_tokens,
+                        completion_tokens = total_usage.completion_tokens,
+                        user_message_preview = %session
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|m| matches!(m.role, Role::User))
+                            .map(|m| m.content.chars().take(80).collect::<String>())
+                            .unwrap_or_default(),
+                        "Agent returned empty response with no tool calls"
+                    );
                     return Err(InferenceError::Engine(
                         "model produced empty response with no tool calls".into(),
                     ));
@@ -959,34 +975,43 @@ mod tests {
 
     impl MockToolExecutor {
         fn new() -> Self {
-            let mut results = HashMap::new();
-            results.insert(
-                "search_nodes".to_string(),
+            Self {
+                tools: Vec::new(),
+                results: HashMap::new(),
+            }
+            .with_tool(
+                "search_nodes",
+                json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
                 json!({"count": 2, "nodes": [
                     {"id": "abc123", "title": "Billing Architecture", "type": "text"},
                     {"id": "def456", "title": "Payment Processing", "type": "text"},
                 ]}),
-            );
-            results.insert(
-                "get_node".to_string(),
+            )
+            .with_tool(
+                "get_node",
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
                 json!({"id": "abc123", "title": "Billing Architecture", "body": "Content here"}),
-            );
+            )
+        }
 
-            Self {
-                tools: vec![
-                    ToolDefinition {
-                        name: "search_nodes".into(),
-                        description: "Search for nodes".into(),
-                        parameters_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
-                    },
-                    ToolDefinition {
-                        name: "get_node".into(),
-                        description: "Get a node by ID".into(),
-                        parameters_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
-                    },
-                ],
-                results,
-            }
+        /// Register an additional tool with its JSON schema and canned result.
+        ///
+        /// Lets tests express "I expect the agent to call X with shape Y, and
+        /// when it does, return Z" in one call instead of poking at the
+        /// internal `tools` / `results` fields directly.
+        fn with_tool(
+            mut self,
+            name: &str,
+            parameters_schema: serde_json::Value,
+            result: serde_json::Value,
+        ) -> Self {
+            self.tools.push(ToolDefinition {
+                name: name.into(),
+                description: format!("Mock tool: {name}"),
+                parameters_schema,
+            });
+            self.results.insert(name.to_string(), result);
+            self
         }
     }
 
@@ -2139,32 +2164,23 @@ mod tests {
             ],
         ]));
 
-        // Extend MockToolExecutor's defaults with search_skills + create_node mocks.
-        let mut executor = MockToolExecutor::new();
-        executor.results.insert(
-            "search_skills".to_string(),
-            json!({
-                "query": "create a new task",
-                "matches": [
-                    {"id": "skill-1", "name": "Node Creation", "confidence": 0.91,
-                     "description": "Create new nodes", "tools": ["create_node"]}
-                ]
-            }),
-        );
-        executor.tools.push(ToolDefinition {
-            name: "search_skills".into(),
-            description: "Search skills".into(),
-            parameters_schema: json!({"type": "object"}),
-        });
-        executor.tools.push(ToolDefinition {
-            name: "create_node".into(),
-            description: "Create a node".into(),
-            parameters_schema: json!({"type": "object"}),
-        });
-        executor.results.insert(
-            "create_node".to_string(),
-            json!({"id": "nodespace://task-1"}),
-        );
+        let executor = MockToolExecutor::new()
+            .with_tool(
+                "search_skills",
+                json!({"type": "object"}),
+                json!({
+                    "query": "create a new task",
+                    "matches": [
+                        {"id": "skill-1", "name": "Node Creation", "confidence": 0.91,
+                         "description": "Create new nodes", "tools": ["create_node"]}
+                    ]
+                }),
+            )
+            .with_tool(
+                "create_node",
+                json!({"type": "object"}),
+                json!({"id": "nodespace://task-1"}),
+            );
 
         let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
         let mut session = new_session();
@@ -2205,12 +2221,16 @@ mod tests {
         assert!(result.usage.prompt_tokens > 0);
     }
 
-    /// search_skills can be called more than once in a turn so the model can
-    /// chain skill invocations for multi-step requests.
+    /// Multi-skill turn from issue #1130 AC: the model calls `search_skills`
+    /// for each sub-task, then invokes the matched skill's tool. This test
+    /// exercises a full chain — search_skills (notes) → search_semantic →
+    /// search_skills (task) → create_node — not just two back-to-back
+    /// searches, so a regression that breaks tool dispatch after a second
+    /// `search_skills` call is caught here.
     #[tokio::test]
-    async fn search_skills_can_be_called_multiple_times_in_a_turn() {
+    async fn multi_skill_turn_invokes_skill_tools_between_searches() {
         let engine = Arc::new(MockEngine::new(vec![
-            // Round 1: search for "find notes"
+            // Round 1: search_skills for "find notes"
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
@@ -2227,15 +2247,15 @@ mod tests {
                     },
                 },
             ],
-            // Round 2: search for "create task"
+            // Round 2: invoke search_semantic (the matched skill's tool)
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_semantic".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
-                    args_json: r#"{"query":"create task"}"#.to_string(),
+                    args_json: r#"{"query":"Q2 budget notes"}"#.to_string(),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {
@@ -2244,33 +2264,89 @@ mod tests {
                     },
                 },
             ],
-            // Round 3: final text
+            // Round 3: search_skills for "create task"
             vec![
-                StreamingChunk::Token {
-                    text: "Here are both.".to_string(),
+                StreamingChunk::ToolCallStart {
+                    id: "tc_3".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_3".to_string(),
+                    args_json: r#"{"query":"create task"}"#.to_string(),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {
-                        prompt_tokens: 20,
+                        prompt_tokens: 18,
                         completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 4: invoke create_node (the matched skill's tool)
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_4".to_string(),
+                    name: "create_node".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_4".to_string(),
+                    args_json: r#"{"content":"Review Q2 notes","node_type":"task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 22,
+                        completion_tokens: 6,
+                    },
+                },
+            ],
+            // Round 5: final summary
+            vec![
+                StreamingChunk::Token {
+                    text: "Found the notes and created the review task.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 25,
+                        completion_tokens: 9,
                     },
                 },
             ],
         ]));
 
-        let mut executor = MockToolExecutor::new();
-        executor.tools.push(ToolDefinition {
-            name: "search_skills".into(),
-            description: "Search skills".into(),
-            parameters_schema: json!({"type": "object"}),
-        });
-        executor.results.insert(
-            "search_skills".to_string(),
-            json!({"query": "x", "matches": []}),
-        );
+        let executor = MockToolExecutor::new()
+            .with_tool(
+                "search_skills",
+                json!({"type": "object"}),
+                // Same canned response works for both calls; in production
+                // the embeddings would distinguish them, but the agent loop
+                // doesn't introspect the match payload — it just relays it
+                // back to the model.
+                json!({
+                    "query": "x",
+                    "matches": [
+                        {"id": "skill-1", "name": "Match", "confidence": 0.9,
+                         "description": "matched skill", "tools": ["search_semantic"]}
+                    ]
+                }),
+            )
+            .with_tool(
+                "search_semantic",
+                json!({"type": "object"}),
+                json!({"count": 1, "results": [
+                    {"id": "note-1", "title": "Q2 Budget", "score": 0.87,
+                     "snippet": "Quarterly budget summary…"}
+                ]}),
+            )
+            .with_tool(
+                "create_node",
+                json!({"type": "object"}),
+                json!({"id": "nodespace://task-1"}),
+            );
 
         let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
         let mut session = new_session();
+        // Loosen the iteration cap since this turn legitimately needs 4 tool
+        // rounds (2 searches + 2 invocations) plus a text round. MAX_TOOL_ITERATIONS
+        // is 5, so we're at the boundary on purpose.
         let result = agent_loop
             .run_turn(
                 &mut session,
@@ -2282,9 +2358,94 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.tool_calls_made.len(), 2);
+        assert_eq!(
+            result.tool_calls_made.len(),
+            4,
+            "{:?}",
+            result.tool_calls_made
+        );
         assert_eq!(result.tool_calls_made[0].name, "search_skills");
-        assert_eq!(result.tool_calls_made[1].name, "search_skills");
+        assert_eq!(result.tool_calls_made[1].name, "search_semantic");
+        assert_eq!(result.tool_calls_made[2].name, "search_skills");
+        assert_eq!(result.tool_calls_made[3].name, "create_node");
+        assert_eq!(
+            result.response,
+            "Found the notes and created the review task."
+        );
+    }
+
+    /// Empty `search_skills` matches → model judges and produces a contextual
+    /// clarification (referencing what it searched), rather than the prior
+    /// hardcoded `CLARIFYING_QUESTION` string. This is the "no relevant skill"
+    /// path from issue #1130 AC.
+    #[tokio::test]
+    async fn empty_search_skills_matches_let_model_clarify_with_context() {
+        let engine = Arc::new(MockEngine::new(vec![
+            // Round 1: model calls search_skills
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"query":"send carrier pigeons"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 2: model produces a contextual clarification referencing
+            // the search it just performed. The exact wording isn't checked —
+            // only that the model gets to respond after seeing matches=[].
+            vec![
+                StreamingChunk::Token {
+                    text: "I searched for skills related to that but didn't find anything relevant. Could you describe what you'd like to do?".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 18,
+                    },
+                },
+            ],
+        ]));
+
+        let executor = MockToolExecutor::new().with_tool(
+            "search_skills",
+            json!({"type": "object"}),
+            // Empty matches array — the meaningful "no skill applies" signal.
+            json!({"query": "send carrier pigeons", "matches": []}),
+        );
+
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "can you send carrier pigeons",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        // Crucially: the response is the model's contextual text, not a
+        // canned constant. Just check it's non-empty and acknowledges the
+        // search — exact wording belongs to the model.
+        assert!(!result.response.is_empty());
+        assert!(
+            result.response.to_lowercase().contains("search")
+                || result.response.to_lowercase().contains("didn't find"),
+            "model response should reference what it searched: {:?}",
+            result.response
+        );
     }
 
     /// Per #1130: an empty response with no tool calls is an inference bug

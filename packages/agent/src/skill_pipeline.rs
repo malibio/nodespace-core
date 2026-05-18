@@ -16,19 +16,6 @@
 
 use nodespace_core::mcp::handlers::markdown::NodeTemplate;
 
-/// Skill seeding entry point.
-///
-/// Wraps [`seed_skill_nodes`] in a type so existing call sites
-/// (`SkillPipeline::seed_skill_nodes()`) keep working without churn.
-pub struct SkillPipeline;
-
-impl SkillPipeline {
-    /// Get default seed skill templates for first-run creation.
-    pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
-        seed_skill_nodes()
-    }
-}
-
 /// Default skill node templates seeded on first run.
 ///
 /// Each template produces one skill root node plus optional `prompt` children
@@ -309,18 +296,6 @@ mod tests {
             assert_eq!(root.id.len(), 36, "Node ID should be a UUID");
             assert_eq!(root.id.chars().filter(|c| *c == '-').count(), 4);
             assert_eq!(root.content, seed.title);
-        }
-    }
-
-    #[test]
-    fn skill_pipeline_wrapper_returns_same_templates() {
-        // SkillPipeline::seed_skill_nodes() is a thin wrapper retained for
-        // call-site compatibility; verify it matches the free function.
-        let from_struct = SkillPipeline::seed_skill_nodes();
-        let from_func = seed_skill_nodes();
-        assert_eq!(from_struct.len(), from_func.len());
-        for (a, b) in from_struct.iter().zip(from_func.iter()) {
-            assert_eq!(a.title, b.title);
         }
     }
 

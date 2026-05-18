@@ -393,6 +393,189 @@ async fn test_search_embeddings_empty_db_returns_empty() -> Result<()> {
 }
 
 // =========================================================================
+// search_embeddings_by_node_type (Issue #1130 — typed linear-scan search)
+// =========================================================================
+//
+// Test helpers shared across the typed-scan tests. Each test seeds nodes of
+// different types with synthetic embeddings, then asserts that the typed scan
+// filters correctly via the `node.node_type = $node_type` record-link
+// traversal — the SurrealQL pattern is new in this PR and these tests are
+// what prevents a silent regression where an empty result is indistinguishable
+// from a correct "no matches" outcome.
+
+/// Insert a node with a synthetic 768-dim embedding directly (bypasses NLP engine).
+async fn seed_node_with_embedding(
+    store: &Arc<SurrealStore>,
+    node_type: &str,
+    content: &str,
+    vector: Vec<f32>,
+) -> Result<String> {
+    use nodespace_core::models::{NewEmbedding, Node};
+
+    let node = store
+        .create_node(
+            Node::new(node_type.to_string(), content.to_string(), json!({})),
+            None,
+            None,
+        )
+        .await?;
+
+    store
+        .upsert_embeddings(
+            &node.id,
+            vec![NewEmbedding {
+                node_id: node.id.clone(),
+                vector,
+                model_name: Some("test-model".to_string()),
+                chunk_index: 0,
+                chunk_start: 0,
+                chunk_end: content.len() as i32,
+                total_chunks: 1,
+                content_hash: format!("hash-{}", node.id),
+                token_count: 10,
+            }],
+        )
+        .await?;
+
+    Ok(node.id)
+}
+
+/// Confident match: a skill node and a text node both share the query vector
+/// exactly, but the typed scan must only return the skill node — proving the
+/// `node.node_type = $node_type` filter actually works against the
+/// record-link traversal in SurrealQL.
+#[tokio::test]
+async fn test_search_embeddings_by_node_type_filters_to_requested_type() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("test.db");
+    let store = Arc::new(SurrealStore::new(db_path).await?);
+
+    // Same vector for both nodes so similarity is identical — only the type
+    // filter can distinguish them.
+    let vector: Vec<f32> = (0..768).map(|i| (i as f32) / 768.0).collect();
+
+    let skill_id =
+        seed_node_with_embedding(&store, "skill", "Node Creation", vector.clone()).await?;
+    let _text_id =
+        seed_node_with_embedding(&store, "text", "Random note content", vector.clone()).await?;
+
+    let results = store
+        .search_embeddings_by_node_type(&vector, "skill", 5, Some(0.0))
+        .await
+        .expect("typed scan must not fail");
+
+    assert_eq!(
+        results.len(),
+        1,
+        "expected exactly the skill node, got {} results",
+        results.len()
+    );
+    assert_eq!(results[0].node_id, skill_id);
+    assert_eq!(
+        results[0].node.as_ref().map(|n| n.node_type.as_str()),
+        Some("skill"),
+        "returned node must be of type 'skill'"
+    );
+    Ok(())
+}
+
+/// Empty result when no embeddings exist for the requested type.
+/// Critical because empty results are the "no skill applies" signal exposed
+/// to the model — a query that silently errored out would be much worse than
+/// one that returns the correct empty set.
+#[tokio::test]
+async fn test_search_embeddings_by_node_type_returns_empty_for_unknown_type() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("test.db");
+    let store = Arc::new(SurrealStore::new(db_path).await?);
+
+    // Seed a text node, but query for skills — expect a clean empty result.
+    let vector: Vec<f32> = (0..768).map(|i| (i as f32) / 768.0).collect();
+    let _text_id = seed_node_with_embedding(&store, "text", "Just a note", vector.clone()).await?;
+
+    let results = store
+        .search_embeddings_by_node_type(&vector, "skill", 5, Some(0.0))
+        .await
+        .expect("typed scan must not fail on empty result set");
+
+    assert!(
+        results.is_empty(),
+        "querying for a node_type with no embeddings should return empty, got {:?}",
+        results.iter().map(|r| &r.node_id).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+/// Empty database — no nodes of any type, no embeddings. Should be a clean
+/// empty result (not an error), since `find_skills` may be called on a fresh
+/// workspace before any skills are seeded.
+#[tokio::test]
+async fn test_search_embeddings_by_node_type_empty_db_returns_empty() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("test.db");
+    let store = Arc::new(SurrealStore::new(db_path).await?);
+
+    let vector: Vec<f32> = vec![0.0f32; 768];
+    let results = store
+        .search_embeddings_by_node_type(&vector, "skill", 5, Some(0.0))
+        .await
+        .expect("typed scan on empty database must not fail");
+
+    assert!(results.is_empty(), "empty DB should return no results");
+    Ok(())
+}
+
+/// Ranking + limit: two skill nodes with different distances from the query —
+/// the higher-similarity one must come first, and `limit=1` truncates to just
+/// the top match. Exercises the ORDER BY composite_score DESC + LIMIT clause
+/// that the local agent depends on for the default `limit=3` behaviour.
+#[tokio::test]
+async fn test_search_embeddings_by_node_type_orders_by_similarity_and_respects_limit() -> Result<()>
+{
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("test.db");
+    let store = Arc::new(SurrealStore::new(db_path).await?);
+
+    // Build two distinct vectors: `near` is the query, `far` is orthogonal-ish.
+    let near: Vec<f32> = (0..768).map(|i| (i as f32) / 768.0).collect();
+    let far: Vec<f32> = (0..768).map(|i| ((767 - i) as f32) / 768.0).collect();
+
+    let near_skill_id =
+        seed_node_with_embedding(&store, "skill", "Near skill", near.clone()).await?;
+    let _far_skill_id = seed_node_with_embedding(&store, "skill", "Far skill", far.clone()).await?;
+
+    // limit=1 → only the top match comes back
+    let top = store
+        .search_embeddings_by_node_type(&near, "skill", 1, Some(0.0))
+        .await
+        .expect("typed scan must not fail");
+    assert_eq!(top.len(), 1, "limit=1 must return exactly 1 result");
+    assert_eq!(
+        top[0].node_id, near_skill_id,
+        "top result must be the nearest skill"
+    );
+
+    // limit=5 → both come back, with the near one ranked first
+    let all = store
+        .search_embeddings_by_node_type(&near, "skill", 5, Some(0.0))
+        .await?;
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        all[0].node_id,
+        near_skill_id,
+        "near skill must rank above far skill (got {:?})",
+        all.iter()
+            .map(|r| (&r.node_id, r.score))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        all[0].score >= all[1].score,
+        "results must be sorted by descending composite score"
+    );
+    Ok(())
+}
+
+// =========================================================================
 // Malformed Input Tests
 // =========================================================================
 
