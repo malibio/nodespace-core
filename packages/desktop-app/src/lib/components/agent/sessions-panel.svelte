@@ -1,6 +1,12 @@
 <script lang="ts">
-  import { ptyListSessions, ptyTerminateSession, type PtySessionInfo } from '$lib/services/tauri-commands';
+  import {
+    ptyListSessions,
+    ptyTerminateSession,
+    getCaptureSettings,
+    type PtySessionInfo
+  } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
+  import { onMount, onDestroy } from 'svelte';
 
   const log = createLogger('SessionsPanel');
 
@@ -9,22 +15,35 @@
     codex: 'Codex',
     'gemini-cli': 'Gemini CLI',
     pi: 'Pi',
-    'open-code': 'Open Code',
+    'open-code': 'Open Code'
   };
 
   let {
     activeSessionId = null,
     onSelectSession,
     onSessionTerminated,
+    onNavigateToNode
   }: {
     activeSessionId?: string | null;
     onSelectSession: (_sessionId: string) => void;
     onSessionTerminated: (_sessionId: string) => void;
+    onNavigateToNode?: (_nodeId: string) => void;
   } = $props();
 
+  interface EndedSession {
+    sessionId: string;
+    agentType: string;
+    capturedNodeId: string | null;
+    endedAt: number;
+  }
+
   let sessions = $state<PtySessionInfo[]>([]);
+  let endedSessions = $state<EndedSession[]>([]);
   let loading = $state(false);
   let terminatingIds = $state(new Set<string>());
+  let captureEnabled = $state(false);
+
+  const closedListeners = new Map<string, () => void>();
 
   async function refresh() {
     loading = true;
@@ -51,6 +70,38 @@
     }
   }
 
+  function registerCloseListener(session: PtySessionInfo) {
+    if (closedListeners.has(session.sessionId)) return;
+
+    const agentType = session.agentType;
+    const sessionId = session.sessionId;
+
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen(`pty-closed-${sessionId}`, async () => {
+          const unlisten = closedListeners.get(sessionId);
+          if (unlisten) {
+            unlisten();
+            closedListeners.delete(sessionId);
+          }
+
+          sessions = sessions.filter((s) => s.sessionId !== sessionId);
+          onSessionTerminated(sessionId);
+
+          if (captureEnabled) {
+            endedSessions = [
+              ...endedSessions,
+              { sessionId, agentType, capturedNodeId: null, endedAt: Date.now() }
+            ];
+          }
+        })
+      )
+      .then((unlisten) => {
+        closedListeners.set(sessionId, unlisten);
+      })
+      .catch((e) => log.warn('Failed to register pty-closed listener', e));
+  }
+
   function formatAge(startedAt: number): string {
     const seconds = Math.floor(Date.now() / 1000) - startedAt;
     if (seconds < 60) return `${seconds}s`;
@@ -58,8 +109,27 @@
     return `${Math.floor(seconds / 3600)}h`;
   }
 
-  $effect(() => {
+  onMount(async () => {
+    try {
+      const settings = await getCaptureSettings();
+      captureEnabled = settings.enabled;
+    } catch (e) {
+      log.warn('Failed to load capture settings', e);
+    }
     refresh();
+  });
+
+  onDestroy(() => {
+    for (const unlisten of closedListeners.values()) {
+      unlisten();
+    }
+    closedListeners.clear();
+  });
+
+  $effect(() => {
+    for (const session of sessions) {
+      registerCloseListener(session);
+    }
   });
 </script>
 
@@ -92,53 +162,94 @@
   </div>
 
   <div class="sessions-body">
-    {#if sessions.length === 0}
+    {#if sessions.length === 0 && endedSessions.length === 0}
       <div class="sessions-empty">No active sessions</div>
-    {:else}
-      {#each sessions as session (session.sessionId)}
-        {@const agentLabel = AGENT_LABELS[session.agentType] ?? session.agentType}
-        {@const isActive = session.sessionId === activeSessionId}
-        {@const isTerminating = terminatingIds.has(session.sessionId)}
-        <div class="session-row" class:active={isActive}>
-          <button
-            class="session-select"
-            onclick={() => onSelectSession(session.sessionId)}
-            aria-pressed={isActive}
-            title="Open terminal"
-          >
-            <span class="session-agent">{agentLabel}</span>
-            <span class="session-meta">
-              <span class="session-id">{session.sessionId.slice(0, 8)}</span>
-              <span class="session-age">{formatAge(session.startedAt)}</span>
-            </span>
-          </button>
-          <button
-            class="terminate-button"
-            onclick={() => terminate(session.sessionId)}
-            disabled={isTerminating}
-            aria-label="Terminate {agentLabel} session"
-            title="Terminate"
-          >
-            {#if isTerminating}
-              <span class="spinner" aria-hidden="true"></span>
-            {:else}
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                width="12"
-                height="12"
-                aria-hidden="true"
-              >
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            {/if}
-          </button>
-        </div>
-      {/each}
     {/if}
+
+    {#each sessions as session (session.sessionId)}
+      {@const agentLabel = AGENT_LABELS[session.agentType] ?? session.agentType}
+      {@const isActive = session.sessionId === activeSessionId}
+      {@const isTerminating = terminatingIds.has(session.sessionId)}
+      <div class="session-row" class:active={isActive}>
+        <button
+          class="session-select"
+          onclick={() => onSelectSession(session.sessionId)}
+          aria-pressed={isActive}
+          title="Open terminal"
+        >
+          <span class="session-agent">{agentLabel}</span>
+          <span class="session-meta">
+            <span class="session-id">{session.sessionId.slice(0, 8)}</span>
+            <span class="session-age">{formatAge(session.startedAt)}</span>
+          </span>
+        </button>
+        <button
+          class="terminate-button"
+          onclick={() => terminate(session.sessionId)}
+          disabled={isTerminating}
+          aria-label="Terminate {agentLabel} session"
+          title="Terminate"
+        >
+          {#if isTerminating}
+            <span class="spinner" aria-hidden="true"></span>
+          {:else}
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="12"
+              height="12"
+              aria-hidden="true"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          {/if}
+        </button>
+      </div>
+    {/each}
+
+    {#each endedSessions as ended (ended.sessionId)}
+      {@const agentLabel = AGENT_LABELS[ended.agentType] ?? ended.agentType}
+      <div class="session-row ended-row">
+        <div class="session-ended">
+          <span class="session-agent session-agent-dim">{agentLabel}</span>
+          <span class="session-meta">
+            <span class="session-id">{ended.sessionId.slice(0, 8)}</span>
+            <span class="ended-badge">ended</span>
+          </span>
+          {#if ended.capturedNodeId && onNavigateToNode}
+            <button class="capture-link" onclick={() => onNavigateToNode?.(ended.capturedNodeId!)}>
+              View captured session →
+            </button>
+          {:else if captureEnabled}
+            <span class="capture-pending">Capture saved</span>
+          {/if}
+        </div>
+        <button
+          class="dismiss-button"
+          onclick={() => {
+            endedSessions = endedSessions.filter((s) => s.sessionId !== ended.sessionId);
+          }}
+          aria-label="Dismiss"
+          title="Dismiss"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="10"
+            height="10"
+            aria-hidden="true"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    {/each}
   </div>
 </div>
 
@@ -271,7 +382,9 @@
     cursor: pointer;
     border-radius: 0.25rem;
     flex-shrink: 0;
-    transition: color 0.15s, background 0.15s;
+    transition:
+      color 0.15s,
+      background 0.15s;
   }
 
   .terminate-button:hover:not(:disabled) {
@@ -298,5 +411,74 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  .ended-row {
+    opacity: 0.7;
+  }
+
+  .session-ended {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.5rem 0.875rem;
+  }
+
+  .session-agent-dim {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .ended-badge {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted));
+    border-radius: 0.25rem;
+    padding: 0 0.25rem;
+  }
+
+  .capture-link {
+    font-size: 0.75rem;
+    color: hsl(var(--primary));
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    text-decoration: underline;
+    margin-top: 0.125rem;
+  }
+
+  .capture-link:hover {
+    opacity: 0.8;
+  }
+
+  .capture-pending {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    margin-top: 0.125rem;
+  }
+
+  .dismiss-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-right: 0.25rem;
+    border: none;
+    background: none;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+    border-radius: 0.25rem;
+    flex-shrink: 0;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+  }
+
+  .dismiss-button:hover {
+    opacity: 1;
   }
 </style>

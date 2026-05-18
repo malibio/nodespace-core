@@ -12,8 +12,9 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
-    settings_service_server::SettingsService as GrpcSettingsService, DaemonConfigResponse,
-    GetDaemonConfigRequest, UpdateDaemonConfigRequest,
+    settings_service_server::SettingsService as GrpcSettingsService, CaptureContentLevel,
+    CaptureSettingsResponse, DaemonConfigResponse, GetCaptureSettingsRequest,
+    GetDaemonConfigRequest, UpdateCaptureSettingsRequest, UpdateDaemonConfigRequest,
 };
 
 const DEFAULT_GRPC_ADDRESS: &str = "[::1]:50051";
@@ -23,12 +24,78 @@ const DEFAULT_GRPC_ADDRESS: &str = "[::1]:50051";
 struct DaemonConfig {
     active_database_path: Option<String>,
     grpc_address: Option<String>,
+    #[serde(default)]
+    capture: CaptureConfig,
+}
+
+/// Session capture settings persisted in daemon.toml under `[capture]`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CaptureConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sync: bool,
+    #[serde(default)]
+    pub content: CaptureContentSetting,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sync: false,
+            content: CaptureContentSetting::MetadataOnly,
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureContentSetting {
+    #[default]
+    MetadataOnly,
+    Summary,
+    Full,
+}
+
+impl From<CaptureContentSetting> for CaptureContentLevel {
+    fn from(s: CaptureContentSetting) -> Self {
+        match s {
+            CaptureContentSetting::MetadataOnly => CaptureContentLevel::MetadataOnly,
+            CaptureContentSetting::Summary => CaptureContentLevel::Summary,
+            CaptureContentSetting::Full => CaptureContentLevel::Full,
+        }
+    }
+}
+
+impl From<CaptureContentLevel> for CaptureContentSetting {
+    fn from(l: CaptureContentLevel) -> Self {
+        match l {
+            CaptureContentLevel::MetadataOnly => CaptureContentSetting::MetadataOnly,
+            CaptureContentLevel::Summary => CaptureContentSetting::Summary,
+            CaptureContentLevel::Full => CaptureContentSetting::Full,
+        }
+    }
+}
+
+/// Read capture settings from the config file at the given path. Used by the
+/// capture service to decide whether and how to capture a completed session.
+pub async fn read_capture_settings(config_path: &std::path::Path) -> anyhow::Result<CaptureConfig> {
+    match tokio::fs::read_to_string(config_path).await {
+        Ok(contents) => {
+            let config: DaemonConfig = toml::from_str(&contents)
+                .map_err(|e| anyhow::anyhow!("failed to parse daemon config: {}", e))?;
+            Ok(config.capture)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(CaptureConfig::default()),
+        Err(e) => Err(anyhow::anyhow!("failed to read daemon config: {}", e)),
+    }
 }
 
 pub struct SettingsServiceImpl {
     config_path: PathBuf,
-    /// Serializes concurrent UpdateDaemonConfig RPCs so read-modify-write
-    /// operations on daemon.toml are not interleaved.
+    /// Serializes concurrent UpdateDaemonConfig / UpdateCaptureSettings RPCs
+    /// so read-modify-write operations on daemon.toml are not interleaved.
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -82,6 +149,14 @@ impl SettingsServiceImpl {
                 .unwrap_or_else(|| DEFAULT_GRPC_ADDRESS.to_string()),
         }
     }
+
+    fn capture_to_response(capture: &CaptureConfig) -> CaptureSettingsResponse {
+        CaptureSettingsResponse {
+            enabled: capture.enabled,
+            sync: capture.sync,
+            content: CaptureContentLevel::from(capture.content) as i32,
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -112,5 +187,38 @@ impl GrpcSettingsService for SettingsServiceImpl {
 
         self.write_config(&config).await?;
         Ok(Response::new(Self::config_to_response(&config)))
+    }
+
+    async fn get_capture_settings(
+        &self,
+        _request: Request<GetCaptureSettingsRequest>,
+    ) -> Result<Response<CaptureSettingsResponse>, Status> {
+        let config = self.read_config().await?;
+        Ok(Response::new(Self::capture_to_response(&config.capture)))
+    }
+
+    async fn update_capture_settings(
+        &self,
+        request: Request<UpdateCaptureSettingsRequest>,
+    ) -> Result<Response<CaptureSettingsResponse>, Status> {
+        let req = request.into_inner();
+        let _guard = self.write_lock.lock().await;
+
+        let mut config = self.read_config().await?;
+
+        if let Some(enabled) = req.enabled {
+            config.capture.enabled = enabled;
+        }
+        if let Some(sync) = req.sync {
+            config.capture.sync = sync;
+        }
+        if let Some(content_i32) = req.content {
+            let level = CaptureContentLevel::try_from(content_i32)
+                .unwrap_or(CaptureContentLevel::MetadataOnly);
+            config.capture.content = CaptureContentSetting::from(level);
+        }
+
+        self.write_config(&config).await?;
+        Ok(Response::new(Self::capture_to_response(&config.capture)))
     }
 }

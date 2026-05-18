@@ -4,6 +4,7 @@
 //! logic and adapts it to the tonic-generated service trait.
 
 pub mod agent_session_service;
+pub mod capture_service;
 pub mod embeddings_service;
 pub mod import_service;
 pub mod local_agent_service;

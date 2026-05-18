@@ -7,7 +7,10 @@
 //! in Tauri local storage and are never sent to the daemon.
 
 use crate::services::GrpcClient;
-use nodespace_daemon::nodespace::{GetDaemonConfigRequest, UpdateDaemonConfigRequest};
+use nodespace_daemon::nodespace::{
+    GetCaptureSettingsRequest, GetDaemonConfigRequest, UpdateCaptureSettingsRequest,
+    UpdateDaemonConfigRequest,
+};
 use tauri::{AppHandle, Manager};
 
 /// Settings response sent to the frontend.
@@ -158,6 +161,87 @@ pub fn restart_app(app: tauri::AppHandle) {
     crate::graceful_shutdown(&app);
     tracing::info!("Graceful shutdown complete, restarting app...");
     app.restart();
+}
+
+// ---------------------------------------------------------------------------
+// Capture settings
+// ---------------------------------------------------------------------------
+
+/// Capture settings response sent to the frontend.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSettingsResult {
+    pub enabled: bool,
+    pub sync: bool,
+    /// "metadata_only" | "summary" | "full"
+    pub content: String,
+}
+
+/// Get session capture settings from the daemon.
+#[tauri::command]
+pub async fn get_capture_settings(
+    grpc_client: tauri::State<'_, GrpcClient>,
+) -> Result<CaptureSettingsResult, String> {
+    let mut client = grpc_client.settings_client().await;
+    let resp = client
+        .get_capture_settings(GetCaptureSettingsRequest {})
+        .await
+        .map_err(|e| format!("Failed to get capture settings: {}", e))?
+        .into_inner();
+
+    Ok(CaptureSettingsResult {
+        enabled: resp.enabled,
+        sync: resp.sync,
+        content: content_level_to_str(resp.content),
+    })
+}
+
+/// Update session capture settings.
+#[tauri::command]
+pub async fn update_capture_settings(
+    grpc_client: tauri::State<'_, GrpcClient>,
+    enabled: Option<bool>,
+    sync: Option<bool>,
+    content: Option<String>,
+) -> Result<CaptureSettingsResult, String> {
+    let content_i32 = content.as_deref().map(str_to_content_level).transpose()?;
+
+    let mut client = grpc_client.settings_client().await;
+    let resp = client
+        .update_capture_settings(UpdateCaptureSettingsRequest {
+            enabled,
+            sync,
+            content: content_i32,
+        })
+        .await
+        .map_err(|e| format!("Failed to update capture settings: {}", e))?
+        .into_inner();
+
+    Ok(CaptureSettingsResult {
+        enabled: resp.enabled,
+        sync: resp.sync,
+        content: content_level_to_str(resp.content),
+    })
+}
+
+fn content_level_to_str(level: i32) -> String {
+    match level {
+        1 => "summary".to_string(),
+        2 => "full".to_string(),
+        _ => "metadata_only".to_string(),
+    }
+}
+
+fn str_to_content_level(s: &str) -> Result<i32, String> {
+    match s {
+        "metadata_only" => Ok(0),
+        "summary" => Ok(1),
+        "full" => Ok(2),
+        other => Err(format!(
+            "Invalid content level '{}'. Must be metadata_only, summary, or full.",
+            other
+        )),
+    }
 }
 
 /// Reset database path to default by updating daemon config.

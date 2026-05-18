@@ -211,12 +211,22 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
         node_service.clone(),
         embedding_service_opt,
     ));
-    let agent_session = AgentSessionHandler::new(manager, assembler);
-
-    let import = ImportServiceImpl::new(node_service);
-
     let settings = SettingsServiceImpl::with_default_path()
         .map_err(|e| anyhow::anyhow!("Failed to initialize SettingsService: {}", e))?;
+    let capture_config_path = {
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::path::PathBuf::from(home)
+            .join(".nodespace")
+            .join("daemon.toml")
+    };
+    let agent_session = AgentSessionHandler::new(
+        manager,
+        assembler,
+        node_service.clone(),
+        capture_config_path,
+    );
+
+    let import = ImportServiceImpl::new(node_service);
 
     Ok(ServiceBundle {
         node_service_grpc,

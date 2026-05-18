@@ -35,6 +35,7 @@ use uuid::Uuid;
 use crate::acp::context_assembly::GraphContextAssembler;
 use crate::acp::registry::SystemAgentRegistry;
 use crate::agent_types::{AgentType, ContextError};
+use crate::pty::capture::SessionCapture;
 
 /// Number of buffered chunks per output subscriber. Slow consumers that fall
 /// behind by more than this many chunks will see `RecvError::Lagged`; that is
@@ -105,6 +106,10 @@ pub struct PtySession {
     /// final value — terminate() and the manager's auto-prune both rely on
     /// this.
     exit_tx: watch::Sender<Option<ExitStatus>>,
+
+    /// Ring buffer that accumulates output for capture. Shared with the
+    /// reader task so all chunks land here without extra subscriptions.
+    capture: Arc<Mutex<SessionCapture>>,
 
     // Held only for its Drop side effect — deletes the temp dir on disk when
     // this session is dropped. Never read directly.
@@ -203,8 +208,9 @@ impl PtySession {
         let master = Arc::new(Mutex::new(pair.master));
         let writer = Arc::new(Mutex::new(writer));
         let child_killer = Arc::new(Mutex::new(child_killer));
+        let capture = Arc::new(Mutex::new(SessionCapture::new()));
 
-        spawn_reader_task(reader, output_tx.clone());
+        spawn_reader_task(reader, output_tx.clone(), capture.clone());
         spawn_exit_watcher_task(child, exit_tx.clone());
 
         Ok(Self {
@@ -216,6 +222,7 @@ impl PtySession {
             child_killer,
             output_tx,
             exit_tx,
+            capture,
             _session_dir: session_dir,
         })
     }
@@ -242,6 +249,11 @@ impl PtySession {
     /// while it is still running.
     pub fn exit_status(&self) -> Option<ExitStatus> {
         *self.exit_tx.borrow()
+    }
+
+    /// Return a cloned snapshot of the capture buffer, briefly locking it.
+    pub async fn snapshot_capture(&self) -> SessionCapture {
+        self.capture.lock().await.clone()
     }
 
     /// Write `data` to the PTY's stdin.
@@ -332,8 +344,13 @@ impl PtySession {
 ///
 /// Runs on the blocking pool because `portable-pty`'s reader is synchronous.
 /// The task ends naturally when the reader returns EOF (child closed the PTY)
-/// or hits an error.
-fn spawn_reader_task(mut reader: Box<dyn Read + Send>, output_tx: broadcast::Sender<OutputChunk>) {
+/// or hits an error. Each chunk is also pushed into `capture` so the capture
+/// service can assemble a transcript or summary after the session ends.
+fn spawn_reader_task(
+    mut reader: Box<dyn Read + Send>,
+    output_tx: broadcast::Sender<OutputChunk>,
+    capture: Arc<Mutex<SessionCapture>>,
+) {
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; READ_BUFFER_BYTES];
         loop {
@@ -344,6 +361,9 @@ fn spawn_reader_task(mut reader: Box<dyn Read + Send>, output_tx: broadcast::Sen
                         data: buf[..n].to_vec(),
                         timestamp: Utc::now(),
                     };
+                    // Push into the capture buffer synchronously — this is a
+                    // blocking task so `blocking_lock` is appropriate here.
+                    capture.blocking_lock().push(chunk.clone());
                     // Send errors only happen when no receivers exist; that
                     // is fine — keep draining the PTY so the kernel buffer
                     // does not fill and block the child.
@@ -401,8 +421,9 @@ impl PtySession {
         let master = Arc::new(Mutex::new(pair.master));
         let writer = Arc::new(Mutex::new(writer));
         let child_killer = Arc::new(Mutex::new(child_killer));
+        let capture = Arc::new(Mutex::new(SessionCapture::new()));
 
-        spawn_reader_task(reader, output_tx.clone());
+        spawn_reader_task(reader, output_tx.clone(), capture.clone());
         spawn_exit_watcher_task(child, exit_tx.clone());
 
         Ok(Self {
@@ -414,6 +435,7 @@ impl PtySession {
             child_killer,
             output_tx,
             exit_tx,
+            capture,
             _session_dir: session_dir,
         })
     }

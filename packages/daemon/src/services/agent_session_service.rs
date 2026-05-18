@@ -10,13 +10,16 @@
 //! to construct and clone, and so multiple concurrent RPCs see the same set of
 //! sessions.
 
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use chrono::Utc;
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::agent_types::AgentType;
 use nodespace_agent::pty::{PtySession, PtySessionManager};
+use nodespace_core::services::NodeService as CoreNodeService;
 use tokio::sync::broadcast::error::RecvError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -27,16 +30,30 @@ use crate::nodespace::{
     SessionInfo, StreamOutputRequest, TerminateSessionRequest, TerminateSessionResponse,
     WriteInputRequest, WriteInputResponse,
 };
+use crate::services::capture_service::{finalize_capture, CompletedSession};
+use crate::services::settings_service::{read_capture_settings, CaptureConfig};
 
 /// gRPC adapter that owns shared handles to the PTY engine.
 pub struct AgentSessionHandler {
     manager: Arc<PtySessionManager>,
     assembler: Arc<GraphContextAssembler>,
+    node_service: Arc<CoreNodeService>,
+    config_path: PathBuf,
 }
 
 impl AgentSessionHandler {
-    pub fn new(manager: Arc<PtySessionManager>, assembler: Arc<GraphContextAssembler>) -> Self {
-        Self { manager, assembler }
+    pub fn new(
+        manager: Arc<PtySessionManager>,
+        assembler: Arc<GraphContextAssembler>,
+        node_service: Arc<CoreNodeService>,
+        config_path: PathBuf,
+    ) -> Self {
+        Self {
+            manager,
+            assembler,
+            node_service,
+            config_path,
+        }
     }
 }
 
@@ -49,6 +66,7 @@ impl AgentSessionService for AgentSessionHandler {
         let req = request.into_inner();
 
         let agent_type = parse_agent_type(&req.agent_type).map_err(Status::invalid_argument)?;
+        let agent_type_str = agent_type_to_string(agent_type);
         let id = self
             .manager
             .launch(agent_type, req.prompt, &self.assembler)
@@ -88,6 +106,60 @@ impl AgentSessionService for AgentSessionHandler {
                     "LaunchSession: session auto-pruned before initial resize could apply"
                 ),
             }
+        }
+
+        // Spawn a capture task that waits for the session to exit, then
+        // creates an ai-chat node if capture is enabled. This runs after
+        // the launch response is returned — it does not block session start.
+        //
+        // Capture config is read once here (at launch time) so finalize_capture
+        // doesn't re-hit the filesystem on every session end. Sessions started
+        // before the handler initializes are not covered (no manager.get hit).
+        if let Some(ref session) = self.manager.get(&id).await {
+            let session = session.clone();
+            let node_service = self.node_service.clone();
+            let config_path = self.config_path.clone();
+            let started_at = session.started_at;
+
+            tokio::spawn(async move {
+                let config = match read_capture_settings(&config_path).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "capture: failed to read config, skipping");
+                        CaptureConfig::default()
+                    }
+                };
+
+                // Wait for the child process to exit.
+                let mut exit_rx = session.subscribe_exit();
+                let exit_status = loop {
+                    if let Some(status) = *exit_rx.borrow() {
+                        break status;
+                    }
+                    if exit_rx.changed().await.is_err() {
+                        // Sender dropped — session already gone.
+                        return;
+                    }
+                };
+
+                let capture = session.snapshot_capture().await;
+                let completed = CompletedSession {
+                    id: session.id,
+                    agent_type: agent_type_str,
+                    started_at,
+                    ended_at: Utc::now(),
+                    exit_status,
+                };
+
+                if let Err(e) = finalize_capture(&completed, &capture, &node_service, &config).await
+                {
+                    tracing::warn!(
+                        session_id = %session.id,
+                        error = %e,
+                        "session capture failed (non-fatal)"
+                    );
+                }
+            });
         }
 
         Ok(Response::new(LaunchSessionResponse {
