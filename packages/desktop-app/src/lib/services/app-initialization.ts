@@ -9,7 +9,6 @@
  */
 
 import { createLogger } from '$lib/utils/logger';
-import { statusBar } from '$lib/stores/status-bar';
 import { sharedNodeStore } from './shared-node-store.svelte';
 
 const log = createLogger('AppInit');
@@ -124,33 +123,9 @@ export async function initializeApp(): Promise<void> {
     // Wait for Tauri API to be available
     await waitForTauriReady();
 
-    // Initialize database
-    // This ensures SchemaService and other services are available to Tauri commands
-    try {
-      // Tauri 2.x uses window.__TAURI__.core.invoke
-      const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke;
-      if (!invoke) {
-        throw new Error('Tauri invoke function not available');
-      }
-      log.info('Calling initialize_database...');
-      const dbPath = await invoke('initialize_database') as string;
-      log.info('Database initialized at:', dbPath);
-      statusBar.success(`database: ${dbPath}`);
-    } catch (error: unknown) {
-      // Check if already initialized (this is expected on subsequent calls)
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (errorMsg.includes('already initialized')) {
-        log.debug('Database already initialized');
-      } else {
-        // CRITICAL: Log the full error so we can debug why initialization failed
-        log.error('DATABASE INITIALIZATION FAILED:', errorMsg);
-        log.error('Full error object:', error);
-        // Store error for diagnostic panel
-        (window as unknown as { __DB_INIT_ERROR__?: string }).__DB_INIT_ERROR__ = errorMsg;
-        // Re-throw so the UI can show an error state
-        throw new Error(`Database initialization failed: ${errorMsg}`);
-      }
-    }
+    // Database and all services are initialized by nodespaced at Tauri setup time.
+    // No explicit initialize_database call needed here.
+    log.debug('Tauri ready — services initialized at startup');
 
     // Register shutdown handlers to flush pending data on close
     registerShutdownHandlers();

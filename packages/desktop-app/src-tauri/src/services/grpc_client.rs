@@ -9,7 +9,7 @@
 //!   2. Connects clients to that endpoint and stashes the `Channel`
 //!      so commands can clone the client cheaply.
 //!
-//! The same `Arc<NodeService>` AppServices already initializes is reused as
+//! The same `Arc<NodeService>` that `lib.rs` setup initializes is reused as
 //! the backing implementation, so there is no second database open and no
 //! RocksDB lock contention.
 

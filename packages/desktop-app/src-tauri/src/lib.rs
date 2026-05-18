@@ -14,9 +14,6 @@ pub mod constants;
 // Runtime application configuration
 pub mod config;
 
-// Centralized services container (Issue #894)
-pub mod app_services;
-
 // Background services
 pub mod services;
 
@@ -307,13 +304,155 @@ pub fn run() {
             // Set the menu
             app.set_menu(menu)?;
 
-            // Register shutdown token as managed state so commands/db.rs can access it
-            // when spawning background tasks (MCP server, domain event forwarder)
-            app.manage(shutdown_token_for_setup);
+            // Register shutdown token as managed state for background task coordination.
+            app.manage(shutdown_token_for_setup.clone());
 
-            // Register AppServices container as managed state (Issue #894)
-            // Services are populated later via commands/db.rs::init_services()
-            app.manage(app_services::AppServices::new());
+            // Initialize database and all services at startup.
+            {
+                use nodespace_core::services::{
+                    EmbeddingProcessor, NodeAccessor, NodeEmbeddingService,
+                };
+                use nodespace_core::{NodeService, SurrealStore};
+                use nodespace_nlp_engine::{EmbeddingConfig, EmbeddingService};
+                use std::sync::Arc;
+
+                let app_handle = app.handle().clone();
+                let session_token = shutdown_token_for_setup.child_token();
+
+                tauri::async_runtime::block_on(async {
+                    // Migrate legacy DB path if needed, then load preferences.
+                    preferences::migrate_legacy_database_if_needed(&app_handle)
+                        .await
+                        .unwrap_or_else(|e| tracing::warn!("Legacy DB migration skipped: {e}"));
+
+                    let prefs = preferences::load_preferences(&app_handle)
+                        .await
+                        .expect("Failed to load preferences");
+
+                    let db_path = prefs
+                        .database_path
+                        .clone()
+                        .unwrap_or_else(|| preferences::get_default_database_path().expect("Failed to resolve DB path"));
+
+                    if let Some(parent) = db_path.parent() {
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .expect("Failed to create database directory");
+                    }
+
+                    let model_path = commands::resolve_bundled_model_path(&app_handle);
+
+                    let config = config::AppConfig::from_preferences(
+                        &prefs,
+                        model_path.clone().unwrap_or_default(),
+                    )
+                    .expect("Failed to build AppConfig");
+
+                    tracing::info!(db_path = %config.database_path.display(), "Database path");
+
+                    let mut store = Arc::new(
+                        SurrealStore::new(config.database_path.clone())
+                            .await
+                            .expect("Failed to initialize SurrealStore"),
+                    );
+
+                    let mut node_service = NodeService::new(&mut store)
+                        .await
+                        .expect("Failed to initialize NodeService");
+
+                    // Seed prompt/skill nodes (idempotent — skips existing nodes).
+                    {
+                        use nodespace_agent::prompt_assembler::PromptAssembler;
+                        use nodespace_agent::skill_pipeline::seed_skill_nodes;
+                        use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
+
+                        let prompt_templates = PromptAssembler::seed_prompt_nodes();
+                        let skill_templates = seed_skill_nodes();
+                        let mut all_template_nodes = Vec::new();
+                        for tmpl in prompt_templates.iter().chain(skill_templates.iter()) {
+                            match prepare_nodes_from_template(tmpl) {
+                                Ok(nodes) => all_template_nodes.push(nodes),
+                                Err(e) => tracing::warn!(error = ?e, title = %tmpl.title, "Failed to expand seed template"),
+                            }
+                        }
+                        if let Err(e) = node_service.seed_nodes_from_templates(all_template_nodes).await {
+                            tracing::warn!(error = %e, "Failed to seed agent nodes (non-fatal)");
+                        }
+                    }
+
+                    // Tiered NLP init: skipped when model is absent, non-fatal on other errors.
+                    let (embedding_service, processor) = if let Some(mp) = model_path {
+                        let result = (|| -> Result<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>), String> {
+                            let embedding_config = EmbeddingConfig {
+                                model_path: Some(mp),
+                                ..Default::default()
+                            };
+                            let mut nlp_engine = EmbeddingService::new(embedding_config)
+                                .map_err(|e| format!("Failed to create NLP engine: {e}"))?;
+                            nlp_engine.initialize().map_err(|e| format!("Failed to load NLP model: {e}"))?;
+                            let nlp_engine_arc = Arc::new(nlp_engine);
+                            let node_accessor: Arc<dyn NodeAccessor> = Arc::new(node_service.clone());
+                            let behaviors = node_service.behaviors().clone();
+                            let svc = Arc::new(NodeEmbeddingService::new(
+                                nlp_engine_arc,
+                                store.clone(),
+                                node_accessor,
+                                behaviors,
+                            ));
+                            let proc = EmbeddingProcessor::new(svc.clone())
+                                .map_err(|e| format!("Failed to init EmbeddingProcessor: {e}"))?;
+                            node_service.set_embedding_waker(proc.waker());
+                            proc.wake();
+                            Ok((svc, Arc::new(proc)))
+                        })();
+                        match result {
+                            Ok((svc, proc)) => (Some(svc), Some(proc)),
+                            Err(e) => {
+                                tracing::warn!("NLP/embedding init failed (semantic search disabled): {e}");
+                                (None, None)
+                            }
+                        }
+                    } else {
+                        (None, None)
+                    };
+
+                    let node_service = Arc::new(node_service);
+                    let client_id = config.tauri_client_id.clone();
+
+                    if let Err(e) = initialize_domain_event_forwarder(
+                        app_handle.clone(),
+                        node_service.clone(),
+                        client_id,
+                        session_token.clone(),
+                    ) {
+                        tracing::error!("Failed to initialize domain event forwarder: {e}");
+                    }
+
+                    if let Err(e) = initialize_playbook_engine(node_service.clone(), session_token.clone()) {
+                        tracing::error!("Failed to initialize playbook engine: {e}");
+                    }
+
+                    if let Err(e) = initialize_skill_updater(node_service.clone(), session_token.clone()) {
+                        tracing::error!("Failed to initialize skill updater: {e}");
+                    }
+
+                    match crate::services::GrpcClient::start(
+                        node_service,
+                        embedding_service,
+                        processor,
+                    )
+                    .await
+                    {
+                        Ok(client) => {
+                            app_handle.manage(client);
+                            tracing::info!("In-process gRPC client registered");
+                        }
+                        Err(e) => {
+                            panic!("Failed to start in-process gRPC server: {e}");
+                        }
+                    }
+                });
+            }
 
             // CompositeModelManager for chat_models commands (Issue #1058).
             // Routes between GGUF and Ollama models in the Tauri process.
@@ -392,7 +531,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             toggle_sidebar,
-            commands::db::initialize_database,
             commands::embeddings::generate_root_embedding,
             commands::embeddings::search_roots,
             commands::embeddings::update_root_embedding,

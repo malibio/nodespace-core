@@ -250,6 +250,7 @@ pub async fn local_agent_get_sessions(
             created_at,
             tool_executions: vec![],
             dynamic_context: None,
+            system_prompt_override: None,
         });
     }
     Ok(sessions)

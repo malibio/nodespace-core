@@ -129,7 +129,10 @@ mod tests {
             agent_type: "claude-code".to_string(),
             started_at: ts,
             ended_at: ts,
-            exit_status: ExitStatus { code: 0 },
+            exit_status: ExitStatus {
+                code: 0,
+                success: true,
+            },
         }
     }
 

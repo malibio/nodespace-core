@@ -109,7 +109,6 @@ impl AgentSessionService for AgentSessionHandler {
             }
         }
 
-
         let id = self
             .manager
             .launch(agent_type, req.prompt, &self.assembler)
