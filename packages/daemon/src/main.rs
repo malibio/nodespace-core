@@ -102,12 +102,17 @@ async fn serve_headless() -> Result<()> {
     let bundle = build_services(&db_path).await?;
 
     tracing::info!(%addr, "gRPC server listening");
-    let serve = Server::builder()
+    let builder = Server::builder()
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(EmbeddingsServiceServer::new(bundle.embeddings_service_grpc))
-        .serve_with_shutdown(addr, shutdown);
+        .add_service(ImportServiceServer::new(bundle.import));
+    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
+        builder
+            .add_service(EmbeddingsServiceServer::new(emb))
+            .serve_with_shutdown(addr, shutdown)
+    } else {
+        builder.serve_with_shutdown(addr, shutdown)
+    };
 
     serve.await.context("gRPC server terminated with error")?;
     drain_gpu(bundle.embedding_state).await;
@@ -138,13 +143,18 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     };
 
     tracing::info!(%addr, "gRPC server listening");
-    let serve = Server::builder()
+    let builder = Server::builder()
         .layer(TrayMetricsLayer::new(controller))
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(EmbeddingsServiceServer::new(bundle.embeddings_service_grpc))
-        .serve_with_shutdown(addr, combined_shutdown);
+        .add_service(ImportServiceServer::new(bundle.import));
+    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
+        builder
+            .add_service(EmbeddingsServiceServer::new(emb))
+            .serve_with_shutdown(addr, combined_shutdown)
+    } else {
+        builder.serve_with_shutdown(addr, combined_shutdown)
+    };
 
     serve.await.context("gRPC server terminated with error")?;
     drain_gpu(bundle.embedding_state).await;
@@ -156,7 +166,10 @@ struct ServiceBundle {
     node_service_grpc: NodeServiceImpl,
     agent_session: AgentSessionHandler,
     import: ImportServiceImpl,
-    embeddings_service_grpc: EmbeddingsServiceImpl,
+    /// `None` when the NLP model is absent — the daemon starts without semantic
+    /// search rather than refusing to run. The `EmbeddingsService` gRPC endpoint
+    /// is simply not registered in that case.
+    embeddings_service_grpc: Option<EmbeddingsServiceImpl>,
     /// Held so we can drain GPU resources after the server shuts down.
     embedding_state: Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)>,
 }
@@ -185,17 +198,9 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     let embedding_service_opt = embedding_state.as_ref().map(|(svc, _)| svc.clone());
     let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
 
-    let embeddings_service_grpc = match &embedding_state {
-        Some((svc, proc)) => {
-            EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
-        }
-        None => {
-            return Err(anyhow::anyhow!(
-                "Embedding service unavailable — NLP model not found. \
-                 Place the model in ~/.nodespace/models/ to enable semantic search."
-            ));
-        }
-    };
+    let embeddings_service_grpc = embedding_state.as_ref().map(|(svc, proc)| {
+        EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
+    });
 
     let manager = Arc::new(PtySessionManager::new());
     let assembler = Arc::new(GraphContextAssembler::new(node_service.clone(), embedding_service_opt));

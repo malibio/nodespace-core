@@ -190,7 +190,7 @@ pub async fn create_node(
     client: State<'_, GrpcClient>,
     node: CreateNodeInput,
 ) -> Result<String, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     validate_node_type(&node.node_type, &mut c).await?;
 
     let properties_str = node.properties.to_string();
@@ -217,7 +217,7 @@ pub async fn create_root_node(
     client: State<'_, GrpcClient>,
     input: CreateRootNodeInput,
 ) -> Result<String, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     validate_node_type(&input.node_type, &mut c).await?;
 
     let properties_str = input.properties.to_string();
@@ -257,7 +257,7 @@ pub async fn create_node_mention(
     mentioning_node_id: String,
     mentioned_node_id: String,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     c.create_mention(Request::new(CreateMentionRequest {
         mentioning_node_id,
         mentioned_node_id,
@@ -273,7 +273,7 @@ pub async fn get_node(
     client: State<'_, GrpcClient>,
     id: String,
 ) -> Result<Option<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_node(Request::new(GetNodeRequest { node_id: id }))
         .await;
@@ -296,7 +296,7 @@ pub async fn update_node(
     version: i64,
     update: NodeUpdate,
 ) -> Result<Value, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
 
     let content_preview = update.content.as_ref().map(|c| {
         if c.len() > 50 {
@@ -347,7 +347,7 @@ pub async fn delete_node(
     id: String,
     version: i64,
 ) -> Result<DeleteResult, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .delete_node(Request::new(DeleteNodeRequest {
             node_id: id,
@@ -371,7 +371,7 @@ pub async fn move_node(
     new_parent_id: Option<String>,
     insert_after_node_id: Option<String>,
 ) -> Result<Value, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .move_node(Request::new(MoveNodeRequest {
             node_id,
@@ -394,7 +394,7 @@ pub async fn reorder_node(
     version: i64,
     insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     c.reorder_node(Request::new(ReorderNodeRequest {
         node_id,
         version,
@@ -411,7 +411,7 @@ pub async fn get_children(
     client: State<'_, GrpcClient>,
     parent_id: String,
 ) -> Result<Vec<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_children(Request::new(GetChildrenRequest { node_id: parent_id }))
         .await
@@ -433,7 +433,7 @@ pub async fn get_children_tree(
     client: State<'_, GrpcClient>,
     parent_id: String,
 ) -> Result<serde_json::Value, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_children_tree(Request::new(GetChildrenTreeRequest { node_id: parent_id }))
         .await
@@ -453,7 +453,7 @@ pub async fn get_nodes_by_root_id(
     client: State<'_, GrpcClient>,
     root_id: String,
 ) -> Result<Vec<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     // Phase 5 (Issue #511): Redirect to get_children (graph-native)
     let resp = c
         .get_children(Request::new(GetChildrenRequest { node_id: root_id }))
@@ -476,7 +476,7 @@ pub async fn query_nodes_simple(
     client: State<'_, GrpcClient>,
     query: NodeQuery,
 ) -> Result<Vec<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .query_nodes_simple(Request::new(QueryNodesSimpleRequest {
             id: query.id,
@@ -507,7 +507,7 @@ pub async fn mention_autocomplete(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .mention_autocomplete(Request::new(MentionAutocompleteRequest {
             query,
@@ -532,7 +532,7 @@ pub async fn save_node_with_parent(
     client: State<'_, GrpcClient>,
     input: SaveNodeWithParentInput,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     validate_node_type(&input.node_type, &mut c).await?;
 
     c.upsert_node_with_parent(Request::new(UpsertNodeWithParentRequest {
@@ -554,7 +554,7 @@ pub async fn get_outgoing_mentions(
     client: State<'_, GrpcClient>,
     node_id: String,
 ) -> Result<Vec<String>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_outgoing_mentions(Request::new(MentionTargetRequest { node_id }))
         .await
@@ -569,7 +569,7 @@ pub async fn get_incoming_mentions(
     client: State<'_, GrpcClient>,
     node_id: String,
 ) -> Result<Vec<String>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_incoming_mentions(Request::new(MentionTargetRequest { node_id }))
         .await
@@ -584,7 +584,7 @@ pub async fn get_mentioning_roots(
     client: State<'_, GrpcClient>,
     node_id: String,
 ) -> Result<Vec<NodeReference>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_mentioning_roots(Request::new(MentionTargetRequest { node_id }))
         .await
@@ -673,7 +673,7 @@ pub async fn update_task_node(
     version: i64,
     update: TaskNodeUpdate,
 ) -> Result<Value, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let req = task_update_to_proto(&id, version, update);
     let resp = c
         .update_task_node(Request::new(req))
@@ -691,7 +691,7 @@ pub async fn delete_node_mention(
     mentioning_node_id: String,
     mentioned_node_id: String,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     c.delete_mention(Request::new(DeleteMentionRequest {
         mentioning_node_id,
         mentioned_node_id,

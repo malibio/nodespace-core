@@ -38,6 +38,18 @@ impl EmbeddingsServiceImpl {
             processor,
         }
     }
+
+    /// Shared implementation for stale-count queries used by both
+    /// `get_embedding_status` and `get_stale_count` to avoid duplication.
+    async fn stale_count_inner(&self) -> Result<i32, Status> {
+        let ids = self
+            .node_service
+            .store()
+            .get_stale_embedding_root_ids(None, 0, EmbeddingConfig::default().max_retries)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to get stale count: {}", e)))?;
+        Ok(i32::try_from(ids.len()).unwrap_or(i32::MAX))
+    }
 }
 
 #[tonic::async_trait]
@@ -46,14 +58,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         _request: Request<GetEmbeddingStatusRequest>,
     ) -> Result<Response<EmbeddingStatusResponse>, Status> {
-        let stale_count = self
-            .node_service
-            .store()
-            .get_stale_embedding_root_ids(None, 0, EmbeddingConfig::default().max_retries)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to get stale count: {}", e)))?
-            .len() as i32;
-
+        let stale_count = self.stale_count_inner().await?;
         Ok(Response::new(EmbeddingStatusResponse {
             available: true,
             stale_count,
@@ -160,14 +165,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         _request: Request<GetStaleCountRequest>,
     ) -> Result<Response<GetStaleCountResponse>, Status> {
-        let count = self
-            .node_service
-            .store()
-            .get_stale_embedding_root_ids(None, 0, EmbeddingConfig::default().max_retries)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to get stale count: {}", e)))?
-            .len() as i32;
-
+        let count = self.stale_count_inner().await?;
         Ok(Response::new(GetStaleCountResponse { count }))
     }
 

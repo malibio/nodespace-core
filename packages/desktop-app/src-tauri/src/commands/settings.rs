@@ -5,6 +5,7 @@
 //! Database settings now hot-swap services without requiring a restart.
 
 use crate::app_services::AppServices;
+use crate::services::GrpcClient;
 use tauri::{AppHandle, Manager};
 
 /// Settings response sent to the frontend
@@ -231,6 +232,23 @@ async fn switch_database_services(
             e
         );
     }
+
+    // Restart the in-process gRPC server with the new database services so
+    // all subsequent embedding/node/collection RPCs target the new database.
+    // The managed GrpcClient uses interior mutability (RwLock) for this swap.
+    let grpc_client: tauri::State<GrpcClient> = app.state();
+    if let Err(e) = grpc_client
+        .restart(
+            bundle.node_service.clone(),
+            bundle.embedding_service.clone(),
+            bundle.processor.clone(),
+        )
+        .await
+    {
+        tracing::error!("Failed to restart in-process gRPC server after database switch: {}", e);
+        return Err(format!("Failed to restart gRPC server: {}", e));
+    }
+    tracing::info!("In-process gRPC server restarted with new database");
 
     tracing::info!("Database switch complete");
     Ok(())

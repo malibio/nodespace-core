@@ -31,8 +31,30 @@ fn embeddings_unavailable() -> CommandError {
 }
 
 fn node_from_proto(data: nodespace_daemon::NodeData) -> Option<Node> {
-    let created_at = data.created_at.parse().ok()?;
-    let modified_at = data.modified_at.parse().ok()?;
+    let created_at = match data.created_at.parse() {
+        Ok(ts) => ts,
+        Err(e) => {
+            tracing::warn!(
+                node_id = %data.id,
+                raw = %data.created_at,
+                error = %e,
+                "Dropping node from search results: unparseable created_at timestamp"
+            );
+            return None;
+        }
+    };
+    let modified_at = match data.modified_at.parse() {
+        Ok(ts) => ts,
+        Err(e) => {
+            tracing::warn!(
+                node_id = %data.id,
+                raw = %data.modified_at,
+                error = %e,
+                "Dropping node from search results: unparseable modified_at timestamp"
+            );
+            return None;
+        }
+    };
     let properties = serde_json::from_str(&data.properties).unwrap_or_default();
     Some(Node {
         id: data.id,
@@ -56,7 +78,7 @@ pub async fn generate_root_embedding(
     root_id: String,
 ) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -105,7 +127,7 @@ pub async fn search_roots(
     }
 
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     let response = client
@@ -135,7 +157,7 @@ pub async fn update_root_embedding(
     root_id: String,
 ) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -153,7 +175,7 @@ pub async fn on_root_closed(
     root_id: String,
 ) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -171,7 +193,7 @@ pub async fn on_root_idle(
     root_id: String,
 ) -> Result<bool, CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -179,6 +201,9 @@ pub async fn on_root_idle(
         .await
         .map_err(|e| grpc_err(e.message()))?;
 
+    // Returns `true` for compatibility with the frontend idle-trigger contract,
+    // which expects a boolean "was queued" signal. The gRPC call already returns
+    // an error on failure via the `?` above, so `true` is always correct here.
     Ok(true)
 }
 
@@ -186,7 +211,7 @@ pub async fn on_root_idle(
 #[tauri::command]
 pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     client
@@ -201,7 +226,7 @@ pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandE
 #[tauri::command]
 pub async fn get_stale_root_count(grpc: State<'_, GrpcClient>) -> Result<usize, CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     let response = client
@@ -235,7 +260,7 @@ pub async fn batch_generate_embeddings(
     root_ids: Vec<String>,
 ) -> Result<BatchEmbeddingResult, CommandError> {
     let mut client = grpc
-        .embeddings_client()
+        .embeddings_client().await
         .ok_or_else(embeddings_unavailable)?;
 
     let response = client

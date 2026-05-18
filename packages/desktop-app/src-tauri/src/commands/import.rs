@@ -79,7 +79,7 @@ pub async fn import_markdown_file(
     file_path: String,
     options: Option<ImportOptions>,
 ) -> Result<FileImportResult, String> {
-    let mut client = grpc.import_client();
+    let mut client = grpc.import_client().await;
     let req = ImportMarkdownRequest {
         file_path: file_path.clone(),
         options: Some(options.unwrap_or_default().into_proto()),
@@ -146,7 +146,7 @@ pub async fn import_markdown_files(
     options: Option<ImportOptions>,
 ) -> Result<BatchImportResult, String> {
     let total_files = file_paths.len();
-    let mut client = grpc.import_client();
+    let mut client = grpc.import_client().await;
     let req = ImportMarkdownFilesRequest {
         file_paths,
         options: Some(options.unwrap_or_default().into_proto()),

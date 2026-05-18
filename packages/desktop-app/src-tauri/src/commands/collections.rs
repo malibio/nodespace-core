@@ -45,7 +45,7 @@ pub struct CollectionInfo {
 pub async fn get_all_collections(
     client: State<'_, GrpcClient>,
 ) -> Result<Vec<CollectionInfo>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_all_collections(Request::new(GetAllCollectionsRequest {}))
         .await
@@ -85,7 +85,7 @@ pub async fn get_collection_members(
     client: State<'_, GrpcClient>,
     collection_id: String,
 ) -> Result<Vec<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_collection_members(Request::new(CollectionMembersRequest { collection_id }))
         .await
@@ -115,7 +115,7 @@ pub async fn get_collection_members_recursive(
     client: State<'_, GrpcClient>,
     collection_id: String,
 ) -> Result<Vec<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_collection_members_recursive(Request::new(CollectionMembersRequest { collection_id }))
         .await
@@ -148,7 +148,7 @@ pub async fn get_node_collections(
     client: State<'_, GrpcClient>,
     node_id: String,
 ) -> Result<Vec<String>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_node_collections(Request::new(NodeCollectionsRequest { node_id }))
         .await
@@ -172,7 +172,7 @@ pub async fn add_node_to_collection(
     node_id: String,
     collection_id: String,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     c.add_node_to_collection(Request::new(AddNodeToCollectionRequest {
         node_id,
         collection_id,
@@ -197,7 +197,7 @@ pub async fn add_node_to_collection_path(
     node_id: String,
     collection_path: String,
 ) -> Result<String, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .add_node_to_collection_by_path(Request::new(AddNodeToCollectionByPathRequest {
             node_id,
@@ -224,7 +224,7 @@ pub async fn remove_node_from_collection(
     node_id: String,
     collection_id: String,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     c.remove_node_from_collection(Request::new(RemoveNodeFromCollectionRequest {
         node_id,
         collection_id,
@@ -249,7 +249,7 @@ pub async fn find_collection_by_path(
     client: State<'_, GrpcClient>,
     collection_path: String,
 ) -> Result<Option<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .find_collection_by_path(Request::new(FindCollectionByPathRequest {
             collection_path,
@@ -286,7 +286,7 @@ pub async fn get_collection_by_name(
     client: State<'_, GrpcClient>,
     name: String,
 ) -> Result<Option<Value>, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .get_collection_by_name(Request::new(GetCollectionByNameRequest { name }))
         .await
@@ -321,7 +321,7 @@ pub async fn create_collection(
     name: String,
     description: Option<String>,
 ) -> Result<String, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .create_collection(Request::new(CreateCollectionRequest {
             name,
@@ -356,7 +356,7 @@ pub async fn rename_collection(
     version: i64,
     new_name: String,
 ) -> Result<Value, CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     let resp = c
         .rename_collection(Request::new(RenameCollectionRequest {
             collection_id,
@@ -400,7 +400,7 @@ pub async fn delete_collection(
     collection_id: String,
     version: i64,
 ) -> Result<(), CommandError> {
-    let mut c = client.client();
+    let mut c = client.client().await;
     c.delete_collection(Request::new(DeleteCollectionRequest {
         collection_id,
         version,
