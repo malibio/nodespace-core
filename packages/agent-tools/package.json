@@ -1,0 +1,35 @@
+{
+  "name": "@nodespace/agent-tools",
+  "version": "0.1.0",
+  "description": "gRPC-backed knowledge graph tools for PTY-spawned agents (Claude Code, Codex, etc.)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "preinstall": "node ../../enforce-bun.js",
+    "build": "tsc",
+    "test": "bunx vitest run",
+    "test:watch": "bunx vitest",
+    "quality:fix": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.0",
+    "@grpc/proto-loader": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "~5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "license": "MIT"
+}
