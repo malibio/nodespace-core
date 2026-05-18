@@ -7,6 +7,11 @@
  *
  * GraphContextAssembler writes both files into the session temp dir and sets
  * GEMINI_TOOLS_DIR to that directory before spawning Gemini CLI.
+ *
+ * Protocol (Gemini stdio contract):
+ *   stdin:  `{ "name": "<tool>", "args": { ... } }`
+ *   stdout (success): `{ "result": <value> }`
+ *   stdout (error):   `{ "error": "<message>" }` + exit code 1
  */
 
 import { searchSemantic, getNode, createNode, updateNode, getChildren, ToolError }
