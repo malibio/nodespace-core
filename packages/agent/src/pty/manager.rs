@@ -72,10 +72,21 @@ impl PtySessionManager {
         }
 
         // Auto-cleanup: when the child process exits, drop the session out
-        // of the map so the temp dir gets cleaned up.
+        // of the map so the temp dir gets cleaned up. `watch` latches the
+        // final value, so this works whether the child exits before or
+        // after the receiver was constructed.
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let _ = exit_rx.recv().await;
+            // Fast path: exit already happened before insert returned.
+            if exit_rx.borrow().is_none() {
+                // Loop until the latched value transitions to Some, or the
+                // sender is dropped (session removed by another path).
+                while exit_rx.changed().await.is_ok() {
+                    if exit_rx.borrow().is_some() {
+                        break;
+                    }
+                }
+            }
             let mut guard = sessions.lock().await;
             guard.remove(&id);
         });
@@ -125,7 +136,7 @@ impl PtySessionManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -214,5 +225,22 @@ mod tests {
         arc.resize(100, 30).await.expect("resize");
 
         manager.terminate(&id).await.expect("terminate cat");
+    }
+
+    /// Regression for review Finding #2: very short-lived processes whose
+    /// exit fires before the manager's auto-prune task has a chance to
+    /// subscribe. The watch-channel redesign latches the final value so the
+    /// subscriber still observes it. Repeated to make the race more likely.
+    #[tokio::test]
+    async fn ultra_short_lived_processes_are_pruned() {
+        let manager = PtySessionManager::new();
+        for _ in 0..10 {
+            // `true` exits with status 0 essentially immediately. The watcher
+            // very plausibly fires before the manager's auto-prune subscribes.
+            let session =
+                PtySession::launch_for_test("true", vec![]).expect("launch true session");
+            manager.insert(session).await;
+        }
+        wait_for_len(&manager, 0, Duration::from_secs(3)).await;
     }
 }

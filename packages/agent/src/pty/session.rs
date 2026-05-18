@@ -29,7 +29,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, watch, Mutex};
 use uuid::Uuid;
 
 use crate::acp::context_assembly::GraphContextAssembler;
@@ -99,12 +99,15 @@ pub struct PtySession {
 
     /// Fan-out for output chunks.
     output_tx: broadcast::Sender<OutputChunk>,
-    /// Fan-out for process exit. A single value is sent when the child exits;
-    /// subscribers created before exit will receive it.
-    exit_tx: broadcast::Sender<ExitStatus>,
+    /// Latched exit status. Starts at `None` and transitions to `Some(...)`
+    /// exactly once when the watcher observes the child exiting. `watch` (not
+    /// `broadcast`) so subscribers created *after* the exit still see the
+    /// final value — terminate() and the manager's auto-prune both rely on
+    /// this.
+    exit_tx: watch::Sender<Option<ExitStatus>>,
 
-    /// Per-session working directory. Dropping this session drops the
-    /// `TempDir`, which deletes the directory tree on disk.
+    // Held only for its Drop side effect — deletes the temp dir on disk when
+    // this session is dropped. Never read directly.
     _session_dir: tempfile::TempDir,
 }
 
@@ -192,7 +195,7 @@ impl PtySession {
         let child_killer = child.clone_killer();
 
         let (output_tx, _) = broadcast::channel::<OutputChunk>(OUTPUT_CHANNEL_CAPACITY);
-        let (exit_tx, _) = broadcast::channel::<ExitStatus>(1);
+        let (exit_tx, _) = watch::channel::<Option<ExitStatus>>(None);
 
         let id = Uuid::new_v4();
         let started_at = Utc::now();
@@ -228,10 +231,17 @@ impl PtySession {
 
     /// Subscribe to the child-exit signal.
     ///
-    /// Exactly one [`ExitStatus`] value is broadcast when the child exits;
-    /// subscribers that subscribed before exit will receive it.
-    pub fn subscribe_exit(&self) -> broadcast::Receiver<ExitStatus> {
+    /// The returned receiver always sees the *latest* value of the exit
+    /// status, including if the child has already exited before the call
+    /// (the watch channel latches the final `Some(...)`).
+    pub fn subscribe_exit(&self) -> watch::Receiver<Option<ExitStatus>> {
         self.exit_tx.subscribe()
+    }
+
+    /// Return the exit status if the child has already terminated, or `None`
+    /// while it is still running.
+    pub fn exit_status(&self) -> Option<ExitStatus> {
+        *self.exit_tx.borrow()
     }
 
     /// Write `data` to the PTY's stdin.
@@ -267,16 +277,30 @@ impl PtySession {
     /// `Arc<PtySession>` from `get()`). Temp-dir cleanup happens when the
     /// last `Arc` is dropped — usually the manager removing the entry
     /// after this returns.
+    ///
+    /// Safe to call when the child has already exited: returns immediately
+    /// without erroring.
+    ///
+    /// On Unix the kill is `SIGHUP` (what `portable_pty::ChildKiller::kill`
+    /// emits); on Windows it is `TerminateProcess`. Most agent CLIs treat
+    /// either as a clean shutdown signal. If a future agent needs `SIGTERM`
+    /// specifically, signal it directly via `libc::kill` from `cfg(unix)`
+    /// code rather than changing this default.
     pub async fn terminate(&self) -> anyhow::Result<()> {
-        // Subscribe BEFORE sending the kill so we cannot miss the broadcast
-        // if the watcher fires immediately. (Late subscribers see Closed
-        // once the watcher drops its sender, which would be a spurious
-        // failure here.)
+        // Subscribe to the watch channel up front. `watch::Receiver` always
+        // sees the latest value, so this works whether the child has already
+        // exited or is still running.
         let mut exit_rx = self.exit_tx.subscribe();
 
+        // Fast path: if the watcher has already latched a value, the child
+        // is gone and there is nothing to kill.
+        if exit_rx.borrow().is_some() {
+            return Ok(());
+        }
+
         // Send the kill signal. If the child has already exited, kill()
-        // returns an error which we ignore — we just want to make sure the
-        // process is gone before we drop the temp dir.
+        // returns an error which we ignore — the watch loop below will
+        // observe the exit either way.
         {
             let killer = self.child_killer.clone();
             tokio::task::spawn_blocking(move || {
@@ -287,11 +311,19 @@ impl PtySession {
             .map_err(|e| anyhow::anyhow!("terminate kill task panicked: {}", e))?;
         }
 
-        match exit_rx.recv().await {
-            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => Ok(()),
-            Err(broadcast::error::RecvError::Closed) => Err(anyhow::anyhow!(
-                "exit watcher closed without reporting status"
-            )),
+        // Wait for the watcher to publish a `Some(_)`. `changed()` resolves
+        // every time the value transitions; we loop until the latched value
+        // is non-None to guard against spurious wakeups.
+        loop {
+            if exit_rx.borrow().is_some() {
+                return Ok(());
+            }
+            if exit_rx.changed().await.is_err() {
+                // Sender dropped — only happens if the session itself was
+                // dropped concurrently, which would be a logic error in
+                // the caller. Treat as success since the process is gone.
+                return Ok(());
+            }
         }
     }
 }
@@ -357,7 +389,7 @@ impl PtySession {
         let child_killer = child.clone_killer();
 
         let (output_tx, _) = broadcast::channel::<OutputChunk>(OUTPUT_CHANNEL_CAPACITY);
-        let (exit_tx, _) = broadcast::channel::<ExitStatus>(1);
+        let (exit_tx, _) = watch::channel::<Option<ExitStatus>>(None);
 
         let id = Uuid::new_v4();
         let started_at = Utc::now();
@@ -388,10 +420,10 @@ impl PtySession {
     }
 }
 
-/// Background task: own the child, wait for it to exit, broadcast the status.
+/// Background task: own the child, wait for it to exit, latch the status.
 fn spawn_exit_watcher_task(
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
-    exit_tx: broadcast::Sender<ExitStatus>,
+    exit_tx: watch::Sender<Option<ExitStatus>>,
 ) {
     tokio::task::spawn_blocking(move || {
         let status = match child.wait() {
@@ -407,11 +439,11 @@ fn spawn_exit_watcher_task(
                 }
             }
         };
-        let _ = exit_tx.send(status);
+        let _ = exit_tx.send(Some(status));
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -435,6 +467,26 @@ mod tests {
         out
     }
 
+    /// Wait for the watch receiver to latch a `Some(_)` exit status, with a
+    /// deadline. Returns the latched status or panics on timeout.
+    async fn await_exit(
+        rx: &mut watch::Receiver<Option<ExitStatus>>,
+        deadline: Duration,
+    ) -> ExitStatus {
+        timeout(deadline, async {
+            loop {
+                if let Some(s) = *rx.borrow() {
+                    return s;
+                }
+                if rx.changed().await.is_err() {
+                    panic!("exit sender dropped before publishing status");
+                }
+            }
+        })
+        .await
+        .expect("exit status latched within deadline")
+    }
+
     #[tokio::test]
     async fn launch_for_test_runs_command_and_emits_output() {
         let session =
@@ -454,10 +506,7 @@ mod tests {
             text
         );
 
-        let status = timeout(Duration::from_secs(2), exit_rx.recv())
-            .await
-            .expect("exit broadcast within deadline")
-            .expect("clean exit broadcast");
+        let status = await_exit(&mut exit_rx, Duration::from_secs(2)).await;
         assert!(status.success, "echo should exit successfully");
     }
 
@@ -494,10 +543,7 @@ mod tests {
         session.resize(80, 24).await.expect("resize back succeeds");
 
         let mut exit_rx = session.subscribe_exit();
-        timeout(Duration::from_secs(3), exit_rx.recv())
-            .await
-            .expect("sleep completes")
-            .expect("clean exit");
+        await_exit(&mut exit_rx, Duration::from_secs(3)).await;
     }
 
     #[tokio::test]
@@ -513,10 +559,7 @@ mod tests {
             .expect("terminate returns within deadline")
             .expect("terminate succeeds");
 
-        let status = timeout(Duration::from_secs(1), exit_rx.recv())
-            .await
-            .expect("exit broadcast lands")
-            .expect("exit status received");
+        let status = await_exit(&mut exit_rx, Duration::from_secs(1)).await;
         assert!(!status.success, "killed process should not report success");
     }
 
@@ -529,10 +572,7 @@ mod tests {
         assert!(temp_path.exists(), "temp dir should exist immediately");
 
         let mut exit_rx = session.subscribe_exit();
-        timeout(Duration::from_secs(2), exit_rx.recv())
-            .await
-            .expect("exit lands")
-            .expect("clean exit");
+        await_exit(&mut exit_rx, Duration::from_secs(2)).await;
 
         // Session still in scope: temp dir still exists.
         assert!(
@@ -547,5 +587,100 @@ mod tests {
             !temp_path.exists(),
             "temp dir should be removed when session drops"
         );
+    }
+
+    // ---- Regression: late subscribers and double-terminate -------------------
+
+    /// `terminate()` must not hang if the child has already exited naturally
+    /// before terminate is called. Regression test for review Finding #1.
+    #[tokio::test]
+    async fn terminate_after_natural_exit_returns_immediately() {
+        let session = PtySession::launch_for_test("sh", vec!["-c".into(), "echo done".into()])
+            .expect("launch echo session");
+
+        // Wait until the watcher has latched the exit.
+        let mut exit_rx = session.subscribe_exit();
+        await_exit(&mut exit_rx, Duration::from_secs(2)).await;
+        assert!(session.exit_status().is_some());
+
+        // Now terminate — must not block on a missing broadcast.
+        timeout(Duration::from_secs(2), session.terminate())
+            .await
+            .expect("terminate returns immediately after natural exit")
+            .expect("terminate succeeds");
+    }
+
+    /// `subscribe_exit()` after the child has exited must immediately observe
+    /// the latched status — the `watch` channel does not drop values like a
+    /// single-shot `broadcast` does. Regression test for review Finding #2.
+    #[tokio::test]
+    async fn subscribe_exit_after_exit_observes_status() {
+        let session = PtySession::launch_for_test("sh", vec!["-c".into(), "echo done".into()])
+            .expect("launch echo session");
+
+        // Wait via a first subscriber.
+        let mut exit_rx = session.subscribe_exit();
+        await_exit(&mut exit_rx, Duration::from_secs(2)).await;
+
+        // Now create a fresh subscriber after exit. It must see Some(_).
+        let late_rx = session.subscribe_exit();
+        let latched = *late_rx.borrow();
+        assert!(
+            latched.is_some(),
+            "watch receiver subscribed after exit should still see the status"
+        );
+        assert!(latched.unwrap().success);
+    }
+
+    /// Calling `terminate()` twice must be safe.
+    #[tokio::test]
+    async fn terminate_is_idempotent() {
+        let session = PtySession::launch_for_test("sh", vec!["-c".into(), "sleep 30".into()])
+            .expect("launch sleep session");
+
+        timeout(Duration::from_secs(3), session.terminate())
+            .await
+            .expect("first terminate returns")
+            .expect("first terminate succeeds");
+
+        timeout(Duration::from_secs(1), session.terminate())
+            .await
+            .expect("second terminate returns immediately")
+            .expect("second terminate succeeds");
+    }
+
+    /// `write_input` and `resize` use independent locks (writer vs master);
+    /// hammering both concurrently should not deadlock.
+    #[tokio::test]
+    async fn concurrent_write_and_resize_do_not_deadlock() {
+        let session =
+            Arc::new(PtySession::launch_for_test("cat", vec![]).expect("launch cat session"));
+
+        let writer_session = session.clone();
+        let writer = tokio::spawn(async move {
+            for i in 0..20 {
+                writer_session
+                    .write_input(format!("line {}\n", i).as_bytes())
+                    .await
+                    .expect("write succeeds");
+            }
+        });
+
+        let resizer_session = session.clone();
+        let resizer = tokio::spawn(async move {
+            for _ in 0..20 {
+                let _ = resizer_session.resize(80, 24).await;
+                let _ = resizer_session.resize(120, 40).await;
+            }
+        });
+
+        timeout(Duration::from_secs(5), async {
+            writer.await.unwrap();
+            resizer.await.unwrap();
+        })
+        .await
+        .expect("writer + resizer complete without deadlock");
+
+        session.terminate().await.expect("terminate cat");
     }
 }
