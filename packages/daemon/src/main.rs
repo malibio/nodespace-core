@@ -20,8 +20,8 @@ use nodespace_agent::pty::PtySessionManager;
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
-    resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, NodeServiceImpl,
-    NodeServiceServer,
+    resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, ImportServiceImpl,
+    ImportServiceServer, NodeServiceImpl, NodeServiceServer,
 };
 use tonic::transport::Server;
 
@@ -102,6 +102,7 @@ async fn serve_headless() -> Result<()> {
     Server::builder()
         .add_service(NodeServiceServer::new(services.node))
         .add_service(AgentSessionServiceServer::new(services.agent_session))
+        .add_service(ImportServiceServer::new(services.import))
         .serve_with_shutdown(addr, shutdown)
         .await
         .context("gRPC server terminated with error")?;
@@ -136,6 +137,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         .layer(TrayMetricsLayer::new(controller))
         .add_service(NodeServiceServer::new(services.node))
         .add_service(AgentSessionServiceServer::new(services.agent_session))
+        .add_service(ImportServiceServer::new(services.import))
         .serve_with_shutdown(addr, combined_shutdown)
         .await
         .context("gRPC server terminated with error")?;
@@ -146,6 +148,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 struct DaemonServices {
     node: NodeServiceImpl,
     agent_session: AgentSessionHandler,
+    import: ImportServiceImpl,
 }
 
 /// Open the database and assemble every gRPC service implementation the
@@ -182,12 +185,15 @@ async fn build_services(db_path: &std::path::Path) -> Result<DaemonServices> {
     // wrapping in `Arc` keeps the manager itself a single instance so all
     // sessions live in one map.
     let manager = Arc::new(PtySessionManager::new());
-    let assembler = Arc::new(GraphContextAssembler::new(node_service, embedding_service));
+    let assembler = Arc::new(GraphContextAssembler::new(node_service.clone(), embedding_service));
     let agent_session = AgentSessionHandler::new(manager, assembler);
+
+    let import = ImportServiceImpl::new(node_service);
 
     Ok(DaemonServices {
         node,
         agent_session,
+        import,
     })
 }
 

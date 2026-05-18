@@ -20,11 +20,11 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 nodespace-core = { workspace = true }
 nodespace-agent = { workspace = true }
-uuid = { workspace = true }
 
 # System tray (ADR-031): the daemon owns the tray icon, not the Tauri app.
 # tray-icon ships an event loop via `tao`; we run it on the main thread on
