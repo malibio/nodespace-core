@@ -4,7 +4,8 @@
 //! tonic instead of calling `packages/core` directly. This module:
 //!
 //!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, `EmbeddingsServiceImpl`,
-//!      `SettingsServiceImpl`, and `AgentSessionHandler` from `nodespace-daemon` on a localhost port.
+//!      `SettingsServiceImpl`, `AgentSessionHandler`, and `LocalAgentServiceImpl`
+//!      from `nodespace-daemon` on a localhost port.
 //!   2. Connects clients to that endpoint and stashes the `Channel`
 //!      so commands can clone the client cheaply.
 //!
@@ -22,7 +23,8 @@ use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeSer
 use nodespace_daemon::{
     AgentSessionHandler, AgentSessionServiceClient, AgentSessionServiceServer,
     EmbeddingsServiceClient, EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceClient,
-    ImportServiceImpl, ImportServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
+    ImportServiceImpl, ImportServiceServer, LocalAgentServiceClient, LocalAgentServiceImpl,
+    LocalAgentServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
     SettingsServiceClient, SettingsServiceImpl, SettingsServiceServer,
 };
 use tokio::net::TcpListener;
@@ -47,6 +49,7 @@ struct GrpcClientInner {
     settings: SettingsServiceClient<Channel>,
     embeddings: Option<EmbeddingsServiceClient<Channel>>,
     agent_session: AgentSessionServiceClient<Channel>,
+    local_agent: LocalAgentServiceClient<Channel>,
 }
 
 /// Managed Tauri state wrapping the gRPC clients.
@@ -110,13 +113,15 @@ impl GrpcClient {
             embedding_service.clone(),
         ));
         let agent_session_impl = AgentSessionHandler::new(pty_manager, assembler);
+        let local_agent_impl = LocalAgentServiceImpl::new(node_service.clone());
 
         tokio::spawn(async move {
             let builder = Server::builder()
                 .add_service(NodeServiceServer::new(node_service_impl))
                 .add_service(ImportServiceServer::new(import_impl))
                 .add_service(SettingsServiceServer::new(settings_impl))
-                .add_service(AgentSessionServiceServer::new(agent_session_impl));
+                .add_service(AgentSessionServiceServer::new(agent_session_impl))
+                .add_service(LocalAgentServiceServer::new(local_agent_impl));
             let result = if let Some(emb) = embeddings_impl {
                 builder
                     .add_service(EmbeddingsServiceServer::new(emb))
@@ -149,7 +154,8 @@ impl GrpcClient {
             import: ImportServiceClient::new(channel.clone()),
             settings: SettingsServiceClient::new(channel.clone()),
             embeddings: embeddings_client,
-            agent_session: AgentSessionServiceClient::new(channel),
+            agent_session: AgentSessionServiceClient::new(channel.clone()),
+            local_agent: LocalAgentServiceClient::new(channel),
         })
     }
 
@@ -176,6 +182,11 @@ impl GrpcClient {
     /// Borrow a clone of the `AgentSessionServiceClient`.
     pub async fn agent_session_client(&self) -> AgentSessionServiceClient<Channel> {
         self.inner.read().await.agent_session.clone()
+    }
+
+    /// Borrow a clone of the `LocalAgentServiceClient`.
+    pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
+        self.inner.read().await.local_agent.clone()
     }
 }
 

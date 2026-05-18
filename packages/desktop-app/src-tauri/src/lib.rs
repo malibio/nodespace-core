@@ -315,18 +315,13 @@ pub fn run() {
             // Services are populated later via commands/db.rs::init_services()
             app.manage(app_services::AppServices::new());
 
-            // Register agent services as independent managed state (Issue #1008)
-            // These live OUTSIDE AppServices and obtain NodeService/NodeEmbeddingService
-            // per-operation from AppServices.
+            // CompositeModelManager for chat_models commands (Issue #1058).
+            // Routes between GGUF and Ollama models in the Tauri process.
             {
-                use crate::commands::local_agent::ManagedAgentState;
-                use nodespace_agent::acp::registry::SystemAgentRegistry;
                 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
                 use nodespace_agent::local_agent::model_manager::GgufModelManager;
                 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
 
-                // Composite model manager: routes between built-in GGUF models
-                // and Ollama-served models based on the "ollama:" prefix convention.
                 let gguf = std::sync::Arc::new(GgufModelManager::new().unwrap_or_else(|e| {
                     tracing::error!("Failed to initialize GGUF model manager: {e}");
                     panic!("GgufModelManager initialization failed: {e}");
@@ -335,21 +330,15 @@ pub fn run() {
                 let model_manager: std::sync::Arc<CompositeModelManager> =
                     std::sync::Arc::new(CompositeModelManager::new(gguf, ollama));
                 app.manage(model_manager);
+            }
 
-                // Local agent state: wraps LocalAgentService with a no-op engine
-                // initially. The real engine is injected when a model is loaded.
-                // Stored as Arc so it can be cloned and sent to dedicated OS threads
-                // during graceful shutdown (see release_gpu_resources).
-                let app_services = app.state::<app_services::AppServices>().inner().clone();
-                app.manage(std::sync::Arc::new(ManagedAgentState::new(app_services)));
-
-                // PTY-based agent registry (ADR-032). Catalogs known external agents
-                // (Claude Code, Codex, Gemini CLI, Pi, OpenCode) for PTY-spawned sessions.
+            // PTY-based agent registry (ADR-032). Catalogs known external agents
+            // (Claude Code, Codex, Gemini CLI, Pi, OpenCode) for PTY-spawned sessions.
+            {
+                use nodespace_agent::acp::registry::SystemAgentRegistry;
                 let registry: std::sync::Arc<SystemAgentRegistry> =
                     std::sync::Arc::new(SystemAgentRegistry::new());
                 app.manage(registry);
-
-                tracing::info!("Agent services registered as independent managed state");
             }
 
             // Streaming task registry for PTY session cancellation (Issue #1120)
@@ -466,6 +455,7 @@ pub fn run() {
             commands::local_agent::local_agent_end_session,
             commands::local_agent::local_agent_get_sessions,
             commands::local_agent::ensure_model_ready,
+            commands::local_agent::list_local_models,
             // Chat model management commands (Issue #1008)
             commands::chat_models::chat_model_list,
             commands::chat_models::chat_model_recommended,
@@ -548,16 +538,13 @@ pub(crate) fn graceful_shutdown(app_handle: &tauri::AppHandle) {
 
 /// Release GPU resources (Metal context and backend) to prevent SIGABRT crash on exit.
 ///
-/// Proper cleanup sequence to avoid use-after-free Metal crashes:
-/// 1. Reset ManagedAgentState engine to NoOp (drops ChatEngine Arc)
-/// 2. Unload chat model via CompositeModelManager (GGUF or Ollama)
-/// 3. Release embedding GPU resources
-/// 4. Release global llama backend
+/// Unloads the GGUF/Ollama chat model managed by `CompositeModelManager`, then
+/// releases the global llama backend. Embedding GPU contexts are owned by the
+/// in-process gRPC server and released when the tokio runtime shuts down.
 ///
 /// Runs on a dedicated thread because `graceful_shutdown()` may be called from
 /// within the Tokio runtime (Tauri run-event handler), where `block_on` would panic.
 pub(crate) fn release_gpu_resources(app_handle: &tauri::AppHandle) {
-    use crate::commands::local_agent::ManagedAgentState;
     use nodespace_agent::agent_types::ModelManager;
     use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
     use std::sync::Arc;
@@ -565,28 +552,8 @@ pub(crate) fn release_gpu_resources(app_handle: &tauri::AppHandle) {
 
     tracing::debug!("Shutdown: starting GPU resource release sequence");
 
-    // Step 1: Reset ManagedAgentState engine to NoOp
-    // This drops any Arc references to ChatEngine before we tear down the backend.
-    // MUST happen before release_llama_backend() (Step 3).
-    //
-    // Spawn a dedicated OS thread to avoid "cannot start a runtime from within a
-    // runtime" panic: graceful_shutdown() is called from the Tauri run-event handler
-    // which already runs inside the Tokio runtime, so creating a new runtime or
-    // calling block_on directly here would panic. A fresh thread has no runtime
-    // context, so block_on is safe.
-    if let Some(agent_state) = app_handle.try_state::<Arc<ManagedAgentState>>() {
-        tracing::info!("Shutdown: resetting inference engine to NoOp");
-        let state_arc = agent_state.inner().clone();
-        let handle = std::thread::spawn(move || {
-            tauri::async_runtime::block_on(state_arc.reset_to_noop_engine());
-        });
-        if let Err(e) = handle.join() {
-            tracing::error!("Inference engine reset thread panicked: {:?}", e);
-        }
-        tracing::info!("Shutdown: inference engine reset");
-    }
-
-    // Step 2a: Unload chat model if loaded (Issues #1008, #1058)
+    // Unload chat model if loaded (Issues #1008, #1058).
+    // Spawns a dedicated OS thread to avoid "cannot start a runtime from within a runtime" panic.
     if let Some(model_manager) = app_handle.try_state::<Arc<CompositeModelManager>>() {
         tracing::debug!("Shutdown: unloading chat model");
         let manager = model_manager.inner().clone();
@@ -604,12 +571,9 @@ pub(crate) fn release_gpu_resources(app_handle: &tauri::AppHandle) {
         }
     }
 
-    // Step 2b: Embedding GPU resources are owned by the in-process gRPC server
-    // (GrpcClient / EmbeddingsServiceImpl) and released when the tokio runtime
-    // shuts down after the Tauri window closes. No explicit release needed here.
+    // Embedding GPU resources are owned by the in-process gRPC server
+    // (GrpcClient / EmbeddingsServiceImpl) and released when the tokio runtime shuts down.
 
-    // Step 3: Release the global llama backend itself
-    // Must happen AFTER all models/contexts are dropped (steps 1-2)
     tracing::info!("Shutdown: releasing llama backend");
     nodespace_nlp_engine::release_llama_backend();
     tracing::info!("Shutdown: GPU resource release complete");
