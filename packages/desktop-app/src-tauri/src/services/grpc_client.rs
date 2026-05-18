@@ -194,8 +194,8 @@ impl GrpcClient {
     }
 
     /// Borrow a clone of the `LocalAgentServiceClient`.
-    pub async fn local_agent_client(&self) -> Option<LocalAgentServiceClient<Channel>> {
-        Some(self.inner.read().await.local_agent.clone())
+    pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
+        self.inner.read().await.local_agent.clone()
     }
 }
 

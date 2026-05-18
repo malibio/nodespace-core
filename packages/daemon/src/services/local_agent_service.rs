@@ -80,10 +80,9 @@ pub struct LocalAgentServiceImpl {
 
 impl LocalAgentServiceImpl {
     pub fn new(node_service: Arc<NodeService>) -> Self {
-        let gguf = Arc::new(GgufModelManager::new().unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "GgufModelManager failed to init; model loading disabled");
-            panic!("GgufModelManager initialization failed: {e}");
-        }));
+        let gguf = Arc::new(
+            GgufModelManager::new().expect("GgufModelManager initialization failed"),
+        );
         let ollama = Arc::new(OllamaModelManager::new());
         let model_manager = Arc::new(CompositeModelManager::new(gguf, ollama));
 
@@ -222,7 +221,12 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
                     let _ = _status;
                 },
                 move |chunk: StreamingChunk| {
-                    let _ = chunk_tx.send(Ok(streaming_chunk_to_proto(chunk)));
+                    // Filter Done — the agent loop emits it, but we send our own
+                    // done chunk below with authoritative token counts from the
+                    // turn result, avoiding a duplicate done event on the stream.
+                    if !matches!(chunk, StreamingChunk::Done { .. }) {
+                        let _ = chunk_tx.send(Ok(streaming_chunk_to_proto(chunk)));
+                    }
                 },
             )
             .await;
@@ -466,8 +470,13 @@ impl LocalAgentServiceImpl {
         }
 
         // --- GGUF path ---
-        match &model.status {
-            ModelStatus::Loaded => {
+
+        // Check in-memory active engine first: catalog `Loaded` status is
+        // persisted and may survive a daemon restart without the engine being
+        // in memory. `active_model_id` reflects the running engine.
+        {
+            let active = self.inner.active_model_id.lock().await;
+            if active.as_deref() == Some(model_id) {
                 events.push(ModelLoadProgressEvent {
                     event_type: "ready".to_string(),
                     model_id: model_id.to_string(),
@@ -477,6 +486,12 @@ impl LocalAgentServiceImpl {
                 });
                 return events;
             }
+        }
+
+        match &model.status {
+            // Catalog says loaded but engine is not active (e.g. after restart):
+            // fall through to re-load.
+            ModelStatus::Loaded | ModelStatus::Ready => {}
             ModelStatus::NotDownloaded | ModelStatus::Error { .. } => {
                 events.push(ModelLoadProgressEvent {
                     event_type: "downloading".to_string(),
@@ -506,7 +521,6 @@ impl LocalAgentServiceImpl {
                 });
                 return events;
             }
-            ModelStatus::Ready => {}
         }
 
         events.push(ModelLoadProgressEvent {
@@ -546,16 +560,6 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        if let Err(e) = self.inner.model_manager.load(model_id).await {
-            events.push(ModelLoadProgressEvent {
-                event_type: "error".to_string(),
-                model_id: model_id.to_string(),
-                error_message: Some(format!("Failed to mark model as loaded: {e}")),
-                ..Default::default()
-            });
-            return events;
-        }
-
         let model_path_str = model_path.to_string_lossy().to_string();
         let engine_result = tokio::task::spawn_blocking(move || {
             LlamaChatInferenceEngine::load(&model_path_str, family, ChatConfig::default())
@@ -583,6 +587,17 @@ impl LocalAgentServiceImpl {
                 return events;
             }
         };
+
+        // Update catalog status only after llama.cpp context is live.
+        if let Err(e) = self.inner.model_manager.load(model_id).await {
+            events.push(ModelLoadProgressEvent {
+                event_type: "error".to_string(),
+                model_id: model_id.to_string(),
+                error_message: Some(format!("Failed to mark model as loaded: {e}")),
+                ..Default::default()
+            });
+            return events;
+        }
 
         self.replace_engine(Arc::new(engine)).await;
         *self.inner.active_model_id.lock().await = Some(model_id.to_string());

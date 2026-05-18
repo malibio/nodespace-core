@@ -36,7 +36,7 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
 pub async fn local_agent_status(
     grpc: State<'_, GrpcClient>,
 ) -> Result<LocalAgentStatus, CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     let resp = client
         .get_status(GetLocalStatusRequest { session_id: None })
         .await
@@ -51,7 +51,7 @@ pub async fn local_agent_new_session(
     model_id: String,
     grpc: State<'_, GrpcClient>,
 ) -> Result<String, CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     let resp = client
         .start_session(StartLocalSessionRequest { model_id })
         .await
@@ -73,7 +73,7 @@ pub async fn local_agent_send(
     app: AppHandle,
     grpc: State<'_, GrpcClient>,
 ) -> Result<AgentTurnResult, CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     let mut stream = client
         .send_message(SendLocalMessageRequest {
             session_id: session_id.clone(),
@@ -197,7 +197,7 @@ pub async fn local_agent_cancel(
     session_id: String,
     grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     client
         .cancel_generation(CancelGenerationRequest { session_id })
         .await
@@ -211,7 +211,7 @@ pub async fn local_agent_end_session(
     session_id: String,
     grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     client
         .end_session(EndLocalSessionRequest { session_id })
         .await
@@ -224,7 +224,7 @@ pub async fn local_agent_end_session(
 pub async fn local_agent_get_sessions(
     grpc: State<'_, GrpcClient>,
 ) -> Result<Vec<AgentSession>, CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     let resp = client
         .get_sessions(GetSessionsRequest {})
         .await
@@ -285,7 +285,7 @@ pub async fn ensure_model_ready(
     app: AppHandle,
     grpc: State<'_, GrpcClient>,
 ) -> Result<bool, CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     let mut stream = client
         .ensure_model_ready(EnsureModelReadyRequest {
             model_id: model_id.clone(),
@@ -359,7 +359,7 @@ pub async fn ensure_model_ready(
 pub async fn list_local_models(
     grpc: State<'_, GrpcClient>,
 ) -> Result<Vec<ModelInfo>, CommandError> {
-    let mut client = grpc.local_agent_client().await.ok_or_else(|| grpc_err("LocalAgentService unavailable"))?;
+    let mut client = grpc.local_agent_client().await;
     let resp = client
         .list_models(ListModelsRequest {})
         .await
