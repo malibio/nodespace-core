@@ -340,13 +340,15 @@ pub fn run() {
                             .expect("Failed to create database directory");
                     }
 
-                    let model_path = commands::resolve_bundled_model_path(&app_handle)
-                        .unwrap_or_default();
+                    let model_path = commands::resolve_bundled_model_path(&app_handle);
 
-                    let config = config::AppConfig::from_preferences(&prefs, model_path)
-                        .expect("Failed to build AppConfig");
+                    let config = config::AppConfig::from_preferences(
+                        &prefs,
+                        model_path.clone().unwrap_or_default(),
+                    )
+                    .expect("Failed to build AppConfig");
 
-                    eprintln!("📂 Database path: {}", config.database_path.display());
+                    tracing::info!(db_path = %config.database_path.display(), "Database path");
 
                     let mut store = Arc::new(
                         SurrealStore::new(config.database_path.clone())
@@ -378,11 +380,11 @@ pub fn run() {
                         }
                     }
 
-                    // Tiered NLP init: failure is non-fatal.
-                    let (embedding_service, processor) = {
+                    // Tiered NLP init: skipped when model is absent, non-fatal on other errors.
+                    let (embedding_service, processor) = if let Some(mp) = model_path {
                         let result = (|| -> Result<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>), String> {
                             let embedding_config = EmbeddingConfig {
-                                model_path: Some(config.model_path.clone()),
+                                model_path: Some(mp),
                                 ..Default::default()
                             };
                             let mut nlp_engine = EmbeddingService::new(embedding_config)
@@ -410,6 +412,8 @@ pub fn run() {
                                 (None, None)
                             }
                         }
+                    } else {
+                        (None, None)
                     };
 
                     let node_service = Arc::new(node_service);
