@@ -290,12 +290,17 @@ async fn search_nodes_returns_unavailable_without_embedding_service() {
     let _ = shutdown.send(());
 }
 
+/// Per-event timeout for WatchNodes streaming tests. Generous enough to
+/// absorb a loaded CI runner but short enough to fail fast when an event is
+/// genuinely missing.
+const WATCH_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Pull the next event off a WatchNodes stream with a timeout so tests fail
 /// fast instead of hanging forever when an event is dropped.
 async fn next_event_with_timeout(
     stream: &mut tonic::Streaming<nodespace_daemon::nodespace::NodeEvent>,
 ) -> nodespace_daemon::nodespace::NodeEvent {
-    tokio::time::timeout(Duration::from_secs(5), stream.next())
+    tokio::time::timeout(WATCH_EVENT_TIMEOUT, stream.next())
         .await
         .expect("timed out waiting for WatchNodes event")
         .expect("stream ended unexpectedly")
@@ -380,7 +385,10 @@ async fn watch_nodes_receives_create_update_delete_events() {
 
     let delete_event = next_event_with_timeout(&mut stream).await;
     match delete_event.event {
-        Some(NodeEventKind::Deleted(d)) => assert_eq!(d.node_id, node_id),
+        Some(NodeEventKind::Deleted(d)) => {
+            assert_eq!(d.node_id, node_id);
+            assert_eq!(d.node_type, "text");
+        }
         other => panic!("expected Deleted event, got {:?}", other),
     }
 

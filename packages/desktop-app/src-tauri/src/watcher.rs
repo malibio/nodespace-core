@@ -172,9 +172,13 @@ fn forward(app: &AppHandle, event: nodespace_daemon::nodespace::NodeEvent) {
             }
         }
         NodeEventKind::Deleted(d) => {
+            // node_type is required to match the in-process DomainEventForwarder
+            // contract — consumers (e.g. collections sidebar) apply type-aware
+            // cleanup logic for schema/collection deletions without fetching
+            // the already-deleted node.
             let payload = NodeIdPayload {
                 id: d.node_id.clone(),
-                node_type: None,
+                node_type: Some(d.node_type),
             };
             if let Err(e) = app.emit("node:deleted", &payload) {
                 error!("Failed to emit node:deleted for {}: {e}", d.node_id);

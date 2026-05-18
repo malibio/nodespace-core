@@ -175,6 +175,11 @@ message NodeEvent {
 
 message NodeDeleted {
   string node_id = 1;
+  // node_type lets consumers apply type-aware logic (e.g. structural cleanup
+  // for schema/collection deletions) without fetching the already-deleted
+  // node. Carries the same value as DomainEvent::NodeDeleted::node_type from
+  // the core event channel.
+  string node_type = 2;
 }
 
 // ---------------------------------------------------------------------------

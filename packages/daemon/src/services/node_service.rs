@@ -300,12 +300,21 @@ impl GrpcNodeService for NodeServiceImpl {
         }
 
         let mut rx = self.node_service.subscribe_to_events();
+        // Clone the Arc so the stream owns its own handle — the stream future
+        // outlives `&self` (it is returned to tonic and polled independently),
+        // so it cannot borrow from the handler scope.
         let node_service = self.node_service.clone();
 
         let stream = async_stream::stream! {
             loop {
                 match rx.recv().await {
                     Ok(envelope) => {
+                        // Translation is serial: a slow `get_node` lookup will
+                        // delay the next `rx.recv()` and increase the risk of
+                        // `Lagged`. Acceptable because lookups are RocksDB
+                        // point-reads and lag is observable downstream. If a
+                        // future workload makes this hot, parallelize by
+                        // dispatching translations to a bounded mpsc.
                         if let Some(event) = convert_domain_event(&envelope.event, &node_service).await {
                             yield Ok(event);
                         }
@@ -427,9 +436,10 @@ async fn convert_domain_event(
                 None
             }
         },
-        DomainEvent::NodeDeleted { id, .. } => Some(NodeEvent {
+        DomainEvent::NodeDeleted { id, node_type } => Some(NodeEvent {
             event: Some(NodeEventKind::Deleted(NodeDeleted {
                 node_id: id.clone(),
+                node_type: node_type.clone(),
             })),
         }),
         DomainEvent::RelationshipCreated { .. }
