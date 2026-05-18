@@ -4,7 +4,8 @@
 //! tonic instead of calling `packages/core` directly. This module:
 //!
 //!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, `EmbeddingsServiceImpl`,
-//!      `SettingsServiceImpl`, and `AgentSessionHandler` from `nodespace-daemon` on a localhost port.
+//!      `SettingsServiceImpl`, `AgentSessionHandler`, and `LocalAgentServiceImpl`
+//!      from `nodespace-daemon` on a localhost port.
 //!   2. Connects clients to that endpoint and stashes the `Channel`
 //!      so commands can clone the client cheaply.
 //!
