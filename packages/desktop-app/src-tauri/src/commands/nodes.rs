@@ -1,20 +1,26 @@
 //! Node CRUD operation commands for Text, Task, and Date nodes
 //!
-//! As of Issue #676, all commands route through NodeService directly.
-//! NodeOperations layer has been removed - NodeService contains all business logic.
-//!
-//! As of Issue #690, SchemaService was removed. Schema validation is done
-//! via NodeService.get_schema_for_type() and SchemaNodeBehavior.
+//! As of Issue #1113, all commands proxy through the in-process gRPC server
+//! (nodespace-daemon) instead of calling `packages/core` directly.
 
-use nodespace_core::models::{self, NodeReference};
-use nodespace_core::services::CreateNodeParams;
-use nodespace_core::{Node, NodeQuery, NodeService, NodeServiceError, NodeUpdate};
+use chrono::{DateTime, Utc};
+use nodespace_core::models::{self, DeleteResult, NodeReference, TaskNodeUpdate};
+use nodespace_core::{Node, NodeQuery, NodeUpdate};
+use nodespace_daemon::nodespace::{
+    CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
+    GetChildrenRequest, GetChildrenTreeRequest, GetNodeRequest, GetSchemaDefinitionRequest,
+    MentionAutocompleteRequest, MentionTargetRequest, MoveNodeRequest, NodeData, NodeResponse,
+    OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest,
+    UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
+};
+use nodespace_daemon::NodeServiceClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
+use tonic::transport::Channel;
+use tonic::Request;
 
-use crate::app_services::AppServices;
-use crate::constants::TAURI_CLIENT_ID;
+use crate::services::GrpcClient;
 
 /// Input for creating a node - timestamps generated server-side
 #[derive(Debug, Deserialize)]
@@ -30,8 +36,7 @@ pub struct CreateNodeInput {
     #[serde(default)]
     pub insert_after_node_id: Option<String>,
     pub properties: serde_json::Value,
-    #[serde(default)]
-    pub embedding_vector: Option<Vec<u8>>,
+    // embedding_vector dropped - not in proto (Issue #1113)
 }
 
 /// Structured error type for Tauri commands
@@ -50,64 +55,95 @@ pub struct CommandError {
     pub details: Option<String>,
 }
 
-impl From<NodeServiceError> for CommandError {
-    fn from(err: NodeServiceError) -> Self {
-        // Map specific error types to appropriate codes
-        let code = match &err {
-            NodeServiceError::NodeNotFound { .. } => "NODE_NOT_FOUND",
-            NodeServiceError::VersionConflict { .. } => "VERSION_CONFLICT",
-            NodeServiceError::InvalidParent { .. } => "INVALID_PARENT",
-            NodeServiceError::CircularReference { .. } => "CIRCULAR_REFERENCE",
-            NodeServiceError::HierarchyViolation(_) => "HIERARCHY_VIOLATION",
-            _ => "NODE_SERVICE_ERROR",
-        };
-        CommandError {
-            message: format!("Node operation failed: {}", err),
-            code: code.to_string(),
-            details: Some(format!("{}", err)),
-        }
+fn status_to_command_error(status: tonic::Status) -> CommandError {
+    let code = match status.code() {
+        tonic::Code::NotFound => "NODE_NOT_FOUND",
+        tonic::Code::Aborted => "VERSION_CONFLICT",
+        tonic::Code::AlreadyExists => "COLLECTION_EXISTS",
+        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        _ => "GRPC_ERROR",
+    }
+    .to_string();
+    CommandError {
+        message: status.message().to_string(),
+        code,
+        details: Some(format!("{:?}", status.code())),
     }
 }
 
-/// Validate that node type has a schema
-///
-/// Checks if a schema exists for the given node type. This enables
-/// custom entity types while ensuring type safety.
-///
-/// As of Issue #690, validation uses NodeService.get_schema_for_type()
-/// instead of the removed SchemaService.
-///
-/// # Arguments
-/// * `node_type` - Node type string to validate
-/// * `service` - NodeService instance for schema lookups
-///
-/// # Returns
-/// * `Ok(())` if schema exists for this node type
-/// * `Err(CommandError)` if no schema found
-async fn validate_node_type(node_type: &str, service: &NodeService) -> Result<(), CommandError> {
-    // Check if schema exists for this type via NodeService
-    match service.get_schema_for_type(node_type).await {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(CommandError {
-            message: format!(
-                "No schema found for node type: {}. Create a schema first.",
-                node_type
-            ),
-            code: "SCHEMA_NOT_FOUND".to_string(),
-            details: Some(format!(
-                "Node type '{}' does not have a schema definition. \
-                 Use the schema API to create a schema before creating nodes of this type.",
-                node_type
-            )),
-        }),
-        Err(e) => Err(CommandError::from(e)),
+/// Convert proto NodeData → core Node
+pub(crate) fn proto_node_data_to_node(nd: NodeData) -> Result<Node, CommandError> {
+    let properties = serde_json::from_str::<serde_json::Value>(&nd.properties)
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let created_at = DateTime::parse_from_rfc3339(&nd.created_at)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| CommandError {
+            message: format!("Invalid created_at timestamp: {}", e),
+            code: "PARSE_ERROR".to_string(),
+            details: Some(nd.created_at.clone()),
+        })?;
+    let modified_at = DateTime::parse_from_rfc3339(&nd.modified_at)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| CommandError {
+            message: format!("Invalid modified_at timestamp: {}", e),
+            code: "PARSE_ERROR".to_string(),
+            details: Some(nd.modified_at.clone()),
+        })?;
+
+    Ok(Node {
+        id: nd.id,
+        node_type: nd.node_type,
+        content: nd.content,
+        version: nd.version,
+        created_at,
+        modified_at,
+        properties,
+        lifecycle_status: nd.lifecycle_status,
+        mentions: vec![],
+        mentioned_in: vec![],
+        title: None,
+    })
+}
+
+/// Convert proto NodeResponse → core Node
+fn proto_node_response_to_node(resp: NodeResponse) -> Result<Node, CommandError> {
+    let nd = resp.node_data.ok_or_else(|| CommandError {
+        message: "gRPC response missing node_data".to_string(),
+        code: "GRPC_ERROR".to_string(),
+        details: None,
+    })?;
+    proto_node_data_to_node(nd)
+}
+
+/// Validate that node type has a schema via gRPC GetSchemaDefinition RPC
+async fn validate_node_type(
+    node_type: &str,
+    client: &mut NodeServiceClient<Channel>,
+) -> Result<(), CommandError> {
+    match client
+        .get_schema_definition(Request::new(GetSchemaDefinitionRequest {
+            schema_id: node_type.to_string(),
+        }))
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(s)
+            if s.code() == tonic::Code::NotFound || s.code() == tonic::Code::FailedPrecondition =>
+        {
+            Err(CommandError {
+                message: format!("No schema found for node type: {}", node_type),
+                code: "SCHEMA_NOT_FOUND".to_string(),
+                details: None,
+            })
+        }
+        Err(s) => Err(status_to_command_error(s)),
     }
 }
 
 /// Convert a Node to its strongly-typed JSON representation (Issue #673)
 ///
 /// Delegates to the canonical `models::node_to_typed_value` and maps errors to CommandError.
-fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
+pub fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
     models::node_to_typed_value(node).map_err(|e| CommandError {
         message: e.clone(),
         code: "CONVERSION_ERROR".to_string(),
@@ -116,67 +152,12 @@ fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
 }
 
 /// Convert a list of Nodes to their strongly-typed JSON representations (Issue #673)
-fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, CommandError> {
+pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, CommandError> {
     models::nodes_to_typed_values(nodes).map_err(|e| CommandError {
         message: e.clone(),
         code: "CONVERSION_ERROR".to_string(),
         details: Some(e),
     })
-}
-
-/// Create a new node of any type with a registered schema
-///
-/// Routes through NodeService which contains all business logic (Issue #676).
-/// Node type must have a corresponding schema defined in the system.
-///
-/// # Arguments
-/// * `service` - NodeService instance from Tauri state
-/// * `node` - Node data to create (node_type must have a schema)
-///
-/// # Returns
-/// * `Ok(String)` - ID of the created node
-/// * `Err(CommandError)` - Error with details if creation fails
-///
-/// # Errors
-/// Returns error if:
-/// - Node type schema doesn't exist (create schema first)
-/// - Business rule validation fails (container requirements, sibling chains, etc.)
-/// - Database operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const nodeId = await invoke('create_node', {
-///   node: {
-///     node_type: 'text',
-///     content: 'Hello World',
-///     properties: {}
-///   }
-/// });
-/// ```
-#[tauri::command]
-pub async fn create_node(
-    services: State<'_, AppServices>,
-    node: CreateNodeInput,
-) -> Result<String, CommandError> {
-    let service = services.node_service().await?;
-    validate_node_type(&node.node_type, &service).await?;
-
-    // Use NodeService to create node with business rule enforcement
-    // Pass frontend-generated ID so frontend can track node before persistence completes
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .create_node_with_parent(CreateNodeParams {
-            id: Some(node.id), // Frontend provides UUID for local state tracking
-            node_type: node.node_type,
-            content: node.content,
-            parent_id: node.parent_id,
-            // root_id removed - backend auto-derives root from parent chain (Issue #533)
-            // insert_after_node_id: Sibling to insert after for correct ordering (Issue #657)
-            insert_after_node_id: node.insert_after_node_id,
-            properties: node.properties,
-        })
-        .await
-        .map_err(Into::into)
 }
 
 /// Input for creating a root node (top-level container)
@@ -203,179 +184,120 @@ pub struct SaveNodeWithParentInput {
     // before_sibling_id removed - backend uses fractional ordering on has_child edges (Issue #616)
 }
 
+/// Create a new node of any type with a registered schema
+#[tauri::command]
+pub async fn create_node(
+    client: State<'_, GrpcClient>,
+    node: CreateNodeInput,
+) -> Result<String, CommandError> {
+    let mut c = client.client();
+    validate_node_type(&node.node_type, &mut c).await?;
+
+    let properties_str = node.properties.to_string();
+    let resp = c
+        .create_node(Request::new(CreateNodeRequest {
+            id: node.id,
+            node_type: node.node_type,
+            content: node.content,
+            parent_id: node.parent_id.unwrap_or_default(),
+            insert_after_node_id: node.insert_after_node_id.unwrap_or_default(),
+            properties: properties_str,
+            collection: String::new(),
+            lifecycle_status: String::new(),
+        }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    Ok(resp.into_inner().node_id)
+}
+
 /// Create a new root node (top-level node that can contain other nodes)
-///
-/// Routes through NodeService which contains all business logic (Issue #676).
-/// Root nodes are top-level nodes that can contain other nodes (pages, topics, etc.).
-/// Node type must have a corresponding schema defined in the system.
-///
-/// # Arguments
-/// * `service` - NodeService instance from Tauri state
-/// * `input` - Root node data
-///
-/// # Returns
-/// * `Ok(String)` - ID of the created root node
-/// * `Err(CommandError)` - Error with details if creation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const nodeId = await invoke('create_root_node', {
-///   input: {
-///     content: 'Project Planning',
-///     nodeType: 'text',
-///     properties: {},
-///     mentionedBy: 'daily-note-id' // Optional: node that mentions this root
-///   }
-/// });
-/// ```
 #[tauri::command]
 pub async fn create_root_node(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     input: CreateRootNodeInput,
 ) -> Result<String, CommandError> {
-    let service = services.node_service().await?;
-    validate_node_type(&input.node_type, &service).await?;
+    let mut c = client.client();
+    validate_node_type(&input.node_type, &mut c).await?;
 
-    // Create root node with NodeService (parent_id = None means root)
-    let node_id = service
-        .with_client(TAURI_CLIENT_ID)
-        .create_node_with_parent(CreateNodeParams {
-            id: None, // Let NodeService generate ID for root nodes
+    let properties_str = input.properties.to_string();
+    let resp = c
+        .create_node(Request::new(CreateNodeRequest {
+            id: String::new(), // server generates ID for root nodes
             node_type: input.node_type,
             content: input.content,
-            parent_id: None,            // parent_id = None for root nodes
-            insert_after_node_id: None, // No sibling positioning for root nodes
-            properties: input.properties,
-        })
-        .await?;
+            parent_id: String::new(), // no parent = root
+            insert_after_node_id: String::new(),
+            properties: properties_str,
+            collection: String::new(),
+            lifecycle_status: String::new(),
+        }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let node_id = resp.into_inner().node_id;
 
     // If mentioned_by is provided, create mention relationship
     if let Some(mentioning_node_id) = input.mentioned_by {
-        service
-            .with_client(TAURI_CLIENT_ID)
-            .create_mention(&mentioning_node_id, &node_id)
-            .await?;
+        c.create_mention(Request::new(CreateMentionRequest {
+            mentioning_node_id,
+            mentioned_node_id: node_id.clone(),
+        }))
+        .await
+        .map_err(status_to_command_error)?;
     }
 
     Ok(node_id)
 }
 
 /// Create a mention relationship between two nodes
-///
-/// Records that one node mentions another in the node_mentions table.
-/// This enables backlink/references functionality.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `mentioning_node_id` - ID of the node that contains the mention
-/// * `mentioned_node_id` - ID of the node being mentioned
-///
-/// # Returns
-/// * `Ok(())` - Mention created successfully
-/// * `Err(CommandError)` - Error if either node doesn't exist or operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// await invoke('create_node_mention', {
-///   mentioningNodeId: 'daily-note-id',
-///   mentionedNodeId: 'project-planning-id'
-/// });
-/// ```
 #[tauri::command]
 pub async fn create_node_mention(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     mentioning_node_id: String,
     mentioned_node_id: String,
 ) -> Result<(), CommandError> {
-    let service = services.node_service().await?;
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .create_mention(&mentioning_node_id, &mentioned_node_id)
-        .await
-        .map_err(Into::into)
+    let mut c = client.client();
+    c.create_mention(Request::new(CreateMentionRequest {
+        mentioning_node_id,
+        mentioned_node_id,
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+    Ok(())
 }
 
 /// Get a node by ID
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `id` - Unique identifier of the node to retrieve
-///
-/// # Returns
-/// * `Ok(Some(Node))` - Node data if found
-/// * `Ok(None)` - No node exists with the given ID
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Errors
-/// Returns error if:
-/// - Database operation fails
-/// - ID format is invalid
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const node = await invoke('get_node', { id: 'node-123' });
-/// if (node) {
-///   console.log('Found node:', node.content);
-/// }
-/// ```
 #[tauri::command]
 pub async fn get_node(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     id: String,
 ) -> Result<Option<Value>, CommandError> {
-    let service = services.node_service().await?;
-    let node = service
-        .with_client(TAURI_CLIENT_ID)
-        .get_node(&id)
-        .await
-        .map_err(CommandError::from)?;
+    let mut c = client.client();
+    let resp = c
+        .get_node(Request::new(GetNodeRequest { node_id: id }))
+        .await;
 
-    match node {
-        Some(n) => Ok(Some(node_to_typed_value(n)?)),
-        None => Ok(None),
+    match resp {
+        Ok(r) => {
+            let node = proto_node_response_to_node(r.into_inner())?;
+            Ok(Some(node_to_typed_value(node)?))
+        }
+        Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
+        Err(s) => Err(status_to_command_error(s)),
     }
 }
 
 /// Update an existing node
-///
-/// Routes through NodeService which contains all business logic (Issue #676).
-///
-/// # Arguments
-/// * `service` - NodeService instance from Tauri state
-/// * `id` - Unique identifier of the node to update
-/// * `version` - Expected version for optimistic concurrency control
-/// * `update` - Fields to update on the node
-///
-/// # Returns
-/// * `Ok(Node)` - Updated node with new version
-/// * `Err(CommandError)` - Error with details if update fails
-///
-/// # Errors
-/// Returns error if:
-/// - Node with given ID doesn't exist
-/// - Version conflict (concurrent modification)
-/// - Database operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// await invoke('update_node', {
-///   id: 'node-123',
-///   version: 5,
-///   update: {
-///     content: 'Updated content',
-///     properties: { priority: 1 }
-///   }
-/// });
-/// ```
 #[tauri::command]
 pub async fn update_node(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     id: String,
     version: i64,
     update: NodeUpdate,
 ) -> Result<Value, CommandError> {
-    let service = services.node_service().await?;
-    // DEBUG: Log incoming update to trace @mention persistence issue
+    let mut c = client.client();
+
     let content_preview = update.content.as_ref().map(|c| {
         if c.len() > 50 {
             format!("{}...", &c[..50])
@@ -391,15 +313,24 @@ pub async fn update_node(
         update.node_type
     );
 
-    // Use update_node for OCC-protected updates (safe by default)
-    // Returns the updated Node so frontend can refresh its local version
-    let node = service
-        .with_client(TAURI_CLIENT_ID)
-        .update_node(&id, version, update)
-        .await
-        .map_err(CommandError::from)?;
+    let req = UpdateNodeRequest {
+        node_id: id.clone(),
+        version: Some(version),
+        node_type: update.node_type.unwrap_or_default(),
+        content: update.content,
+        properties: update.properties.map(|p| p.to_string()),
+        add_to_collection: String::new(),
+        remove_from_collection: String::new(),
+        lifecycle_status: update.lifecycle_status.unwrap_or_default(),
+    };
 
-    // DEBUG: Log successful update
+    let resp = c
+        .update_node(Request::new(req))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let node = proto_node_response_to_node(resp.into_inner())?;
+
     tracing::debug!(
         "update_node: SUCCESS id={}, new_version={}",
         id,
@@ -410,646 +341,369 @@ pub async fn update_node(
 }
 
 /// Delete a node by ID with cascade deletion
-///
-/// Routes through NodeService which contains all business logic (Issue #676).
-/// Cascades delete to all child nodes recursively.
-///
-/// # Arguments
-/// * `service` - NodeService instance from Tauri state
-/// * `id` - Unique identifier of the node to delete
-/// * `version` - Expected version for optimistic concurrency control
-///
-/// # Returns
-/// * `Ok(DeleteResult)` - Deletion result (existed: true if node was deleted)
-/// * `Err(CommandError)` - Error with details if deletion fails
-///
-/// # Errors
-/// Returns error if:
-/// - Version conflict (concurrent modification)
-/// - Database operation fails
-///
-/// # Warning
-/// This operation is destructive and cannot be undone. Deletes all child nodes
-/// recursively.
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const result = await invoke('delete_node', { id: 'node-123', version: 5 });
-/// console.log(`Node existed: ${result.existed}`);
-/// ```
 #[tauri::command]
 pub async fn delete_node(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     id: String,
     version: i64,
-) -> Result<nodespace_core::models::DeleteResult, CommandError> {
-    let service = services.node_service().await?;
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .delete_node(&id, version)
+) -> Result<DeleteResult, CommandError> {
+    let mut c = client.client();
+    let resp = c
+        .delete_node(Request::new(DeleteNodeRequest {
+            node_id: id,
+            version: Some(version),
+        }))
         .await
-        .map_err(Into::into)
+        .map_err(status_to_command_error)?;
+
+    let dr = resp.into_inner();
+    Ok(DeleteResult {
+        existed: dr.existed,
+    })
 }
 
 /// Atomically move a node to a new parent with new sibling position (with OCC)
-///
-/// Performs a single database transaction that:
-/// - Validates version for optimistic concurrency control
-/// - Deletes the old parent-child edge
-/// - Updates the node's before_sibling_id field
-/// - Creates the new parent-child edge (if new parent specified)
-/// - Bumps the node version after successful move
-///
-/// This ensures database consistency without race conditions.
-///
-/// # Arguments
-/// * `service` - NodeService instance from Tauri state
-/// * `node_id` - ID of the node to move
-/// * `version` - Expected version for OCC (prevents concurrent modification conflicts)
-/// * `new_parent_id` - New parent (None = root node)
-/// * `insert_after_node_id` - New position in sibling chain
-///
-/// # Returns
-/// * `Ok(Node)` - Updated node with new version (critical for frontend to sync local state)
-/// * `Err(CommandError)` - Error if move validation fails or version conflict
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const updatedNode = await invoke('move_node', {
-///   nodeId: 'node-123',
-///   version: 5,
-///   newParentId: 'parent-456',
-///   insertAfterNodeId: 'node-789'
-/// });
-/// // Frontend syncs local version from updatedNode.version
-/// ```
 #[tauri::command]
 pub async fn move_node(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     node_id: String,
     version: i64,
     new_parent_id: Option<String>,
     insert_after_node_id: Option<String>,
 ) -> Result<Value, CommandError> {
-    let service = services.node_service().await?;
-    let node = service
-        .with_client(TAURI_CLIENT_ID)
-        .move_node(
-            &node_id,
+    let mut c = client.client();
+    let resp = c
+        .move_node(Request::new(MoveNodeRequest {
+            node_id,
             version,
-            new_parent_id.as_deref(),
-            insert_after_node_id.as_deref(),
-        )
+            new_parent_id: new_parent_id.unwrap_or_default(),
+            insert_after_node_id: insert_after_node_id.unwrap_or_default(),
+        }))
         .await
-        .map_err(CommandError::from)?;
+        .map_err(status_to_command_error)?;
 
+    let node = proto_node_response_to_node(resp.into_inner())?;
     node_to_typed_value(node)
 }
 
 /// Reorder a node by changing its sibling position
-///
-/// Routes through NodeService which contains all business logic (Issue #676).
-///
-/// # Arguments
-/// * `service` - NodeService instance from Tauri state
-/// * `node_id` - ID of the node to reorder
-/// * `version` - Expected version for optimistic concurrency control
-/// * `insert_after_node_id` - Optional ID of sibling to place after (None = first position)
-///
-/// # Returns
-/// * `Ok(())` - Node reordered successfully
-/// * `Err(CommandError)` - Error if reorder validation fails
-///
-/// # Errors
-/// Returns error if:
-/// - Node doesn't exist
-/// - Version conflict (concurrent modification)
-/// - Sibling doesn't exist
-/// - Root node cannot be reordered
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// await invoke('reorder_node', { nodeId: 'node-123', version: 5, insertAfterNodeId: 'sibling-456' });
-/// ```
 #[tauri::command]
 pub async fn reorder_node(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     node_id: String,
     version: i64,
     insert_after_node_id: Option<String>,
 ) -> Result<(), CommandError> {
-    let service = services.node_service().await?;
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .reorder_node(&node_id, version, insert_after_node_id.as_deref())
-        .await
-        .map_err(Into::into)
+    let mut c = client.client();
+    c.reorder_node(Request::new(ReorderNodeRequest {
+        node_id,
+        version,
+        insert_after_node_id: insert_after_node_id.unwrap_or_default(),
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+    Ok(())
 }
 
 /// Get child nodes of a parent node
-///
-/// Retrieves all nodes that have the specified node as their parent,
-/// supporting hierarchical organization of nodes.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `parent_id` - ID of the parent node
-///
-/// # Returns
-/// * `Ok(Vec<Node>)` - List of child nodes (empty vec if no children)
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Errors
-/// Returns error if:
-/// - Database operation fails
-/// - Parent ID format is invalid
-///
-/// # Notes
-/// - Returns empty vec if parent has no children
-/// - Returns empty vec if parent node doesn't exist (not an error)
-/// - Order of returned nodes is not guaranteed
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const children = await invoke('get_children', {
-///   parent_id: 'parent-node-123'
-/// });
-/// console.log(`Found ${children.length} child nodes`);
-/// ```
 #[tauri::command]
 pub async fn get_children(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     parent_id: String,
 ) -> Result<Vec<Value>, CommandError> {
-    let service = services.node_service().await?;
-    let nodes = service
-        .with_client(TAURI_CLIENT_ID)
-        .get_children(&parent_id)
+    let mut c = client.client();
+    let resp = c
+        .get_children(Request::new(GetChildrenRequest { node_id: parent_id }))
         .await
-        .map_err(CommandError::from)?;
+        .map_err(status_to_command_error)?;
 
-    nodes_to_typed_values(nodes)
+    let nodes: Result<Vec<Node>, CommandError> = resp
+        .into_inner()
+        .nodes
+        .into_iter()
+        .map(proto_node_data_to_node)
+        .collect();
+
+    nodes_to_typed_values(nodes?)
 }
 
 /// Get a node with its entire subtree as a nested tree structure
-///
-/// Returns a single parent node with all its descendants recursively nested as a tree.
-/// This optimization eliminates the need for frontend tree reconstruction by fetching
-/// the entire subtree in a single database query using SurrealDB's recursive FETCH.
-///
-/// # Performance
-/// - Single recursive query to database
-/// - Eliminates O(n) tree reconstruction on frontend
-/// - Much faster than fetching flat children array + edges + reconstructing
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `parent_id` - ID of the root node to fetch with its entire subtree
-///
-/// # Returns
-/// * `Ok(NodeWithChildren)` - Root node with complete nested tree structure
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const tree = await invoke('get_children_tree', {
-///   parent_id: 'my-root-id'
-/// });
-/// // tree has structure:
-/// // {
-/// //   id: 'my-root-id',
-/// //   nodeType: 'text',
-/// //   content: 'Root',
-/// //   children: [
-/// //     { id: 'child-1', content: '...', children: [...] },
-/// //     { id: 'child-2', content: '...', children: [...] }
-/// //   ]
-/// // }
-/// ```
 #[tauri::command]
 pub async fn get_children_tree(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     parent_id: String,
 ) -> Result<serde_json::Value, CommandError> {
-    let service = services.node_service().await?;
-    service
-        .get_children_tree(&parent_id)
+    let mut c = client.client();
+    let resp = c
+        .get_children_tree(Request::new(GetChildrenTreeRequest { node_id: parent_id }))
         .await
-        .map_err(Into::into)
-}
+        .map_err(status_to_command_error)?;
 
-/// Bulk fetch all nodes belonging to a root node (viewer/page)
-///
-/// This is the efficient way to load a complete document tree:
-/// - Single database query fetches all nodes with the same root
-/// - In-memory hierarchy reconstruction using parent_id and before_sibling_id
-///
-/// Phase 5 (Issue #511): Uses graph edges instead of root_id field
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `root_id` - ID of the root node (e.g., date page ID)
-///
-/// # Returns
-/// * `Ok(Vec<Node>)` - All children of this root
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const nodes = await invoke('get_nodes_by_root_id', {
-///   rootId: '2025-10-05'
-/// });
-/// console.log(`Loaded ${nodes.length} nodes for this date`);
-/// ```
-#[tauri::command]
-pub async fn get_nodes_by_root_id(
-    services: State<'_, AppServices>,
-    root_id: String,
-) -> Result<Vec<Value>, CommandError> {
-    let service = services.node_service().await?;
-    // Phase 5 (Issue #511): Redirect to get_children (graph-native)
-    let nodes = service
-        .with_client(TAURI_CLIENT_ID)
-        .get_children(&root_id)
-        .await
-        .map_err(CommandError::from)?;
-
-    nodes_to_typed_values(nodes)
-}
-
-/// Query nodes with flexible filtering
-///
-/// Supports queries by:
-/// - ID (exact match)
-/// - mentioned_by (finds nodes that mention the specified node ID)
-/// - content_contains (case-insensitive substring search)
-/// - node_type (filter by type)
-/// - limit (maximum results to return)
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `query` - Query parameters (all fields optional)
-///
-/// # Returns
-/// * `Ok(Vec<Node>)` - Matching nodes (empty if no matches)
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Query Priority
-/// The query uses priority-based selection - first matching field determines query type:
-/// 1. ID query (exact match, returns 0 or 1 result)
-/// 2. mentioned_by query (finds backlinks)
-/// 3. content_contains query (can be combined with node_type)
-/// 4. node_type query (type filter only)
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// // Find nodes that mention a specific node (backlinks)
-/// const backlinks = await invoke('query_nodes_simple', {
-///   query: { mentionedBy: 'node-123', limit: 50 }
-/// });
-///
-/// // Search by content
-/// const results = await invoke('query_nodes_simple', {
-///   query: { contentContains: 'project', nodeType: 'text' }
-/// });
-///
-/// // Get specific node
-/// const node = await invoke('query_nodes_simple', {
-///   query: { id: 'node-123' }
-/// });
-/// ```
-#[tauri::command]
-pub async fn query_nodes_simple(
-    services: State<'_, AppServices>,
-    query: NodeQuery,
-) -> Result<Vec<Value>, CommandError> {
-    let service = services.node_service().await?;
-    let nodes = service
-        .with_client(TAURI_CLIENT_ID)
-        .query_nodes_simple(query)
-        .await
-        .map_err(CommandError::from)?;
-
-    nodes_to_typed_values(nodes)
-}
-
-/// Mention autocomplete query - specialized endpoint for @mention feature
-///
-/// Provides optimized autocomplete suggestions for @mention syntax.
-/// Designed to evolve with ranking, scoring, and relevance features.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `query` - Search query string
-/// * `limit` - Maximum number of results (default: 10)
-///
-/// # Returns
-/// * `Ok(Vec<Value>)` - Array of typed node values
-/// * `Err(CommandError)` - Error if query fails
-///
-/// # Filter Behavior (applied at database level)
-/// - Excludes: date, schema node types (always)
-/// - Text-based types (text, header, code-block, etc.): only root nodes
-/// - Other types (task, query, etc.): included regardless of hierarchy
-/// - Search: Case-insensitive content matching
-///
-/// # Future Enhancements
-/// - Relevance scoring (recency, frequency, proximity)
-/// - Context-aware ranking
-/// - User preference learning
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const results = await invoke('mention_autocomplete', {
-///   query: 'project',
-///   limit: 10
-/// });
-/// ```
-#[tauri::command]
-pub async fn mention_autocomplete(
-    services: State<'_, AppServices>,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<Value>, CommandError> {
-    let service = services.node_service().await?;
-    let nodes = service
-        .mention_autocomplete(&query, limit)
-        .await
-        .map_err(CommandError::from)?;
-
-    nodes_to_typed_values(nodes)
-}
-
-/// Save a node with automatic parent creation - unified upsert operation
-///
-/// Ensures the parent node exists (creates if needed), then upserts the node.
-/// All operations happen in a single database transaction to prevent locking issues.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `input` - SaveNodeWithParentInput containing node data
-///
-/// # Returns
-/// * `Ok(())` - Save successful
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Errors
-/// Returns error if:
-/// - Node type schema doesn't exist
-/// - Database operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// await invoke('save_node_with_parent', {
-///   nodeId: 'node-123',
-///   content: 'Updated content',
-///   nodeType: 'text',
-///   parentId: '2025-10-05',
-///   rootId: '2025-10-05',
-///   beforeSiblingId: null
-/// });
-/// ```
-///
-/// # Architecture Note: NodeOperations Bypass
-///
-/// ⚠️ **IMPORTANT**: This command uses `NodeService` directly instead of `NodeOperations`.
-///
-/// **Why the bypass?**
-/// - This is a specialized **transactional upsert** that combines "ensure parent exists" + "upsert node"
-/// - The transaction must complete atomically to prevent database locking issues during auto-save
-/// - NodeOperations enforces business rules but doesn't support transactional parent creation yet
-///
-/// **Safety measures:**
-/// - Still validates node type via `validate_node_type()`
-/// - Limited to specific auto-save use case (frontend debounced typing)
-/// - All other node operations (`create_node`, `update_node`, `move_node`, `reorder_node`) use NodeOperations
-///
-/// **Future improvement**: Consider adding `NodeOperations::upsert_node_with_parent()` method
-/// to enforce business rules within the transaction semantics (tracked in follow-up issue).
-#[tauri::command]
-pub async fn save_node_with_parent(
-    services: State<'_, AppServices>,
-    input: SaveNodeWithParentInput,
-) -> Result<(), CommandError> {
-    let service = services.node_service().await?;
-    validate_node_type(&input.node_type, &service).await?;
-
-    // Use single-transaction upsert method (bypasses NodeOperations for transactional reasons)
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .upsert_node_with_parent(
-            &input.node_id,
-            &input.content,
-            &input.node_type,
-            &input.parent_id,
-            &input.root_id,
-            None, // before_sibling_id removed - backend uses fractional ordering (Issue #616)
-        )
-        .await
-        .map_err(Into::into)
-}
-
-/// Get outgoing mentions (nodes that this node mentions)
-///
-/// Retrieves all nodes that are mentioned in this node's content.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `node_id` - ID of the node to query
-///
-/// # Returns
-/// * `Ok(Vec<String>)` - List of mentioned node IDs (empty if no mentions)
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const mentions = await invoke('get_outgoing_mentions', {
-///   nodeId: 'node-123'
-/// });
-/// ```
-#[tauri::command]
-pub async fn get_outgoing_mentions(
-    services: State<'_, AppServices>,
-    node_id: String,
-) -> Result<Vec<String>, CommandError> {
-    let service = services.node_service().await?;
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .get_mentions(&node_id)
-        .await
-        .map_err(Into::into)
-}
-
-/// Get incoming mentions (nodes that mention this node - BACKLINKS)
-///
-/// Retrieves all nodes that mention this node in their content.
-/// This enables bidirectional linking and backlink discovery.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `node_id` - ID of the node to query for backlinks
-///
-/// # Returns
-/// * `Ok(Vec<String>)` - List of node IDs that mention this node (empty if no backlinks)
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const backlinks = await invoke('get_incoming_mentions', {
-///   nodeId: 'node-123'
-/// });
-/// ```
-#[tauri::command]
-pub async fn get_incoming_mentions(
-    services: State<'_, AppServices>,
-    node_id: String,
-) -> Result<Vec<String>, CommandError> {
-    let service = services.node_service().await?;
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .get_mentioned_by(&node_id)
-        .await
-        .map_err(Into::into)
-}
-
-/// Get root nodes of nodes that mention the target node (backlinks at root level)
-///
-/// This resolves incoming mentions to their root nodes and deduplicates.
-///
-/// Unlike `get_incoming_mentions` which returns individual mentioning nodes,
-/// this resolves to their root nodes and deduplicates automatically.
-///
-/// # Root Resolution Logic
-/// - For task and ai-chat nodes: Returns the node's own ID (they are their own roots)
-/// - For other nodes: Returns their root node ID (or the node ID itself if it's a root)
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `node_id` - ID of the node to find backlinks for
-///
-/// # Returns
-/// * `Ok(Vec<String>)` - List of unique root node IDs (empty if no backlinks)
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Example
-/// If nodes A and B (both children of Root X) mention target node,
-/// returns `[{ id: 'root-x-id', title: '...', nodeType: 'text' }]` instead of just IDs
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// const containers = await invoke('get_mentioning_roots', {
-///   nodeId: 'node-123'
-/// });
-/// // containers: Array<{ id: string, title: string | null, nodeType: string }>
-/// ```
-#[tauri::command]
-pub async fn get_mentioning_roots(
-    services: State<'_, AppServices>,
-    node_id: String,
-) -> Result<Vec<NodeReference>, CommandError> {
-    let service = services.node_service().await?;
-    service
-        .get_mentioning_containers(&node_id)
-        .await
-        .map_err(Into::into)
-}
-
-/// Update a task node with type-safe property updates
-///
-/// Provides end-to-end type safety for task updates by routing through
-/// the type-specific update path that directly modifies task node properties.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `id` - Unique identifier of the task node to update
-/// * `version` - Expected version for optimistic concurrency control
-/// * `update` - TaskNodeUpdate with fields to update (status, priority, dueDate, assignee, content)
-///
-/// # Returns
-/// * `Ok(TaskNode)` - Updated task node with new version
-/// * `Err(CommandError)` - Error with details if update fails
-///
-/// # Errors
-/// Returns error if:
-/// - Task node with given ID doesn't exist
-/// - Version conflict (concurrent modification)
-/// - Update payload is empty (no fields to update)
-/// - Database operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// import type { TaskNodeUpdate, TaskStatus } from '$lib/types';
-///
-/// const update: TaskNodeUpdate = { status: 'in_progress' };
-/// const task = await invoke('update_task_node', {
-///   id: 'task-123',
-///   version: 5,
-///   update
-/// });
-/// console.log(`Updated task status: ${task.status}, new version: ${task.version}`);
-/// ```
-#[tauri::command]
-pub async fn update_task_node(
-    services: State<'_, AppServices>,
-    id: String,
-    version: i64,
-    update: models::TaskNodeUpdate,
-) -> Result<Value, CommandError> {
-    let service = services.node_service().await?;
-    let task = service
-        .update_task_node(&id, version, update)
-        .await
-        .map_err(CommandError::from)?;
-
-    serde_json::to_value(task).map_err(|e| CommandError {
-        message: format!("Failed to serialize task node: {}", e),
-        code: "SERIALIZATION_ERROR".to_string(),
-        details: None,
+    let tree_json = resp.into_inner().tree_json;
+    serde_json::from_str(&tree_json).map_err(|e| CommandError {
+        message: format!("Failed to parse tree JSON: {}", e),
+        code: "PARSE_ERROR".to_string(),
+        details: Some(tree_json),
     })
 }
 
+/// Bulk fetch all nodes belonging to a root node (viewer/page)
+#[tauri::command]
+pub async fn get_nodes_by_root_id(
+    client: State<'_, GrpcClient>,
+    root_id: String,
+) -> Result<Vec<Value>, CommandError> {
+    let mut c = client.client();
+    // Phase 5 (Issue #511): Redirect to get_children (graph-native)
+    let resp = c
+        .get_children(Request::new(GetChildrenRequest { node_id: root_id }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let nodes: Result<Vec<Node>, CommandError> = resp
+        .into_inner()
+        .nodes
+        .into_iter()
+        .map(proto_node_data_to_node)
+        .collect();
+
+    nodes_to_typed_values(nodes?)
+}
+
+/// Query nodes with flexible filtering
+#[tauri::command]
+pub async fn query_nodes_simple(
+    client: State<'_, GrpcClient>,
+    query: NodeQuery,
+) -> Result<Vec<Value>, CommandError> {
+    let mut c = client.client();
+    let resp = c
+        .query_nodes_simple(Request::new(QueryNodesSimpleRequest {
+            id: query.id,
+            mentioned_by: query.mentioned_by,
+            content_contains: query.content_contains,
+            title_contains: query.title_contains,
+            node_type: query.node_type,
+            limit: query.limit.unwrap_or(0) as u32,
+            offset: query.offset.unwrap_or(0) as u32,
+        }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let nodes: Result<Vec<Node>, CommandError> = resp
+        .into_inner()
+        .nodes
+        .into_iter()
+        .map(proto_node_data_to_node)
+        .collect();
+
+    nodes_to_typed_values(nodes?)
+}
+
+/// Mention autocomplete query - specialized endpoint for @mention feature
+#[tauri::command]
+pub async fn mention_autocomplete(
+    client: State<'_, GrpcClient>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<Value>, CommandError> {
+    let mut c = client.client();
+    let resp = c
+        .mention_autocomplete(Request::new(MentionAutocompleteRequest {
+            query,
+            limit: limit.unwrap_or(0) as u32,
+        }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let nodes: Result<Vec<Node>, CommandError> = resp
+        .into_inner()
+        .nodes
+        .into_iter()
+        .map(proto_node_data_to_node)
+        .collect();
+
+    nodes_to_typed_values(nodes?)
+}
+
+/// Save a node with automatic parent creation - unified upsert operation
+#[tauri::command]
+pub async fn save_node_with_parent(
+    client: State<'_, GrpcClient>,
+    input: SaveNodeWithParentInput,
+) -> Result<(), CommandError> {
+    let mut c = client.client();
+    validate_node_type(&input.node_type, &mut c).await?;
+
+    c.upsert_node_with_parent(Request::new(UpsertNodeWithParentRequest {
+        node_id: input.node_id,
+        content: input.content,
+        node_type: input.node_type,
+        parent_id: input.parent_id,
+        root_id: input.root_id,
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+
+    Ok(())
+}
+
+/// Get outgoing mentions (nodes that this node mentions)
+#[tauri::command]
+pub async fn get_outgoing_mentions(
+    client: State<'_, GrpcClient>,
+    node_id: String,
+) -> Result<Vec<String>, CommandError> {
+    let mut c = client.client();
+    let resp = c
+        .get_outgoing_mentions(Request::new(MentionTargetRequest { node_id }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    Ok(resp.into_inner().node_ids)
+}
+
+/// Get incoming mentions (nodes that mention this node - BACKLINKS)
+#[tauri::command]
+pub async fn get_incoming_mentions(
+    client: State<'_, GrpcClient>,
+    node_id: String,
+) -> Result<Vec<String>, CommandError> {
+    let mut c = client.client();
+    let resp = c
+        .get_incoming_mentions(Request::new(MentionTargetRequest { node_id }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    Ok(resp.into_inner().node_ids)
+}
+
+/// Get root nodes of nodes that mention the target node (backlinks at root level)
+#[tauri::command]
+pub async fn get_mentioning_roots(
+    client: State<'_, GrpcClient>,
+    node_id: String,
+) -> Result<Vec<NodeReference>, CommandError> {
+    let mut c = client.client();
+    let resp = c
+        .get_mentioning_roots(Request::new(MentionTargetRequest { node_id }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let references = resp
+        .into_inner()
+        .references
+        .into_iter()
+        .map(|r| NodeReference {
+            id: r.id,
+            title: r.title,
+            node_type: r.node_type,
+        })
+        .collect();
+
+    Ok(references)
+}
+
+/// Build UpdateTaskNodeRequest from TaskNodeUpdate
+fn task_update_to_proto(id: &str, version: i64, update: TaskNodeUpdate) -> UpdateTaskNodeRequest {
+    UpdateTaskNodeRequest {
+        node_id: id.to_string(),
+        version,
+        status: update.status.map(|s| s.as_str().to_string()),
+        priority: update.priority.map(|opt| match opt {
+            None => OptionalStringClear {
+                clear: true,
+                value: String::new(),
+            },
+            Some(p) => OptionalStringClear {
+                clear: false,
+                value: p.as_str().to_string(),
+            },
+        }),
+        due_date: update.due_date.map(|opt| match opt {
+            None => OptionalTimestampClear {
+                clear: true,
+                value: String::new(),
+            },
+            Some(dt) => OptionalTimestampClear {
+                clear: false,
+                value: dt.to_rfc3339(),
+            },
+        }),
+        assignee: update.assignee.map(|opt| match opt {
+            None => OptionalStringClear {
+                clear: true,
+                value: String::new(),
+            },
+            Some(a) => OptionalStringClear {
+                clear: false,
+                value: a,
+            },
+        }),
+        started_at: update.started_at.map(|opt| match opt {
+            None => OptionalTimestampClear {
+                clear: true,
+                value: String::new(),
+            },
+            Some(dt) => OptionalTimestampClear {
+                clear: false,
+                value: dt.to_rfc3339(),
+            },
+        }),
+        completed_at: update.completed_at.map(|opt| match opt {
+            None => OptionalTimestampClear {
+                clear: true,
+                value: String::new(),
+            },
+            Some(dt) => OptionalTimestampClear {
+                clear: false,
+                value: dt.to_rfc3339(),
+            },
+        }),
+        content: update.content,
+        properties: None,
+    }
+}
+
+/// Update a task node with type-safe property updates
+#[tauri::command]
+pub async fn update_task_node(
+    client: State<'_, GrpcClient>,
+    id: String,
+    version: i64,
+    update: TaskNodeUpdate,
+) -> Result<Value, CommandError> {
+    let mut c = client.client();
+    let req = task_update_to_proto(&id, version, update);
+    let resp = c
+        .update_task_node(Request::new(req))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let node = proto_node_response_to_node(resp.into_inner())?;
+    node_to_typed_value(node)
+}
+
 /// Delete a mention relationship between two nodes
-///
-/// Removes the record that one node mentions another.
-/// This is called when mentions are removed from node content.
-///
-/// # Arguments
-/// * `service` - Node service instance from Tauri state
-/// * `mentioning_node_id` - ID of the node that contains the mention
-/// * `mentioned_node_id` - ID of the node being mentioned
-///
-/// # Returns
-/// * `Ok(())` - Mention deleted successfully
-/// * `Err(CommandError)` - Error with details if operation fails
-///
-/// # Example Frontend Usage
-/// ```typescript
-/// await invoke('delete_node_mention', {
-///   mentioningNodeId: 'node-123',
-///   mentionedNodeId: 'node-456'
-/// });
-/// ```
 #[tauri::command]
 pub async fn delete_node_mention(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     mentioning_node_id: String,
     mentioned_node_id: String,
 ) -> Result<(), CommandError> {
-    let service = services.node_service().await?;
-    service
-        .with_client(TAURI_CLIENT_ID)
-        .remove_mention(&mentioning_node_id, &mentioned_node_id)
-        .await
-        .map_err(Into::into)
+    let mut c = client.client();
+    c.delete_mention(Request::new(DeleteMentionRequest {
+        mentioning_node_id,
+        mentioned_node_id,
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Note: Integration tests for schema-based validation are in the integration test suite
-    // since they require database setup.
-    // Unit tests here focus on command error serialization.
 
     #[test]
     fn test_command_error_serialization() {

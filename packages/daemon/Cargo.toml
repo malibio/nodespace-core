@@ -21,6 +21,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 nodespace-core = { workspace = true }
 
 # System tray (ADR-031): the daemon owns the tray icon, not the Tauri app.
