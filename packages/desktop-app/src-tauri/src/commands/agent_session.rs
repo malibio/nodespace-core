@@ -130,6 +130,7 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
     let code = match status.code() {
         tonic::Code::NotFound => "SESSION_NOT_FOUND",
         tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        tonic::Code::FailedPrecondition => "AGENT_NOT_READY",
         _ => "GRPC_ERROR",
     }
     .to_string();

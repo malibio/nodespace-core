@@ -73,9 +73,17 @@ impl AgentSessionService for AgentSessionHandler {
         // The UI calls CheckAgentAvailability before showing the Launch button,
         // but the RPC guard ensures the daemon never spawns a doomed process
         // even if the UI check is skipped or stale.
-        let availability = detect_all_agents()
-            .into_iter()
-            .find(|a| a.agent_type == agent_type);
+        //
+        // detect_all_agents() spawns /usr/libexec/path_helper via
+        // std::process::Command on macOS — a blocking call that must not run
+        // on a Tokio executor thread.
+        let availability = tokio::task::spawn_blocking(move || {
+            detect_all_agents()
+                .into_iter()
+                .find(|a| a.agent_type == agent_type)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("agent detection task panicked: {e}")))?;
         if let Some(av) = availability {
             if !av.binary_found || !av.auth_found {
                 let reason = match (av.binary_found, av.auth_found) {
@@ -359,7 +367,12 @@ impl AgentSessionService for AgentSessionHandler {
         &self,
         _request: Request<CheckAvailabilityRequest>,
     ) -> Result<Response<CheckAvailabilityResponse>, Status> {
-        let results = detect_all_agents();
+        // detect_all_agents() spawns /usr/libexec/path_helper via
+        // std::process::Command on macOS — a blocking call that must not run
+        // on a Tokio executor thread.
+        let results = tokio::task::spawn_blocking(detect_all_agents)
+            .await
+            .map_err(|e| Status::internal(format!("agent detection task panicked: {e}")))?;
         let agents: Vec<AgentAvailability> = results
             .into_iter()
             .map(|av| AgentAvailability {

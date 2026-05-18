@@ -52,7 +52,8 @@ pub fn detect_all_agents() -> Vec<AgentAvailability> {
 // ---------------------------------------------------------------------------
 
 fn detect_one(agent_type: AgentType, binary: &'static str, path: &OsString) -> AgentAvailability {
-    let binary_path = which::which_in(binary, Some(path), ".").ok();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let binary_path = which::which_in(binary, Some(path), &cwd).ok();
     let binary_found = binary_path.is_some();
     let auth_found = check_auth(agent_type);
     let install_hint = if binary_found {
@@ -186,10 +187,18 @@ fn path_helper_output() -> Option<OsString> {
         return None;
     }
     let stdout = String::from_utf8(output.stdout).ok()?;
-    // Extract the value between the first pair of double-quotes.
-    let start = stdout.find('"')? + 1;
-    let end = stdout[start..].find('"')? + start;
-    Some(OsString::from(&stdout[start..end]))
+    // Find the PATH= line and extract the quoted value defensively using
+    // strip_prefix/strip_suffix rather than positional find('"') so that
+    // unexpected whitespace or ordering doesn't silently yield a wrong path.
+    let path_line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with("PATH="))?;
+    let after_prefix = path_line.trim_start().strip_prefix("PATH=\"")?;
+    // Accept either `"…"; export PATH;` or a bare closing quote.
+    let value = after_prefix
+        .strip_suffix("\"; export PATH;")
+        .or_else(|| after_prefix.strip_suffix('"'))?;
+    Some(OsString::from(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +212,7 @@ mod tests {
     #[test]
     fn detect_all_returns_five_entries() {
         let results = detect_all_agents();
-        assert_eq!(results.len(), 5);
+        assert_eq!(results.len(), AGENT_CATALOG.len());
     }
 
     #[test]

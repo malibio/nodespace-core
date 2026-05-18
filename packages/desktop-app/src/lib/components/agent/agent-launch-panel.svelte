@@ -88,6 +88,7 @@
     return availability[selectedAgent];
   }
 
+
   function agentStatus(agentId: string): AgentStatus {
     const av = availability[agentId];
     if (!av) return 'unknown';
