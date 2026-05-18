@@ -48,17 +48,25 @@ NodeSpace is an AI-native knowledge management system built with Rust backend, S
 >
 > **⚠️ EXCEPTION: If continuing from a WIP commit, skip to "Continuing from WIP" section below**
 >
-> 1. **Check git status**: `git status` - commit any pending changes first
-> 2. **Pull latest changes**: `git fetch origin && git pull origin main` - ensure you're working from the latest codebase
-> 3. **Install dependencies**: `bun install` - sync node_modules after pulling (new packages may have been added)
-> 4. **Run test baseline**: `bun run test` - run frontend tests only (Rust tests require a warm cache and full disk space)
-> 5. **Document baseline**: Add comment to issue with baseline test status
+> 1. **Check git status on the primary checkout**: `git status` — commit any pending changes first
+> 2. **Pull latest `main`**: `git fetch origin && git pull origin main` — make sure the worktree branches from up-to-date code
+> 3. **Enter an isolated worktree**: `EnterWorktree({name: "issue-<number>-brief-desc"})`
+>    - Creates `.claude/worktrees/issue-<number>-brief-desc/` on a new branch of the same name, branched from the latest `origin/main`
+>    - All subsequent commands (and all implementation work) run **inside the worktree**
+>    - The primary `main` checkout stays untouched, usable for parallel work and required for the final merge step (see Implementation Workflow step 7)
+>    - **Naming**: terse, no `feature/` prefix — the branch name doubles as the worktree directory name, e.g. `issue-1122-agent-tools`
+>    - **Continuing parent-issue work on a shared branch**: enter the existing worktree with `EnterWorktree({path: ".claude/worktrees/<existing>"})` instead of creating a new one. If no worktree exists yet for the shared branch, create it first: `git worktree add .claude/worktrees/<name> <branch>` then `EnterWorktree({path: "..."})`
+> 4. **Install dependencies in the worktree**: `bun install` — syncs `node_modules` in the new checkout
+> 5. **Run test baseline (inside the worktree)**: `bun run test` — frontend tests only (Rust tests require a warm cache and full disk space)
+>    - If you hit a `Cannot find base config file "./.svelte-kit/tsconfig.json"` error, run `bunx svelte-kit sync` once from `packages/desktop-app/` to generate the synced tsconfig, then re-run
+>    - ⚠️ **WAIT for complete test output** — look for the "Test Files X passed" summary line
+>    - ⚠️ **Verify the final "Duration" line is visible** — if missing, output was truncated
+> 6. **Document baseline**: `bun run gh:comment <number> "Frontend: X passed"`
 >
->    > ⚠️ **CRITICAL: All `bun run gh:*` commands MUST be run from the repository root (`nodespace-core/`), NOT from subdirectories like `packages/desktop-app/`. The scripts are defined in the root package.json and will fail with "Script not found" if run from the wrong directory.**
+>    > ⚠️ **CRITICAL: All `bun run gh:*` commands MUST be run from the repository root of the worktree (the directory `EnterWorktree` placed you in), NOT from subdirectories like `packages/desktop-app/`. The scripts are defined in the root `package.json` and will fail with "Script not found" if run from the wrong directory.**
 >
 >    ```bash
->    # ✅ CORRECT - from repository root
->    cd /path/to/nodespace-core  # Ensure you're at repo root first!
+>    # ✅ CORRECT - from worktree root
 >    bun run gh:comment <number> "Frontend: X passed"
 >
 >    # ❌ WRONG - do NOT pipe to gh:comment (it doesn't read stdin)
@@ -68,31 +76,31 @@ NodeSpace is an AI-native knowledge management system built with Rust backend, S
 >    cd packages/desktop-app
 >    bun run gh:comment <number> "..."
 >    ```
->    - ⚠️ **WAIT for complete test output** - look for "Test Files X passed" summary line
->    - ⚠️ **Verify final "Duration" line is visible** - if missing, output was truncated
-> 6. **Determine branching strategy**: Check parent issue for specified approach (single branch vs. individual branches)
-> 7. **Create/switch to branch**: Based on strategy - either `git checkout -b feature/issue-<number>-brief-description` OR switch to existing parent issue branch
-> 8. **Assign issue**: `bun run gh:assign <number> "@me"` *(run from repo root)*
-> 9. **Update project status**: `bun run gh:status <number> "In Progress"` *(run from repo root)*
-> 10. **Select subagent**: Choose appropriate specialized agent based on task complexity and type
-> 11. **Read issue requirements**: Understand all acceptance criteria
-> 12. **Plan implementation**: Self-contained approach with appropriate subagent
+> 7. **Assign issue**: `bun run gh:assign <number> "@me"`
+> 8. **Update project status**: `bun run gh:status <number> "In Progress"`
+> 9. **Select subagent**: Choose appropriate specialized agent based on task complexity and type
+> 10. **Read issue requirements**: Understand all acceptance criteria
+> 11. **Plan implementation**: Self-contained approach with appropriate subagent
 >
 > ## 📋 CONTINUING FROM WIP COMMIT
 >
 > **If you're picking up work from a previous WIP commit, use this simplified sequence:**
 >
-> 1. **Check git status**: `git status` - verify you're on the correct branch
-> 2. **Pull latest changes**: `git fetch origin && git pull origin <branch-name>` - get latest WIP commits
-> 3. **Review WIP commit message**: Read the handoff commit to understand current state and next steps
-> 4. **Check issue comment**: Look for the baseline test status documented when work started
-> 5. **Resume implementation**: Continue from "Remaining Work" section in WIP commit message
+> 1. **Enter the existing worktree**:
+>    - If the worktree directory still exists on disk: `EnterWorktree({path: ".claude/worktrees/issue-<N>-brief-desc"})`
+>    - If it was removed (e.g., previous session ended with `ExitWorktree({action: "remove"})`): recreate it on the existing remote branch first — `git worktree add .claude/worktrees/issue-<N>-brief-desc <branch-name>` (from the primary checkout), then `EnterWorktree({path: "..."})`
+> 2. **Check git status**: `git status` — confirm you're on the right branch inside the worktree
+> 3. **Pull latest commits on the branch**: `git fetch origin && git pull origin <branch-name>` — get any pushes that landed since the WIP
+> 4. **Sync dependencies if needed**: `bun install` — only if the WIP commit mentions new packages
+> 5. **Review WIP commit message**: read the handoff commit to understand current state and next steps
+> 6. **Check issue comment**: look for the baseline test status documented when work started
+> 7. **Resume implementation**: continue from the "Remaining Work" section in the WIP commit message
 >
 > **DO NOT:**
 > - ❌ Re-run baseline tests (already done when work started)
 > - ❌ Re-assign the issue (already assigned)
 > - ❌ Re-update status to "In Progress" (already set)
-> - ❌ Create a new branch (already exists)
+> - ❌ Create a new worktree or branch (already exists)
 >
 > **Focus on:**
 > - ✅ Understanding what was completed (from WIP commit)
@@ -108,13 +116,13 @@ NodeSpace is an AI-native knowledge management system built with Rust backend, S
 > 3. Restart implementation with proper branch and issue assignment
 > 
 > **Common mistakes agents make:**
-> - **Skipping `git pull`** - Starting work without pulling latest changes leads to merge conflicts
-> - **Skipping test baseline** - Not recording initial test status leads to regressions
-> - **Running `bun run gh:*` from wrong directory** - These scripts only work from repo root, not from `packages/desktop-app/`
-> - Reading files before creating feature branch
+> - **Skipping `git pull` on main** before EnterWorktree — the worktree branches from your stale local `main` instead of `origin/main`
+> - **Skipping test baseline** — Not recording initial test status leads to regressions
+> - **Running `bun run gh:*` from wrong directory** — These scripts only work from the worktree root, not from `packages/desktop-app/`
+> - **Reading files before EnterWorktree** — any edits would land in the wrong checkout
+> - **Skipping EnterWorktree entirely** and working directly on `main` — pollutes the primary checkout and blocks parallel work
 > - Planning implementation before assigning issue
-> - Using TodoWrite without including startup sequence as first item
-> - Skipping git checkout step entirely
+> - Using TodoWrite without including the startup sequence as the first item
 
 > 🚨 **ADDITIONAL CRITICAL REQUIREMENTS** 🚨
 > 
@@ -328,10 +336,11 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    ```
    All commands now use TypeScript API (no Claude Code approval prompts)
 
-2. **Create Feature Branch**
-   ```bash
-   git checkout -b feature/issue-<number>-brief-description
+2. **Enter an Isolated Worktree** (do this from the primary `main` checkout)
    ```
+   EnterWorktree({name: "issue-<number>-brief-desc"})
+   ```
+   Creates `.claude/worktrees/issue-<number>-brief-desc/` on a new branch of the same name, branched from `origin/main`. All implementation work happens inside this worktree.
 
 3. **Implement with Self-Contained Approach**
    - **Use mock data/services temporarily** for independent development (see development process for patterns)
@@ -420,8 +429,8 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    git add .
    git commit -m "Fix linting and formatting"
 
-   # Create PR (run from repository root)
-   git push -u origin feature/issue-<number>-brief-description
+   # Create PR (run from the worktree root)
+   git push -u origin issue-<number>-brief-desc
    bun run gh:pr <number>
    ```
    **CRITICAL**:
@@ -435,25 +444,37 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    - Use `senior-architect-reviewer` agent for complex architectural decisions
    - All quality gates and review requirements apply universally to AI agents and human reviewers
 
-7. **Merge PR and Clean Up Feature Branch**
+7. **Merge PR and Clean Up the Worktree** — order matters
+
    ```bash
-   # Merge the PR (use GitHub CLI or GitHub UI)
-   gh pr merge <number> --auto --squash
-
-   # After merge is confirmed, delete the local feature branch
-   git branch -d feature/issue-<number>-brief-description
-
-   # Switch back to main
-   git checkout main
-   git pull origin main
+   # Step 1: Verify the PR is actually mergeable (in the worktree)
+   gh pr view <PR#> --json mergeable,reviewDecision,statusCheckRollup
    ```
-   **NOTE**: Remote branch is automatically deleted by GitHub's branch auto-delete setting. Only local cleanup is needed.
+
+   ```
+   # Step 2: Exit and remove the worktree BEFORE merging
+   ExitWorktree({action: "remove", discard_changes: true})
+   ```
+   `discard_changes: true` is safe here — the squash merge about to land on `main` supersedes the local branch commits.
+
+   ```bash
+   # Step 3: Merge the PR (now from the primary `main` checkout)
+   gh pr merge <PR#> --squash --delete-branch
+
+   # Step 4: Pull the squash commit and update issue status
+   git pull origin main
+   bun run gh:status <issue#> "Done"
+   ```
+
+   **Why this order matters**: `gh pr merge --delete-branch` tries to switch the local checkout off the about-to-be-deleted branch. If you're still inside the worktree, that fails with `'main' is already used by worktree at ...`. The remote merge itself still lands (GitHub merges server-side), but local cleanup fails noisily. Always `ExitWorktree` first.
+
+   **NOTE**: Remote branch deletion is handled by `--delete-branch` (or GitHub's branch auto-delete setting). No further cleanup needed.
 
 **TodoWrite Tool Users - UPDATED:**
 
 **For NEW tasks (starting fresh):**
-- Your **FIRST todo item** must be: "Complete startup sequence: git status, pull latest, run test baseline (bun run test), document baseline in issue, branch strategy, create branch, assign issue (bun run gh:assign N '@me'), update status (bun run gh:status N 'In Progress'), select subagent"
-- Your **LAST todo items** must include: "Run test:all to verify no new failures", "Run quality:fix and commit changes", and "Create PR"
+- Your **FIRST todo item** must be: "Complete startup sequence: git status + pull main on primary checkout, EnterWorktree({name: 'issue-N-brief-desc'}), then inside the worktree: bun install, run test baseline (bun run test), document baseline, assign issue (bun run gh:assign N '@me'), update status (bun run gh:status N 'In Progress'), select subagent"
+- Your **LAST todo items** must include: "Run test:all to verify no new failures", "Run quality:fix and commit changes", "Create PR", and "After review: verify mergeable, ExitWorktree, gh pr merge --squash --delete-branch"
 - Do NOT break the startup sequence into separate todo items
 - Only after completing the startup sequence should you add implementation todos
 
@@ -473,10 +494,10 @@ When using plan mode (EnterPlanMode / ExitPlanMode), the context window is clear
 **Therefore, every plan MUST be self-contained and include:**
 
 1. **Startup sequence as Step 0** — The plan must begin with:
-   > Step 0: Complete startup sequence — git status, pull latest, `bun install`, run test baseline (`bun run test`), document baseline in issue (`bun run gh:comment <N> "..."`), create branch (`git checkout -b feature/issue-<N>-description`), assign issue (`bun run gh:assign <N> "@me"`), update status (`bun run gh:status <N> "In Progress"`)
+   > Step 0: Complete startup sequence — `git status` and `git pull origin main` on the primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})`, then *inside the worktree*: `bun install`, run test baseline (`bun run test`), document baseline (`bun run gh:comment <N> "..."`), `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
 
 2. **Finalization steps at the end** — The plan must end with:
-   > Final steps: Run `bun run test:all` to verify no new failures vs baseline. Run `bun run quality:fix` and commit any changes. Create PR with `bun run gh:pr <N>`.
+   > Final steps: Run `bun run test:all` to verify no new failures vs baseline. Run `bun run quality:fix` and commit any changes. Create PR with `bun run gh:pr <N>`. After review/approval: verify mergeable (`gh pr view <PR#>`), `ExitWorktree({action: "remove", discard_changes: true})`, then `gh pr merge <PR#> --squash --delete-branch` from the primary checkout.
 
 3. **Key development standards inline** — Include any relevant standards the implementation agent needs (e.g., "use `createLogger` not `console.log`", "mock Tauri invoke with `vi.mock('@tauri-apps/api/core')`", "use `bun run test` not `bun test`").
 
@@ -542,7 +563,7 @@ When using plan mode (EnterPlanMode / ExitPlanMode), the context window is clear
 - **CI/CD:** All test scripts in package.json use the correct commands
 
 **Git Workflow:**
-- Create feature branches: `feature/issue-<number>-brief-description`
+- Each implementation task gets its own isolated worktree (see startup sequence). Branch names match the worktree directory name: `issue-<number>-brief-desc` (no `feature/` prefix — the terse name doubles as both the directory and branch identifier).
 - Link commits to issues: `git commit -m "Add TextNode component (closes #4)"`
 - Include Claude Code attribution in commit messages
 
@@ -658,13 +679,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 **EVERY AGENT MUST COMPLETE THIS CHECKLIST FOR EACH TASK:**
 
 **Startup Sequence - NEW TASK (MANDATORY - Steps 1-11 from above):**
-- [ ] Checked git status and committed any pending changes
-- [ ] **Pulled latest changes** (`git fetch origin && git pull origin main`)
-- [ ] **Installed dependencies** (`bun install` - sync node_modules after pull)
-- [ ] **Recorded test baseline** (`bun run test` - frontend tests only)
+- [ ] Checked `git status` on the primary checkout and committed any pending changes
+- [ ] **Pulled latest `main`** (`git fetch origin && git pull origin main`) on the primary checkout
+- [ ] **Entered an isolated worktree** (`EnterWorktree({name: "issue-<N>-brief-desc"})`)
+- [ ] **Installed dependencies inside the worktree** (`bun install`)
+- [ ] **Recorded test baseline inside the worktree** (`bun run test` — frontend only)
 - [ ] **Documented baseline in issue** using `bun run gh:comment <N> "Frontend: X passed"` (NOT piped via echo)
-- [ ] Determined branching strategy from parent issue (single branch vs. individual branches)
-- [ ] Created/switched to appropriate branch based on strategy
 - [ ] Assigned issue to self (`bun run gh:assign <number> "@me"`)
 - [ ] Updated GitHub project status using CLI: Todo → In Progress
 - [ ] Selected appropriate subagent based on task complexity
@@ -673,10 +693,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - [ ] Planned self-contained implementation with mock dependencies
 
 **Startup Sequence - CONTINUING FROM WIP (Simplified):**
-- [ ] Checked git status - verified on correct branch
-- [ ] **Pulled latest from branch** (`git fetch origin && git pull origin <branch-name>`)
-- [ ] **Read WIP commit message** - understand completed work and remaining tasks
-- [ ] **Check issue for baseline** - reference the test baseline documented when work started
+- [ ] **Entered the existing worktree** (`EnterWorktree({path: ".claude/worktrees/issue-<N>-..."})`) — or recreated it with `git worktree add` first if the directory was removed
+- [ ] Checked git status — verified on correct branch inside the worktree
+- [ ] **Pulled latest commits on the branch** (`git fetch origin && git pull origin <branch-name>`)
+- [ ] **Read WIP commit message** — understand completed work and remaining tasks
+- [ ] **Check issue for baseline** — reference the test baseline documented when work started
 - [ ] Resume implementation from "Remaining Work" section
 - [ ] **DO NOT re-run baseline, re-assign issue, or re-update status**
 
@@ -695,14 +716,20 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - [ ] **Run `bun run quality:fix` and commit any changes**
 
 **PR and Review:**
-- [ ] **Verify test suite**: Run `bun run test:all` - no new failures allowed
+- [ ] **Verify test suite**: Run `bun run test:all` — no new failures allowed
 - [ ] **Verify code quality**: Run `bun run quality:fix` one final time
 - [ ] Commit any linting/formatting fixes
 - [ ] Created PR with proper title and description
 - [ ] **Document test status in PR**: Note baseline vs current test results
 - [ ] Updated GitHub project status using CLI: In Progress → Ready for Review
-- [ ] Used appropriate subagent for code review if needed
-- [ ] Merged immediately if review passes, or addressed feedback
+- [ ] Ran `/pragmatic-code-review` (and addressed feedback if any)
+
+**Merge and Clean Up (in this order):**
+- [ ] Verified PR is mergeable: `gh pr view <PR#> --json mergeable,reviewDecision`
+- [ ] **Exited the worktree** with `ExitWorktree({action: "remove", discard_changes: true})` *before* attempting the merge
+- [ ] Merged from the primary checkout: `gh pr merge <PR#> --squash --delete-branch`
+- [ ] Pulled the squash commit on `main`: `git pull origin main`
+- [ ] Updated GitHub project status: Ready for Review → Done
 
 **Failure to follow this checklist blocks the development process and violates project standards.**
 
