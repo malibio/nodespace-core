@@ -12,7 +12,6 @@
  */
 
 import { createLogger } from '$lib/utils/logger';
-import { invoke } from '@tauri-apps/api/core';
 
 const log = createLogger('DiagnosticLogger');
 
@@ -267,76 +266,3 @@ function truncateResult(result: unknown): unknown {
   return result;
 }
 
-// ============================================================================
-// Diagnostic Tauri Commands (for direct backend calls)
-// ============================================================================
-
-/**
- * Call the get_database_diagnostics Tauri command
- */
-export async function getDatabaseDiagnostics(): Promise<DatabaseDiagnostics | null> {
-  // Check if in Tauri environment
-  if (typeof window === 'undefined' || !('__TAURI__' in window || '__TAURI_INTERNALS__' in window)) {
-    log.warn('getDatabaseDiagnostics: Not in Tauri environment');
-    return null;
-  }
-
-  try {
-    return await withDiagnosticLogging(
-      'get_database_diagnostics',
-      () => invoke<DatabaseDiagnostics>('get_database_diagnostics'),
-      []
-    );
-  } catch (error) {
-    log.error('Failed to get database diagnostics:', error);
-    return null;
-  }
-}
-
-/**
- * Call the test_node_persistence Tauri command
- */
-export async function testNodePersistence(): Promise<TestPersistenceResult | null> {
-  // Check if in Tauri environment
-  if (typeof window === 'undefined' || !('__TAURI__' in window || '__TAURI_INTERNALS__' in window)) {
-    log.warn('testNodePersistence: Not in Tauri environment');
-    return null;
-  }
-
-  try {
-    return await withDiagnosticLogging(
-      'test_node_persistence',
-      () => invoke<TestPersistenceResult>('test_node_persistence'),
-      []
-    );
-  } catch (error) {
-    log.error('Failed to test node persistence:', error);
-    return null;
-  }
-}
-
-// ============================================================================
-// Types for Diagnostic Commands
-// ============================================================================
-
-export interface DatabaseDiagnostics {
-  databasePath: string;
-  databaseExists: boolean;
-  databaseSizeBytes: number | null;
-  totalNodeCount: number;
-  rootNodeCount: number;
-  recentNodeIds: string[];
-  schemaCount: number;
-  errors: string[];
-}
-
-export interface TestPersistenceResult {
-  testId: string;
-  created: boolean;
-  createdId: string | null;
-  createError: string | null;
-  verified: boolean;
-  verifyError: string | null;
-  contentMatched: boolean;
-  cleanupSuccess: boolean;
-}

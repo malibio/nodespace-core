@@ -5,7 +5,6 @@
 pub mod chat_models;
 pub mod collections;
 pub mod db;
-pub mod diagnostics;
 pub mod embeddings;
 pub mod import;
 pub mod local_agent;
