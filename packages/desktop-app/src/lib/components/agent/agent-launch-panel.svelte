@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
+  import { ptyLaunchSession } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('AgentLaunchPanel');
@@ -27,13 +27,11 @@
     launching = true;
     error = null;
     try {
-      const result = await invoke<{ sessionId: string; createdAt: number }>('launch_session', {
-        input: {
-          agentType: selectedAgent,
-          prompt: prompt.trim() || null,
-          cols: 80,
-          rows: 24,
-        },
+      const result = await ptyLaunchSession({
+        agentType: selectedAgent,
+        prompt: prompt.trim() || null,
+        cols: 80,
+        rows: 24,
       });
       prompt = '';
       onSessionLaunched(result.sessionId);

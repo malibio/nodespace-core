@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
+  import { ptyListSessions, ptyTerminateSession, type PtySessionInfo } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('SessionsPanel');
@@ -12,12 +12,6 @@
     'open-code': 'Open Code',
   };
 
-  interface SessionInfo {
-    sessionId: string;
-    agentType: string;
-    startedAt: number;
-  }
-
   let {
     activeSessionId = null,
     onSelectSession,
@@ -28,14 +22,14 @@
     onSessionTerminated: (_sessionId: string) => void;
   } = $props();
 
-  let sessions = $state<SessionInfo[]>([]);
+  let sessions = $state<PtySessionInfo[]>([]);
   let loading = $state(false);
   let terminatingIds = $state(new Set<string>());
 
   async function refresh() {
     loading = true;
     try {
-      const result = await invoke<{ sessions: SessionInfo[]; count: number }>('list_sessions');
+      const result = await ptyListSessions();
       sessions = result.sessions;
     } catch (e) {
       log.warn('Failed to list sessions', e);
@@ -47,7 +41,7 @@
   async function terminate(sessionId: string) {
     terminatingIds = new Set([...terminatingIds, sessionId]);
     try {
-      await invoke('terminate_session', { sessionId });
+      await ptyTerminateSession(sessionId);
       onSessionTerminated(sessionId);
       sessions = sessions.filter((s) => s.sessionId !== sessionId);
     } catch (e) {

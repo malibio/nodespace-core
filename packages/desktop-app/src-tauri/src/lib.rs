@@ -352,6 +352,9 @@ pub fn run() {
                 tracing::info!("Agent services registered as independent managed state");
             }
 
+            // Streaming task registry for PTY session cancellation (Issue #1120)
+            app.manage(commands::agent_session::StreamingTaskRegistry::default());
+
             Ok(())
         })
         .on_menu_event(|app, event| {

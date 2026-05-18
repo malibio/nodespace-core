@@ -4,6 +4,16 @@
 //! background task that reads the `StreamOutput` server-streaming response
 //! and emits Tauri events keyed by session ID so the frontend's
 //! `PtyTerminal.svelte` can subscribe via `listen("pty-output-{sessionId}")`.
+//!
+//! ## Streaming task lifecycle
+//!
+//! Each launched session gets a `CancellationToken` stored in
+//! `StreamingTaskRegistry`. When `terminate_session` is called, the registry
+//! cancels the token, which causes the background streaming loop to exit
+//! promptly rather than waiting for the next gRPC message or a closed stream.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use futures::StreamExt;
 use nodespace_daemon::{
@@ -12,10 +22,39 @@ use nodespace_daemon::{
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+use tokio_util::sync::CancellationToken;
 use tonic::Request;
 
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
+
+// ---------------------------------------------------------------------------
+// Streaming task registry — tracks cancellation tokens by session ID
+// ---------------------------------------------------------------------------
+
+/// Tauri managed state that maps session IDs to cancellation tokens for their
+/// background `StreamOutput` reader tasks. Allows `terminate_session` to stop
+/// the reader promptly rather than waiting for the gRPC stream to drain.
+#[derive(Default)]
+pub struct StreamingTaskRegistry {
+    tokens: Mutex<HashMap<String, CancellationToken>>,
+}
+
+impl StreamingTaskRegistry {
+    pub fn insert(&self, session_id: &str, token: CancellationToken) {
+        if let Ok(mut map) = self.tokens.lock() {
+            map.insert(session_id.to_string(), token);
+        }
+    }
+
+    pub fn cancel_and_remove(&self, session_id: &str) {
+        if let Ok(mut map) = self.tokens.lock() {
+            if let Some(token) = map.remove(session_id) {
+                token.cancel();
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Frontend-facing types
@@ -92,10 +131,11 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
 ///
 /// The frontend should listen on `"pty-output-{sessionId}"` immediately after
 /// calling this command. The background streaming task runs until the session
-/// closes or the client disconnects.
+/// closes, the client disconnects, or `terminate_session` cancels it.
 #[tauri::command]
 pub async fn launch_session(
     client: State<'_, GrpcClient>,
+    registry: State<'_, StreamingTaskRegistry>,
     app: AppHandle,
     input: LaunchSessionInput,
 ) -> Result<LaunchSessionResult, CommandError> {
@@ -118,15 +158,16 @@ pub async fn launch_session(
     // Obtain the client before spawning (State<'_> has a non-'static lifetime).
     let mut stream_client = client.agent_session_client().await;
 
+    let cancel_token = CancellationToken::new();
+    registry.insert(&session_id, cancel_token.clone());
+
     // Spawn background task: reads StreamOutput and emits Tauri events.
     let session_id_for_task = session_id.clone();
     tauri::async_runtime::spawn(async move {
         let stream_result = stream_client
-            .stream_output(Request::new(
-                nodespace_daemon::StreamOutputRequest {
-                    session_id: session_id_for_task.clone(),
-                },
-            ))
+            .stream_output(Request::new(nodespace_daemon::StreamOutputRequest {
+                session_id: session_id_for_task.clone(),
+            }))
             .await;
 
         let mut stream = match stream_result {
@@ -142,29 +183,39 @@ pub async fn launch_session(
         };
 
         let event_name = format!("pty-output-{}", session_id_for_task);
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    let payload = PtyOutputPayload {
-                        data: chunk.data.to_vec(),
-                        timestamp_ms: chunk.timestamp_ms,
-                    };
-                    if let Err(e) = app.emit(&event_name, payload) {
-                        tracing::warn!(
-                            session_id = %session_id_for_task,
-                            error = %e,
-                            "Failed to emit pty-output event"
-                        );
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        session_id = %session_id_for_task,
-                        error = %e,
-                        "StreamOutput ended"
-                    );
+        loop {
+            tokio::select! {
+                // Stop the loop when terminate_session cancels the token.
+                _ = cancel_token.cancelled() => {
+                    tracing::debug!(session_id = %session_id_for_task, "StreamOutput reader cancelled");
                     break;
+                }
+                chunk_result = stream.next() => {
+                    match chunk_result {
+                        Some(Ok(chunk)) => {
+                            let payload = PtyOutputPayload {
+                                data: chunk.data.to_vec(),
+                                timestamp_ms: chunk.timestamp_ms,
+                            };
+                            if let Err(e) = app.emit(&event_name, payload) {
+                                tracing::warn!(
+                                    session_id = %session_id_for_task,
+                                    error = %e,
+                                    "Failed to emit pty-output event"
+                                );
+                                break;
+                            }
+                        }
+                        Some(Err(e)) => {
+                            tracing::debug!(
+                                session_id = %session_id_for_task,
+                                error = %e,
+                                "StreamOutput ended"
+                            );
+                            break;
+                        }
+                        None => break,
+                    }
                 }
             }
         }
@@ -217,11 +268,18 @@ pub async fn resize_terminal(
 }
 
 /// Terminate a PTY session and clean up its resources.
+///
+/// Cancels the background `StreamOutput` reader task in addition to sending the
+/// gRPC `TerminateSession` RPC, so the reader exits immediately rather than
+/// waiting for the next message from a now-dead stream.
 #[tauri::command]
 pub async fn terminate_session(
     client: State<'_, GrpcClient>,
+    registry: State<'_, StreamingTaskRegistry>,
     session_id: String,
 ) -> Result<TerminateSessionResult, CommandError> {
+    registry.cancel_and_remove(&session_id);
+
     let mut c = client.agent_session_client().await;
     let resp = c
         .terminate_session(Request::new(TerminateSessionRequest { session_id }))

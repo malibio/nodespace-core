@@ -3,7 +3,7 @@
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { invoke } from '@tauri-apps/api/core';
+  import { ptyWriteInput, ptyResizeTerminal } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('PtyTerminal');
@@ -38,10 +38,7 @@
     // Forward keystrokes to the PTY
     terminal.onData(async (data) => {
       try {
-        await invoke('write_input', {
-          sessionId,
-          data: Array.from(new TextEncoder().encode(data)),
-        });
+        await ptyWriteInput(sessionId, Array.from(new TextEncoder().encode(data)));
       } catch (e) {
         log.warn('write_input failed', e);
       }
@@ -64,7 +61,7 @@
     resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
       const { cols, rows } = terminal;
-      invoke('resize_terminal', { sessionId, cols, rows }).catch((e) =>
+      ptyResizeTerminal(sessionId, cols, rows).catch((e) =>
         log.warn('resize_terminal failed', e)
       );
     });
