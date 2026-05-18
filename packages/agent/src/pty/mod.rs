@@ -16,9 +16,11 @@
 //!    [`tempfile::TempDir`] so the working directory is cleaned up.
 
 pub mod capture;
+pub mod detection;
 pub mod manager;
 pub mod session;
 
 pub use capture::SessionCapture;
+pub use detection::{detect_all_agents, AgentAvailability};
 pub use manager::{PtySessionManager, SessionMetadata};
 pub use session::{ExitStatus, OutputChunk, PtySession};
