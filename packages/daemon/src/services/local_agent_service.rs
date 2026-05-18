@@ -25,10 +25,10 @@ use tonic::{Request, Response, Status};
 use crate::nodespace::{
     local_agent_service_server::LocalAgentService as GrpcLocalAgentService, AgentChunk,
     CancelGenerationRequest, CancelGenerationResponse, EndLocalSessionRequest,
-    EndLocalSessionResponse, EnsureModelReadyRequest, GetLocalStatusRequest,
-    GetSessionsRequest, GetSessionsResponse, ListModelsRequest, ListModelsResponse,
-    LocalAgentStatusResponse, LocalSessionInfo, ModelEntry, ModelLoadProgressEvent,
-    SendLocalMessageRequest, StartLocalSessionRequest, StartLocalSessionResponse,
+    EndLocalSessionResponse, EnsureModelReadyRequest, GetLocalStatusRequest, GetSessionsRequest,
+    GetSessionsResponse, ListModelsRequest, ListModelsResponse, LocalAgentStatusResponse,
+    LocalSessionInfo, ModelEntry, ModelLoadProgressEvent, SendLocalMessageRequest,
+    StartLocalSessionRequest, StartLocalSessionResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -47,7 +47,9 @@ impl ChatInferenceEngine for NoOpInferenceEngine {
         Err(InferenceError::NoModelLoaded)
     }
 
-    async fn model_info(&self) -> Result<Option<nodespace_agent::agent_types::ChatModelSpec>, InferenceError> {
+    async fn model_info(
+        &self,
+    ) -> Result<Option<nodespace_agent::agent_types::ChatModelSpec>, InferenceError> {
         Ok(None)
     }
 
@@ -80,9 +82,8 @@ pub struct LocalAgentServiceImpl {
 
 impl LocalAgentServiceImpl {
     pub fn new(node_service: Arc<NodeService>) -> Self {
-        let gguf = Arc::new(
-            GgufModelManager::new().expect("GgufModelManager initialization failed"),
-        );
+        let gguf =
+            Arc::new(GgufModelManager::new().expect("GgufModelManager initialization failed"));
         let ollama = Arc::new(OllamaModelManager::new());
         let model_manager = Arc::new(CompositeModelManager::new(gguf, ollama));
 
@@ -124,8 +125,11 @@ impl LocalAgentServiceImpl {
             ),
         ));
 
-        let new_service =
-            Arc::new(LocalAgentService::new_with_assembler(engine, executor, prompt_assembler));
+        let new_service = Arc::new(LocalAgentService::new_with_assembler(
+            engine,
+            executor,
+            prompt_assembler,
+        ));
 
         let mut guard = self.inner.service.write().await;
         *guard = new_service;
@@ -365,7 +369,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         _request: Request<ListModelsRequest>,
     ) -> Result<Response<ListModelsResponse>, Status> {
         let models = self
-            .inner.model_manager
+            .inner
+            .model_manager
             .list()
             .await
             .map_err(|e| Status::internal(format!("Failed to list models: {e}")))?;
@@ -428,8 +433,7 @@ impl LocalAgentServiceImpl {
 
         // --- Ollama fast path ---
         if CompositeModelManager::is_ollama(model_id) {
-            let ollama_name =
-                CompositeModelManager::strip_ollama_prefix(model_id).to_string();
+            let ollama_name = CompositeModelManager::strip_ollama_prefix(model_id).to_string();
 
             events.push(ModelLoadProgressEvent {
                 event_type: "loading".to_string(),
@@ -449,7 +453,8 @@ impl LocalAgentServiceImpl {
             }
 
             let ollama_base_url = self
-                .inner.model_manager
+                .inner
+                .model_manager
                 .ollama_manager()
                 .base_url()
                 .to_string();
@@ -530,11 +535,7 @@ impl LocalAgentServiceImpl {
             ..Default::default()
         });
 
-        let model_path = match self
-            .inner.model_manager
-            .gguf_manager()
-            .model_path(model_id)
-        {
+        let model_path = match self.inner.model_manager.gguf_manager().model_path(model_id) {
             Ok(p) => p,
             Err(e) => {
                 events.push(ModelLoadProgressEvent {
@@ -612,7 +613,6 @@ impl LocalAgentServiceImpl {
 
         events
     }
-
 }
 
 // ---------------------------------------------------------------------------

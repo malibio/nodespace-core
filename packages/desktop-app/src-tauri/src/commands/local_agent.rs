@@ -173,7 +173,9 @@ pub async fn local_agent_send(
                 completion_tokens = chunk.completion_tokens.unwrap_or(0) as u32;
             }
             "error" => {
-                let msg = chunk.error_message.unwrap_or_else(|| "Unknown error".to_string());
+                let msg = chunk
+                    .error_message
+                    .unwrap_or_else(|| "Unknown error".to_string());
                 let _ = app.emit(agent_events::LOCAL_AGENT_ERROR, &msg);
                 return Err(grpc_err(msg));
             }
@@ -233,8 +235,8 @@ pub async fn local_agent_get_sessions(
 
     let mut sessions = Vec::new();
     for info in resp.sessions {
-        let status: LocalAgentStatus = serde_json::from_str(&info.status_json)
-            .unwrap_or(LocalAgentStatus::Idle);
+        let status: LocalAgentStatus =
+            serde_json::from_str(&info.status_json).unwrap_or(LocalAgentStatus::Idle);
         let created_at = info
             .created_at
             .parse()
@@ -371,7 +373,8 @@ pub async fn list_local_models(
         .into_iter()
         .filter_map(|entry| {
             let status = serde_json::from_str(&entry.status_json).ok()?;
-            let backend = serde_json::from_str(&format!("\"{}\"", entry.backend)).unwrap_or_default();
+            let backend =
+                serde_json::from_str(&format!("\"{}\"", entry.backend)).unwrap_or_default();
             Some(ModelInfo {
                 id: entry.id,
                 name: entry.name,

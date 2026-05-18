@@ -861,9 +861,13 @@ mod tests {
             .await
             .unwrap();
 
-        write_shim_files(session_dir.path(), AgentType::ClaudeCode, shim_source.path())
-            .await
-            .unwrap();
+        write_shim_files(
+            session_dir.path(),
+            AgentType::ClaudeCode,
+            shim_source.path(),
+        )
+        .await
+        .unwrap();
 
         let copied = tokio::fs::read_to_string(session_dir.path().join("nodespace-hook.ts"))
             .await
@@ -945,7 +949,12 @@ mod tests {
 
     #[test]
     fn tools_section_non_claude_does_not_include_hook_path() {
-        for agent_type in [AgentType::Codex, AgentType::GeminiCli, AgentType::Pi, AgentType::OpenCode] {
+        for agent_type in [
+            AgentType::Codex,
+            AgentType::GeminiCli,
+            AgentType::Pi,
+            AgentType::OpenCode,
+        ] {
             let section = tools_section(agent_type);
             assert!(
                 !section.contains("nodespace-hook.ts"),

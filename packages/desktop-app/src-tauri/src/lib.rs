@@ -401,7 +401,6 @@ pub fn run() {
             commands::embeddings::on_root_idle,
             commands::embeddings::sync_embeddings,
             commands::embeddings::get_stale_root_count,
-            commands::models::ensure_models_installed,
             commands::nodes::create_node,
             commands::nodes::create_root_node,
             commands::nodes::create_node_mention,
