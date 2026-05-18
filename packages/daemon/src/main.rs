@@ -16,9 +16,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::pty::PtySessionManager;
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
-use nodespace_daemon::{tray, NodeServiceImpl, NodeServiceServer};
+use nodespace_daemon::{
+    tray, AgentSessionHandler, AgentSessionServiceServer, NodeServiceImpl, NodeServiceServer,
+};
 use tonic::transport::Server;
 
 /// Default address the daemon binds to. ADR-031 standardizes on
@@ -106,11 +110,12 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(db_path = %db_path.display(), %addr, "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
-    let service = build_node_service(&db_path).await?;
+    let services = build_services(&db_path).await?;
 
     tracing::info!(%addr, "gRPC server listening");
     Server::builder()
-        .add_service(NodeServiceServer::new(service))
+        .add_service(NodeServiceServer::new(services.node))
+        .add_service(AgentSessionServiceServer::new(services.agent_session))
         .serve_with_shutdown(addr, shutdown)
         .await
         .context("gRPC server terminated with error")?;
@@ -128,7 +133,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
-    let service = build_node_service(&db_path).await?;
+    let services = build_services(&db_path).await?;
 
     // `TrayController` is `Clone`; one copy goes to the metrics layer, the
     // other drives the shutdown future.
@@ -143,15 +148,23 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     tracing::info!(%addr, "gRPC server listening");
     Server::builder()
         .layer(TrayMetricsLayer::new(controller))
-        .add_service(NodeServiceServer::new(service))
+        .add_service(NodeServiceServer::new(services.node))
+        .add_service(AgentSessionServiceServer::new(services.agent_session))
         .serve_with_shutdown(addr, combined_shutdown)
         .await
         .context("gRPC server terminated with error")?;
     Ok(())
 }
 
-/// Open the database and assemble the gRPC service implementation.
-async fn build_node_service(db_path: &std::path::Path) -> Result<NodeServiceImpl> {
+/// Bundle of gRPC service implementations registered by both server loops.
+struct DaemonServices {
+    node: NodeServiceImpl,
+    agent_session: AgentSessionHandler,
+}
+
+/// Open the database and assemble every gRPC service implementation the
+/// daemon exposes.
+async fn build_services(db_path: &std::path::Path) -> Result<DaemonServices> {
     if let Some(parent) = db_path.parent() {
         tokio::fs::create_dir_all(parent).await.with_context(|| {
             format!("Failed to create database parent dir: {}", parent.display())
@@ -171,8 +184,25 @@ async fn build_node_service(db_path: &std::path::Path) -> Result<NodeServiceImpl
     );
 
     // Embedding service is wired by a follow-up issue. The gRPC `SearchNodes`
-    // handler returns `Unavailable` until it is provided.
-    Ok(NodeServiceImpl::new(node_service, None))
+    // handler returns `Unavailable` until it is provided. The same handle
+    // would feed semantic expansion in [`GraphContextAssembler`]; for now the
+    // assembler runs without semantic neighbours (it logs and skips).
+    let embedding_service = None;
+
+    let node = NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
+
+    // The PTY engine and context assembler are shared across every
+    // `AgentSessionService` RPC call. `PtySessionManager` is `Clone` but
+    // wrapping in `Arc` keeps the manager itself a single instance so all
+    // sessions live in one map.
+    let manager = Arc::new(PtySessionManager::new());
+    let assembler = Arc::new(GraphContextAssembler::new(node_service, embedding_service));
+    let agent_session = AgentSessionHandler::new(manager, assembler);
+
+    Ok(DaemonServices {
+        node,
+        agent_session,
+    })
 }
 
 /// Install the shutdown signal future at boot time so a failure to register

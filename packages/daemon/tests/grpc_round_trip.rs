@@ -93,6 +93,8 @@ async fn create_then_get_round_trip() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create_node failed")
@@ -133,6 +135,8 @@ async fn update_increments_version() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create_node failed")
@@ -176,6 +180,8 @@ async fn get_children_returns_parent_subtree() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create parent")
@@ -190,6 +196,8 @@ async fn get_children_returns_parent_subtree() {
                 properties: String::new(),
                 collection: String::new(),
                 lifecycle_status: String::new(),
+                id: String::new(),
+                insert_after_node_id: String::new(),
             })
             .await
             .expect("create child");
@@ -239,6 +247,8 @@ async fn delete_node_marks_existed() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create_node failed")
@@ -335,6 +345,8 @@ async fn watch_nodes_receives_create_update_delete_events() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create_node failed")
@@ -422,6 +434,8 @@ async fn watch_nodes_supports_multiple_concurrent_watchers() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create_node failed")
@@ -481,6 +495,8 @@ async fn watch_nodes_closes_when_client_drops_stream() {
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect("create_node failed");
@@ -508,6 +524,8 @@ async fn create_node_rejects_malformed_properties() {
             properties: "{not valid json".into(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .expect_err("expected invalid_argument");
