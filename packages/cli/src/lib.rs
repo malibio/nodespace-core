@@ -5,10 +5,11 @@
 
 pub mod commands;
 pub mod output;
+pub mod terminal;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nodespace_daemon::{ImportServiceClient, NodeServiceClient};
+use nodespace_daemon::{AgentSessionServiceClient, ImportServiceClient, NodeServiceClient};
 use tonic::transport::Channel;
 
 /// Default endpoint the CLI dials. ADR-031 reserves `localhost:50051` for the
@@ -54,6 +55,11 @@ pub enum Command {
         #[command(subcommand)]
         action: commands::import::ImportAction,
     },
+    /// Manage PTY agent sessions (launch, attach, list, kill).
+    Session {
+        #[command(subcommand)]
+        action: commands::session::SessionAction,
+    },
 }
 
 /// Resolve the configured endpoint, falling back to `DEFAULT_ENDPOINT`.
@@ -91,6 +97,18 @@ pub async fn connect_import(endpoint: &str) -> Result<ImportServiceClient<Channe
         })
 }
 
+/// Connect an AgentSessionServiceClient to the daemon.
+pub async fn connect_session(endpoint: &str) -> Result<AgentSessionServiceClient<Channel>> {
+    AgentSessionServiceClient::connect(endpoint.to_string())
+        .await
+        .with_context(|| {
+            format!(
+                "Could not connect to nodespaced at {endpoint}.\n\
+                 Is the daemon running? Start it with `nodespaced` in another terminal."
+            )
+        })
+}
+
 /// Top-level dispatch — wired by `main.rs` and reused by integration tests.
 pub async fn run(cli: Cli) -> Result<()> {
     let endpoint = resolve_endpoint(cli.endpoint.as_deref());
@@ -112,6 +130,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Import { action } => {
             let mut client = connect_import(&endpoint).await?;
             commands::import::run(&mut client, action, json).await
+        }
+        Command::Session { action } => {
+            let mut client = connect_session(&endpoint).await?;
+            commands::session::run(&mut client, action, json).await
         }
     }
 }
