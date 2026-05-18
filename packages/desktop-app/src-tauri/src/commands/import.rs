@@ -1,42 +1,44 @@
-//! File import commands for bulk markdown import
+//! File import commands — thin gRPC proxy to ImportService in nodespaced.
 //!
-//! Provides direct file system import bypassing MCP for faster bulk operations.
-//! Useful for importing large documentation sets (e.g., entire book chapters).
-//!
-//! ## Smart Collection Routing
-//!
-//! When `auto_collection_routing` is enabled, files are automatically assigned
-//! to collections based on their directory path:
-//!
-//! - `*/archived/*` → "Archived" collection (with lifecycle_status: "archived")
-//! - `*/decisions/*` or `*/adr/*` → "ADR" collection
-//! - `*/lessons/*` → "Lessons" collection
-//! - `*/troubleshooting/*` → "Troubleshooting" collection
-//! - `*/components/*` → "Components" collection
-//! - `*/business-logic/*` → "Business Logic" collection
-//! - `*/development/process/*` → "Development:Process" collection
-//! - `*/architecture/core/*` → "Architecture:Core" collection
-//! - etc.
-//!
-//! ## Performance Optimization (Issue #854)
-//!
-//! The import pipeline uses a two-phase architecture:
-//!
-//! 1. **Phase 1 (Sync)**: Parse all files, prepare nodes, transform inter-file links
-//! 2. **Phase 2 (Async)**: Spawn background task for bulk DB operations
-//!
-//! This returns immediately to the UI while heavy database work happens in background.
+//! All import logic (smart collection routing, two-phase async pipeline) runs
+//! inside the daemon so imports continue if the Tauri window is closed
+//! mid-import. These handlers subscribe to the progress stream and forward
+//! each event to the frontend via Tauri events.
 
-use crate::app_services::AppServices;
-use nodespace_core::mcp::handlers::markdown::{
-    prepare_nodes_from_markdown, transform_links_in_nodes_with_mentions, PreparedNode,
+use nodespace_daemon::nodespace::{
+    ImportMarkdownFilesRequest, ImportMarkdownRequest, ImportOptions as ProtoImportOptions,
 };
-use nodespace_core::services::{CollectionService, CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+use tokio_stream::StreamExt;
+use tonic::Request;
+
+use crate::services::GrpcClient;
+
+/// Options for file import (mirrors proto ImportOptions)
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ImportOptions {
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub use_filename_as_title: bool,
+    #[serde(default)]
+    pub auto_collection_routing: bool,
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+    pub base_directory: Option<String>,
+}
+
+impl ImportOptions {
+    fn into_proto(self) -> ProtoImportOptions {
+        ProtoImportOptions {
+            collection: self.collection.unwrap_or_default(),
+            use_filename_as_title: self.use_filename_as_title,
+            auto_collection_routing: self.auto_collection_routing,
+            exclude_patterns: self.exclude_patterns,
+            base_directory: self.base_directory.unwrap_or_default(),
+        }
+    }
+}
 
 /// Result of importing a single file
 #[derive(Debug, Clone, Serialize)]
@@ -46,9 +48,7 @@ pub struct FileImportResult {
     pub nodes_created: usize,
     pub success: bool,
     pub error: Option<String>,
-    /// Collection the file was assigned to (if auto-routing enabled)
     pub collection: Option<String>,
-    /// Whether the file was marked as archived
     pub archived: bool,
 }
 
@@ -59,980 +59,189 @@ pub struct BatchImportResult {
     pub successful: usize,
     pub failed: usize,
     pub results: Vec<FileImportResult>,
-    pub duration_ms: u128,
 }
 
-/// Options for file import
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ImportOptions {
-    /// Collection path to add imported documents to (e.g., "rust-book")
-    /// Ignored if `auto_collection_routing` is true.
-    pub collection: Option<String>,
-    /// Whether to use filename as title (default: false - uses first heading/line)
-    #[serde(default)]
-    pub use_filename_as_title: bool,
-    /// Enable smart collection routing based on file paths (default: false)
-    /// When enabled, files are assigned to collections based on directory structure.
-    #[serde(default)]
-    pub auto_collection_routing: bool,
-    /// Directory patterns to exclude (e.g., ["design-system", "node_modules"])
-    #[serde(default)]
-    pub exclude_patterns: Vec<String>,
-    /// Base directory for relative path calculation in auto-routing
-    /// If not set, uses the import directory as base.
-    pub base_directory: Option<String>,
-}
-
-/// Progress event emitted during import
-///
-/// Shows 9 distinct steps during import:
-/// 1. Scanning folder
-/// 2. Reading files (shows each filename)
-/// 3. Parsing markdown (shows each filename)
-/// 4. Resolving links
-/// 5. Creating collections
-/// 6. Importing nodes
-/// 7. Assigning to collections
-/// 8. Creating references
-/// 9. Complete (shows summary)
+/// Progress event forwarded to the frontend during import
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportProgressEvent {
-    /// Step number (1-9)
     pub step: u8,
-    /// Step name (e.g., "scanning", "reading", "parsing", etc.)
     pub step_name: String,
-    /// User-friendly message (e.g., "Reading: overview.md")
     pub message: String,
-    /// Current item in step (if applicable)
     pub current: usize,
-    /// Total items in step (if applicable)
     pub total: usize,
 }
 
-/// Prepared file data for batched import (Issue #854)
-///
-/// Contains all parsed data for a single file, ready for batch insertion.
-#[derive(Debug)]
-struct PreparedFileImport {
-    /// Original file path
-    file_path: PathBuf,
-    /// Root node ID (pre-assigned UUID)
-    root_id: String,
-    /// Root node content (title)
-    root_content: String,
-    /// Whether this is an archived document
-    is_archived: bool,
-    /// Collection path for assignment (if any)
-    collection_path: Option<String>,
-    /// Prepared child nodes from markdown parsing
-    children: Vec<PreparedNode>,
-}
-
-/// Metadata derived from file path for collection routing
-#[derive(Debug, Clone)]
-struct CollectionMetadata {
-    /// Collection path (e.g., "Architecture:Core")
-    collection: String,
-    /// Whether the file should be marked as archived
-    is_archived: bool,
-}
-
-/// Intermediate result from reading a file (before parsing)
-///
-/// Holds file content and metadata between the "reading" and "parsing" phases,
-/// enabling per-step progress events.
-#[derive(Debug)]
-struct FileReadResult {
-    /// Full path to the file
-    path: PathBuf,
-    /// Raw file content
-    content: String,
-    /// Path relative to base directory (for display)
-    relative_path: String,
-    /// Collection path for assignment (if auto-routing enabled)
-    collection_path: Option<String>,
-    /// Whether this file is in an archived directory
-    is_archived: bool,
-}
-
-/// Derive collection and metadata from file path relative to base directory
-///
-/// Implements smart routing rules:
-/// - `*/archived/*` → "Archived" (is_archived: true)
-/// - `*/decisions/*` → "ADR"
-/// - `*/lessons/*` → "Lessons"
-/// - `*/troubleshooting/*` → "Troubleshooting"
-/// - `*/components/*` → "Components"
-/// - `*/business-logic/*` → "Business Logic"
-/// - `*/development/X/*` → "Development:X"
-/// - `*/architecture/core/*` → "Architecture:Core"
-/// - `*/architecture/X/*` → "Architecture:X"
-fn derive_collection_metadata(file_path: &Path, base_dir: &Path) -> CollectionMetadata {
-    let relative = file_path.strip_prefix(base_dir).unwrap_or(file_path);
-
-    let path_str = relative.to_string_lossy().to_lowercase();
-    let segments: Vec<&str> = relative
-        .parent()
-        .unwrap_or(Path::new(""))
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
-
-    // Check for archived content anywhere in path
-    if path_str.contains("/archived/")
-        || segments.iter().any(|s| s.eq_ignore_ascii_case("archived"))
-    {
-        return CollectionMetadata {
-            collection: "Archived".to_string(),
-            is_archived: true,
-        };
-    }
-
-    // ADR / Decisions
-    if path_str.contains("/decisions/") || path_str.contains("/adr/") {
-        return CollectionMetadata {
-            collection: "ADR".to_string(),
-            is_archived: false,
-        };
-    }
-
-    // Lessons
-    if path_str.contains("/lessons/") || segments.iter().any(|s| s.eq_ignore_ascii_case("lessons"))
-    {
-        return CollectionMetadata {
-            collection: "Lessons".to_string(),
-            is_archived: false,
-        };
-    }
-
-    // Troubleshooting
-    if segments
-        .first()
-        .map(|s| s.eq_ignore_ascii_case("troubleshooting"))
-        .unwrap_or(false)
-    {
-        return CollectionMetadata {
-            collection: "Troubleshooting".to_string(),
-            is_archived: false,
-        };
-    }
-
-    // Architecture-specific routing
-    if segments
-        .first()
-        .map(|s| s.eq_ignore_ascii_case("architecture"))
-        .unwrap_or(false)
-    {
-        let sub_segments: Vec<&str> = segments.iter().skip(1).copied().collect();
-
-        if sub_segments
-            .first()
-            .map(|s| s.eq_ignore_ascii_case("components"))
-            .unwrap_or(false)
-        {
-            return CollectionMetadata {
-                collection: "Components".to_string(),
-                is_archived: false,
-            };
-        }
-
-        if sub_segments
-            .first()
-            .map(|s| s.eq_ignore_ascii_case("business-logic"))
-            .unwrap_or(false)
-        {
-            return CollectionMetadata {
-                collection: "Business Logic".to_string(),
-                is_archived: false,
-            };
-        }
-
-        if sub_segments
-            .first()
-            .map(|s| s.eq_ignore_ascii_case("development"))
-            .unwrap_or(false)
-        {
-            let dev_sub: Vec<&str> = sub_segments.iter().skip(1).copied().collect();
-            if !dev_sub.is_empty() {
-                let nested = dev_sub
-                    .iter()
-                    .map(|s| to_title_case(s))
-                    .collect::<Vec<_>>()
-                    .join(":");
-                return CollectionMetadata {
-                    collection: format!("Development:{}", nested),
-                    is_archived: false,
-                };
-            }
-            return CollectionMetadata {
-                collection: "Development".to_string(),
-                is_archived: false,
-            };
-        }
-
-        if sub_segments
-            .first()
-            .map(|s| s.eq_ignore_ascii_case("core"))
-            .unwrap_or(false)
-        {
-            return CollectionMetadata {
-                collection: "Architecture:Core".to_string(),
-                is_archived: false,
-            };
-        }
-
-        if !sub_segments.is_empty() {
-            let arch_sub = sub_segments
-                .iter()
-                .map(|s| to_title_case(s))
-                .collect::<Vec<_>>()
-                .join(":");
-            return CollectionMetadata {
-                collection: format!("Architecture:{}", arch_sub),
-                is_archived: false,
-            };
-        }
-
-        return CollectionMetadata {
-            collection: "Architecture".to_string(),
-            is_archived: false,
-        };
-    }
-
-    // Performance
-    if segments
-        .first()
-        .map(|s| s.eq_ignore_ascii_case("performance"))
-        .unwrap_or(false)
-    {
-        return CollectionMetadata {
-            collection: "Performance".to_string(),
-            is_archived: false,
-        };
-    }
-
-    // Testing
-    if segments
-        .first()
-        .map(|s| s.eq_ignore_ascii_case("testing"))
-        .unwrap_or(false)
-    {
-        return CollectionMetadata {
-            collection: "Testing".to_string(),
-            is_archived: false,
-        };
-    }
-
-    // Default: use directory path as collection
-    if segments.is_empty() {
-        return CollectionMetadata {
-            collection: "Docs".to_string(),
-            is_archived: false,
-        };
-    }
-
-    let collection = segments
-        .iter()
-        .map(|s| to_title_case(s))
-        .collect::<Vec<_>>()
-        .join(":");
-
-    CollectionMetadata {
-        collection,
-        is_archived: false,
-    }
-}
-
-/// Convert kebab-case or snake_case to Title Case
-fn to_title_case(s: &str) -> String {
-    s.split(['-', '_'])
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Import a single markdown file directly into NodeSpace
-///
-/// Bypasses MCP for faster direct import. Reads file from disk,
-/// parses markdown, and creates nodes using bulk_create_hierarchy.
+/// Import a single markdown file via gRPC ImportService
 #[tauri::command]
 pub async fn import_markdown_file(
-    services: State<'_, AppServices>,
+    app: AppHandle,
+    grpc: State<'_, GrpcClient>,
     file_path: String,
     options: Option<ImportOptions>,
 ) -> Result<FileImportResult, String> {
-    let node_service = services.node_service().await.map_err(|e| e.message)?;
-    let path = PathBuf::from(&file_path);
-    let options = options.unwrap_or_default();
-
-    // Validate file exists and is readable
-    if !path.exists() {
-        return Ok(FileImportResult {
-            file_path,
-            root_id: None,
-            nodes_created: 0,
-            success: false,
-            error: Some("File does not exist".to_string()),
-            collection: None,
-            archived: false,
-        });
-    }
-
-    if !path.is_file() {
-        return Ok(FileImportResult {
-            file_path,
-            root_id: None,
-            nodes_created: 0,
-            success: false,
-            error: Some("Path is not a file".to_string()),
-            collection: None,
-            archived: false,
-        });
-    }
-
-    // Read file content
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(FileImportResult {
-                file_path,
-                root_id: None,
-                nodes_created: 0,
-                success: false,
-                error: Some(format!("Failed to read file: {}", e)),
-                collection: None,
-                archived: false,
-            });
-        }
+    let mut client = grpc.import_client();
+    let req = ImportMarkdownRequest {
+        file_path: file_path.clone(),
+        options: Some(options.unwrap_or_default().into_proto()),
     };
 
-    // Determine collection and metadata
-    let (collection, is_archived) = if options.auto_collection_routing {
-        let base_dir = options
-            .base_directory
-            .as_ref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")).to_path_buf());
-        let metadata = derive_collection_metadata(&path, &base_dir);
-        (Some(metadata.collection), metadata.is_archived)
-    } else {
-        (options.collection.clone(), false)
-    };
+    let mut stream = client
+        .import_markdown(Request::new(req))
+        .await
+        .map_err(|e| e.to_string())?
+        .into_inner();
 
-    // Determine title - prefer first heading from content
-    let title = if options.use_filename_as_title {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "Untitled".to_string())
-    } else {
-        // Use first non-empty line as title
-        content
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "Untitled".to_string())
-    };
+    let mut last_result: Option<FileImportResult> = None;
 
-    // Import using internal function
-    match import_markdown_content(&node_service, &title, &content, is_archived).await {
-        Ok((root_id, nodes_created)) => {
-            // For single file import, do collection assignment immediately
-            if let Some(ref coll) = collection {
-                let collection_service =
-                    CollectionService::new(node_service.store(), &node_service);
-                if let Err(e) = collection_service
-                    .add_to_collection_by_path(&root_id, coll)
-                    .await
-                {
-                    return Ok(FileImportResult {
-                        file_path,
-                        root_id: Some(root_id),
-                        nodes_created,
-                        success: true,
-                        error: Some(format!("Imported but failed to add to collection: {}", e)),
-                        collection,
-                        archived: is_archived,
-                    });
-                }
+    while let Some(event) = stream.next().await {
+        let event = event.map_err(|e| e.to_string())?;
+
+        let _ = app.emit(
+            "import-progress",
+            ImportProgressEvent {
+                step: event.step as u8,
+                step_name: event.step_name.clone(),
+                message: event.message.clone(),
+                current: event.current as usize,
+                total: event.total as usize,
+            },
+        );
+
+        if event.step == 9 {
+            if let Some(r) = event.results.into_iter().next() {
+                last_result = Some(FileImportResult {
+                    file_path: r.file_path,
+                    root_id: if r.root_id.is_empty() {
+                        None
+                    } else {
+                        Some(r.root_id)
+                    },
+                    nodes_created: r.nodes_created as usize,
+                    success: r.success,
+                    error: if r.error.is_empty() {
+                        None
+                    } else {
+                        Some(r.error)
+                    },
+                    collection: if r.collection.is_empty() {
+                        None
+                    } else {
+                        Some(r.collection)
+                    },
+                    archived: r.archived,
+                });
             }
-            Ok(FileImportResult {
-                file_path,
-                root_id: Some(root_id),
-                nodes_created,
-                success: true,
-                error: None,
-                collection,
-                archived: is_archived,
-            })
         }
-        Err(e) => Ok(FileImportResult {
-            file_path,
-            root_id: None,
-            nodes_created: 0,
-            success: false,
-            error: Some(e),
-            collection: None,
-            archived: false,
-        }),
     }
+
+    last_result.ok_or_else(|| "Import stream ended without a result".to_string())
 }
 
-/// Import multiple markdown files in batch (Issue #854 - Optimized)
-///
-/// Uses a two-phase architecture for maximum performance:
-///
-/// **Phase 1 (Sync - Fast):**
-/// - Read all files from disk
-/// - Parse markdown content to prepared nodes
-/// - Build file→UUID map for inter-file link resolution
-/// - Transform links to nodespace:// format
-/// - Collect unique collection paths
-///
-/// **Phase 2 (Async - Background):**
-/// - Bulk resolve/create all collections (one pass)
-/// - Bulk create ALL nodes (one transaction)
-/// - Bulk assign ALL collection memberships (one transaction)
-/// - Emit progress events during each phase
-///
-/// Returns immediately after Phase 1 completes. Phase 2 runs in background.
+/// Import multiple markdown files via gRPC ImportService
 #[tauri::command]
 pub async fn import_markdown_files(
     app: AppHandle,
-    services: State<'_, AppServices>,
+    grpc: State<'_, GrpcClient>,
     file_paths: Vec<String>,
     options: Option<ImportOptions>,
 ) -> Result<BatchImportResult, String> {
-    let node_service = services.node_service().await.map_err(|e| e.message)?;
-    let start = std::time::Instant::now();
     let total_files = file_paths.len();
-    let options = options.unwrap_or_default();
+    let mut client = grpc.import_client();
+    let req = ImportMarkdownFilesRequest {
+        file_paths,
+        options: Some(options.unwrap_or_default().into_proto()),
+    };
 
-    // Determine base directory for auto-routing
-    let base_dir = options
-        .base_directory
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| {
-            file_paths.first().map(|p| {
-                PathBuf::from(p)
-                    .parent()
-                    .unwrap_or(Path::new("."))
-                    .to_path_buf()
-            })
-        })
-        .unwrap_or_else(|| PathBuf::from("."));
+    let mut stream = client
+        .import_markdown_files(Request::new(req))
+        .await
+        .map_err(|e| e.to_string())?
+        .into_inner();
 
-    // ========================================================================
-    // PHASE 1: Parse all files (sync, in-memory, fast)
-    // ========================================================================
+    let mut final_results: Vec<FileImportResult> = Vec::new();
 
-    let mut prepared_files: Vec<PreparedFileImport> = Vec::with_capacity(total_files);
-    let mut results: Vec<FileImportResult> = Vec::with_capacity(total_files);
-    let mut failed = 0;
+    while let Some(event) = stream.next().await {
+        let event = event.map_err(|e| e.to_string())?;
 
-    // Step 1: Scanning folder
-    let _ = app.emit(
-        "import-progress",
-        ImportProgressEvent {
-            step: 1,
-            step_name: "scanning".to_string(),
-            message: "Scanning folder...".to_string(),
-            current: 0,
-            total: total_files,
-        },
-    );
-
-    // Store file contents for reading/parsing phases
-    let mut file_contents: Vec<FileReadResult> = Vec::new();
-
-    // Step 2: Reading files (emit per-file progress)
-    for (index, file_path) in file_paths.iter().enumerate() {
-        let path = PathBuf::from(file_path);
-        let relative_path = path
-            .strip_prefix(&base_dir)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .to_string();
-
-        // Extract just the filename for display
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&relative_path)
-            .to_string();
-
-        // Emit reading progress
         let _ = app.emit(
             "import-progress",
             ImportProgressEvent {
-                step: 2,
-                step_name: "reading".to_string(),
-                message: format!("Reading: {}", filename),
-                current: index + 1,
-                total: total_files,
+                step: event.step as u8,
+                step_name: event.step_name.clone(),
+                message: event.message.clone(),
+                current: event.current as usize,
+                total: event.total as usize,
             },
         );
 
-        // Skip non-existent files
-        if !path.exists() || !path.is_file() {
-            results.push(FileImportResult {
-                file_path: file_path.clone(),
-                root_id: None,
-                nodes_created: 0,
-                success: false,
-                error: Some("File does not exist or is not a file".to_string()),
-                collection: None,
-                archived: false,
-            });
-            failed += 1;
-            continue;
+        if event.step == 9 {
+            final_results = event
+                .results
+                .into_iter()
+                .map(|r| FileImportResult {
+                    file_path: r.file_path,
+                    root_id: if r.root_id.is_empty() {
+                        None
+                    } else {
+                        Some(r.root_id)
+                    },
+                    nodes_created: r.nodes_created as usize,
+                    success: r.success,
+                    error: if r.error.is_empty() {
+                        None
+                    } else {
+                        Some(r.error)
+                    },
+                    collection: if r.collection.is_empty() {
+                        None
+                    } else {
+                        Some(r.collection)
+                    },
+                    archived: r.archived,
+                })
+                .collect();
         }
-
-        // Determine collection and metadata
-        let (collection_path, is_archived) = if options.auto_collection_routing {
-            let metadata = derive_collection_metadata(&path, &base_dir);
-            (Some(metadata.collection), metadata.is_archived)
-        } else {
-            (options.collection.clone(), false)
-        };
-
-        // Read file content
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                results.push(FileImportResult {
-                    file_path: file_path.clone(),
-                    root_id: None,
-                    nodes_created: 0,
-                    success: false,
-                    error: Some(format!("Failed to read file: {}", e)),
-                    collection: None,
-                    archived: false,
-                });
-                failed += 1;
-                continue;
-            }
-        };
-
-        file_contents.push(FileReadResult {
-            path,
-            content,
-            relative_path,
-            collection_path,
-            is_archived,
-        });
     }
 
-    // Step 3: Parsing markdown (emit per-file progress)
-    for (index, file_read) in file_contents.iter().enumerate() {
-        let FileReadResult {
-            path,
-            content,
-            relative_path,
-            collection_path,
-            is_archived,
-        } = file_read;
+    let successful = final_results.iter().filter(|r| r.success).count();
+    let failed = final_results.len().saturating_sub(successful);
 
-        // Extract just the filename for display
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(relative_path)
-            .to_string();
-
-        // Emit parsing progress
-        let _ = app.emit(
-            "import-progress",
-            ImportProgressEvent {
-                step: 3,
-                step_name: "parsing".to_string(),
-                message: format!("Parsing: {}", filename),
-                current: index + 1,
-                total: file_contents.len(),
-            },
-        );
-
-        // Determine title
-        let title = if options.use_filename_as_title {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "Untitled".to_string())
-        } else {
-            content
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "Untitled".to_string())
-        };
-
-        // Generate root node ID upfront
-        let root_id = uuid::Uuid::new_v4().to_string();
-
-        // Determine root content (title as header)
-        let root_content = if title.starts_with('#') {
-            title.clone()
-        } else {
-            format!("# {}", title)
-        };
-
-        // Skip the first line of content if it matches the title (de-duplication)
-        let content_for_children = {
-            let first_line = content.lines().find(|l| !l.trim().is_empty());
-            if first_line == Some(&title) {
-                let lines: Vec<&str> = content.lines().collect();
-                let first_idx = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
-                lines[first_idx + 1..].join("\n")
-            } else {
-                content.to_string()
-            }
-        };
-
-        // Parse markdown to prepared nodes
-        let children =
-            match prepare_nodes_from_markdown(&content_for_children, Some(root_id.clone())) {
-                Ok(nodes) => nodes,
-                Err(e) => {
-                    results.push(FileImportResult {
-                        file_path: path.to_string_lossy().to_string(),
-                        root_id: None,
-                        nodes_created: 0,
-                        success: false,
-                        error: Some(format!("Failed to parse markdown: {:?}", e)),
-                        collection: None,
-                        archived: false,
-                    });
-                    failed += 1;
-                    continue;
-                }
-            };
-
-        prepared_files.push(PreparedFileImport {
-            file_path: path.clone(),
-            root_id,
-            root_content,
-            is_archived: *is_archived,
-            collection_path: collection_path.clone(),
-            children,
-        });
-    }
-
-    // Build file→UUID map for link transformation
-    let file_to_uuid_map: HashMap<PathBuf, String> = prepared_files
-        .iter()
-        .map(|f| (f.file_path.clone(), f.root_id.clone()))
-        .collect();
-
-    // Step 4: Resolving links
-    let _ = app.emit(
-        "import-progress",
-        ImportProgressEvent {
-            step: 4,
-            step_name: "resolving".to_string(),
-            message: "Resolving internal links...".to_string(),
-            current: 0,
-            total: prepared_files.len(),
-        },
-    );
-
-    // Transform inter-file links in all nodes and collect mentions (Issue #868)
-    let mut all_mentions: Vec<(String, String)> = Vec::new();
-    for prepared in &mut prepared_files {
-        let result = transform_links_in_nodes_with_mentions(
-            &mut prepared.children,
-            &file_to_uuid_map,
-            Some(&prepared.file_path),
-            &prepared.root_id,
-        );
-        all_mentions.extend(result.mentions);
-    }
-
-    // Collect unique collection paths
-    let unique_collections: Vec<String> = prepared_files
-        .iter()
-        .filter_map(|f| f.collection_path.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    // Build results for successfully parsed files (will be updated after insertion)
-    let successful_count = prepared_files.len();
-    for prepared in &prepared_files {
-        results.push(FileImportResult {
-            file_path: prepared.file_path.to_string_lossy().to_string(),
-            root_id: Some(prepared.root_id.clone()),
-            nodes_created: 1 + prepared.children.len(), // Root + children
-            success: true,
-            error: None,
-            collection: prepared.collection_path.clone(),
-            archived: prepared.is_archived,
-        });
-    }
-
-    // ========================================================================
-    // PHASE 2: Spawn async task for DB operations (fire-and-forget)
-    // ========================================================================
-
-    let parsing_duration = start.elapsed().as_millis();
-
-    // Clone data for the spawned task.
-    // These values are computed before tokio::spawn because:
-    // 1. The async block uses `move`, which takes ownership of captured variables
-    // 2. Computing lengths/counts here avoids borrowing issues in the async context
-    // 3. Cloning Arc/handles is cheap and allows the original references to be dropped
-    let store = Arc::clone(node_service.store());
-    let node_service_clone = (*node_service).clone();
-    let app_clone = app.clone();
-    let total_files_clone = total_files;
-    let successful_files_clone = prepared_files.len();
-    let total_nodes_clone: usize = prepared_files.iter().map(|f| 1 + f.children.len()).sum();
-    let all_mentions_count = all_mentions.len();
-    let unique_collections_count = unique_collections.len();
-
-    // Spawn background task for DB operations
-    tokio::spawn(async move {
-        let insert_start = std::time::Instant::now();
-
-        // Step 5: Creating collections
-        let _ = app_clone.emit(
-            "import-progress",
-            ImportProgressEvent {
-                step: 5,
-                step_name: "collections".to_string(),
-                message: format!("Creating {} collections...", unique_collections_count),
-                current: 0,
-                total: unique_collections_count,
-            },
-        );
-
-        let collection_service = CollectionService::new(&store, &node_service_clone);
-        let collection_map = match collection_service
-            .bulk_resolve_collections(&unique_collections)
-            .await
-        {
-            Ok(map) => map,
-            Err(e) => {
-                tracing::error!("Failed to bulk resolve collections: {:?}", e);
-                HashMap::new()
-            }
-        };
-
-        // Build all nodes for bulk insertion
-        let mut all_nodes: Vec<(
-            String,
-            String,
-            String,
-            Option<String>,
-            f64,
-            serde_json::Value,
-        )> = Vec::new();
-        let mut collection_assignments: Vec<(String, String)> = Vec::new();
-
-        for prepared in &prepared_files {
-            // Add root node
-            let mut root_props = serde_json::json!({});
-            if prepared.is_archived {
-                root_props["lifecycle_status"] = serde_json::json!("archived");
-            }
-            all_nodes.push((
-                prepared.root_id.clone(),
-                "header".to_string(),
-                prepared.root_content.clone(),
-                None, // Root has no parent
-                1.0,
-                root_props,
-            ));
-
-            // Add child nodes (with parent remapping)
-            for child in &prepared.children {
-                let parent = child
-                    .parent_id
-                    .clone()
-                    .or_else(|| Some(prepared.root_id.clone()));
-                all_nodes.push((
-                    child.id.clone(),
-                    child.node_type.clone(),
-                    child.content.clone(),
-                    parent,
-                    child.order,
-                    child.properties.clone(),
-                ));
-            }
-
-            // Track collection assignment
-            if let Some(ref coll_path) = prepared.collection_path {
-                if let Some(coll_id) = collection_map.get(coll_path) {
-                    collection_assignments.push((prepared.root_id.clone(), coll_id.clone()));
-                }
-            }
-        }
-
-        // Step 6: Importing nodes
-        let _ = app_clone.emit(
-            "import-progress",
-            ImportProgressEvent {
-                step: 6,
-                step_name: "importing".to_string(),
-                message: format!("Importing {} nodes...", all_nodes.len()),
-                current: 0,
-                total: all_nodes.len(),
-            },
-        );
-
-        // Bulk create all nodes using trusted import (skips schema validation)
-        match node_service_clone
-            .bulk_create_hierarchy_trusted(all_nodes)
-            .await
-        {
-            Ok(created_ids) => {
-                tracing::info!(
-                    "Bulk created {} nodes in {:?}",
-                    created_ids.len(),
-                    insert_start.elapsed()
-                );
-            }
-            Err(e) => {
-                tracing::error!("Failed to bulk create nodes: {:?}", e);
-            }
-        }
-
-        // Step 7: Assigning to collections
-        let _ = app_clone.emit(
-            "import-progress",
-            ImportProgressEvent {
-                step: 7,
-                step_name: "assigning".to_string(),
-                message: "Assigning to collections...".to_string(),
-                current: 0,
-                total: collection_assignments.len(),
-            },
-        );
-
-        if !collection_assignments.is_empty() {
-            match store.bulk_add_to_collections(&collection_assignments).await {
-                Ok(count) => {
-                    tracing::info!("Bulk assigned {} collection memberships", count);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to bulk add to collections: {:?}", e);
-                }
-            }
-        }
-
-        // Step 8: Creating references (mentions)
-        let _ = app_clone.emit(
-            "import-progress",
-            ImportProgressEvent {
-                step: 8,
-                step_name: "references".to_string(),
-                message: format!("Creating {} references...", all_mentions_count),
-                current: 0,
-                total: all_mentions_count,
-            },
-        );
-
-        if !all_mentions.is_empty() {
-            match store.bulk_create_mentions(&all_mentions).await {
-                Ok(count) => {
-                    tracing::info!("Bulk created {} mentions", count);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to bulk create mentions: {:?}", e);
-                }
-            }
-        }
-
-        // Update lifecycle_status for archived documents
-        for prepared in &prepared_files {
-            if prepared.is_archived {
-                if let Err(e) = store
-                    .update_lifecycle_status(&prepared.root_id, "archived")
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to set lifecycle_status for {}: {}",
-                        prepared.root_id,
-                        e
-                    );
-                }
-            }
-        }
-
-        // Step 9: Complete
-        let total_duration = insert_start.elapsed();
-        let _ = app_clone.emit(
-            "import-progress",
-            ImportProgressEvent {
-                step: 9,
-                step_name: "complete".to_string(),
-                message: format!(
-                    "Imported {} files ({} nodes) in {:.1}s",
-                    successful_files_clone,
-                    total_nodes_clone,
-                    total_duration.as_secs_f64()
-                ),
-                current: total_files_clone,
-                total: total_files_clone,
-            },
-        );
-
-        tracing::info!(
-            "Background import complete: {} files, {} nodes in {:?}",
-            prepared_files.len(),
-            prepared_files
-                .iter()
-                .map(|f| 1 + f.children.len())
-                .sum::<usize>(),
-            total_duration
-        );
-    });
-
-    // Return immediately with parsing results (Phase 1 complete)
     Ok(BatchImportResult {
         total_files,
-        successful: successful_count,
+        successful,
         failed,
-        results,
-        duration_ms: parsing_duration,
+        results: final_results,
     })
 }
 
-/// Import markdown from a directory (all .md files)
-///
-/// Recursively finds all markdown files and imports them.
-/// Supports exclusion patterns and auto-collection routing.
+/// Import markdown from a directory — collects .md files and delegates to batch import
 #[tauri::command]
 pub async fn import_markdown_directory(
     app: AppHandle,
-    services: State<'_, AppServices>,
+    grpc: State<'_, GrpcClient>,
     directory_path: String,
     options: Option<ImportOptions>,
 ) -> Result<BatchImportResult, String> {
-    let path = PathBuf::from(&directory_path);
+    use std::path::PathBuf;
 
-    if !path.exists() {
+    let dir = PathBuf::from(&directory_path);
+    if !dir.exists() {
         return Err("Directory does not exist".to_string());
     }
-
-    if !path.is_dir() {
+    if !dir.is_dir() {
         return Err("Path is not a directory".to_string());
     }
 
-    let options = options.unwrap_or_default();
-    let exclude_patterns = &options.exclude_patterns;
+    let mut opts = options.unwrap_or_default();
+    let exclude_patterns = opts.exclude_patterns.clone();
 
-    // Collect all .md files, respecting exclusion patterns
+    // Set base_directory if not provided
+    if opts.base_directory.is_none() {
+        opts.base_directory = Some(directory_path.clone());
+    }
+
     let mut md_files: Vec<String> = Vec::new();
-    collect_markdown_files_with_exclusions(&path, &mut md_files, exclude_patterns)?;
-
-    // Sort for consistent ordering
+    collect_markdown_files_with_exclusions(&dir, &mut md_files, &exclude_patterns)?;
     md_files.sort();
 
     tracing::info!(
@@ -1042,19 +251,11 @@ pub async fn import_markdown_directory(
         exclude_patterns
     );
 
-    // Set base directory if not already set
-    let mut import_options = options.clone();
-    if import_options.base_directory.is_none() {
-        import_options.base_directory = Some(directory_path.clone());
-    }
-
-    // Import all files
-    import_markdown_files(app, services, md_files, Some(import_options)).await
+    import_markdown_files(app, grpc, md_files, Some(opts)).await
 }
 
-/// Recursively collect markdown files from a directory with exclusion patterns
 fn collect_markdown_files_with_exclusions(
-    dir: &PathBuf,
+    dir: &std::path::Path,
     files: &mut Vec<String>,
     exclude_patterns: &[String],
 ) -> Result<(), String> {
@@ -1064,10 +265,8 @@ fn collect_markdown_files_with_exclusions(
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
 
-        // Check if this path matches any exclusion pattern
         let path_str = path.to_string_lossy();
         let should_exclude = exclude_patterns.iter().any(|pattern| {
-            // Simple pattern matching: check if any path component equals the pattern
             path.components().any(|c| {
                 c.as_os_str()
                     .to_str()
@@ -1082,136 +281,13 @@ fn collect_markdown_files_with_exclusions(
         }
 
         if path.is_dir() {
-            // Recurse into subdirectories
             collect_markdown_files_with_exclusions(&path, files, exclude_patterns)?;
-        } else if path.is_file() {
-            // Check for .md extension
-            if let Some(ext) = path.extension() {
-                if ext == "md" {
-                    if let Some(path_str) = path.to_str() {
-                        files.push(path_str.to_string());
-                    }
-                }
+        } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+            if let Some(s) = path.to_str() {
+                files.push(s.to_string());
             }
         }
     }
 
     Ok(())
-}
-
-/// Internal function to import markdown content
-///
-/// Creates root node and bulk-creates children efficiently.
-/// Collection assignment is deferred - returns root_id for later batch assignment.
-/// Supports lifecycle_status for archived docs.
-///
-/// **De-duplication Logic**: If the title was extracted from the first line of content
-/// (indicated by `title` being the raw first line), the children are parsed from content
-/// AFTER the first line to avoid duplicate nodes.
-async fn import_markdown_content(
-    node_service: &NodeService,
-    title: &str,
-    content: &str,
-    is_archived: bool,
-) -> Result<(String, usize), String> {
-    // Determine root node type - if title starts with # it's a header, otherwise text
-    let (node_type, clean_title) = if title.starts_with('#') {
-        ("header", title.to_string())
-    } else {
-        ("header", format!("# {}", title))
-    };
-
-    // Skip the first line of content if it matches the title (de-duplication)
-    // This prevents creating a duplicate H1 child when the title came from content
-    let content_for_children = {
-        let first_line = content.lines().find(|l| !l.trim().is_empty());
-        if first_line == Some(title) {
-            // Title matches first line - skip it in children
-            let lines: Vec<&str> = content.lines().collect();
-            let first_idx = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
-            lines[first_idx + 1..].join("\n")
-        } else {
-            // Title was provided separately or doesn't match - use full content
-            content.to_string()
-        }
-    };
-
-    // Prepare nodes from markdown (phase 1 - in memory, no DB)
-    let prepared_nodes = prepare_nodes_from_markdown(&content_for_children, None)
-        .map_err(|e| format!("Failed to parse markdown: {:?}", e))?;
-
-    // Create root node with lifecycle_status if archived
-    let mut properties = serde_json::json!({});
-    if is_archived {
-        properties["lifecycle_status"] = serde_json::json!("archived");
-    }
-
-    let root_id = node_service
-        .create_node_with_parent(CreateNodeParams {
-            id: None,
-            node_type: node_type.to_string(),
-            content: clean_title,
-            parent_id: None,
-            insert_after_node_id: None,
-            properties,
-        })
-        .await
-        .map_err(|e| format!("Failed to create root node: {}", e))?;
-
-    // If archived, update lifecycle_status explicitly (in case properties didn't work)
-    if is_archived {
-        if let Err(e) = node_service
-            .store()
-            .update_lifecycle_status(&root_id, "archived")
-            .await
-        {
-            tracing::warn!(
-                "Failed to set lifecycle_status to archived for {}: {}",
-                root_id,
-                e
-            );
-        }
-    }
-
-    let mut nodes_created = 1; // Root node
-
-    // Bulk create children if any
-    if !prepared_nodes.is_empty() {
-        // Remap parent_ids: None -> root_id, Some(id) -> id
-        let nodes_for_bulk: Vec<(
-            String,
-            String,
-            String,
-            Option<String>,
-            f64,
-            serde_json::Value,
-        )> = prepared_nodes
-            .iter()
-            .map(|n| {
-                let parent = n.parent_id.clone().or_else(|| Some(root_id.clone()));
-                (
-                    n.id.clone(),
-                    n.node_type.clone(),
-                    n.content.clone(),
-                    parent,
-                    n.order,
-                    n.properties.clone(),
-                )
-            })
-            .collect();
-
-        // Use root-only notification - emits single event for root node
-        // Other clients receive "tree created" event without per-node overhead
-        let created_ids = node_service
-            .bulk_create_hierarchy_root_notify(nodes_for_bulk)
-            .await
-            .map_err(|e| format!("Failed to bulk create nodes: {}", e))?;
-
-        nodes_created += created_ids.len();
-    }
-
-    // NOTE: Collection assignment is now deferred to batch processing after all imports
-    // This avoids N+1 collection lookups that cause slowdown
-
-    Ok((root_id, nodes_created))
 }

@@ -21,7 +21,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
-use nodespace_daemon::{NodeServiceClient, NodeServiceImpl, NodeServiceServer};
+use nodespace_daemon::{
+    ImportServiceClient, ImportServiceImpl, ImportServiceServer, NodeServiceClient,
+    NodeServiceImpl, NodeServiceServer,
+};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::{Channel, Endpoint, Server};
@@ -37,13 +40,14 @@ const BIND_ADDR_TEMPLATE: &str = "127.0.0.1:0";
 /// finished binding, so we give tonic a brief window to retry.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Managed Tauri state wrapping the gRPC client.
+/// Managed Tauri state wrapping the gRPC clients.
 ///
-/// `Channel` is cheap to clone (it is an `Arc` internally) and so is
-/// `NodeServiceClient<Channel>`. Commands clone the client per call.
+/// `Channel` is cheap to clone (it is an `Arc` internally). Commands clone
+/// the client per call.
 #[derive(Clone)]
 pub struct GrpcClient {
-    inner: NodeServiceClient<Channel>,
+    node_client: NodeServiceClient<Channel>,
+    import_client: ImportServiceClient<Channel>,
 }
 
 impl GrpcClient {
@@ -64,12 +68,14 @@ impl GrpcClient {
 
         tracing::info!(%addr, "Starting in-process gRPC server");
 
-        let service_impl = NodeServiceImpl::new(node_service, embedding_service);
+        let node_impl = NodeServiceImpl::new(Arc::clone(&node_service), embedding_service);
+        let import_impl = ImportServiceImpl::new(node_service);
         let incoming = TcpListenerStream::new(listener);
 
         tokio::spawn(async move {
             if let Err(e) = Server::builder()
-                .add_service(NodeServiceServer::new(service_impl))
+                .add_service(NodeServiceServer::new(node_impl))
+                .add_service(ImportServiceServer::new(import_impl))
                 .serve_with_incoming(incoming)
                 .await
             {
@@ -82,18 +88,26 @@ impl GrpcClient {
             .connect_timeout(CONNECT_TIMEOUT);
 
         let channel = endpoint.connect().await.map_err(GrpcClientError::Connect)?;
-        let inner = NodeServiceClient::new(channel);
+        let node_client = NodeServiceClient::new(channel.clone());
+        let import_client = ImportServiceClient::new(channel);
 
         tracing::info!(%addr, "In-process gRPC client connected");
 
-        Ok(Self { inner })
+        Ok(Self {
+            node_client,
+            import_client,
+        })
     }
 
-    /// Borrow a clone of the underlying tonic client. Callers should clone
-    /// the client per request because tonic's generated methods take
-    /// `&mut self`.
+    /// Borrow a clone of the node service client. Commands should clone per
+    /// call because tonic's generated methods take `&mut self`.
     pub fn client(&self) -> NodeServiceClient<Channel> {
-        self.inner.clone()
+        self.node_client.clone()
+    }
+
+    /// Borrow a clone of the import service client.
+    pub fn import_client(&self) -> ImportServiceClient<Channel> {
+        self.import_client.clone()
     }
 }
 

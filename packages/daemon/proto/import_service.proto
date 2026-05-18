@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package nodespace;
+
+// ImportService exposes markdown import operations over gRPC.
+//
+// Imports run entirely inside the daemon's Tokio runtime so they survive
+// Tauri window close and are accessible from CLI and agent tools.
+//
+// The two-phase pipeline (parse → background DB write) is preserved:
+//   - Phase 1: file reads and markdown parsing happen synchronously
+//   - Phase 2: DB writes run in a spawned task; progress is streamed back
+service ImportService {
+  // Import a single markdown file. Streams progress events; final event
+  // carries step=9 ("complete") with the import summary.
+  rpc ImportMarkdown(ImportMarkdownRequest) returns (stream ImportProgressEvent);
+
+  // Import a batch of markdown files. Supports smart collection routing
+  // and the two-phase async pipeline from commands/import.rs.
+  rpc ImportMarkdownFiles(ImportMarkdownFilesRequest) returns (stream ImportProgressEvent);
+}
+
+// ---------------------------------------------------------------------------
+// Shared import options
+// ---------------------------------------------------------------------------
+
+message ImportOptions {
+  // Collection path to assign imported documents to (e.g. "rust-book").
+  // Ignored when auto_collection_routing is true.
+  string collection = 1;
+  // Use the filename stem as the document title instead of the first heading.
+  bool use_filename_as_title = 2;
+  // Route files to collections automatically based on their directory path.
+  bool auto_collection_routing = 3;
+  // Directory path components to exclude (e.g. ["design-system", "node_modules"]).
+  repeated string exclude_patterns = 4;
+  // Base directory for relative path calculation in auto-routing.
+  // Empty string = use the import directory.
+  string base_directory = 5;
+}
+
+// ---------------------------------------------------------------------------
+// ImportMarkdown — single file
+// ---------------------------------------------------------------------------
+
+message ImportMarkdownRequest {
+  // Absolute path to the markdown file on the daemon's filesystem.
+  string file_path = 1;
+  ImportOptions options = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ImportMarkdownFiles — batch
+// ---------------------------------------------------------------------------
+
+message ImportMarkdownFilesRequest {
+  // Absolute paths to the markdown files on the daemon's filesystem.
+  repeated string file_paths = 1;
+  ImportOptions options = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Progress events (shared by both RPCs)
+// ---------------------------------------------------------------------------
+
+// ImportProgressEvent mirrors commands/import.rs::ImportProgressEvent.
+//
+// Steps:
+//   1 = scanning    — folder scan complete
+//   2 = reading     — reading individual files
+//   3 = parsing     — parsing individual files
+//   4 = resolving   — resolving inter-file links
+//   5 = collections — creating/resolving collections
+//   6 = importing   — bulk node insertion
+//   7 = assigning   — collection membership
+//   8 = references  — creating mention edges
+//   9 = complete    — final summary; file_result populated for single-file RPC
+message ImportProgressEvent {
+  // Step number 1-9.
+  uint32 step = 1;
+  // Machine-readable step name (e.g. "scanning", "reading", "complete").
+  string step_name = 2;
+  // Human-readable message (e.g. "Reading: overview.md").
+  string message = 3;
+  // Current item count within this step.
+  uint32 current = 4;
+  // Total item count for this step.
+  uint32 total = 5;
+  // Populated on the final event (step=9) with per-file import results.
+  repeated FileImportResult results = 6;
+}
+
+// Result for a single file, carried on the final progress event.
+message FileImportResult {
+  string file_path = 1;
+  // Root node ID assigned to this document; empty when success=false.
+  string root_id = 2;
+  uint32 nodes_created = 3;
+  bool success = 4;
+  // Non-empty when success=false or when there was a non-fatal warning.
+  string error = 5;
+  // Collection the file was routed to (empty when not assigned).
+  string collection = 6;
+  bool archived = 7;
+}

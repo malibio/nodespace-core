@@ -8,7 +8,7 @@ pub mod output;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nodespace_daemon::NodeServiceClient;
+use nodespace_daemon::{ImportServiceClient, NodeServiceClient};
 use tonic::transport::Channel;
 
 /// Default endpoint the CLI dials. ADR-031 reserves `localhost:50051` for the
@@ -49,6 +49,11 @@ pub enum Command {
     Search(commands::search::SearchArgs),
     /// Developer diagnostics: database path, size, node counts, schema count.
     Diagnostics(commands::diagnostics::DiagnosticsArgs),
+    /// Import markdown files into NodeSpace.
+    Import {
+        #[command(subcommand)]
+        action: commands::import::ImportAction,
+    },
 }
 
 /// Resolve the configured endpoint, falling back to `DEFAULT_ENDPOINT`.
@@ -74,15 +79,39 @@ pub async fn connect(endpoint: &str) -> Result<NodeServiceClient<Channel>> {
         })
 }
 
+/// Connect an ImportServiceClient to the daemon.
+pub async fn connect_import(endpoint: &str) -> Result<ImportServiceClient<Channel>> {
+    ImportServiceClient::connect(endpoint.to_string())
+        .await
+        .with_context(|| {
+            format!(
+                "Could not connect to nodespaced at {endpoint}.\n\
+                 Is the daemon running? Start it with `nodespaced` in another terminal."
+            )
+        })
+}
+
 /// Top-level dispatch — wired by `main.rs` and reused by integration tests.
 pub async fn run(cli: Cli) -> Result<()> {
     let endpoint = resolve_endpoint(cli.endpoint.as_deref());
-    let mut client = connect(&endpoint).await?;
     let json = cli.json;
 
     match cli.command {
-        Command::Node { action } => commands::node::run(&mut client, action, json).await,
-        Command::Search(args) => commands::search::run(&mut client, args, json).await,
-        Command::Diagnostics(args) => commands::diagnostics::run(&mut client, args, json).await,
+        Command::Node { action } => {
+            let mut client = connect(&endpoint).await?;
+            commands::node::run(&mut client, action, json).await
+        }
+        Command::Search(args) => {
+            let mut client = connect(&endpoint).await?;
+            commands::search::run(&mut client, args, json).await
+        }
+        Command::Diagnostics(args) => {
+            let mut client = connect(&endpoint).await?;
+            commands::diagnostics::run(&mut client, args, json).await
+        }
+        Command::Import { action } => {
+            let mut client = connect_import(&endpoint).await?;
+            commands::import::run(&mut client, action, json).await
+        }
     }
 }
