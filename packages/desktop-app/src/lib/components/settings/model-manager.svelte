@@ -10,6 +10,7 @@
   const loadedModelId = $derived(modelStore.loadedModelId);
   const recommendedModel = $derived(modelStore.recommendedModel);
   const isLoading = $derived(modelStore.isLoading);
+  const systemRamGb = $derived(modelStore.systemRamGb);
 
   onMount(() => {
     if (models.length === 0) {
@@ -79,7 +80,8 @@
         {@const isLoaded = model.id === loadedModelId}
         {@const progress = downloadProgress[model.id]}
 
-        <div class="model-card" class:model-loaded={isLoaded}>
+        {@const insufficientRam = systemRamGb > 0 && model.min_memory_gb > 0 && systemRamGb < model.min_memory_gb}
+        <div class="model-card" class:model-loaded={isLoaded} class:model-insufficient-ram={insufficientRam}>
           <div class="model-card-header">
             <div class="model-card-title">
               <span class="model-name">{model.name}</span>
@@ -96,6 +98,13 @@
             <span>{formatBytes(model.size_bytes)}</span>
             <span>&middot;</span>
             <span>{model.quantization}</span>
+            {#if model.min_memory_gb > 0}
+              <span>&middot;</span>
+              <span>Requires {model.min_memory_gb} GB RAM</span>
+              {#if insufficientRam}
+                <span class="ram-warning-chip">Insufficient RAM</span>
+              {/if}
+            {/if}
           </div>
 
           {#if progress !== undefined}
@@ -223,6 +232,10 @@
     background: hsl(var(--primary) / 0.03);
   }
 
+  .model-insufficient-ram {
+    opacity: 0.6;
+  }
+
   .model-card-header {
     display: flex;
     align-items: center;
@@ -285,9 +298,20 @@
 
   .model-card-meta {
     display: flex;
+    align-items: center;
     gap: 0.375rem;
     font-size: 0.8125rem;
     color: hsl(var(--muted-foreground));
+    flex-wrap: wrap;
+  }
+
+  .ram-warning-chip {
+    font-size: 0.6875rem;
+    background: hsl(var(--destructive) / 0.1);
+    color: hsl(var(--destructive));
+    padding: 0.0625rem 0.375rem;
+    border-radius: 9999px;
+    font-weight: 500;
   }
 
   .model-progress {

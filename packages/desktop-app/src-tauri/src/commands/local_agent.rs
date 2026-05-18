@@ -386,6 +386,7 @@ pub async fn list_local_models(
                 sha256: None,
                 backend,
                 status,
+                min_memory_gb: entry.min_memory_gb.min(u8::MAX as u32) as u8,
             })
         })
         .collect();

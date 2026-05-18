@@ -75,6 +75,7 @@ describe('ModelStore', () => {
         expect(model.quantization).toBeTruthy();
         expect(model.status).toBeDefined();
         expect(model.status.status).toBe('not_downloaded');
+        expect(model.min_memory_gb).toBeGreaterThan(0);
       }
     });
   });

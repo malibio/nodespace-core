@@ -43,6 +43,7 @@ function createMockModels(): ModelInfo[] {
       url: 'https://huggingface.co/ministral/ministral-8b-instruct-2410-GGUF',
       sha256: 'abc123',
       status: { status: 'not_downloaded' },
+      min_memory_gb: 16,
     },
     {
       id: 'ministral-3b-q4',
@@ -54,6 +55,7 @@ function createMockModels(): ModelInfo[] {
       url: 'https://huggingface.co/ministral/ministral-3b-instruct-GGUF',
       sha256: 'def456',
       status: { status: 'not_downloaded' },
+      min_memory_gb: 8,
     },
     {
       id: 'ministral-8b-q8',
@@ -65,6 +67,7 @@ function createMockModels(): ModelInfo[] {
       url: 'https://huggingface.co/ministral/ministral-8b-instruct-2410-GGUF',
       sha256: 'ghi789',
       status: { status: 'not_downloaded' },
+      min_memory_gb: 16,
     },
   ];
 }
@@ -74,6 +77,8 @@ class ModelStore {
   downloadProgress = $state<Record<string, number>>({});
   loadedModelId = $state<string | null>(null);
   isLoading = $state(false);
+  /** Total system RAM in GiB. 0 means unknown (non-Tauri or not yet loaded). */
+  systemRamGb = $state(0);
 
   private downloadAbortControllers = new Map<string, AbortController>();
   private eventUnlisteners: Array<() => void> = [];
@@ -107,7 +112,10 @@ class ModelStore {
     this.isLoading = true;
     try {
       if (isTauri()) {
-        this.models = await tauriCommands.chatModelList();
+        [this.models, this.systemRamGb] = await Promise.all([
+          tauriCommands.chatModelList(),
+          tauriCommands.getSystemRamGb(),
+        ]);
         // Detect which model is loaded
         const loaded = this.models.find((m) => m.status.status === 'loaded');
         this.loadedModelId = loaded?.id ?? null;
@@ -115,6 +123,7 @@ class ModelStore {
         await new Promise((resolve) => setTimeout(resolve, 200));
         if (this.models.length === 0) {
           this.models = createMockModels();
+          this.systemRamGb = 8; // Simulate a low-RAM machine so the warning chip is visible in dev
         }
       }
       log.info('Models refreshed', { count: this.models.length });
@@ -398,6 +407,7 @@ class ModelStore {
     this.downloadProgress = {};
     this.loadedModelId = null;
     this.isLoading = false;
+    this.systemRamGb = 0;
   }
 
   /** Internal helper to update a model's status immutably. */

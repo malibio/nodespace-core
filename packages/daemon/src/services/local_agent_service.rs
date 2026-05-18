@@ -387,6 +387,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
                     status_json,
                     size_bytes: m.size_bytes as i64,
                     quantization: m.quantization,
+                    min_memory_gb: m.min_memory_gb as u32,
                 }
             })
             .collect();

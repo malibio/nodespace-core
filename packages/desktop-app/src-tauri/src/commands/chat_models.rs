@@ -11,6 +11,7 @@ use crate::agent_events;
 use crate::commands::nodes::CommandError;
 use nodespace_agent::agent_types::{DownloadEvent, ModelInfo, ModelManager};
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
+use nodespace_agent::local_agent::model_manager::detect_system_ram;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -137,4 +138,13 @@ pub async fn ollama_available(
     manager: State<'_, Arc<CompositeModelManager>>,
 ) -> Result<bool, CommandError> {
     Ok(manager.ollama_available().await)
+}
+
+/// Return total system RAM in GiB (rounded down).
+///
+/// Used by the model manager UI to dim cards for models that exceed the
+/// machine's available RAM.
+#[tauri::command]
+pub fn get_system_ram_gb() -> u64 {
+    detect_system_ram() / (1024 * 1024 * 1024)
 }

@@ -171,6 +171,8 @@ message ModelEntry {
   string status_json = 4;
   int64 size_bytes = 5;
   string quantization = 6;
+  // Minimum system RAM (GiB) required; 0 means unknown.
+  uint32 min_memory_gb = 7;
 }
 
 message ListModelsResponse {

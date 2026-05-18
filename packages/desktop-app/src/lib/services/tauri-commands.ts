@@ -348,6 +348,12 @@ export async function chatModelUnload(): Promise<void> {
   return invoke<void>('chat_model_unload');
 }
 
+/** Return total system RAM in GiB (rounded down). Returns 0 outside Tauri. */
+export function getSystemRamGb(): Promise<number> {
+  if (!isTauri()) return Promise.resolve(0);
+  return invoke<number>('get_system_ram_gb');
+}
+
 /**
  * Ensure a model is downloaded, loaded, and the inference engine is ready.
  * Handles full lifecycle: download → load → engine swap.

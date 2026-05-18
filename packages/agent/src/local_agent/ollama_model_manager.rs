@@ -175,6 +175,8 @@ impl ModelManager for OllamaModelManager {
                 sha256: None,
                 backend: ModelBackend::Ollama,
                 status: ModelStatus::Ready,
+                // Ollama manages its own model files; RAM requirement is unknown.
+                min_memory_gb: 0,
             })
             .collect();
 
