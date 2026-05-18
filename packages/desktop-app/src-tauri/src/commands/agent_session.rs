@@ -257,10 +257,7 @@ pub async fn write_input(
 ) -> Result<i64, CommandError> {
     let mut c = client.agent_session_client().await;
     let resp = c
-        .write_input(Request::new(WriteInputRequest {
-            session_id,
-            data: data.into(),
-        }))
+        .write_input(Request::new(WriteInputRequest { session_id, data }))
         .await
         .map_err(status_to_command_error)?;
     Ok(resp.into_inner().bytes_written)

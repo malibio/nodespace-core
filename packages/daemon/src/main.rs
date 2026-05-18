@@ -16,7 +16,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
+use nodespace_agent::skill_pipeline::seed_skill_nodes;
+use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
 use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
@@ -195,6 +198,7 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
         .await
         .context("Failed to initialize NodeService")?;
 
+    seed_agent_nodes(&mut node_service).await;
     let embedding_state = build_embedding_state(&store, &mut node_service);
     let node_service = Arc::new(node_service);
 
@@ -236,6 +240,29 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
         embeddings_service_grpc,
         embedding_state,
     })
+}
+
+/// Seed prompt and skill nodes on first launch. Idempotent — existing nodes are skipped.
+async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
+    let prompt_templates = PromptAssembler::seed_prompt_nodes();
+    let skill_templates = seed_skill_nodes();
+
+    let mut all_template_nodes = Vec::new();
+    for tmpl in prompt_templates.iter().chain(skill_templates.iter()) {
+        match prepare_nodes_from_template(tmpl) {
+            Ok(nodes) => all_template_nodes.push(nodes),
+            Err(e) => {
+                tracing::warn!(error = ?e, title = %tmpl.title, "Failed to expand seed template")
+            }
+        }
+    }
+
+    if let Err(e) = node_service
+        .seed_nodes_from_templates(all_template_nodes)
+        .await
+    {
+        tracing::warn!(error = %e, "Failed to seed agent nodes (non-fatal)");
+    }
 }
 
 /// Try to initialize NLP engine and embedding services. Non-fatal: returns
