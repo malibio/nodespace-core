@@ -4282,6 +4282,7 @@ dependencies = [
  "futures",
  "nodespace-agent",
  "nodespace-core",
+ "nodespace-daemon",
  "nodespace-nlp-engine",
  "serde",
  "serde_json",
@@ -4296,6 +4297,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tonic 0.12.3",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -4355,6 +4357,7 @@ name = "nodespace-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "image",
  "nodespace-core",

@@ -34,6 +34,8 @@ tauri-plugin-decorum = "1.1.1"
 nodespace-core = { workspace = true }
 nodespace-nlp-engine = { workspace = true }
 nodespace-agent = { workspace = true }
+nodespace-daemon = { workspace = true }
+tonic = "0.12"
 dirs = "5.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

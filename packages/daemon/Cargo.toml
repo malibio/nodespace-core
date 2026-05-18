@@ -15,6 +15,7 @@ tonic = "0.12"
 prost = "0.13"
 tokio = { workspace = true }
 tokio-stream = "0.1"
+async-stream = "0.3"
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

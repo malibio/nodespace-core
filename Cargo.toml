@@ -31,6 +31,7 @@ tracing = "0.1"
 nodespace-core = { path = "packages/core" }
 nodespace-nlp-engine = { path = "packages/nlp-engine" }
 nodespace-agent = { path = "packages/agent" }
+nodespace-daemon = { path = "packages/daemon" }
 
 # Dev dependencies (shared via workspace inheritance)
 tokio-test = "0.4"

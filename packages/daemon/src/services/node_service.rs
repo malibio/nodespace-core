@@ -6,12 +6,12 @@
 //!   3. Converts the result back into proto messages.
 //!   4. Maps `OpsError` → `tonic::Status`.
 //!
-//! `WatchNodes` and `Chat` return `Unimplemented` here — both have dedicated
-//! follow-up issues that will replace these stubs with real streaming impls.
+//! `Chat` returns `Unimplemented` — covered by a separate streaming issue.
 
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nodespace_core::db::events::DomainEvent;
 use nodespace_core::models::Node;
 use nodespace_core::ops::{
     node_ops::{self, CreateNodeInput, DeleteNodeInput, UpdateNodeInput},
@@ -19,14 +19,15 @@ use nodespace_core::ops::{
     OpsError,
 };
 use nodespace_core::services::{NodeEmbeddingService, NodeService as CoreNodeService};
+use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
-    node_service_server::NodeService as GrpcNodeService, ChatRequest, ChatResponse,
-    CreateNodeRequest, DeleteNodeRequest, DeleteNodeResponse, GetChildrenRequest, GetNodeRequest,
-    NodeData, NodeEvent, NodeListResponse, NodeResponse, SearchRequest, UpdateNodeRequest,
-    WatchRequest,
+    node_event::Event as NodeEventKind, node_service_server::NodeService as GrpcNodeService,
+    ChatRequest, ChatResponse, CreateNodeRequest, DeleteNodeRequest, DeleteNodeResponse,
+    GetChildrenRequest, GetNodeRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse,
+    NodeResponse, SearchRequest, UpdateNodeRequest, WatchRequest,
 };
 
 /// gRPC adapter that owns shared handles to the core services.
@@ -284,11 +285,55 @@ impl GrpcNodeService for NodeServiceImpl {
 
     async fn watch_nodes(
         &self,
-        _request: Request<WatchRequest>,
+        request: Request<WatchRequest>,
     ) -> Result<Response<Self::WatchNodesStream>, Status> {
-        Err(Status::unimplemented(
-            "WatchNodes streaming is not yet implemented — tracked separately",
-        ))
+        let req = request.into_inner();
+        if !req.node_type.is_empty() || !req.root_id.is_empty() {
+            // Filtering is intentionally out of scope for the initial implementation
+            // (issue #1114 lists it as a Non-Goal). Log so clients can see the
+            // request was accepted but the filter is being ignored.
+            tracing::debug!(
+                node_type = %req.node_type,
+                root_id = %req.root_id,
+                "WatchNodes filter fields are not yet implemented; streaming all events"
+            );
+        }
+
+        let mut rx = self.node_service.subscribe_to_events();
+        // Clone the Arc so the stream owns its own handle — the stream future
+        // outlives `&self` (it is returned to tonic and polled independently),
+        // so it cannot borrow from the handler scope.
+        let node_service = self.node_service.clone();
+
+        let stream = async_stream::stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(envelope) => {
+                        // Translation is serial: a slow `get_node` lookup will
+                        // delay the next `rx.recv()` and increase the risk of
+                        // `Lagged`. Acceptable because lookups are RocksDB
+                        // point-reads and lag is observable downstream. If a
+                        // future workload makes this hot, parallelize by
+                        // dispatching translations to a bounded mpsc.
+                        if let Some(event) = convert_domain_event(&envelope.event, &node_service).await {
+                            yield Ok(event);
+                        }
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        // The broadcast channel ring buffer overflowed. A slow
+                        // client missed `skipped` events. Log and continue —
+                        // dropping the stream on lag would be worse than the
+                        // client briefly being out of sync, and `Lagged` is
+                        // observable from the broadcast layer (not a bug).
+                        tracing::warn!(skipped, "WatchNodes subscriber lagged; some events dropped");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        };
+
+        Ok(Response::new(Box::pin(stream)))
     }
 
     type ChatStream = ReceiverStream<Result<ChatResponse, Status>>;
@@ -346,6 +391,60 @@ fn node_to_proto(node: Node, parent_id: Option<String>, collection_id: Option<St
         created_at: node.created_at.to_rfc3339(),
         modified_at: node.modified_at.to_rfc3339(),
         collection_id: collection_id.unwrap_or_default(),
+    }
+}
+
+/// Translate a core `DomainEvent` into a proto `NodeEvent`.
+///
+/// Returns `None` for non-node events (relationships) — those are out of scope
+/// for `WatchNodes` (per issue #1114 Non-Goals: relationship streaming is a
+/// separate concern).
+///
+/// For `NodeCreated` and `NodeUpdated`, fetches the current node payload so
+/// clients receive full node data inline and don't need a follow-up `GetNode`.
+/// If the node has already been deleted by the time we look it up (a race
+/// possible under concurrent mutations), the event is dropped — the next event
+/// in the stream will be the corresponding `NodeDeleted`.
+async fn convert_domain_event(
+    event: &DomainEvent,
+    node_service: &Arc<CoreNodeService>,
+) -> Option<NodeEvent> {
+    match event {
+        DomainEvent::NodeCreated { node_id, .. } => match node_service.get_node(node_id).await {
+            Ok(Some(node)) => Some(NodeEvent {
+                event: Some(NodeEventKind::Created(node_to_proto(node, None, None))),
+            }),
+            Ok(None) => {
+                tracing::debug!(node_id = %node_id, "NodeCreated event skipped: node already gone");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(node_id = %node_id, error = %e, "failed to fetch node for NodeCreated event");
+                None
+            }
+        },
+        DomainEvent::NodeUpdated { node_id, .. } => match node_service.get_node(node_id).await {
+            Ok(Some(node)) => Some(NodeEvent {
+                event: Some(NodeEventKind::Updated(node_to_proto(node, None, None))),
+            }),
+            Ok(None) => {
+                tracing::debug!(node_id = %node_id, "NodeUpdated event skipped: node already gone");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(node_id = %node_id, error = %e, "failed to fetch node for NodeUpdated event");
+                None
+            }
+        },
+        DomainEvent::NodeDeleted { id, node_type } => Some(NodeEvent {
+            event: Some(NodeEventKind::Deleted(NodeDeleted {
+                node_id: id.clone(),
+                node_type: node_type.clone(),
+            })),
+        }),
+        DomainEvent::RelationshipCreated { .. }
+        | DomainEvent::RelationshipUpdated { .. }
+        | DomainEvent::RelationshipDeleted { .. } => None,
     }
 }
 

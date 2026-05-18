@@ -20,6 +20,10 @@ pub mod app_services;
 // Background services
 pub mod services;
 
+// gRPC-backed node event watcher (#1114). Inert until activated by #1113 —
+// see watcher.rs module docs for activation gating.
+pub mod watcher;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {

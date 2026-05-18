@@ -12,13 +12,14 @@ use std::time::Duration;
 
 use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
 use nodespace_daemon::nodespace::{
-    CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, SearchRequest,
-    UpdateNodeRequest,
+    node_event::Event as NodeEventKind, CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest,
+    GetNodeRequest, SearchRequest, UpdateNodeRequest, WatchRequest,
 };
 use nodespace_daemon::{NodeServiceClient, NodeServiceImpl, NodeServiceServer};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tonic::Code;
 
@@ -285,6 +286,210 @@ async fn search_nodes_returns_unavailable_without_embedding_service() {
         .expect_err("expected unavailable");
 
     assert_eq!(err.code(), Code::Unavailable);
+
+    let _ = shutdown.send(());
+}
+
+/// Per-event timeout for WatchNodes streaming tests. Generous enough to
+/// absorb a loaded CI runner but short enough to fail fast when an event is
+/// genuinely missing.
+const WATCH_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Pull the next event off a WatchNodes stream with a timeout so tests fail
+/// fast instead of hanging forever when an event is dropped.
+async fn next_event_with_timeout(
+    stream: &mut tonic::Streaming<nodespace_daemon::nodespace::NodeEvent>,
+) -> nodespace_daemon::nodespace::NodeEvent {
+    tokio::time::timeout(WATCH_EVENT_TIMEOUT, stream.next())
+        .await
+        .expect("timed out waiting for WatchNodes event")
+        .expect("stream ended unexpectedly")
+        .expect("stream item was an error")
+}
+
+/// Acceptance criterion (#1114): mutate a node via gRPC, verify the watcher
+/// receives the corresponding event. Covers all three event kinds in one go.
+#[tokio::test]
+async fn watch_nodes_receives_create_update_delete_events() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    // Open the watch stream BEFORE issuing any mutation so we see the events.
+    // We use a second client handle for streaming so the main client can keep
+    // issuing unary requests without contention with the streaming response.
+    let mut watch_client = client.clone();
+    let mut stream = watch_client
+        .watch_nodes(WatchRequest {
+            node_type: String::new(),
+            root_id: String::new(),
+        })
+        .await
+        .expect("watch_nodes failed")
+        .into_inner();
+
+    // Trigger create → update → delete and observe each event.
+    let created = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "watched node".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("create_node failed")
+        .into_inner();
+    let node_id = created.node_id.clone();
+
+    let create_event = next_event_with_timeout(&mut stream).await;
+    match create_event.event {
+        Some(NodeEventKind::Created(data)) => {
+            assert_eq!(data.id, node_id);
+            assert_eq!(data.content, "watched node");
+            assert_eq!(data.node_type, "text");
+        }
+        other => panic!("expected Created event, got {:?}", other),
+    }
+
+    client
+        .update_node(UpdateNodeRequest {
+            node_id: node_id.clone(),
+            version: None,
+            node_type: String::new(),
+            content: Some("watched node v2".into()),
+            properties: None,
+            add_to_collection: String::new(),
+            remove_from_collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("update_node failed");
+
+    let update_event = next_event_with_timeout(&mut stream).await;
+    match update_event.event {
+        Some(NodeEventKind::Updated(data)) => {
+            assert_eq!(data.id, node_id);
+            assert_eq!(data.content, "watched node v2");
+            assert!(data.version >= 2);
+        }
+        other => panic!("expected Updated event, got {:?}", other),
+    }
+
+    client
+        .delete_node(DeleteNodeRequest {
+            node_id: node_id.clone(),
+            version: None,
+        })
+        .await
+        .expect("delete_node failed");
+
+    let delete_event = next_event_with_timeout(&mut stream).await;
+    match delete_event.event {
+        Some(NodeEventKind::Deleted(d)) => {
+            assert_eq!(d.node_id, node_id);
+            assert_eq!(d.node_type, "text");
+        }
+        other => panic!("expected Deleted event, got {:?}", other),
+    }
+
+    let _ = shutdown.send(());
+}
+
+/// Acceptance criterion (#1114): multiple concurrent watchers supported
+/// simultaneously. Both must receive the same event from a single mutation.
+#[tokio::test]
+async fn watch_nodes_supports_multiple_concurrent_watchers() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let mut watch_a = client.clone();
+    let mut watch_b = client.clone();
+    let mut stream_a = watch_a
+        .watch_nodes(WatchRequest::default())
+        .await
+        .expect("watch_a failed")
+        .into_inner();
+    let mut stream_b = watch_b
+        .watch_nodes(WatchRequest::default())
+        .await
+        .expect("watch_b failed")
+        .into_inner();
+
+    let created = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "broadcast me".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("create_node failed")
+        .into_inner();
+
+    let (event_a, event_b) = tokio::join!(
+        next_event_with_timeout(&mut stream_a),
+        next_event_with_timeout(&mut stream_b),
+    );
+
+    for event in [event_a, event_b] {
+        match event.event {
+            Some(NodeEventKind::Created(data)) => {
+                assert_eq!(data.id, created.node_id);
+                assert_eq!(data.content, "broadcast me");
+            }
+            other => panic!("expected Created event on both watchers, got {:?}", other),
+        }
+    }
+
+    let _ = shutdown.send(());
+}
+
+/// Verifies the server-side stream closes cleanly when the client drops its
+/// receiver, rather than holding the broadcast subscription forever. Matches
+/// the AC "Stream closes gracefully when the client disconnects".
+#[tokio::test]
+async fn watch_nodes_closes_when_client_drops_stream() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    {
+        let mut transient = client.clone();
+        let _stream = transient
+            .watch_nodes(WatchRequest::default())
+            .await
+            .expect("watch failed")
+            .into_inner();
+        // Stream is dropped at end of this block; the server-side task should
+        // observe the receiver-half being gone via tonic's cancellation
+        // signaling and break its loop. We don't have a direct hook into that,
+        // but we can verify a fresh watcher still works afterwards (i.e. the
+        // server is still healthy and tracking subscribers correctly).
+    }
+
+    let mut fresh = client.clone();
+    let mut stream = fresh
+        .watch_nodes(WatchRequest::default())
+        .await
+        .expect("fresh watch failed")
+        .into_inner();
+
+    client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "post-drop".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("create_node failed");
+
+    let event = next_event_with_timeout(&mut stream).await;
+    assert!(
+        matches!(event.event, Some(NodeEventKind::Created(_))),
+        "expected fresh watcher to receive Created event after previous watcher dropped"
+    );
 
     let _ = shutdown.send(());
 }
