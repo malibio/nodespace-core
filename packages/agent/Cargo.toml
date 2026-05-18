@@ -27,6 +27,8 @@ minijinja = "2"
 dirs = "5.0"
 sysinfo = "0.33"
 which = "7"
+portable-pty = "0.8"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
