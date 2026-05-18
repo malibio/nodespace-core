@@ -30,7 +30,7 @@ import type {
   AgentSession,
   AgentTurnResult,
   LocalAgentStatus,
-  ModelInfo,
+  ModelInfo
 } from '$lib/types/agent-types';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -222,7 +222,9 @@ export async function createContainerNode(input: CreateContainerInput): Promise<
 
 /** Check if running in a Tauri desktop environment. */
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  return (
+    typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+  );
 }
 
 // ============================================================================
@@ -251,15 +253,12 @@ export async function localAgentNewSession(modelId: string): Promise<string> {
  * Streaming chunks are delivered via Tauri events (local-agent://chunk).
  * @returns Final turn result when generation completes.
  */
-export async function localAgentSend(
-  sessionId: string,
-  message: string
-): Promise<AgentTurnResult> {
+export async function localAgentSend(sessionId: string, message: string): Promise<AgentTurnResult> {
   if (!isTauri()) {
     return {
       response: 'Mock response (Tauri not available)',
       tool_calls_made: [],
-      usage: { prompt_tokens: 0, completion_tokens: 0 },
+      usage: { prompt_tokens: 0, completion_tokens: 0 }
     };
   }
   return invoke<AgentTurnResult>('local_agent_send', { sessionId, message });
@@ -446,3 +445,39 @@ export async function ptyListSessions(): Promise<PtyListSessionsResult> {
   return invoke<PtyListSessionsResult>('list_sessions');
 }
 
+// ============================================================================
+// Session Capture Settings Commands (Issue #1125)
+// ============================================================================
+
+export type CaptureContentLevel = 'metadata_only' | 'summary' | 'full';
+
+export interface CaptureSettings {
+  enabled: boolean;
+  sync: boolean;
+  content: CaptureContentLevel;
+}
+
+export async function getCaptureSettings(): Promise<CaptureSettings> {
+  if (!isTauri()) {
+    return { enabled: false, sync: false, content: 'metadata_only' };
+  }
+  return invoke<CaptureSettings>('get_capture_settings');
+}
+
+export async function updateCaptureSettings(
+  settings: Partial<CaptureSettings>
+): Promise<CaptureSettings> {
+  if (!isTauri()) {
+    return {
+      enabled: false,
+      sync: false,
+      content: 'metadata_only',
+      ...settings
+    } as CaptureSettings;
+  }
+  return invoke<CaptureSettings>('update_capture_settings', {
+    enabled: settings.enabled ?? null,
+    sync: settings.sync ?? null,
+    content: settings.content ?? null
+  });
+}

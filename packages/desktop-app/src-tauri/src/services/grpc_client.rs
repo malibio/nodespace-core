@@ -112,7 +112,18 @@ impl GrpcClient {
             node_service.clone(),
             embedding_service.clone(),
         ));
-        let agent_session_impl = AgentSessionHandler::new(pty_manager, assembler);
+        let capture_config_path = {
+            let home = std::env::var("HOME").unwrap_or_default();
+            std::path::PathBuf::from(home)
+                .join(".nodespace")
+                .join("daemon.toml")
+        };
+        let agent_session_impl = AgentSessionHandler::new(
+            pty_manager,
+            assembler,
+            node_service.clone(),
+            capture_config_path,
+        );
         let local_agent_impl = LocalAgentServiceImpl::new(node_service.clone());
 
         tokio::spawn(async move {

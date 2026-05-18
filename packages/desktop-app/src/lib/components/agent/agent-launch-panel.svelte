@@ -1,6 +1,12 @@
 <script lang="ts">
-  import { ptyLaunchSession } from '$lib/services/tauri-commands';
+  import {
+    ptyLaunchSession,
+    getCaptureSettings,
+    updateCaptureSettings,
+    type CaptureContentLevel
+  } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
+  import { onMount } from 'svelte';
 
   const log = createLogger('AgentLaunchPanel');
 
@@ -9,11 +15,17 @@
     { id: 'codex', label: 'Codex' },
     { id: 'gemini-cli', label: 'Gemini CLI' },
     { id: 'pi', label: 'Pi' },
-    { id: 'open-code', label: 'Open Code' },
+    { id: 'open-code', label: 'Open Code' }
+  ];
+
+  const CONTENT_LEVELS: { value: CaptureContentLevel; label: string }[] = [
+    { value: 'metadata_only', label: 'Metadata only' },
+    { value: 'summary', label: 'Summary' },
+    { value: 'full', label: 'Full transcript' }
   ];
 
   let {
-    onSessionLaunched,
+    onSessionLaunched
   }: {
     onSessionLaunched: (_sessionId: string) => void;
   } = $props();
@@ -23,6 +35,33 @@
   let launching = $state(false);
   let error = $state<string | null>(null);
 
+  let captureEnabled = $state(false);
+  let captureSync = $state(false);
+  let captureContent = $state<CaptureContentLevel>('metadata_only');
+
+  onMount(async () => {
+    try {
+      const settings = await getCaptureSettings();
+      captureEnabled = settings.enabled;
+      captureSync = settings.sync;
+      captureContent = settings.content;
+    } catch (e) {
+      log.warn('Failed to load capture settings', e);
+    }
+  });
+
+  async function saveCaptureSettings() {
+    try {
+      await updateCaptureSettings({
+        enabled: captureEnabled,
+        sync: captureSync,
+        content: captureContent
+      });
+    } catch (e) {
+      log.error('Failed to save capture settings', e);
+    }
+  }
+
   async function launch() {
     launching = true;
     error = null;
@@ -31,7 +70,7 @@
         agentType: selectedAgent,
         prompt: prompt.trim() || null,
         cols: 80,
-        rows: 24,
+        rows: 24
       });
       prompt = '';
       onSessionLaunched(result.sessionId);
@@ -86,6 +125,47 @@
       ></textarea>
       <span class="field-hint-inline">⌘↩ to launch</span>
     </div>
+
+    <details class="capture-section">
+      <summary class="capture-summary">Session capture</summary>
+      <div class="capture-body">
+        <label class="capture-row">
+          <input
+            type="checkbox"
+            class="capture-checkbox"
+            bind:checked={captureEnabled}
+            onchange={saveCaptureSettings}
+          />
+          <span class="capture-label">Save session to knowledge graph</span>
+        </label>
+
+        {#if captureEnabled}
+          <div class="capture-row capture-indent">
+            <label class="field-label" for="capture-content">Content</label>
+            <select
+              id="capture-content"
+              class="field-select capture-select"
+              bind:value={captureContent}
+              onchange={saveCaptureSettings}
+            >
+              {#each CONTENT_LEVELS as level (level.value)}
+                <option value={level.value}>{level.label}</option>
+              {/each}
+            </select>
+          </div>
+
+          <label class="capture-row capture-indent">
+            <input
+              type="checkbox"
+              class="capture-checkbox"
+              bind:checked={captureSync}
+              onchange={saveCaptureSettings}
+            />
+            <span class="capture-label">Include in sync</span>
+          </label>
+        {/if}
+      </div>
+    </details>
 
     {#if error}
       <div class="error-banner" role="alert">{error}</div>
@@ -180,6 +260,61 @@
     font-size: 0.6875rem;
     color: hsl(var(--muted-foreground));
     align-self: flex-end;
+  }
+
+  .capture-section {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+
+  .capture-summary {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+    cursor: pointer;
+    user-select: none;
+    background: hsl(var(--muted) / 0.3);
+  }
+
+  .capture-summary:hover {
+    background: hsl(var(--muted) / 0.5);
+  }
+
+  .capture-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0.75rem;
+  }
+
+  .capture-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+
+  .capture-indent {
+    padding-left: 1.25rem;
+  }
+
+  .capture-checkbox {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .capture-label {
+    font-size: 0.8125rem;
+    color: hsl(var(--foreground));
+  }
+
+  .capture-select {
+    flex: 1;
+    margin-top: 0.25rem;
   }
 
   .error-banner {

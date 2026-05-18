@@ -15,8 +15,10 @@
 //! 6. On [`PtySession::terminate`] (or when the child exits naturally), drop the
 //!    [`tempfile::TempDir`] so the working directory is cleaned up.
 
+pub mod capture;
 pub mod manager;
 pub mod session;
 
+pub use capture::SessionCapture;
 pub use manager::{PtySessionManager, SessionMetadata};
-pub use session::{OutputChunk, PtySession};
+pub use session::{ExitStatus, OutputChunk, PtySession};

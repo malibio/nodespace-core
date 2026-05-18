@@ -58,9 +58,10 @@ pub use nodespace::node_service_server::NodeServiceServer;
 pub use nodespace::settings_service_client::SettingsServiceClient;
 pub use nodespace::settings_service_server::SettingsServiceServer;
 pub use nodespace::{
-    LaunchSessionRequest, LaunchSessionResponse, ListSessionsRequest, ListSessionsResponse,
-    NodeData, ResizeRequest, ResizeResponse, SessionInfo, StreamOutputRequest,
-    TerminateSessionRequest, TerminateSessionResponse, WriteInputRequest, WriteInputResponse,
+    CaptureContentLevel, CaptureSettingsResponse, GetCaptureSettingsRequest, LaunchSessionRequest,
+    LaunchSessionResponse, ListSessionsRequest, ListSessionsResponse, NodeData, ResizeRequest,
+    ResizeResponse, SessionInfo, StreamOutputRequest, TerminateSessionRequest,
+    TerminateSessionResponse, UpdateCaptureSettingsRequest, WriteInputRequest, WriteInputResponse,
 };
 
 pub use services::{

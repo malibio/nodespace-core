@@ -446,6 +446,8 @@ pub fn run() {
             commands::settings::select_new_database,
             commands::settings::restart_app,
             commands::settings::reset_database_to_default,
+            commands::settings::get_capture_settings,
+            commands::settings::update_capture_settings,
             // Local agent commands (Issue #1008)
             commands::local_agent::local_agent_status,
             commands::local_agent::local_agent_new_session,
