@@ -214,7 +214,7 @@ async fn switch_database_services(
         .switch_database(
             bundle.store.clone(),
             bundle.node_service.clone(),
-            bundle.embedding_state,
+            bundle.embedding_service.clone(),
             new_config.clone(),
             new_session_token.clone(),
         )

@@ -5,10 +5,10 @@
 //! `packages/core` directly. To avoid running a separate `nodespaced` process
 //! while migration is in flight, this module:
 //!
-//!   1. Spawns the `NodeServiceImpl` from `nodespace-daemon` on a localhost
-//!      port (default `127.0.0.1:50051`).
-//!   2. Connects a `NodeServiceClient` to that endpoint and stashes the
-//!      `Channel` so commands can clone the client cheaply.
+//!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, and `EmbeddingsServiceImpl`
+//!      from `nodespace-daemon` on a localhost port.
+//!   2. Connects clients to that endpoint and stashes the `Channel`
+//!      so commands can clone the client cheaply.
 //!
 //! The same `Arc<NodeService>` AppServices already initializes is reused as
 //! the backing implementation, so there is no second database open and no
@@ -20,10 +20,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nodespace_core::services::{NodeEmbeddingService, NodeService};
+use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeService};
 use nodespace_daemon::{
-    ImportServiceClient, ImportServiceImpl, ImportServiceServer, NodeServiceClient,
-    NodeServiceImpl, NodeServiceServer,
+    EmbeddingsServiceClient, EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceClient,
+    ImportServiceImpl, ImportServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
 };
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -43,23 +43,25 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Managed Tauri state wrapping the gRPC clients.
 ///
 /// `Channel` is cheap to clone (it is an `Arc` internally). Commands clone
-/// the client per call.
+/// clients per call since tonic's generated methods take `&mut self`.
 #[derive(Clone)]
 pub struct GrpcClient {
-    node_client: NodeServiceClient<Channel>,
-    import_client: ImportServiceClient<Channel>,
+    node: NodeServiceClient<Channel>,
+    import: ImportServiceClient<Channel>,
+    embeddings: Option<EmbeddingsServiceClient<Channel>>,
 }
 
 impl GrpcClient {
     /// Start the in-process gRPC server and return a connected client.
     ///
-    /// `node_service` and `embedding_service` are the same instances used by
-    /// the unmigrated Tauri command handlers, so there is exactly one
-    /// `NodeService` per process. The server is spawned on a tokio task and
-    /// runs until the runtime shuts down.
+    /// `node_service`, `embedding_service`, and `processor` are the same
+    /// instances used by the Tauri app — one database, no lock contention.
+    /// The server is spawned on a tokio task and runs until the runtime shuts
+    /// down.
     pub async fn start(
         node_service: Arc<NodeService>,
         embedding_service: Option<Arc<NodeEmbeddingService>>,
+        processor: Option<Arc<EmbeddingProcessor>>,
     ) -> Result<Self, GrpcClientError> {
         let listener = TcpListener::bind(BIND_ADDR_TEMPLATE)
             .await
@@ -68,17 +70,32 @@ impl GrpcClient {
 
         tracing::info!(%addr, "Starting in-process gRPC server");
 
-        let node_impl = NodeServiceImpl::new(Arc::clone(&node_service), embedding_service);
-        let import_impl = ImportServiceImpl::new(node_service);
+        let node_service_impl =
+            NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
+        let import_impl = ImportServiceImpl::new(node_service.clone());
         let incoming = TcpListenerStream::new(listener);
 
+        let embeddings_impl =
+            embedding_service
+                .as_ref()
+                .zip(processor.as_ref())
+                .map(|(svc, proc)| {
+                    EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
+                });
+
         tokio::spawn(async move {
-            if let Err(e) = Server::builder()
-                .add_service(NodeServiceServer::new(node_impl))
-                .add_service(ImportServiceServer::new(import_impl))
-                .serve_with_incoming(incoming)
-                .await
-            {
+            let builder = Server::builder()
+                .add_service(NodeServiceServer::new(node_service_impl))
+                .add_service(ImportServiceServer::new(import_impl));
+            let result = if let Some(emb) = embeddings_impl {
+                builder
+                    .add_service(EmbeddingsServiceServer::new(emb))
+                    .serve_with_incoming(incoming)
+                    .await
+            } else {
+                builder.serve_with_incoming(incoming).await
+            };
+            if let Err(e) = result {
                 tracing::error!(error = %e, "In-process gRPC server terminated unexpectedly");
             }
         });
@@ -88,26 +105,35 @@ impl GrpcClient {
             .connect_timeout(CONNECT_TIMEOUT);
 
         let channel = endpoint.connect().await.map_err(GrpcClientError::Connect)?;
-        let node_client = NodeServiceClient::new(channel.clone());
-        let import_client = ImportServiceClient::new(channel);
+
+        let embeddings_client = if embedding_service.is_some() {
+            Some(EmbeddingsServiceClient::new(channel.clone()))
+        } else {
+            None
+        };
 
         tracing::info!(%addr, "In-process gRPC client connected");
 
         Ok(Self {
-            node_client,
-            import_client,
+            node: NodeServiceClient::new(channel.clone()),
+            import: ImportServiceClient::new(channel),
+            embeddings: embeddings_client,
         })
     }
 
-    /// Borrow a clone of the node service client. Commands should clone per
-    /// call because tonic's generated methods take `&mut self`.
+    /// Borrow a clone of the `NodeServiceClient`.
     pub fn client(&self) -> NodeServiceClient<Channel> {
-        self.node_client.clone()
+        self.node.clone()
     }
 
-    /// Borrow a clone of the import service client.
+    /// Borrow a clone of the `ImportServiceClient`.
     pub fn import_client(&self) -> ImportServiceClient<Channel> {
-        self.import_client.clone()
+        self.import.clone()
+    }
+
+    /// Borrow a clone of the `EmbeddingsServiceClient`, if available.
+    pub fn embeddings_client(&self) -> Option<EmbeddingsServiceClient<Channel>> {
+        self.embeddings.clone()
     }
 }
 

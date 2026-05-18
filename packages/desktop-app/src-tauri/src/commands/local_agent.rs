@@ -124,7 +124,7 @@ impl ManagedAgentState {
 
         // Resolve services from AppServices (should be initialized by now).
         let node_service = self.app_services.node_service().await.ok();
-        let embedding_service = self.app_services.embedding_service().await.ok();
+        let embedding_service = self.app_services.embedding_service().await;
 
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(
             GraphToolExecutor::new_with_optional_services(node_service.clone(), embedding_service),

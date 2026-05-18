@@ -531,8 +531,8 @@ pub(crate) fn graceful_shutdown(app_handle: &tauri::AppHandle) {
     }
     // Grace period for background tasks (MCP server, domain event forwarder)
     // to exit their tokio::select! loops and drop their Arc references.
-    // Must complete BEFORE release_gpu_resources() takes ownership of embedding state,
-    // so those tasks don't race with GPU resource teardown.
+    // Grace period for background tasks (MCP server, domain event forwarder) to exit
+    // their tokio::select! loops before GPU resource teardown.
     std::thread::sleep(std::time::Duration::from_millis(200));
     release_gpu_resources(app_handle);
 }
@@ -595,23 +595,9 @@ pub(crate) fn release_gpu_resources(app_handle: &tauri::AppHandle) {
         }
     }
 
-    // Step 2b: Release embedding GPU resources
-    if let Some(services) = app_handle.try_state::<app_services::AppServices>() {
-        tracing::debug!("Shutdown: releasing embedding GPU resources");
-        let services_clone = services.inner().clone();
-        // Spawn a dedicated thread to avoid "cannot block_on inside a runtime" panic.
-        // The Tauri run-event handler runs on a Tokio runtime thread, so we need
-        // a fresh thread with its own block_on to drive the async GPU release.
-        let handle = std::thread::spawn(move || {
-            tauri::async_runtime::block_on(async {
-                services_clone.release_gpu_resources().await;
-            });
-        });
-        // Wait for GPU release to complete before releasing the backend
-        if let Err(e) = handle.join() {
-            tracing::error!("GPU resource release thread panicked: {:?}", e);
-        }
-    }
+    // Step 2b: Embedding GPU resources are owned by the in-process gRPC server
+    // (GrpcClient / EmbeddingsServiceImpl) and released when the tokio runtime
+    // shuts down after the Tauri window closes. No explicit release needed here.
 
     // Step 3: Release the global llama backend itself
     // Must happen AFTER all models/contexts are dropped (steps 1-2)
