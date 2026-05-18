@@ -1,38 +1,19 @@
 //! Schema read commands for retrieving entity schemas
 //!
-//! As of Issue #690, schema operations use NodeService with strongly-typed SchemaNode.
-//! Schema mutation operations (add_field, remove_field, etc.) were removed
-//! as they weren't used by any UI components.
+//! As of Issue #1113, schema operations proxy through the in-process gRPC server
+//! (nodespace-daemon) instead of calling `packages/core` directly.
 //!
 //! This module provides read-only schema commands:
 //! - `get_all_schemas` - List all schema nodes (returns SchemaNode[] with typed fields)
 //! - `get_schema_definition` - Get a specific schema by ID (returns SchemaNode with typed fields)
 
-use crate::app_services::AppServices;
-use nodespace_core::services::NodeServiceError;
-use nodespace_core::{NodeQuery, SchemaNode};
-use serde::Serialize;
+use nodespace_core::SchemaNode;
+use nodespace_daemon::nodespace::{GetAllSchemasRequest, GetSchemaDefinitionRequest};
 use tauri::State;
+use tonic::Request;
 
-/// Structured error type for Tauri commands
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CommandError {
-    pub message: String,
-    pub code: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<String>,
-}
-
-impl From<NodeServiceError> for CommandError {
-    fn from(err: NodeServiceError) -> Self {
-        CommandError {
-            message: format!("Schema operation failed: {}", err),
-            code: "SCHEMA_SERVICE_ERROR".to_string(),
-            details: Some(err.to_string()),
-        }
-    }
-}
+use super::nodes::{proto_node_data_to_node, CommandError};
+use crate::services::GrpcClient;
 
 /// Get all schema nodes with typed fields
 ///
@@ -44,28 +25,27 @@ impl From<NodeServiceError> for CommandError {
 /// * `Err(CommandError)` - Error if retrieval fails
 #[tauri::command]
 pub async fn get_all_schemas(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
 ) -> Result<Vec<SchemaNode>, CommandError> {
-    let service = services.node_service().await.map_err(|e| CommandError {
-        message: e.message,
-        code: e.code,
-        details: e.details,
-    })?;
-
-    // Query all schema nodes and wrap in SchemaNode for typed serialization
-    let query = NodeQuery {
-        node_type: Some("schema".to_string()),
-        ..Default::default()
-    };
-    let nodes = service
-        .query_nodes_simple(query)
+    let mut c = client.client();
+    let resp = c
+        .get_all_schemas(Request::new(GetAllSchemasRequest {}))
         .await
-        .map_err(CommandError::from)?;
+        .map_err(|s| CommandError {
+            message: format!("Failed to retrieve schemas: {}", s.message()),
+            code: "SCHEMA_SERVICE_ERROR".to_string(),
+            details: Some(format!("{:?}", s.code())),
+        })?;
 
-    // Convert to SchemaNode for typed serialization
-    let schema_nodes: Vec<SchemaNode> = nodes
+    let schema_nodes: Vec<SchemaNode> = resp
+        .into_inner()
+        .nodes
         .into_iter()
-        .filter_map(|node| SchemaNode::from_node(node).ok())
+        .filter_map(|nd| {
+            proto_node_data_to_node(nd)
+                .ok()
+                .and_then(|node| SchemaNode::from_node(node).ok())
+        })
         .collect();
 
     Ok(schema_nodes)
@@ -84,27 +64,44 @@ pub async fn get_all_schemas(
 /// * `Err(CommandError)` - Error if schema not found
 #[tauri::command]
 pub async fn get_schema_definition(
-    services: State<'_, AppServices>,
+    client: State<'_, GrpcClient>,
     schema_id: String,
 ) -> Result<SchemaNode, CommandError> {
-    let service = services.node_service().await.map_err(|e| CommandError {
-        message: e.message,
-        code: e.code,
-        details: e.details,
-    })?;
-
-    let schema_node = service
-        .get_schema_node(&schema_id)
+    let mut c = client.client();
+    let resp = c
+        .get_schema_definition(Request::new(GetSchemaDefinitionRequest {
+            schema_id: schema_id.clone(),
+        }))
         .await
-        .map_err(CommandError::from)?
-        .ok_or_else(|| CommandError {
-            message: format!("Schema '{}' not found", schema_id),
-            code: "SCHEMA_NOT_FOUND".to_string(),
-            details: None,
+        .map_err(|s| {
+            if s.code() == tonic::Code::NotFound {
+                CommandError {
+                    message: format!("Schema '{}' not found", schema_id),
+                    code: "SCHEMA_NOT_FOUND".to_string(),
+                    details: None,
+                }
+            } else {
+                CommandError {
+                    message: format!("Schema operation failed: {}", s.message()),
+                    code: "SCHEMA_SERVICE_ERROR".to_string(),
+                    details: Some(format!("{:?}", s.code())),
+                }
+            }
         })?;
 
-    // Return SchemaNode directly - custom Serialize impl outputs typed fields
-    Ok(schema_node)
+    let nd = resp.into_inner().node_data.ok_or_else(|| CommandError {
+        message: "gRPC GetSchemaDefinition response missing node_data".to_string(),
+        code: "GRPC_ERROR".to_string(),
+        details: None,
+    })?;
+
+    let node = proto_node_data_to_node(nd)?;
+
+    SchemaNode::from_node(node).map_err(|e| CommandError {
+        message: format!("Failed to parse schema node: {}", e),
+        code: "SCHEMA_SERVICE_ERROR".to_string(),
+        details: Some(format!("{:?}", e)),
+    })
 }
 
 #[cfg(test)]

@@ -264,6 +264,21 @@ async fn init_services(app: &AppHandle, config: &crate::config::AppConfig) -> Re
         // Non-critical — skill descriptions stay static if updater fails to start
     }
 
+    // Start in-process gRPC server and register the client as managed state
+    // so the migrated nodes/collections/schemas commands can proxy via tonic
+    // (Issue #1113). Reuses the same NodeService/embedding services so there
+    // is no second database open.
+    let embedding_service = services.embedding_service().await.ok();
+    match crate::services::GrpcClient::start(bundle.node_service.clone(), embedding_service).await {
+        Ok(client) => {
+            app.manage(client);
+            tracing::info!("In-process gRPC client registered");
+        }
+        Err(e) => {
+            return Err(format!("Failed to start in-process gRPC server: {}", e));
+        }
+    }
+
     tracing::info!("Service initialization complete");
     Ok(())
 }

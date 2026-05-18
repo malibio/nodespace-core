@@ -32,6 +32,8 @@ nodespace-core = { path = "packages/core" }
 nodespace-nlp-engine = { path = "packages/nlp-engine" }
 nodespace-agent = { path = "packages/agent" }
 nodespace-daemon = { path = "packages/daemon" }
+tonic = "0.12"
+prost = "0.13"
 
 # Dev dependencies (shared via workspace inheritance)
 tokio-test = "0.4"
