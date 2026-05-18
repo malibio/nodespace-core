@@ -1,6 +1,7 @@
 //! `nodespace session ...` subcommands — PTY agent session management via gRPC.
 
 use anyhow::{Context, Result};
+use chrono::{Local, TimeZone};
 use clap::{Args, Subcommand};
 use crossterm::terminal;
 use nodespace_daemon::nodespace::{
@@ -170,16 +171,23 @@ async fn stream_bridge(
             };
             let data = buf[..n].to_vec();
 
-            // Ctrl+D (0x04) — detach without killing.
-            // Ctrl+C (0x03) — also detach without killing.
+            // Ctrl+D (0x04) and Ctrl+C (0x03) detach without killing the session.
+            // Filter them out before forwarding so the agent's PTY does not receive
+            // SIGINT or EOF — we are detaching the CLI, not signalling the agent.
             let should_detach = data.iter().any(|&b| b == 0x04 || b == 0x03);
+            let forwarded: Vec<u8> = data
+                .into_iter()
+                .filter(|&b| b != 0x03 && b != 0x04)
+                .collect();
 
-            let _ = input_client
-                .write_input(Request::new(WriteInputRequest {
-                    session_id: input_session.clone(),
-                    data,
-                }))
-                .await;
+            if !forwarded.is_empty() {
+                let _ = input_client
+                    .write_input(Request::new(WriteInputRequest {
+                        session_id: input_session.clone(),
+                        data: forwarded,
+                    }))
+                    .await;
+            }
 
             if should_detach {
                 break;
@@ -195,14 +203,16 @@ async fn stream_bridge(
             }
             Ok(None) => break, // stream ended cleanly
             Err(e) => {
-                // Abort input task then surface the error.
                 input_task.abort();
+                let _ = input_task.await;
                 return Err(e).context("StreamOutput error");
             }
         }
     }
 
+    // Abort the stdin task and wait for it to exit before raw mode is restored.
     input_task.abort();
+    let _ = input_task.await;
     Ok(())
 }
 
@@ -214,10 +224,11 @@ fn detect_terminal_size(cols_override: Option<u32>, rows_override: Option<u32>) 
 }
 
 fn format_unix_time(unix_secs: i64) -> String {
-    // Simple HH:MM:SS display — good enough for a session list.
-    let secs = unix_secs % 86400;
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
+    if unix_secs == 0 {
+        return "unknown".to_string();
+    }
+    match Local.timestamp_opt(unix_secs, 0).single() {
+        Some(dt) => dt.format("%H:%M:%S").to_string(),
+        None => "unknown".to_string(),
+    }
 }

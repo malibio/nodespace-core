@@ -4423,6 +4423,7 @@ name = "nodespace-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "crossterm",
  "nodespace-core",
