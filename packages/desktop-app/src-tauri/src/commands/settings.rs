@@ -245,7 +245,10 @@ async fn switch_database_services(
         )
         .await
     {
-        tracing::error!("Failed to restart in-process gRPC server after database switch: {}", e);
+        tracing::error!(
+            "Failed to restart in-process gRPC server after database switch: {}",
+            e
+        );
         return Err(format!("Failed to restart gRPC server: {}", e));
     }
     tracing::info!("In-process gRPC server restarted with new database");

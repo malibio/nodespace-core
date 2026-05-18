@@ -196,14 +196,18 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     let node_service = Arc::new(node_service);
 
     let embedding_service_opt = embedding_state.as_ref().map(|(svc, _)| svc.clone());
-    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
+    let node_service_grpc =
+        NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
 
     let embeddings_service_grpc = embedding_state.as_ref().map(|(svc, proc)| {
         EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
     });
 
     let manager = Arc::new(PtySessionManager::new());
-    let assembler = Arc::new(GraphContextAssembler::new(node_service.clone(), embedding_service_opt));
+    let assembler = Arc::new(GraphContextAssembler::new(
+        node_service.clone(),
+        embedding_service_opt,
+    ));
     let agent_session = AgentSessionHandler::new(manager, assembler);
 
     let import = ImportServiceImpl::new(node_service);
