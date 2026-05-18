@@ -36,13 +36,13 @@ use crate::nodespace::{
     DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse, Empty,
     FindCollectionByPathRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRequest,
-    GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse, MentionResponse,
-    MentionTargetRequest, MoveNodeRequest, NodeCollectionsRequest, NodeData, NodeDeleted,
-    NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse, NodeResponse,
-    NodeTreeResponse, OptionalNodeResponse, OptionalStringClear, OptionalTimestampClear,
-    QueryNodesSimpleRequest, RemoveNodeFromCollectionRequest, RenameCollectionRequest,
-    ReorderNodeRequest, ReorderNodeResponse, SearchRequest, UpdateNodeRequest,
-    UpdateTaskNodeRequest, UpsertNodeWithParentRequest, WatchRequest,
+    GetRootsRequest, GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
+    MentionResponse, MentionTargetRequest, MoveNodeRequest, NodeCollectionsRequest, NodeData,
+    NodeDeleted, NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse,
+    NodeResponse, NodeTreeResponse, OptionalNodeResponse, OptionalStringClear,
+    OptionalTimestampClear, QueryNodesSimpleRequest, RemoveNodeFromCollectionRequest,
+    RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SearchRequest,
+    UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest, WatchRequest,
 };
 
 /// gRPC adapter that owns shared handles to the core services.
@@ -294,6 +294,48 @@ impl GrpcNodeService for NodeServiceImpl {
 
         Ok(Response::new(NodeTreeResponse {
             tree_json: tree.to_string(),
+        }))
+    }
+
+    async fn get_roots(
+        &self,
+        request: Request<GetRootsRequest>,
+    ) -> Result<Response<NodeListResponse>, Status> {
+        let req = request.into_inner();
+        let limit = if req.limit == 0 {
+            None
+        } else {
+            Some(req.limit as usize)
+        };
+        let offset = if req.offset == 0 {
+            None
+        } else {
+            Some(req.offset as usize)
+        };
+
+        let mut roots = self
+            .node_service
+            .get_roots()
+            .await
+            .map_err(service_error_to_status)?;
+
+        if let Some(off) = offset {
+            roots = roots.into_iter().skip(off).collect();
+        }
+        if let Some(lim) = limit {
+            roots.truncate(lim);
+        }
+
+        let nodes: Vec<NodeData> = roots
+            .into_iter()
+            .map(|n| node_to_proto(n, None, None))
+            .collect();
+        let count = nodes.len() as i32;
+
+        Ok(Response::new(NodeListResponse {
+            nodes,
+            count,
+            collection_id: String::new(),
         }))
     }
 

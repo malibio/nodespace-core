@@ -342,6 +342,11 @@ async fn diagnostics_collect_reports_counts_and_recency() {
         baseline.total_node_count + 3,
         "expected three additional nodes vs baseline"
     );
+    assert_eq!(
+        report.root_node_count,
+        baseline.root_node_count + 1,
+        "expected one additional root node vs baseline"
+    );
     assert!(
         report.database_exists,
         "daemon-db directory must exist after node creation"
