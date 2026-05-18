@@ -4,6 +4,8 @@
     import { createLogger } from '$lib/utils/logger';
 
     const log = createLogger('DatabaseSettings');
+
+    let restartPending = $state(false);
 </script>
 
 <div class="settings-section">
@@ -16,12 +18,21 @@
         </div>
     </div>
 
+    {#if restartPending}
+        <div class="restart-notice">
+            Restart required for the new database path to take effect.
+        </div>
+    {/if}
+
     <div class="setting-actions">
         <button class="btn btn-secondary" onclick={async () => {
             try {
-                const result = await invoke<{ newPath: string; success: boolean }>('select_new_database');
+                const result = await invoke<{ newPath: string; success: boolean; restartRequired: boolean }>('select_new_database');
                 if (result.success) {
                     await loadSettings();
+                    if (result.restartRequired) {
+                        restartPending = true;
+                    }
                 }
             } catch (err) {
                 if (err !== 'No folder selected') {
@@ -36,6 +47,7 @@
             try {
                 await invoke<string>('reset_database_to_default');
                 await loadSettings();
+                restartPending = true;
             } catch (err) {
                 log.error('Failed to reset database:', err);
             }
@@ -52,6 +64,7 @@
     .setting-label { display: block; font-size: 0.875rem; font-weight: 500; color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem; }
     .setting-value { font-size: 0.875rem; color: hsl(var(--foreground)); }
     .path-display { font-family: monospace; background: hsl(var(--muted)); padding: 0.5rem 0.75rem; border-radius: var(--radius); word-break: break-all; }
+    .restart-notice { font-size: 0.875rem; color: hsl(var(--warning, 38 92% 50%)); background: hsl(var(--warning, 38 92% 50%) / 0.1); border: 1px solid hsl(var(--warning, 38 92% 50%) / 0.3); padding: 0.5rem 0.75rem; border-radius: var(--radius); margin-bottom: 1rem; }
     .setting-actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
     .btn { padding: 0.5rem 1rem; border-radius: var(--radius); font-size: 0.875rem; cursor: pointer; border: 1px solid transparent; }
     .btn-secondary { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }

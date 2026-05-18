@@ -87,8 +87,8 @@ impl GrpcClient {
         let node_service_impl =
             NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
         let import_impl = ImportServiceImpl::new(node_service.clone());
-        let settings_impl = SettingsServiceImpl::with_default_path()
-            .map_err(|e| GrpcClientError::InvalidEndpoint(e))?;
+        let settings_impl =
+            SettingsServiceImpl::with_default_path().map_err(GrpcClientError::InvalidEndpoint)?;
         let incoming = TcpListenerStream::new(listener);
 
         let embeddings_impl =

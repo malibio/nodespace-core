@@ -5,8 +5,10 @@
 //! Tauri process — this service does not touch them.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
@@ -25,11 +27,17 @@ struct DaemonConfig {
 
 pub struct SettingsServiceImpl {
     config_path: PathBuf,
+    /// Serializes concurrent UpdateDaemonConfig RPCs so read-modify-write
+    /// operations on daemon.toml are not interleaved.
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl SettingsServiceImpl {
     pub fn new(config_path: PathBuf) -> Self {
-        Self { config_path }
+        Self {
+            config_path,
+            write_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     /// Build with the default path `~/.nodespace/daemon.toml`.
@@ -91,6 +99,8 @@ impl GrpcSettingsService for SettingsServiceImpl {
         request: Request<UpdateDaemonConfigRequest>,
     ) -> Result<Response<DaemonConfigResponse>, Status> {
         let req = request.into_inner();
+        let _guard = self.write_lock.lock().await;
+
         let mut config = self.read_config().await?;
 
         if !req.active_database_path.is_empty() {
