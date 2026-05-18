@@ -2,6 +2,10 @@ import * as grpc from '@grpc/grpc-js';
 import { getClient, type NodeServiceClient } from './client.js';
 import { type NodeResult, type SearchResult, ToolError } from './types.js';
 
+// Wire-format mirrors of the proto messages in
+// packages/daemon/proto/node_service.proto. The proto is the source of
+// truth; these interfaces only exist to give the response handlers a typed
+// shape after JS-style camelCase conversion by @grpc/proto-loader.
 interface ProtoNodeData {
   id: string;
   nodeType: string;
@@ -39,29 +43,27 @@ function fromNodeData(data: ProtoNodeData): NodeResult {
 }
 
 function fromNodeResponse(response: ProtoNodeResponse): NodeResult {
-  if (response.nodeData !== undefined) {
-    return fromNodeData(response.nodeData);
+  // The proto guarantees node_data is populated for GetNode/CreateNode/UpdateNode.
+  // If it's missing, that's a server-side bug — surface it loudly rather than
+  // returning a NodeResult with empty content that callers might quietly persist.
+  if (response.nodeData === undefined) {
+    throw new ToolError('INTERNAL', 'NodeResponse missing node_data');
   }
-  return {
-    id: response.nodeId,
-    nodeType: response.nodeType,
-    content: '',
-    parentId: response.parentId === '' ? undefined : response.parentId
-  };
+  return fromNodeData(response.nodeData);
 }
 
-function callUnary<TRequest, TResponse>(
+type UnaryCall<TRequest, TResponse> = (
+  request: TRequest,
+  callback: (err: grpc.ServiceError | null, response: TResponse) => void
+) => grpc.ClientUnaryCall;
+
+function promisify<TRequest, TResponse>(
   client: NodeServiceClient,
-  method: string,
+  method: UnaryCall<TRequest, TResponse>,
   request: TRequest
 ): Promise<TResponse> {
   return new Promise((resolve, reject) => {
-    const fn = (client as unknown as Record<string, Function>)[method];
-    if (typeof fn !== 'function') {
-      reject(new ToolError('INTERNAL', `gRPC method "${method}" not found on client`));
-      return;
-    }
-    fn.call(client, request, (err: grpc.ServiceError | null, response: TResponse) => {
+    method.call(client, request, (err, response) => {
       if (err !== null && err !== undefined) {
         reject(toToolError(err));
         return;
@@ -95,9 +97,9 @@ export async function searchSemantic(query: string, limit?: number): Promise<Sea
     semantic: true,
     filters: ''
   };
-  const response = await callUnary<typeof request, ProtoNodeListResponse>(
+  const response = await promisify<typeof request, ProtoNodeListResponse>(
     client,
-    'searchNodes',
+    client.searchNodes as UnaryCall<typeof request, ProtoNodeListResponse>,
     request
   );
   return {
@@ -108,9 +110,9 @@ export async function searchSemantic(query: string, limit?: number): Promise<Sea
 
 export async function getNode(nodeId: string): Promise<NodeResult> {
   const client = getClient();
-  const response = await callUnary<{ nodeId: string }, ProtoNodeResponse>(
+  const response = await promisify<{ nodeId: string }, ProtoNodeResponse>(
     client,
-    'getNode',
+    client.getNode as UnaryCall<{ nodeId: string }, ProtoNodeResponse>,
     { nodeId }
   );
   return fromNodeResponse(response);
@@ -130,9 +132,9 @@ export async function createNode(
     collection: '',
     lifecycleStatus: ''
   };
-  const response = await callUnary<typeof request, ProtoNodeResponse>(
+  const response = await promisify<typeof request, ProtoNodeResponse>(
     client,
-    'createNode',
+    client.createNode as UnaryCall<typeof request, ProtoNodeResponse>,
     request
   );
   return fromNodeResponse(response);
@@ -140,6 +142,11 @@ export async function createNode(
 
 export async function updateNode(nodeId: string, content: string): Promise<NodeResult> {
   const client = getClient();
+  // The proto marks `content` as optional (so callers can express "no change"),
+  // but for the agent-tools contract `updateNode` always sets content. The
+  // remaining non-optional enum-like fields (nodeType, lifecycleStatus,
+  // add/remove collection) are sent as empty strings — proto3 server-side
+  // treats empty here as "no change", matching the proto's inline comments.
   const request = {
     nodeId,
     content,
@@ -148,9 +155,9 @@ export async function updateNode(nodeId: string, content: string): Promise<NodeR
     removeFromCollection: '',
     lifecycleStatus: ''
   };
-  const response = await callUnary<typeof request, ProtoNodeResponse>(
+  const response = await promisify<typeof request, ProtoNodeResponse>(
     client,
-    'updateNode',
+    client.updateNode as UnaryCall<typeof request, ProtoNodeResponse>,
     request
   );
   return fromNodeResponse(response);
@@ -158,9 +165,9 @@ export async function updateNode(nodeId: string, content: string): Promise<NodeR
 
 export async function getChildren(nodeId: string): Promise<NodeResult[]> {
   const client = getClient();
-  const response = await callUnary<{ nodeId: string }, ProtoNodeListResponse>(
+  const response = await promisify<{ nodeId: string }, ProtoNodeListResponse>(
     client,
-    'getChildren',
+    client.getChildren as UnaryCall<{ nodeId: string }, ProtoNodeListResponse>,
     { nodeId }
   );
   return response.nodes.map(fromNodeData);

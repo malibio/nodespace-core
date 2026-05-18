@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as grpc from '@grpc/grpc-js';
 import * as clientModule from '../client.js';
+import {
+  searchSemantic,
+  getNode,
+  createNode,
+  updateNode,
+  getChildren
+} from '../tools.js';
+import { ToolError } from '../types.js';
 
 type UnaryCallback = (err: grpc.ServiceError | null, response?: unknown) => void;
 
@@ -69,7 +77,6 @@ describe('searchSemantic', () => {
         cb(null, { nodes: [sampleNodeData], count: 1, collectionId: '' });
       }
     );
-    const { searchSemantic } = await import('../tools.js');
 
     const result = await searchSemantic('hello', 5);
 
@@ -91,7 +98,6 @@ describe('searchSemantic', () => {
         cb(null, { nodes: [], count: 0, collectionId: '' });
       }
     );
-    const { searchSemantic } = await import('../tools.js');
 
     await searchSemantic('q');
 
@@ -104,8 +110,6 @@ describe('searchSemantic', () => {
         cb(unavailableError());
       }
     );
-    const { searchSemantic } = await import('../tools.js');
-    const { ToolError } = await import('../types.js');
 
     await expect(searchSemantic('q')).rejects.toBeInstanceOf(ToolError);
     await expect(searchSemantic('q')).rejects.toMatchObject({
@@ -121,7 +125,6 @@ describe('getNode', () => {
         cb(null, sampleNodeResponse);
       }
     );
-    const { getNode } = await import('../tools.js');
 
     const result = await getNode('node-1');
 
@@ -140,11 +143,26 @@ describe('getNode', () => {
         cb(notFoundError());
       }
     );
-    const { getNode } = await import('../tools.js');
-    const { ToolError } = await import('../types.js');
 
     await expect(getNode('missing')).rejects.toBeInstanceOf(ToolError);
     await expect(getNode('missing')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('throws ToolError when server returns NodeResponse without node_data', async () => {
+    mockClient.getNode.mockImplementation(
+      (_req: unknown, cb: UnaryCallback) => {
+        cb(null, {
+          nodeId: 'node-1',
+          nodeType: 'text',
+          parentId: '',
+          collectionId: ''
+          // nodeData intentionally missing
+        });
+      }
+    );
+
+    await expect(getNode('node-1')).rejects.toBeInstanceOf(ToolError);
+    await expect(getNode('node-1')).rejects.toMatchObject({ code: 'INTERNAL' });
   });
 });
 
@@ -155,7 +173,6 @@ describe('createNode', () => {
         cb(null, sampleNodeResponse);
       }
     );
-    const { createNode } = await import('../tools.js');
 
     const result = await createNode('text', 'hello world', 'parent-1');
 
@@ -173,7 +190,6 @@ describe('createNode', () => {
         cb(null, sampleNodeResponse);
       }
     );
-    const { createNode } = await import('../tools.js');
 
     await createNode('text', 'hello');
 
@@ -188,7 +204,6 @@ describe('updateNode', () => {
         cb(null, sampleNodeResponse);
       }
     );
-    const { updateNode } = await import('../tools.js');
 
     const result = await updateNode('node-1', 'new content');
 
@@ -211,7 +226,6 @@ describe('getChildren', () => {
         });
       }
     );
-    const { getChildren } = await import('../tools.js');
 
     const result = await getChildren('parent-1');
 
@@ -227,7 +241,6 @@ describe('getChildren', () => {
         cb(null, { nodes: [], count: 0, collectionId: '' });
       }
     );
-    const { getChildren } = await import('../tools.js');
 
     expect(await getChildren('leaf')).toEqual([]);
   });
@@ -244,7 +257,6 @@ describe('parentId normalization', () => {
         });
       }
     );
-    const { getNode } = await import('../tools.js');
 
     const result = await getNode('root');
 

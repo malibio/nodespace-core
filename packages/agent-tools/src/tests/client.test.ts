@@ -1,11 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { getClient, resetClient } from '../client.js';
+import * as fs from 'node:fs';
+import { getClient, resetClient, PROTO_PATH } from '../client.js';
 
 afterEach(() => {
   resetClient();
 });
 
 describe('client', () => {
+  it('resolves PROTO_PATH to a file that exists on disk', () => {
+    // Guards against silent breakage if packages/daemon is ever relocated.
+    expect(fs.existsSync(PROTO_PATH)).toBe(true);
+  });
+
   it('loads node_service.proto and constructs a NodeService client', () => {
     const client = getClient();
     expect(client).toBeDefined();
