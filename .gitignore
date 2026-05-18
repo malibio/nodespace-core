@@ -109,6 +109,7 @@ research_*.rs
 session*.rs
 !**/src/acp/session.rs
 !**/src/pty/session.rs
+!**/src/commands/session.rs
 *_test.rs.bak
 check_*.rs
 temp_*.rs
