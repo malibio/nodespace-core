@@ -1,10 +1,8 @@
 # NodeSpace Development Agent Guide
 
-## 🚨 CRITICAL: Pre-Release Development - NO BACKWARD COMPATIBILITY 🚨
+## CRITICAL: Pre-Release Development - NO BACKWARD COMPATIBILITY
 
 **NodeSpace has ZERO users, NO production deployment, and NO releases.**
-
-### Absolute Rules for All Agents
 
 - ❌ **NO backward compatibility code** - Delete old patterns immediately when replaced
 - ❌ **NO migration strategies** - We can reset the database anytime
@@ -16,289 +14,132 @@
 - ❌ **NO `#[deprecated]` attributes** - Delete old code, don't deprecate it
 - ❌ **NO `#[allow(dead_code)]`** - Delete unused code, don't suppress warnings
 
-### What This Means for Implementation
-
-**When fixing bugs or implementing features:**
-- ✅ Make breaking changes without hesitation - we have no users to impact
-- ✅ If you break something, fix it immediately in the same work session
-- ✅ Delete deprecated code immediately - no "TODO: remove after migration"
-- ✅ Update tests to match new behavior - don't test old patterns
-- ✅ Implement final architecture directly - skip intermediate steps
-- ✅ Reset database if needed - no data preservation required
-- ✅ Own your changes end-to-end - don't leave broken code for others
-
-**If you find yourself writing:**
-- "for backward compatibility..."
-- "during the transition period..."
-- "to support both old and new..."
-- "gradual rollout strategy..."
-- "soak period before removing..."
-
-**STOP. You're overthinking it. This is greenfield development.**
+Make breaking changes without hesitation. Fix breakage immediately in the same session. Implement final architecture directly — skip intermediate steps. If you find yourself writing "for backward compatibility" or "during the transition period" — **STOP. This is greenfield development.**
 
 ## Project Overview
 
-NodeSpace is an AI-native knowledge management system built with Rust backend, Svelte frontend, and Tauri desktop framework. This guide helps agents understand the project structure and find their next tasks.
+NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 frontend, Tauri 2.0 desktop. Stack: SurrealDB/RocksDB, async/await trait-based Rust, $state/$derived/$effect runes. UI-first approach — build interfaces with mock data before storage integration.
 
-## Getting Started as an Agent
+**Before starting any task, read:**
+- [`overview.md`](../nodespace-docs/development/overview.md) - Complete development process
+- [`startup-sequence.md`](../nodespace-docs/development/startup-sequence.md) - Mandatory pre-implementation steps
 
-> ## 🚨 MANDATORY FIRST STEPS FOR EVERY TASK 🚨
->
-> **BEFORE ANY IMPLEMENTATION WORK - COMPLETE THIS EXACT SEQUENCE:**
->
-> **⚠️ EXCEPTION: If continuing from a WIP commit, skip to "Continuing from WIP" section below**
->
-> 1. **Check git status on the primary checkout**: `git status` — commit any pending changes first
-> 2. **Pull latest `main`**: `git fetch origin && git pull origin main` — make sure the worktree branches from up-to-date code
-> 3. **Enter an isolated worktree**: `EnterWorktree({name: "issue-<number>-brief-desc"})`
->    - Creates `.claude/worktrees/issue-<number>-brief-desc/` on a new branch of the same name, branched from the latest `origin/main`
->    - All subsequent commands (and all implementation work) run **inside the worktree**
->    - The primary `main` checkout stays untouched, usable for parallel work and required for the final merge step (see Implementation Workflow step 7)
->    - **Naming**: terse, no `feature/` prefix — the branch name doubles as the worktree directory name, e.g. `issue-1122-agent-tools`
->    - **Continuing parent-issue work on a shared branch**: enter the existing worktree with `EnterWorktree({path: ".claude/worktrees/<existing>"})` instead of creating a new one. If no worktree exists yet for the shared branch, create it first: `git worktree add .claude/worktrees/<name> <branch>` then `EnterWorktree({path: "..."})`
-> 4. **Install dependencies in the worktree**: `bun install` — syncs `node_modules` in the new checkout
-> 5. **Run test baseline (inside the worktree)**: `bun run test` — frontend tests only (Rust tests require a warm cache and full disk space)
->    - If you hit a `Cannot find base config file "./.svelte-kit/tsconfig.json"` error, run `bunx svelte-kit sync` once from `packages/desktop-app/` to generate the synced tsconfig, then re-run
->    - ⚠️ **WAIT for complete test output** — look for the "Test Files X passed" summary line
->    - ⚠️ **Verify the final "Duration" line is visible** — if missing, output was truncated
-> 6. **Document baseline**: `bun run gh:comment <number> "Frontend: X passed"`
->
->    > ⚠️ **CRITICAL: All `bun run gh:*` commands MUST be run from the repository root of the worktree (the directory `EnterWorktree` placed you in), NOT from subdirectories like `packages/desktop-app/`. The scripts are defined in the root `package.json` and will fail with "Script not found" if run from the wrong directory.**
->
->    ```bash
->    # ✅ CORRECT - from worktree root
->    bun run gh:comment <number> "Frontend: X passed"
->
->    # ❌ WRONG - do NOT pipe to gh:comment (it doesn't read stdin)
->    echo "text" | bun run gh:comment <number>
->
->    # ❌ WRONG - running from subdirectory (will fail: "Script not found")
->    cd packages/desktop-app
->    bun run gh:comment <number> "..."
->    ```
-> 7. **Assign issue**: `bun run gh:assign <number> "@me"`
-> 8. **Update project status**: `bun run gh:status <number> "In Progress"`
-> 9. **Select subagent**: Choose appropriate specialized agent based on task complexity and type
-> 10. **Read issue requirements**: Understand all acceptance criteria
-> 11. **Plan implementation**: Self-contained approach with appropriate subagent
->
-> ## 📋 CONTINUING FROM WIP COMMIT
->
-> **If you're picking up work from a previous WIP commit, use this simplified sequence:**
->
-> 1. **Enter the existing worktree**:
->    - If the worktree directory still exists on disk: `EnterWorktree({path: ".claude/worktrees/issue-<N>-brief-desc"})`
->    - If it was removed (e.g., previous session ended with `ExitWorktree({action: "remove"})`): recreate it on the existing remote branch first — `git worktree add .claude/worktrees/issue-<N>-brief-desc <branch-name>` (from the primary checkout), then `EnterWorktree({path: "..."})`
-> 2. **Check git status**: `git status` — confirm you're on the right branch inside the worktree
-> 3. **Pull latest commits on the branch**: `git fetch origin && git pull origin <branch-name>` — get any pushes that landed since the WIP
-> 4. **Sync dependencies if needed**: `bun install` — only if the WIP commit mentions new packages
-> 5. **Review WIP commit message**: read the handoff commit to understand current state and next steps
-> 6. **Check issue comment**: look for the baseline test status documented when work started
-> 7. **Resume implementation**: continue from the "Remaining Work" section in the WIP commit message
->
-> **DO NOT:**
-> - ❌ Re-run baseline tests (already done when work started)
-> - ❌ Re-assign the issue (already assigned)
-> - ❌ Re-update status to "In Progress" (already set)
-> - ❌ Create a new worktree or branch (already exists)
->
-> **Focus on:**
-> - ✅ Understanding what was completed (from WIP commit)
-> - ✅ Understanding what remains (from "Remaining Work" section)
-> - ✅ Continuing the implementation approach
-> - ✅ Maintaining consistency with established patterns
-> 
-> **🔴 CRITICAL PROCESS VIOLATIONS**
-> 
-> **If you start implementation work without completing the startup sequence:**
-> 1. STOP immediately  
-> 2. Complete the startup sequence
-> 3. Restart implementation with proper branch and issue assignment
-> 
-> **Common mistakes agents make:**
-> - **Skipping `git pull` on main** before EnterWorktree — the worktree branches from your stale local `main` instead of `origin/main`
-> - **Skipping test baseline** — Not recording initial test status leads to regressions
-> - **Running `bun run gh:*` from wrong directory** — These scripts only work from the worktree root, not from `packages/desktop-app/`
-> - **Reading files before EnterWorktree** — any edits would land in the wrong checkout
-> - **Skipping EnterWorktree entirely** and working directly on `main` — pollutes the primary checkout and blocks parallel work
-> - Planning implementation before assigning issue
-> - Using TodoWrite without including the startup sequence as the first item
+## Mandatory Startup Sequence — NEW TASK
 
-> 🚨 **ADDITIONAL CRITICAL REQUIREMENTS** 🚨
-> 
-> **BEFORE STARTING ANY TASK, YOU MUST ALSO READ:**
-> - [`overview.md`](../nodespace-docs/development/overview.md) - Complete development process overview
-> - [`startup-sequence.md`](../nodespace-docs/development/startup-sequence.md) - Mandatory pre-implementation steps
-> 
-> **KEY PRINCIPLES YOU MUST FOLLOW:**
-> - ✅ **Self-Contained Implementation**: Each issue must work independently with full functionality
-> - ✅ **Early-Phase Mock Development**: Use mock data/services temporarily for parallel development (transitioning to real services soon)
-> - ✅ **Vertical Slicing**: Complete features end-to-end, not horizontal layers
-> - ✅ **GitHub Status Updates**: Use CLI commands to update project status at each transition (Todo → In Progress → Ready for Review)
-> - ✅ **Use Appropriate Subagents**: Use specialized agents when task complexity warrants expert assistance
+> **EXCEPTION: If continuing from a WIP commit, skip to the next section.**
 
-### 1. Understanding the Project
-- **Read the README.md** for high-level project overview and architecture
-- **Review `../nodespace-docs/`** for detailed technical specifications:
-  - `architecture/system-overview.md` - Complete architecture and design decisions
-  - `architecture/technology-stack.md` - Current tech stack and versions
-  - `components/` - Detailed component specifications
+1. **Check git status on the primary checkout**: `git status` — commit any pending changes first
+2. **Pull latest `main`**: `git fetch origin && git pull origin main`
+3. **Enter an isolated worktree**: `EnterWorktree({name: "issue-<number>-brief-desc"})`
+   - Creates `.claude/worktrees/issue-<number>-brief-desc/` on a new branch branched from `origin/main`
+   - All subsequent commands run **inside the worktree**; primary `main` stays untouched
+   - Naming: terse, no `feature/` prefix — branch name doubles as directory name, e.g. `issue-1122-agent-tools`
+   - Continuing parent-issue work on a shared branch: `EnterWorktree({path: ".claude/worktrees/<existing>"})`. If no worktree exists yet: `git worktree add .claude/worktrees/<name> <branch>` first
+4. **Install dependencies**: `bun install`
+5. **Run test baseline**: `bun run test` — frontend only (Rust tests require warm cache)
+   - If you hit `Cannot find base config file "./.svelte-kit/tsconfig.json"`, run `bunx svelte-kit sync` from `packages/desktop-app/` once, then re-run
+   - WAIT for complete output — look for "Test Files X passed" summary and "Duration" line
+6. **Document baseline**: `bun run gh:comment <number> "Frontend: X passed"`
 
-### 2. Finding Tasks to Work On
+   > ⚠️ **All `bun run gh:*` commands MUST run from the worktree root, NOT from subdirectories. Do NOT pipe to gh:comment (it doesn't read stdin).**
 
-**Primary Task Source: GitHub Issues**
+7. **Assign issue**: `bun run gh:assign <number> "@me"`
+8. **Update project status**: `bun run gh:status <number> "In Progress"`
+9. **Select subagent**, read issue requirements, plan self-contained implementation
 
-⚠️ **IMPORTANT: All `bun run gh:*` commands must be run from the repository root directory, NOT from subdirectories like `packages/desktop-app/`.**
+## Mandatory Startup Sequence — CONTINUING FROM WIP
+
+1. **Enter the existing worktree**: `EnterWorktree({path: ".claude/worktrees/issue-<N>-brief-desc"})`
+   - If removed: `git worktree add .claude/worktrees/issue-<N>-brief-desc <branch>` first
+2. **Check git status**: confirm you're on the right branch
+3. **Pull latest**: `git fetch origin && git pull origin <branch-name>`
+4. **Sync dependencies if needed**: `bun install` — only if WIP commit mentions new packages
+5. **Review WIP commit message**: understand completed work and remaining tasks
+6. **Resume** from the "Remaining Work" section
+
+**DO NOT** re-run baseline, re-assign the issue, re-update status, or create a new worktree.
+
+## Critical Process Violations
+
+If you start implementation without completing the startup sequence: STOP, complete it, restart.
+
+**Common mistakes:**
+- Skipping `git pull` on main before EnterWorktree — worktree branches from stale local `main`
+- Skipping test baseline — leads to undetected regressions
+- Running `bun run gh:*` from a subdirectory — fails with "Script not found"
+- Reading/editing files before EnterWorktree — edits land in wrong checkout
+- Skipping EnterWorktree entirely and working on `main` — blocks parallel work
+- Using TodoWrite without startup sequence as the first item
+
+## Finding Tasks
 
 ```bash
-# CORRECT - from repository root
 bun run gh:list
-
-# WRONG - from subdirectory
-cd packages/desktop-app
-bun run gh:list  # ❌ Will fail
-
-# List all open issues
-bun run gh:list
-
-# View specific issue details
 bun run gh:view <issue-number>
-
-# Edit issue properties
 bun run gh:edit <issue-number> --title "New Title"
 bun run gh:edit <issue-number> --body "Updated description"
 bun run gh:edit <issue-number> --labels "foundation,ui"
 bun run gh:edit <issue-number> --state "closed"
-
-# Check issue status and acceptance criteria
-bun run gh:view <issue-number>
 ```
 
-**When creating or modifying issues:**
-- **MUST follow**: [Issue Workflow Guide](../nodespace-docs/development/issue-workflow.md)
-- Contains templates, formatting rules, and quality gates
+When creating or modifying issues, follow the [Issue Workflow Guide](../nodespace-docs/development/issue-workflow.md).
 
-**Issue Priority Guidelines:**
-- Issues labeled `foundation` - Core infrastructure (highest priority)
-- Issues labeled `design-system` - UI foundation components
-- Issues labeled `ui` - User interface implementations
-- Issues labeled `backend` - Rust backend functionality
+Issue priority: `foundation` (highest) > `design-system` > `ui` > `backend`
 
-### 3. Project Context and State
+## Architecture & Docs
 
-> ⚠️ **Do not infer architecture from existing code comments — they may contain stale terminology from previous designs.**
-> When your task involves node storage, data models, type-specific fields, or database queries, read [`../nodespace-docs/architecture/data-layer.md`](../nodespace-docs/architecture/data-layer.md) before implementing.
-> For frontend state or persistence patterns, read [`../nodespace-docs/architecture/frontend-state-and-persistence.md`](../nodespace-docs/architecture/frontend-state-and-persistence.md).
+> Do not infer architecture from existing code comments — they may be stale.
 
-**Current Architecture:**
-- **Backend**: Rust with async/await, trait-based architecture
-- **Frontend**: Svelte 5.x with reactive state management ($state, $derived, $effect runes)
-- **Desktop**: Tauri 2.0 for native integration
-- **Database**: SurrealDB embedded with RocksDB backend
-- **AI**: mistral.rs with local models (planned)
+- Node storage / data models / DB queries: read [`data-layer.md`](../nodespace-docs/architecture/data-layer.md)
+- Frontend state / persistence: read [`frontend-state-and-persistence.md`](../nodespace-docs/architecture/frontend-state-and-persistence.md)
+- Full architecture: `../nodespace-docs/architecture/system-overview.md`, `technology-stack.md`
 
-**Development Philosophy:**
-- UI-first approach: Build interfaces before storage integration
-- Early-phase mock development: Use mock services temporarily for independent feature development (transitioning to real services soon)
-- Build-time plugins: Compile-time extensibility for performance
-- Design system driven: Consistent UI patterns from the start
+## Node Type System & Schema Architecture (CRITICAL)
 
-### 4. Node Type System & Schema Architecture (CRITICAL)
+Read before implementing any node type or property:
+- [`node-behavior-system.md`](../nodespace-docs/components/node-behavior-system.md) — hybrid Core (hardcoded) vs Extension (schema-driven) architecture
+- [`schema-management.md`](../nodespace-docs/components/schema-management.md) — namespace enforcement, protection levels
 
-**🚨 MANDATORY READING BEFORE IMPLEMENTING NODE TYPES OR PROPERTIES:**
+**Decision tree:**
 
-NodeSpace uses a **hybrid architecture** combining hardcoded behaviors with schema-driven extensions. Understanding this is critical to avoid breaking changes and maintenance hell.
-
-#### Core Architecture Documents (READ THESE FIRST)
-
-**1. Node Behavior System**
-- **Location**: [`node-behavior-system.md`](../nodespace-docs/components/node-behavior-system.md)
-- **When to read**: Before modifying/creating ANY node type (task, text, date, etc.)
-- **Key concepts**:
-  - Hybrid approach: Core (hardcoded) vs Extension (schema-driven)
-  - When to use behaviors vs schemas
-  - Property ownership model
-  - Validation hierarchy
-
-**2. Schema Management**
-- **Location**: [`schema-management.md`](../nodespace-docs/components/schema-management.md)
-- **When to read**: Before adding properties to nodes or creating custom types
-- **Key concepts**:
-  - **Namespace enforcement** (CRITICAL for preventing conflicts)
-  - User properties MUST use prefixes (`custom:`, `org:`, `plugin:`)
-  - Core properties use simple names (reserved for future)
-  - Protection levels and lazy migration
-
-#### Quick Decision Tree
-
-**Adding a property to a core node type (task, text, date, etc.):**
 ```
-Is it a CORE property the UI depends on?
-  ✅ YES → Edit hardcoded behavior in packages/core/src/behaviors/mod.rs
-  ❌ NO → Use schema system with NAMESPACE PREFIX (custom:propertyName)
+Adding a property to a core node type?
+  Core property the UI depends on → Edit hardcoded behavior in packages/core/src/behaviors/mod.rs
+  Everything else → Use schema system with NAMESPACE PREFIX (custom:propertyName)
+
+Creating a new node type?
+  Built-in type everyone needs → Hardcoded behavior + schema (requires issue approval)
+  Everything else → Schema-only type
 ```
 
-**Creating a new node type:**
-```
-Is it a built-in core type everyone needs?
-  ✅ YES → Create hardcoded behavior + schema (requires issue approval)
-  ❌ NO → Create schema-only type (no behavior needed)
-```
-
-#### Critical Rules
-
-**DO:**
-- ✅ Read node-behavior-system.md before touching node types
-- ✅ Use namespace prefixes for user properties (`custom:`, `org:`, `plugin:`)
-- ✅ Follow the hybrid architecture pattern
+**Rules:**
+- ✅ Use namespace prefixes for user properties: `custom:`, `org:`, `plugin:`
 - ✅ Check issue #400 for namespace enforcement status
+- ❌ No user properties without namespace prefix — conflicts with future core properties
+- ❌ No deleting core properties from schemas — breaks UI
+- ❌ No hardcoded behaviors for plugin/custom types
 
-**DON'T:**
-- ❌ Add user properties without namespace prefix (will conflict with future core properties)
-- ❌ Delete core properties from schemas (breaks UI)
-- ❌ Create hardcoded behaviors for plugin/custom types
-- ❌ Skip reading the architecture docs (leads to breaking changes)
+## Component Architecture (CRITICAL)
 
-### 5. Component Architecture (CRITICAL)
+Naming conventions (follow exactly):
+- `*Node` — individual node components wrapping BaseNode
+- `*NodeViewer` — page-level viewers wrapping BaseNodeViewer
 
-**Established Naming Conventions** (Follow these patterns exactly):
+**Correct hierarchy:**
+- `BaseNode` (`src/lib/design/components/base-node.svelte`) — abstract core, NEVER use directly
+- `BaseNodeViewer` (`src/lib/design/components/base-node-viewer.svelte`) — node collection manager
+- `TextNode`, `TaskNode`, `DateNode` — concrete node wrappers
+- `DateNodeViewer` — date page viewer
 
-```
-*Node = Individual node components that wrap BaseNode
-*NodeViewer = Page-level viewers that wrap BaseNodeViewer
-```
+**Do NOT create:** `TextNodeViewer`, `DatePageViewer`, or direct BaseNode usage in app code.
 
-**✅ Correct Component Hierarchy:**
-- **BaseNode** (`src/lib/design/components/base-node.svelte`) - Abstract core (NEVER use directly)
-- **BaseNodeViewer** (`src/lib/design/components/base-node-viewer.svelte`) - Node collection manager
-- **TextNode** (`src/lib/components/viewers/text-node.svelte`) - Text node wrapper
-- **TaskNode** (`src/lib/design/components/task-node.svelte`) - Task node wrapper
-- **DateNode** (`src/lib/components/viewers/date-node.svelte`) - Date node wrapper
-- **DateNodeViewer** (`src/lib/components/viewers/date-node-viewer.svelte`) - Date page viewer
+Full docs: [`component-architecture.md`](../nodespace-docs/components/component-architecture.md), [`frontend-architecture.md`](../nodespace-docs/architecture/frontend-architecture.md)
 
-**❌ DO NOT Create These:**
-- `TextNodeViewer` - BaseNodeViewer is sufficient for text
-- `DatePageViewer` - Should be `DateNodeViewer`
-- Any direct usage of `BaseNode` in application code
+When building components: read the architecture guide first, determine type (Node vs Viewer), follow naming, use provided templates, register in plugin system with correct lazy loading paths.
 
-**📖 Complete Documentation:**
-- [`component-architecture.md`](../nodespace-docs/components/component-architecture.md) - Complete patterns and templates
-- [`frontend-architecture.md`](../nodespace-docs/architecture/frontend-architecture.md) - Frontend overview
+## Sub-Agent Commissioning
 
-**When Building New Components:**
-1. **Read the architecture guide first** - Contains templates and patterns
-2. **Determine component type**: Node wrapper or Viewer wrapper?
-3. **Follow naming convention**: `*Node` or `*NodeViewer`
-4. **Use provided templates** from the architecture guide
-5. **Register in plugin system** with correct lazy loading paths
-
-### 5. Specialized Agent Usage
-
-Use the most appropriate specialized sub-agent available for complex tasks. Claude Code will automatically select the best agent based on task context and complexity.
-
-**CRITICAL: Sub-Agent Commissioning Instructions**
-
-When commissioning a specialized sub-agent, you MUST include these specific instructions in your prompt:
+When commissioning a specialized sub-agent, you MUST include these instructions verbatim:
 
 ```
 IMPORTANT SUB-AGENT INSTRUCTIONS:
@@ -312,506 +153,154 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
 - Return control to main agent when your technical work is complete
 ```
 
-**Why This Matters:**
-- Prevents redundant administrative work that wastes time
-- Ensures sub-agents focus on their specialized expertise (not project management)
-- Maintains single point of control for git operations and project status
-- Avoids conflicts with already-completed setup and branch state
-- Allows for seamless handoff between main agent and specialist
-- Main agent maintains full context of implementation progress and can handle commits/PRs appropriately
+## Implementation Workflow
 
-### 5. Implementation Workflow
-
-**CRITICAL**: Follow the complete development process in the [development documentation](../nodespace-docs/development/overview.md)
-
-**Step-by-Step Process (Summary - See Full Process Documentation):**
-
-1. **Pick an Issue & Assign Yourself**
+1. **Pick an Issue & Assign Yourself** (from worktree root after startup sequence)
    ```bash
-   # ⚠️ MUST be run from repository root
    bun run gh:list
    bun run gh:view <number>
    bun run gh:assign <number> "@me"
    bun run gh:status <number> "In Progress"
    ```
-   All commands now use TypeScript API (no Claude Code approval prompts)
 
-2. **Enter an Isolated Worktree** (do this from the primary `main` checkout)
-   ```
-   EnterWorktree({name: "issue-<number>-brief-desc"})
-   ```
-   Creates `.claude/worktrees/issue-<number>-brief-desc/` on a new branch of the same name, branched from `origin/main`. All implementation work happens inside this worktree.
+2. **Implement with Self-Contained Approach**
+   - Use mock data/services temporarily for independent development
+   - Vertical slicing: complete features end-to-end, not horizontal layers
+   - Check off each `- [ ]` acceptance criterion as you complete it
 
-3. **Implement with Self-Contained Approach**
-   - **Use mock data/services temporarily** for independent development (see development process for patterns)
-   - Build complete, working features that don't depend on other incomplete work
-   - Follow vertical slicing: complete the feature end-to-end with mocks for now
-   - Implement all acceptance criteria with demonstrable functionality
-
-4. **Complete Acceptance Criteria**
-   - Check off each `- [ ]` item in the issue as you complete it
-   - Test thoroughly with mock data and services (temporarily, transitioning to real services soon)
-   - Ensure feature works independently and provides user value
-
-**4a. Testing (Required)**
+3. **Testing**
    ```bash
-   # Fast unit tests with Happy-DOM (use during development)
-   bun run test                    # Run all unit tests once (FAST MODE - optimized)
-   bun run test:unit               # Same as above (explicit)
-   bun run test:watch              # Watch mode (recommended for TDD)
-   bun run test:perf               # Full performance validation (large datasets)
-
-   # Test specific files
-   bun run test src/tests/integration/my-test.test.ts
-   bun run test:watch src/tests/unit/my-component.test.ts
-
-   # Browser tests with real DOM (Chromium via Playwright)
-   bun run test:browser            # Run browser tests (for focus, events, etc.)
-   bun run test:browser:watch      # Watch mode for browser tests
-
-   # Run all tests (unit + browser + rust)
-   bun run test:all                # Runs both unit and browser tests + Rust tests
-
-   # Database integration tests (use before merging)
-   bun run test:db                 # Full integration with SQLite
-   bun run test:db:watch           # Watch mode with database
-
-   # Coverage reports
+   bun run test              # Fast unit tests, Happy-DOM — use during development
+   bun run test:unit         # Same as above
+   bun run test:watch        # TDD watch mode
+   bun run test:browser      # Real browser tests (focus/blur, Playwright/Chromium)
+   bun run test:browser:watch
+   bun run test:all          # Unit + browser + Rust — REQUIRED before PR
+   bun run test:db           # Full SQLite integration (before merging critical changes)
+   bun run test:perf         # Full performance validation (large datasets)
    bun run test:coverage
    ```
 
-   **Hybrid Testing Strategy:**
-   NodeSpace uses a **two-tier testing approach** for optimal speed and reliability:
+   - **Happy-DOM** (`bun run test`): 99% of tests — logic, services, utilities
+   - **Browser mode** (`bun run test:browser`): only for real focus/blur or browser-specific DOM APIs; requires `bunx playwright install chromium`
+   - **Performance**: fast mode (default) for daily dev, `bun run test:perf` before perf-critical merges
+   - **Database mode**: full integration validation before merging critical changes
 
-   1. **Happy-DOM (Fast Unit Tests)** - 728+ tests, ~10-20 seconds
-      - Controller logic, services, utilities
-      - Pattern matching, content processing
-      - State management, data transformations
-      - Use: `bun run test` or `bun run test:unit`
-      - Location: `src/tests/**/*.test.ts` (excluding `browser/`)
-
-   2. **Vitest Browser Mode (Real Browser Integration Tests)** - Targeted critical tests
-      - Focus management (focus/blur events)
-      - Edit mode activation and transitions
-      - Dropdown interactions (slash commands, @mentions)
-      - Cross-node navigation with real browser behavior
-      - Use: `bun run test:browser`
-      - Location: `src/tests/browser/**/*.test.ts`
-      - **Note**: Requires Playwright browsers installed (`bunx playwright install chromium`)
-
-   3. **Performance Tests** - Two modes for different workflows
-      - **Fast Mode (default in `bun run test`)**: Reduced datasets (100-500 nodes) for quick feedback
-      - **Full Mode (`bun run test:perf`)**: Large datasets (1000-2000 nodes) for comprehensive validation
-      - Use: `bun run test:perf` when optimizing performance or before major releases
-      - Location: `src/tests/performance/**/*.test.ts`
-      - **Automatic Scaling**: Tests use `TEST_FULL_PERFORMANCE=1` to switch between modes
-
-   **When to use which mode:**
-   - **Happy-DOM (default)**: 99% of tests - logic, services, utilities (fast, TDD-friendly)
-   - **Browser Mode**: Only when you need real focus/blur events or browser-specific DOM APIs
-   - **Performance Tests**: Run fast mode daily, full mode before merging performance-critical changes
-   - **Database Mode**: Full integration validation before merging critical changes
-   - Some tests conditionally skip in in-memory mode (require full database persistence)
-   - See [Testing Guide](../nodespace-docs/development/testing-guide.md) for details
-
-5. **Run Tests & Quality Checks Before PR**
+4. **Quality Checks & PR**
    ```bash
-   # ⚠️ MANDATORY STEP 1: Verify no new test failures
-   bun run test:all
-   # Compare results to baseline from step 3
-   # If any NEW failures: STOP and fix them before PR
-   # Document any pre-existing failures in PR description
-
-   # ⚠️ MANDATORY STEP 2: Run quality:fix
-   bun run quality:fix
-
-   # If quality:fix made changes, commit them
-   git add .
-   git commit -m "Fix linting and formatting"
-
-   # Create PR (run from the worktree root)
+   bun run test:all          # MANDATORY — no new failures vs baseline
+   bun run quality:fix       # MANDATORY — fix all lint/format issues
+   git add . && git commit -m "Fix linting and formatting"
    git push -u origin issue-<number>-brief-desc
-   bun run gh:pr <number>
+   bun run gh:pr <number>    # Creates PR, updates status to "Ready for Review"
    ```
-   **CRITICAL**:
-   - Run `bun run test:all` FIRST - no new test failures allowed
-   - Run `bun run quality:fix` SECOND - no lint/format issues allowed
-   - Automatically updates project status to "Ready for Review"
 
-6. **Conduct Code Review**
-   - **FOLLOW UNIVERSAL PROCESS**: Use the code review guidelines in the [PR review documentation](../nodespace-docs/development/pr-review.md)
-   - Use `/pragmatic-code-review` command for comprehensive PR reviews
-   - Use `senior-architect-reviewer` agent for complex architectural decisions
-   - All quality gates and review requirements apply universally to AI agents and human reviewers
+5. **Code Review** — run `/pragmatic-code-review` on every PR before merge. NEVER merge without it.
 
-7. **Merge PR and Clean Up the Worktree** — order matters
-
+6. **Merge & Clean Up** — order matters:
    ```bash
-   # Step 1: Verify the PR is actually mergeable (in the worktree)
+   # Step 1: Verify mergeable (from worktree)
    gh pr view <PR#> --json mergeable,reviewDecision,statusCheckRollup
    ```
-
    ```
-   # Step 2: Exit and remove the worktree BEFORE merging
+   # Step 2: Exit BEFORE merging
    ExitWorktree({action: "remove", discard_changes: true})
    ```
-   `discard_changes: true` is safe here — the squash merge about to land on `main` supersedes the local branch commits.
-
    ```bash
-   # Step 3: Merge the PR (now from the primary `main` checkout)
+   # Step 3: Merge from primary checkout
    gh pr merge <PR#> --squash --delete-branch
-
-   # Step 4: Pull the squash commit and update issue status
    git pull origin main
    bun run gh:status <issue#> "Done"
    ```
+   `discard_changes: true` is safe — the squash merge supersedes local branch commits. Always ExitWorktree first: `gh pr merge --delete-branch` fails noisily if you're still inside the worktree.
 
-   **Why this order matters**: `gh pr merge --delete-branch` tries to switch the local checkout off the about-to-be-deleted branch. If you're still inside the worktree, that fails with `'main' is already used by worktree at ...`. The remote merge itself still lands (GitHub merges server-side), but local cleanup fails noisily. Always `ExitWorktree` first.
+**TodoWrite — NEW tasks:** First item must be the full startup sequence as a single step. Last items: "Run test:all", "Run quality:fix and commit", "Create PR", "ExitWorktree + merge".
 
-   **NOTE**: Remote branch deletion is handled by `--delete-branch` (or GitHub's branch auto-delete setting). No further cleanup needed.
+**TodoWrite — WIP continuation:** First item: "WIP continuation sequence: git status, pull branch, review WIP commit, resume from Remaining Work". Last items same as above.
 
-**TodoWrite Tool Users - UPDATED:**
+## Plan Mode — CRITICAL CONTEXT PRESERVATION
 
-**For NEW tasks (starting fresh):**
-- Your **FIRST todo item** must be: "Complete startup sequence: git status + pull main on primary checkout, EnterWorktree({name: 'issue-N-brief-desc'}), then inside the worktree: bun install, run test baseline (bun run test), document baseline, assign issue (bun run gh:assign N '@me'), update status (bun run gh:status N 'In Progress'), select subagent"
-- Your **LAST todo items** must include: "Run test:all to verify no new failures", "Run quality:fix and commit changes", "Create PR", and "After review: verify mergeable, ExitWorktree, gh pr merge --squash --delete-branch"
-- Do NOT break the startup sequence into separate todo items
-- Only after completing the startup sequence should you add implementation todos
+The context window clears between planning and implementation. The implementation agent sees ONLY the plan.
 
-**For CONTINUING from WIP commit:**
-- Your **FIRST todo item** must be: "WIP continuation sequence: git status, pull latest from branch, review WIP commit message, check issue for baseline, resume from 'Remaining Work'"
-- Do NOT re-run baseline tests or re-assign the issue
-- Focus todos on remaining work from the WIP commit message
-- Your **LAST todo items** still include: "Run test:all to verify no new failures", "Run quality:fix and commit changes", and "Create PR"
+Every plan MUST include:
 
-**General:**
-- All GitHub operations now use **bun commands** (no Claude Code approval prompts)
+1. **Step 0 — Startup sequence:**
+   > `git status` and `git pull origin main` on primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})`, then inside the worktree: `bun install`, `bun run test` (baseline), `bun run gh:comment <N> "..."`, `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
 
-**Plan Mode — CRITICAL CONTEXT PRESERVATION:**
+2. **Final steps:**
+   > `bun run test:all` (no new failures), `bun run quality:fix` + commit, `bun run gh:pr <N>`. After approval: `gh pr view <PR#>`, `ExitWorktree({action: "remove", discard_changes: true})`, `gh pr merge <PR#> --squash --delete-branch`.
 
-When using plan mode (EnterPlanMode / ExitPlanMode), the context window is cleared between planning and implementation. This means the implementation agent will ONLY see the plan — not the CLAUDE.md, startup sequence, or any prior conversation context.
+3. **Inline standards** the implementation agent needs: e.g. "use `createLogger` not `console.log`", "mock Tauri with `vi.mock('@tauri-apps/api/core')`", "use `bun run test` not `bun test`".
 
-**Therefore, every plan MUST be self-contained and include:**
+## Development Standards
 
-1. **Startup sequence as Step 0** — The plan must begin with:
-   > Step 0: Complete startup sequence — `git status` and `git pull origin main` on the primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})`, then *inside the worktree*: `bun install`, run test baseline (`bun run test`), document baseline (`bun run gh:comment <N> "..."`), `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
+**Linting:** NO lint suppression — fix issues properly. No `any` types. No `{@html}`. Full docs: [`code-quality.md`](../nodespace-docs/development/standards/code-quality.md)
 
-2. **Finalization steps at the end** — The plan must end with:
-   > Final steps: Run `bun run test:all` to verify no new failures vs baseline. Run `bun run quality:fix` and commit any changes. Create PR with `bun run gh:pr <N>`. After review/approval: verify mergeable (`gh pr view <PR#>`), `ExitWorktree({action: "remove", discard_changes: true})`, then `gh pr merge <PR#> --squash --delete-branch` from the primary checkout.
+**Logging:** NO raw `console.log/debug/info/warn/error` in production code.
+```ts
+import { createLogger } from '$lib/utils/logger';
+const log = createLogger('ServiceName');
+log.debug() / log.info() / log.warn() / log.error()
+```
+Test files and DeveloperInspector are exempt.
 
-3. **Key development standards inline** — Include any relevant standards the implementation agent needs (e.g., "use `createLogger` not `console.log`", "mock Tauri invoke with `vi.mock('@tauri-apps/api/core')`", "use `bun run test` not `bun test`").
+**Runtime:** Bun-only. `npm`/`yarn`/`pnpm` are blocked. Use `bun install`, `bun run dev`, `bun run test`, `bunx` for one-off tools.
 
-**Why this matters:** Without these steps in the plan itself, the implementation agent has no way to know about them after the context window clears. The plan is the ONLY source of truth during implementation.
+**Testing — NEVER use `bun test`** — it bypasses the Happy-DOM vitest config and breaks DOM tests. Always use `bun run test` or another `bun run test:*` command.
 
-**Before Starting Any Task:**
-1. **COMPLETE THE MANDATORY STARTUP SEQUENCE** (steps 1-11 above, including test baseline)
-2. **READ THE DEVELOPMENT PROCESS DOCUMENTATION** - Start with the [overview](../nodespace-docs/development/overview.md) and [startup sequence](../nodespace-docs/development/startup-sequence.md)
-3. **Select appropriate subagent** based on task complexity and type
-4. Check issue acceptance criteria and requirements
-5. Plan self-contained implementation with mock dependencies
+**Git:** Branch per issue, name `issue-<number>-brief-desc`. Link commits: `git commit -m "Add TextNode component (closes #4)"`. Include Claude Code attribution.
 
-### 6. Development Standards
+## WIP Handoff Commits
 
-> **📖 Complete Standards Documentation:**
-> - [`code-quality.md`](../nodespace-docs/development/standards/code-quality.md) - Full code quality standards including logging
+Create when: implementation spans multiple sessions, approaching context limits, at a natural breakpoint, or before risky changes. Push immediately after creating.
 
-**Code Quality:**
-- Follow Rust formatting standards (rustfmt)
-- Use TypeScript for frontend type safety
-- Implement comprehensive error handling with anyhow/thiserror
-- Write tests with mock services temporarily for independent development (transitioning to real services soon)
-
-**Linting Policy:**
-- **NO lint suppression allowed** - Fix issues properly, don't suppress warnings
-- **NO EXCEPTIONS** - All lint warnings and errors must be fixed with proper solutions
-- Use proper TypeScript types instead of `any`
-- Follow Svelte best practices and avoid unsafe patterns like `{@html}`
-
-**Logging Policy:**
-- **NO raw `console.log/debug/info/warn/error`** in production code - Use Logger utility
-- Import: `import { createLogger } from '$lib/utils/logger';`
-- Create logger: `const log = createLogger('ServiceName');`
-- Use: `log.debug()`, `log.info()`, `log.warn()`, `log.error()`
-- Test files and DeveloperInspector are exempt
-
-**Runtime and Package Manager:**
-- **MANDATORY: Bun-only development** - Node.js not required
-- All scripts use `bunx` for consistent Bun runtime execution
-- Project includes automatic npm/yarn/pnpm blocking via preinstall hooks
-- Install Bun: `curl -fsSL https://bun.sh/install | bash`
-- Install packages: `bun install`
-- Run commands: `bun run dev`, `bun run test`, `bun run build`, etc.
-- Testing: Vitest + Happy DOM (faster than jsdom, Bun-optimized)
-
-**Testing Requirements (CRITICAL):**
-- **NEVER use `bun test`** - This command does NOT support Happy-DOM environment
-- **ALWAYS use one of these:**
-  - **In-Memory Mode (Fast - Recommended)**:
-    - `bun run test` - Run all tests once
-    - `bun run test:watch` - Watch mode for TDD
-    - `bunx vitest` - Direct watch mode
-  - **Database Mode (Full Integration)**:
-    - `bun run test:db` - Full SQLite integration tests
-    - `bun run test:db:watch` - Watch mode with database
-  - **Coverage**:
-    - `bun run test:coverage` - Generate coverage reports
-- **Why?** Vitest is configured with Happy-DOM in vitest.config.ts. Bun's native test runner doesn't read this configuration, causing DOM-dependent tests to fail.
-- **Test Modes:** Integration tests support two modes via `TEST_USE_DATABASE` flag:
-  - **In-memory (default)**: 100x faster, perfect for TDD and CI/CD
-  - **Database mode**: Full integration validation with SQLite persistence
-- **Validation:** Tests will automatically fail with a clear error message if run with wrong command
-- **CI/CD:** All test scripts in package.json use the correct commands
-
-**Git Workflow:**
-- Each implementation task gets its own isolated worktree (see startup sequence). Branch names match the worktree directory name: `issue-<number>-brief-desc` (no `feature/` prefix — the terse name doubles as both the directory and branch identifier).
-- Link commits to issues: `git commit -m "Add TextNode component (closes #4)"`
-- Include Claude Code attribution in commit messages
-
-**Mid-Implementation Commits & Session Handoffs:**
-
-When an issue is lengthy or implementation has gone longer than expected, commit work-in-progress to enable fresh session pickup. These handoff commits require **complete context for the next AI agent session**.
-
-**When to Create Handoff Commits:**
-- Implementation spans multiple logical phases/milestones
-- Session approaching context limits or complexity threshold
-- Natural breakpoint in work (completed subsystem, before major refactor)
-- Need to preserve progress before tackling risky changes
-- Work-in-progress needs to be saved for continuation later
-
-**Handoff Commit Message Format:**
-
+**Commit template:**
 ```
 WIP: [Brief description of what was accomplished]
 
 ## Completed in This Session
-- [x] Phase 1: [Specific accomplishment with details]
-- [x] Phase 2: [Specific accomplishment with details]
-- [x] [Any other completed items]
+- [x] Phase 1: [accomplishment]
 
 ## Remaining Work
-- [ ] Phase 3: [What needs to be done next]
-- [ ] Phase 4: [Subsequent task]
-- [ ] [Final tasks to complete the issue]
+- [ ] Phase 2: [what's next]
 
 ## Current State
-- Files modified: [List key files changed]
+- Files modified: [key files]
 - Tests status: [Passing/Failing/Not yet written]
-- Known issues: [Any blockers or concerns]
-- Dependencies: [What this work depends on or what depends on this]
+- Known issues: [blockers or concerns]
+- Dependencies: [what this depends on]
 
 ## Context for Next Session
-[2-3 sentences explaining the overall approach, any important decisions
-made, and what the next agent should focus on]
+[2-3 sentences: overall approach, key decisions, what to focus on next]
 
 ## Acceptance Criteria Status
 From issue #[number]:
-- [x] [Completed criterion]
-- [ ] [Remaining criterion]
-- [ ] [Remaining criterion]
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+- [x] [completed]
+- [ ] [remaining]
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-**Example Handoff Commit:**
+After pushing, update the issue comment with a handoff summary and commit link. Do NOT use WIP commits for normal development — only intentional session handoffs.
 
-```
-WIP: Implement schema-driven property UI - Phases 1-2 complete
+## Semantic Search
 
-## Completed in This Session
-- [x] Phase 1: Created SchemaPropertyForm component with type detection
-- [x] Phase 2: Implemented text, number, and boolean property renderers
-- [x] Added form validation with error display
-- [x] Integrated with existing node type system
+When NodeSpace is running (`bun run demo:tauri`), docs are searchable via MCP `search_semantic`:
 
-## Remaining Work
-- [ ] Phase 3: Implement date/select/multi-value property types
-- [ ] Phase 4: Add property reordering and deletion
-- [ ] Phase 5: Write integration tests
-- [ ] Phase 6: Update documentation
-
-## Current State
-- Files modified:
-  - src/lib/components/property-forms/schema-property-form.svelte (new)
-  - src/lib/services/schema-service.ts (extended)
-  - src/lib/types/schema.ts (added PropertyRenderer type)
-- Tests status: Unit tests passing, integration tests not yet written
-- Known issues: None - all current functionality working
-- Dependencies: Requires SchemaService, works with BaseNode
-
-## Context for Next Session
-The foundation is solid - basic property types render correctly with
-validation. Focus next on complex types (date pickers, dropdowns) and
-then the editing capabilities (reorder, delete). The component is already
-integrated into the node system, so new property types just need renderers.
-
-## Acceptance Criteria Status
-From issue #193:
-- [x] Schema properties display in node cards
-- [x] Basic property types supported (text, number, boolean)
-- [ ] All property types supported (date, select, multi-value)
-- [ ] Properties can be reordered
-- [ ] Properties can be deleted
-- [ ] Comprehensive tests written
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
-**Critical Guidelines:**
-- **Do NOT use "WIP" commits for normal development** - only for intentional session handoffs
-- **Push WIP commits immediately** so next session can pull them
-- **Update issue comments** with handoff summary and link to commit
-- **Be specific** - next agent shouldn't have to reverse-engineer your work
-- **Include acceptance criteria status** - clearly show progress against original issue
-- **Explain architectural decisions** made during implementation
-- **Note any deviations** from original plan and why
-
-**Documentation:**
-- Update relevant docs when changing architecture
-- Include code examples in component documentation
-- Maintain consistent markdown formatting
-
-### 7. Mandatory Process Checklist
-
-**EVERY AGENT MUST COMPLETE THIS CHECKLIST FOR EACH TASK:**
-
-**Startup Sequence - NEW TASK (MANDATORY - Steps 1-11 from above):**
-- [ ] Checked `git status` on the primary checkout and committed any pending changes
-- [ ] **Pulled latest `main`** (`git fetch origin && git pull origin main`) on the primary checkout
-- [ ] **Entered an isolated worktree** (`EnterWorktree({name: "issue-<N>-brief-desc"})`)
-- [ ] **Installed dependencies inside the worktree** (`bun install`)
-- [ ] **Recorded test baseline inside the worktree** (`bun run test` — frontend only)
-- [ ] **Documented baseline in issue** using `bun run gh:comment <N> "Frontend: X passed"` (NOT piped via echo)
-- [ ] Assigned issue to self (`bun run gh:assign <number> "@me"`)
-- [ ] Updated GitHub project status using CLI: Todo → In Progress
-- [ ] Selected appropriate subagent based on task complexity
-- [ ] Read issue requirements and acceptance criteria
-- [ ] Read development process documentation (start with [overview](../nodespace-docs/development/overview.md))
-- [ ] Planned self-contained implementation with mock dependencies
-
-**Startup Sequence - CONTINUING FROM WIP (Simplified):**
-- [ ] **Entered the existing worktree** (`EnterWorktree({path: ".claude/worktrees/issue-<N>-..."})`) — or recreated it with `git worktree add` first if the directory was removed
-- [ ] Checked git status — verified on correct branch inside the worktree
-- [ ] **Pulled latest commits on the branch** (`git fetch origin && git pull origin <branch-name>`)
-- [ ] **Read WIP commit message** — understand completed work and remaining tasks
-- [ ] **Check issue for baseline** — reference the test baseline documented when work started
-- [ ] Resume implementation from "Remaining Work" section
-- [ ] **DO NOT re-run baseline, re-assign issue, or re-update status**
-
-**During Implementation:**
-- [ ] Following self-contained approach (feature works independently)
-- [ ] Using mock data/services for dependencies
-- [ ] Implementing vertical slice (complete feature end-to-end)
-- [ ] All acceptance criteria being addressed
-
-**Before Submitting:**
-- [ ] Feature works independently and provides demonstrable value
-- [ ] All acceptance criteria completed and checked off
-- [ ] Comprehensive testing with mock services
-- [ ] Code follows project standards
-- [ ] **Run `bun run test:all` - verify no new test failures vs baseline**
-- [ ] **Run `bun run quality:fix` and commit any changes**
-
-**PR and Review:**
-- [ ] **Verify test suite**: Run `bun run test:all` — no new failures allowed
-- [ ] **Verify code quality**: Run `bun run quality:fix` one final time
-- [ ] Commit any linting/formatting fixes
-- [ ] Created PR with proper title and description
-- [ ] **Document test status in PR**: Note baseline vs current test results
-- [ ] Updated GitHub project status using CLI: In Progress → Ready for Review
-- [ ] Ran `/pragmatic-code-review` (and addressed feedback if any)
-
-**Merge and Clean Up (in this order):**
-- [ ] Verified PR is mergeable: `gh pr view <PR#> --json mergeable,reviewDecision`
-- [ ] **Exited the worktree** with `ExitWorktree({action: "remove", discard_changes: true})` *before* attempting the merge
-- [ ] Merged from the primary checkout: `gh pr merge <PR#> --squash --delete-branch`
-- [ ] Pulled the squash commit on `main`: `git pull origin main`
-- [ ] Updated GitHub project status: Ready for Review → Done
-
-**Failure to follow this checklist blocks the development process and violates project standards.**
-
-### 8. Getting Help
-
-**Resources Available:**
-- `../nodespace-docs/` - Complete technical specifications (separate repo)
-- `README.md` - Quick start and overview
-- GitHub issues - Detailed implementation requirements
-- Existing NodeSpace repositories for reference patterns
-
-**When Stuck:**
-- Check related issues for context and dependencies
-- Review architecture docs in `../nodespace-docs/` for design decisions
-- Look at existing NodeSpace codebases for established patterns
-- Verify technology versions match current documentation
-
-### 9. Accessing NodeSpace Documentation (Semantic Search)
-
-**Project documentation is imported into NodeSpace and searchable via MCP tools.**
-
-When NodeSpace is running with the demo database (`bun run demo:tauri`), documentation is available via semantic search:
-
-**Using `search_semantic` tool:**
 ```json
 {
   "name": "search_semantic",
-  "arguments": {
-    "query": "how to add a new node type",
-    "limit": 5,
-    "include_markdown": 1
-  }
+  "arguments": { "query": "how to add a new node type", "limit": 5, "include_markdown": 1 }
 }
 ```
 
-**Collections Structure:**
-- `Architecture:Core` - Core system architecture docs
-- `Architecture:*` - Other architecture documentation
-- `Components` - Component specifications
-- `Business Logic` - Node behaviors, MCP handlers
-- `Development` - Process, standards, guides
-- `Development:Process` - Development workflow docs
-- `Development:Standards` - Code quality standards
-- `ADR` - Architecture Decision Records
-- `Lessons` - Lessons learned from implementations
-- `Troubleshooting` - Issue investigation guides
-- `Archived` - Superseded documents (excluded from search by default)
+Collections: `Architecture:Core`, `Components`, `Business Logic`, `Development`, `Development:Process`, `Development:Standards`, `ADR`, `Lessons`, `Troubleshooting`. Add `"collection": "Business Logic"` to filter. Add `"include_archived": true` to include superseded docs.
 
-**Filtering by Collection:**
-```json
-{
-  "name": "search_semantic",
-  "arguments": {
-    "query": "validation flow",
-    "collection": "Business Logic"
-  }
-}
-```
-
-**Including Archived Content:**
-```json
-{
-  "name": "search_semantic",
-  "arguments": {
-    "query": "turso migration",
-    "include_archived": true
-  }
-}
-```
-
-**Importing/Refreshing Documentation:**
-```bash
-# Preview what will be imported (reads from ../nodespace-docs/)
-bun run scripts/import-docs.ts --dry-run
-
-# Perform actual import (requires NodeSpace running)
-bun run scripts/import-docs.ts
-```
+Refresh docs: `bun run scripts/import-docs.ts` (use `--dry-run` to preview).
 
 ## Repository Structure
 
-> **Documentation lives in a separate repo**: [`../nodespace-docs/`](../nodespace-docs/) contains all architecture, development process, component specs, and design system docs.
+> Documentation lives in [`../nodespace-docs/`](../nodespace-docs/) — a separate repo.
 
 ```
 nodespace-core/
@@ -831,15 +320,3 @@ nodespace-core/
 ├── package.json                  # Bun workspace root
 └── Cargo.toml                    # Rust workspace
 ```
-
-## Current Project Status
-
-- ✅ Architecture documentation complete
-- ✅ GitHub project management setup
-- ✅ Technology versions updated to current releases
-- ⏳ Foundation implementation (Issue #1) - Ready for agent pickup
-- ⏳ Design system, desktop shell, and core components - Planned
-
----
-
-**Note**: This project uses UI-first development approach. Build user interfaces with mock data first, then integrate backend storage and AI functionality. Focus on creating excellent user experiences before tackling complex technical integrations.
