@@ -358,12 +358,16 @@ fn spawn_reader_task(mut reader: Box<dyn Read + Send>, output_tx: broadcast::Sen
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl PtySession {
     /// Test-only constructor: spawn an arbitrary binary in a PTY without
     /// going through [`GraphContextAssembler`]. Lets tests use shell utilities
     /// (`cat`, `sh -c '...'`) instead of depending on a real agent binary.
-    pub(crate) fn launch_for_test(binary: &str, args: Vec<String>) -> anyhow::Result<Self> {
+    ///
+    /// Gated by the `testing` feature so it is reachable from integration
+    /// tests in sibling crates (e.g. `nodespace-daemon`) without being part
+    /// of the production surface.
+    pub fn launch_for_test(binary: &str, args: Vec<String>) -> anyhow::Result<Self> {
         let session_dir = tempfile::tempdir()?;
         let binary_path = which::which(binary)
             .map_err(|e| anyhow::anyhow!("test binary '{}' not on PATH: {}", binary, e))?;
@@ -415,7 +419,7 @@ impl PtySession {
     }
 
     /// Test-only accessor: where this session's temp dir lives.
-    pub(crate) fn session_dir_path(&self) -> &std::path::Path {
+    pub fn session_dir_path(&self) -> &std::path::Path {
         self._session_dir.path()
     }
 }

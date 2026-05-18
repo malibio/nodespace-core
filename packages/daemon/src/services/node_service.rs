@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use nodespace_core::db::events::DomainEvent;
-use nodespace_core::models::{Node, NodeQuery, NodeUpdate, TaskNodeUpdate, TaskPriority, TaskStatus};
+use nodespace_core::models::{
+    Node, NodeQuery, NodeUpdate, TaskNodeUpdate, TaskPriority, TaskStatus,
+};
 use nodespace_core::ops::{
     search_ops::{self, SearchSemanticInput},
     OpsError,

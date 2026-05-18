@@ -237,8 +237,7 @@ mod tests {
         for _ in 0..10 {
             // `true` exits with status 0 essentially immediately. The watcher
             // very plausibly fires before the manager's auto-prune subscribes.
-            let session =
-                PtySession::launch_for_test("true", vec![]).expect("launch true session");
+            let session = PtySession::launch_for_test("true", vec![]).expect("launch true session");
             manager.insert(session).await;
         }
         wait_for_len(&manager, 0, Duration::from_secs(3)).await;

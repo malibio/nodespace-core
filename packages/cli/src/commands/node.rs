@@ -102,6 +102,8 @@ async fn create(
             properties: String::new(),
             collection: String::new(),
             lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
         })
         .await
         .context("CreateNode RPC failed")?

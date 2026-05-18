@@ -30,4 +30,4 @@ pub use nodespace::node_service_client::NodeServiceClient;
 pub use nodespace::node_service_server::NodeServiceServer;
 pub use nodespace::{NodeData, SessionInfo};
 
-pub use services::NodeServiceImpl;
+pub use services::{AgentSessionHandler, NodeServiceImpl};
