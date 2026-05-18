@@ -118,10 +118,16 @@ async fn collect_until(
 async fn stream_output_delivers_echo_hello() {
     let (mut client, manager, shutdown, _tempdir) = spawn_test_daemon().await;
 
-    // Seed the manager with a session running `echo hello`. The session runs
-    // through the full PTY pipeline so StreamOutput sees real broadcast traffic.
-    let session = PtySession::launch_for_test("sh", vec!["-c".into(), "echo hello".into()])
-        .expect("launch echo session");
+    // The session runs through the full PTY pipeline so StreamOutput sees
+    // real broadcast traffic. We delay the echo by 200 ms so the
+    // `client.stream_output(...)` subscriber has time to attach before any
+    // bytes hit the broadcast channel — `tokio::sync::broadcast` does not
+    // replay missed messages to late subscribers, so a bare `echo hello`
+    // races: on a fast machine the reader can drain the PTY and broadcast
+    // the chunk before our gRPC client opens the stream.
+    let session =
+        PtySession::launch_for_test("sh", vec!["-c".into(), "sleep 0.2 && echo hello".into()])
+            .expect("launch echo session");
     let id = manager.insert(session).await;
 
     let mut stream = client

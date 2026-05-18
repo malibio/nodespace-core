@@ -72,9 +72,21 @@ impl AgentSessionService for AgentSessionHandler {
         // Zero on either axis means "keep the engine default" (80x24);
         // ResizeTerminal, in contrast, rejects zero outright — see its proto
         // comment.
+        //
+        // If the auto-prune race removed the entry between launch() and get()
+        // above, the resize is silently skipped — the response is still Ok
+        // because the launch itself succeeded; the next RPC against this id
+        // will naturally return NotFound. Log at warn so the dropped resize is
+        // visible in server-side traces.
         if req.cols != 0 && req.rows != 0 {
-            if let Some(session) = session {
-                resize_session(&session, req.cols, req.rows).await?;
+            match session {
+                Some(session) => resize_session(&session, req.cols, req.rows).await?,
+                None => tracing::warn!(
+                    session_id = %id,
+                    cols = req.cols,
+                    rows = req.rows,
+                    "LaunchSession: session auto-pruned before initial resize could apply"
+                ),
             }
         }
 
@@ -267,9 +279,11 @@ fn parse_agent_type(raw: &str) -> Result<AgentType, String> {
 
 fn agent_type_to_string(agent_type: AgentType) -> String {
     // serde serialization mirrors the kebab-case form parse_agent_type accepts.
-    // Falling back to the debug form is dead code today (the enum is closed)
-    // but keeps the function infallible if serde_json ever fails for a new
-    // variant.
+    // `AgentType` is in-workspace and closed, so the debug-format fallback
+    // is genuinely unreachable today — it exists as defense-in-depth, not as
+    // a graceful-degradation path. The right way to add a new variant is to
+    // extend parse_agent_type / agent_type_to_string together; do NOT rely
+    // on the fallback to ship a new variant.
     serde_json::to_value(agent_type)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
