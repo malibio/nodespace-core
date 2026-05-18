@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
-use nodespace_daemon::nodespace::{GetAllSchemasRequest, QueryNodesSimpleRequest};
+use nodespace_daemon::nodespace::{GetAllSchemasRequest, GetRootsRequest, QueryNodesSimpleRequest};
 use nodespace_daemon::{resolve_db_path, NodeServiceClient};
 use serde_json::json;
 use std::fs;
@@ -32,6 +32,7 @@ pub struct DiagnosticsReport {
     pub database_exists: bool,
     pub database_size_bytes: Option<u64>,
     pub total_node_count: usize,
+    pub root_node_count: usize,
     pub schema_count: i32,
     pub recent_node_ids: Vec<String>,
     pub errors: Vec<String>,
@@ -99,13 +100,19 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
 
     let total_node_count = all_nodes.len();
 
-    // Root count is intentionally omitted from the report. Parentage is
-    // stored as a graph edge in SurrealDB, and the daemon's
-    // `query_nodes_simple` handler ships nodes back with `parent_id = None`
-    // for every row because the column doesn't exist — there is no honest
-    // way to distinguish a root from a child via the current RPC surface.
-    // Add a `GetRoots` RPC (or extend `NodeListResponse` with parent ids)
-    // before reporting this number.
+    let root_node_count = match client
+        .get_roots(GetRootsRequest {
+            limit: 0,
+            offset: 0,
+        })
+        .await
+    {
+        Ok(response) => response.into_inner().count as usize,
+        Err(e) => {
+            errors.push(format!("GetRoots failed: {e}"));
+            0
+        }
+    };
 
     // QueryNodesSimple doesn't expose ORDER BY, so we sort the in-memory
     // batch by created_at descending before slicing. O(n log n) on n ≤
@@ -138,6 +145,7 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
         database_exists,
         database_size_bytes,
         total_node_count,
+        root_node_count,
         schema_count,
         recent_node_ids,
         errors,
@@ -223,6 +231,7 @@ fn print_human(r: &DiagnosticsReport) {
         None => println!("Database size:   n/a"),
     }
     println!("Total nodes:     {}", r.total_node_count);
+    println!("Root nodes:      {}", r.root_node_count);
     println!("Schemas:         {}", r.schema_count);
     if r.recent_node_ids.is_empty() {
         println!("Recent node IDs: (none)");
@@ -244,6 +253,7 @@ fn print_json(r: &DiagnosticsReport) -> Result<()> {
         "database_exists": r.database_exists,
         "database_size_bytes": r.database_size_bytes,
         "total_node_count": r.total_node_count,
+        "root_node_count": r.root_node_count,
         "schema_count": r.schema_count,
         "recent_node_ids": r.recent_node_ids,
         "errors": r.errors,

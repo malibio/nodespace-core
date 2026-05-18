@@ -3603,6 +3603,14 @@ impl NodeService {
         Ok(children)
     }
 
+    /// Returns all root nodes — nodes with no parent edge in the graph.
+    pub async fn get_roots(&self) -> Result<Vec<Node>, NodeServiceError> {
+        self.store
+            .get_children(None)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
+    }
+
     /// Get all descendants of a node (recursive children)
     ///
     /// Fetches all nodes in the subtree rooted at the specified node,
