@@ -9,7 +9,6 @@ pub mod db;
 pub mod embeddings;
 pub mod import;
 pub mod local_agent;
-pub mod models;
 pub mod nodes;
 pub mod schemas;
 pub mod settings;
