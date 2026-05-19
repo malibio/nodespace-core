@@ -1,0 +1,265 @@
+syntax = "proto3";
+
+package nodespace;
+
+// LocalAgentService manages the local llama.cpp ReAct loop agent.
+//
+// A session wraps a conversation with the local LLM inference engine.
+// Clients can start sessions, send messages (receiving token stream responses),
+// query agent/model status, manage models, and cancel in-progress generation.
+service LocalAgentService {
+  rpc StartSession(StartLocalSessionRequest)     returns (StartLocalSessionResponse);
+  rpc SendMessage(SendLocalMessageRequest)       returns (stream AgentChunk);
+  rpc GetStatus(GetLocalStatusRequest)           returns (LocalAgentStatusResponse);
+  rpc CancelGeneration(CancelGenerationRequest)  returns (CancelGenerationResponse);
+  rpc EndSession(EndLocalSessionRequest)         returns (EndLocalSessionResponse);
+  rpc GetSessions(GetSessionsRequest)            returns (GetSessionsResponse);
+  rpc EnsureModelReady(EnsureModelReadyRequest)  returns (stream ModelLoadProgressEvent);
+  rpc ListModels(ListModelsRequest)              returns (ListModelsResponse);
+  rpc DownloadModel(DownloadModelRequest)        returns (stream ModelLoadProgressEvent);
+  rpc DeleteModel(DeleteModelRequest)            returns (DeleteModelResponse);
+  rpc LoadModel(LoadModelRequest)                returns (LoadModelResponse);
+  rpc UnloadModel(UnloadModelRequest)            returns (UnloadModelResponse);
+  rpc CancelModelDownload(CancelModelDownloadRequest) returns (CancelModelDownloadResponse);
+  rpc OllamaAvailable(OllamaAvailableRequest)    returns (OllamaAvailableResponse);
+  rpc RecommendedModel(RecommendedModelRequest)  returns (RecommendedModelResponse);
+  rpc GetSystemRam(GetSystemRamRequest)          returns (GetSystemRamResponse);
+}
+
+// ---------------------------------------------------------------------------
+// StartSession
+// ---------------------------------------------------------------------------
+
+message StartLocalSessionRequest {
+  // Model ID to associate with this session (e.g. "ollama:llama3.2" or
+  // "ministral-3b-instruct-2410-q4_k_m.gguf").
+  string model_id = 1;
+}
+
+message StartLocalSessionResponse {
+  // UUID assigned to the new session.
+  string session_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// SendMessage — server-streaming token output
+// ---------------------------------------------------------------------------
+
+message SendLocalMessageRequest {
+  string session_id = 1;
+  string message = 2;
+}
+
+// AgentChunk is one event in a streaming agent response.
+//
+// The chunk_type field determines which optional field is populated:
+//   "token"           — delta text token
+//   "tool_call_start" — the agent is beginning a tool call
+//   "tool_call_args"  — incremental JSON args for a tool call in progress
+//   "done"            — generation complete (usage populated)
+//   "error"           — an error occurred during streaming
+message AgentChunk {
+  string chunk_type = 1;
+
+  // Populated for chunk_type == "token"
+  optional string token_text = 2;
+
+  // Populated for chunk_type == "tool_call_start" and "tool_call_args"
+  optional string tool_call_id = 3;
+  optional string tool_name = 4;
+  optional string tool_args_json = 5;
+
+  // Populated for chunk_type == "done"
+  optional int32 prompt_tokens = 6;
+  optional int32 completion_tokens = 7;
+
+  // Populated for chunk_type == "error"
+  optional string error_message = 8;
+}
+
+// ---------------------------------------------------------------------------
+// GetStatus
+// ---------------------------------------------------------------------------
+
+message GetLocalStatusRequest {
+  // If set, return status for a specific session; otherwise returns global status.
+  optional string session_id = 1;
+}
+
+message LocalAgentStatusResponse {
+  // Serialized LocalAgentStatus (JSON): "idle" | {"status":"streaming"} | etc.
+  // Using JSON string keeps the proto stable as the Rust enum evolves.
+  string status_json = 1;
+}
+
+// ---------------------------------------------------------------------------
+// CancelGeneration
+// ---------------------------------------------------------------------------
+
+message CancelGenerationRequest {
+  string session_id = 1;
+}
+
+message CancelGenerationResponse {}
+
+// ---------------------------------------------------------------------------
+// EndSession
+// ---------------------------------------------------------------------------
+
+message EndLocalSessionRequest {
+  string session_id = 1;
+}
+
+message EndLocalSessionResponse {}
+
+// ---------------------------------------------------------------------------
+// GetSessions
+// ---------------------------------------------------------------------------
+
+message GetSessionsRequest {}
+
+message LocalSessionInfo {
+  string session_id = 1;
+  optional string model_id = 2;
+  // ISO-8601 timestamp when the session was created.
+  string created_at = 3;
+  // Serialized LocalAgentStatus (JSON).
+  string status_json = 4;
+}
+
+message GetSessionsResponse {
+  repeated LocalSessionInfo sessions = 1;
+}
+
+// ---------------------------------------------------------------------------
+// EnsureModelReady — server-streaming model load/download progress
+// ---------------------------------------------------------------------------
+
+message EnsureModelReadyRequest {
+  string model_id = 1;
+}
+
+// ModelLoadProgressEvent streams phase transitions during model loading.
+//
+// event_type values:
+//   "downloading"  — model file is being downloaded (bytes fields populated)
+//   "loading"      — model is being loaded into memory
+//   "ready"        — model is loaded and the engine is ready
+//   "error"        — an error occurred (error_message populated)
+//   "engine_swapped" — engine was replaced (existing sessions were dropped)
+message ModelLoadProgressEvent {
+  string event_type = 1;
+  string model_id = 2;
+  optional string message = 3;
+
+  // Populated for event_type == "downloading"
+  optional int64 bytes_downloaded = 4;
+  optional int64 bytes_total = 5;
+
+  // Populated for event_type == "error"
+  optional string error_message = 6;
+
+  // Populated for event_type == "engine_swapped": true if the inference
+  // engine was replaced (active sessions were dropped).
+  optional bool engine_swapped = 7;
+}
+
+// ---------------------------------------------------------------------------
+// ListModels
+// ---------------------------------------------------------------------------
+
+message ListModelsRequest {}
+
+message ModelEntry {
+  string id = 1;
+  string name = 2;
+  // "gguf" | "ollama"
+  string backend = 3;
+  // Serialized ModelStatus (JSON tag-enum): "not_downloaded" | "ready" | etc.
+  string status_json = 4;
+  int64 size_bytes = 5;
+  string quantization = 6;
+  // Minimum system RAM (GiB) required; 0 means unknown.
+  uint32 min_memory_gb = 7;
+}
+
+message ListModelsResponse {
+  repeated ModelEntry models = 1;
+}
+
+// ---------------------------------------------------------------------------
+// DownloadModel — server-streaming download progress
+// ---------------------------------------------------------------------------
+
+message DownloadModelRequest {
+  string model_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// DeleteModel
+// ---------------------------------------------------------------------------
+
+message DeleteModelRequest {
+  string model_id = 1;
+}
+
+message DeleteModelResponse {}
+
+// ---------------------------------------------------------------------------
+// LoadModel
+// ---------------------------------------------------------------------------
+
+message LoadModelRequest {
+  string model_id = 1;
+}
+
+message LoadModelResponse {}
+
+// ---------------------------------------------------------------------------
+// UnloadModel
+// ---------------------------------------------------------------------------
+
+message UnloadModelRequest {}
+
+message UnloadModelResponse {}
+
+// ---------------------------------------------------------------------------
+// CancelModelDownload
+// ---------------------------------------------------------------------------
+
+message CancelModelDownloadRequest {
+  string model_id = 1;
+}
+
+message CancelModelDownloadResponse {}
+
+// ---------------------------------------------------------------------------
+// OllamaAvailable
+// ---------------------------------------------------------------------------
+
+message OllamaAvailableRequest {}
+
+message OllamaAvailableResponse {
+  bool available = 1;
+}
+
+// ---------------------------------------------------------------------------
+// RecommendedModel
+// ---------------------------------------------------------------------------
+
+message RecommendedModelRequest {}
+
+message RecommendedModelResponse {
+  string model_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// GetSystemRam
+// ---------------------------------------------------------------------------
+
+message GetSystemRamRequest {}
+
+message GetSystemRamResponse {
+  // Total system RAM in bytes.
+  uint64 ram_bytes = 1;
+}

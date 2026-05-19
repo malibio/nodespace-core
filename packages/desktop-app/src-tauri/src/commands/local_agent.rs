@@ -10,7 +10,7 @@ use crate::agent_events;
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
 use crate::types::{AgentSession, AgentTurnResult, InferenceUsage, LocalAgentStatus};
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     CancelGenerationRequest, EndLocalSessionRequest, EnsureModelReadyRequest,
     GetLocalStatusRequest, GetSessionsRequest, ListModelsRequest, SendLocalMessageRequest,
     StartLocalSessionRequest,

@@ -31,7 +31,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tauri-plugin-decorum = "1.1.1"
-nodespace-daemon = { workspace = true }
+nodespace-proto = { workspace = true }
 tonic = "0.12"
 tower = { version = "0.5", features = ["util"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

@@ -2,9 +2,8 @@
 //!
 //! The daemon crate ships both a binary (`nodespaced`) and a library so
 //! integration tests can spin the gRPC server up in-process without shelling
-//! out. The library is intentionally thin: it exposes the generated proto
-//! module and the service implementations that adapt `nodespace-core` to
-//! tonic.
+//! out. Proto types are provided by the `nodespace-proto` crate; this lib
+//! re-exports them alongside the service implementations.
 
 pub mod services;
 pub mod tray;
@@ -30,38 +29,17 @@ pub fn resolve_db_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".nodespace").join("daemon-db"))
 }
 
-/// Re-exports of prost/tonic generated types for the `nodespace` proto package.
-///
-/// Includes:
-///   - `NodeService` client and server traits
-///   - `AgentSessionService` client and server traits
-///   - All request/response/event message types
-pub mod nodespace {
-    #![allow(clippy::all)]
-    tonic::include_proto!("nodespace");
-}
-
-// Compile-time presence check: if either proto was missing from the combined
-// compilation, the corresponding type would be absent and this module would
-// fail to compile. No allow attributes needed — pub use is the canonical way
-// to re-export and simultaneously verify that generated symbols exist.
-pub use nodespace::agent_session_service_client::AgentSessionServiceClient;
-pub use nodespace::agent_session_service_server::AgentSessionServiceServer;
-pub use nodespace::embeddings_service_client::EmbeddingsServiceClient;
-pub use nodespace::embeddings_service_server::EmbeddingsServiceServer;
-pub use nodespace::import_service_client::ImportServiceClient;
-pub use nodespace::import_service_server::ImportServiceServer;
-pub use nodespace::local_agent_service_client::LocalAgentServiceClient;
-pub use nodespace::local_agent_service_server::LocalAgentServiceServer;
-pub use nodespace::node_service_client::NodeServiceClient;
-pub use nodespace::node_service_server::NodeServiceServer;
-pub use nodespace::settings_service_client::SettingsServiceClient;
-pub use nodespace::settings_service_server::SettingsServiceServer;
-pub use nodespace::{
-    AgentAvailability, CaptureContentLevel, CaptureSettingsResponse, CheckAvailabilityRequest,
-    CheckAvailabilityResponse, GetCaptureSettingsRequest, LaunchSessionRequest,
-    LaunchSessionResponse, ListSessionsRequest, ListSessionsResponse, NodeData, ResizeRequest,
-    ResizeResponse, SessionInfo, StreamOutputRequest, TerminateSessionRequest,
+// Re-export proto types from the lightweight nodespace-proto crate so existing
+// consumers of `nodespace-daemon` types continue to work without changing imports.
+pub use nodespace_proto::nodespace;
+pub use nodespace_proto::{
+    AgentAvailability, AgentSessionServiceClient, AgentSessionServiceServer, CaptureContentLevel,
+    CaptureSettingsResponse, CheckAvailabilityRequest, CheckAvailabilityResponse,
+    EmbeddingsServiceClient, EmbeddingsServiceServer, GetCaptureSettingsRequest,
+    ImportServiceClient, ImportServiceServer, LaunchSessionRequest, LaunchSessionResponse,
+    ListSessionsRequest, ListSessionsResponse, LocalAgentServiceClient, LocalAgentServiceServer,
+    NodeData, NodeServiceClient, NodeServiceServer, ResizeRequest, ResizeResponse, SessionInfo,
+    SettingsServiceClient, SettingsServiceServer, StreamOutputRequest, TerminateSessionRequest,
     TerminateSessionResponse, UpdateCaptureSettingsRequest, WriteInputRequest, WriteInputResponse,
 };
 

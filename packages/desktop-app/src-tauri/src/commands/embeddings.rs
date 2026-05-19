@@ -9,7 +9,7 @@ use crate::types::Node;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     BatchQueueEmbeddingsRequest, GetStaleCountRequest, QueueEmbeddingRequest,
     RegenerateEmbeddingRequest, SearchSemanticRequest, TriggerBatchEmbedRequest,
 };
@@ -22,7 +22,7 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
     }
 }
 
-fn node_from_proto(data: nodespace_daemon::NodeData) -> Option<Node> {
+fn node_from_proto(data: nodespace_proto::NodeData) -> Option<Node> {
     let created_at = match data.created_at.parse() {
         Ok(ts) => ts,
         Err(e) => {

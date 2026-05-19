@@ -1,0 +1,608 @@
+syntax = "proto3";
+
+package nodespace;
+
+// NodeService exposes the core knowledge graph operations over gRPC.
+//
+// Field shapes mirror packages/core/src/ops/node_ops.rs:
+//   - node_id: string UUID (e.g. "550e8400-e29b-41d4-a716-446655440000")
+//   - node_type: string enum (e.g. "text", "task", "date", "header", "code-block")
+//   - content: string (plain text or markdown content of the node)
+//   - properties: JSON-encoded string (arbitrary key-value metadata); see NodeData.properties
+//   - version: int64 optimistic concurrency control counter
+//   - lifecycle_status: string enum ("active", "archived", "deleted")
+service NodeService {
+  // Core CRUD
+  rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
+  rpc GetNode(GetNodeRequest) returns (NodeResponse);
+  rpc UpdateNode(UpdateNodeRequest) returns (NodeResponse);
+  rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
+  rpc GetChildren(GetChildrenRequest) returns (NodeListResponse);
+  rpc GetChildrenTree(GetChildrenTreeRequest) returns (NodeTreeResponse);
+  rpc SearchNodes(SearchRequest) returns (NodeListResponse);
+  rpc QueryNodesSimple(QueryNodesSimpleRequest) returns (NodeListResponse);
+  rpc MentionAutocomplete(MentionAutocompleteRequest) returns (NodeListResponse);
+  rpc UpsertNodeWithParent(UpsertNodeWithParentRequest) returns (NodeResponse);
+
+  // Hierarchy mutations
+  rpc MoveNode(MoveNodeRequest) returns (NodeResponse);
+  rpc ReorderNode(ReorderNodeRequest) returns (ReorderNodeResponse);
+
+  // Mentions
+  rpc CreateMention(CreateMentionRequest) returns (MentionResponse);
+  rpc DeleteMention(DeleteMentionRequest) returns (MentionResponse);
+  rpc GetOutgoingMentions(MentionTargetRequest) returns (MentionIdsResponse);
+  rpc GetIncomingMentions(MentionTargetRequest) returns (MentionIdsResponse);
+  rpc GetMentioningRoots(MentionTargetRequest) returns (NodeReferenceListResponse);
+
+  // Type-specific updates
+  rpc UpdateTaskNode(UpdateTaskNodeRequest) returns (NodeResponse);
+
+  // Roots
+  rpc GetRoots(GetRootsRequest) returns (NodeListResponse);
+
+  // Schemas (read-only)
+  rpc GetAllSchemas(GetAllSchemasRequest) returns (NodeListResponse);
+  rpc GetSchemaDefinition(GetSchemaDefinitionRequest) returns (NodeResponse);
+
+  // Collections
+  rpc GetAllCollections(GetAllCollectionsRequest) returns (CollectionListResponse);
+  rpc GetCollectionMembers(CollectionMembersRequest) returns (NodeListResponse);
+  rpc GetCollectionMembersRecursive(CollectionMembersRequest) returns (NodeListResponse);
+  rpc GetNodeCollections(NodeCollectionsRequest) returns (CollectionIdsResponse);
+  rpc AddNodeToCollection(AddNodeToCollectionRequest) returns (Empty);
+  rpc AddNodeToCollectionByPath(AddNodeToCollectionByPathRequest) returns (CollectionIdResponse);
+  rpc RemoveNodeFromCollection(RemoveNodeFromCollectionRequest) returns (Empty);
+  rpc FindCollectionByPath(FindCollectionByPathRequest) returns (OptionalNodeResponse);
+  rpc GetCollectionByName(GetCollectionByNameRequest) returns (OptionalNodeResponse);
+  rpc CreateCollection(CreateCollectionRequest) returns (CollectionIdResponse);
+  rpc RenameCollection(RenameCollectionRequest) returns (NodeResponse);
+  rpc DeleteCollection(DeleteCollectionRequest) returns (Empty);
+
+  // Streaming
+  rpc WatchNodes(WatchRequest) returns (stream NodeEvent);
+  rpc Chat(stream ChatRequest) returns (stream ChatResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Shared node representation
+// ---------------------------------------------------------------------------
+
+// NodeData is the canonical wire representation of a node.
+message NodeData {
+  string id = 1;
+  string node_type = 2;
+  string content = 3;
+  // parent_id is unset for root nodes. Use optional so callers can
+  // distinguish "no parent" (root) from an empty-string parent_id.
+  optional string parent_id = 4;
+  // properties is a JSON-encoded object matching the serde_json::Value shape
+  // used by the ops layer. We encode as a string rather than google.protobuf.Struct
+  // to avoid the well-known-types dependency and because schema validation
+  // happens server-side before the value reaches the wire.
+  string properties = 5;
+  int64 version = 6;
+  string lifecycle_status = 7; // "active" | "archived" | "deleted"
+  string created_at = 8;       // RFC 3339 timestamp
+  string modified_at = 9;      // RFC 3339 timestamp
+  string collection_id = 10;   // empty string when not in a collection
+}
+
+// ---------------------------------------------------------------------------
+// CreateNode
+// ---------------------------------------------------------------------------
+
+message CreateNodeRequest {
+  string node_type = 1;
+  string content = 2;
+  string parent_id = 3;        // empty string for root nodes
+  string properties = 4;       // JSON-encoded, may be empty string or "{}"
+  string collection = 5;       // optional collection path, e.g. "hr:policy"
+  string lifecycle_status = 6; // defaults to "active" when empty
+  // Caller-supplied UUID. Empty string = server generates a new ID. Used by
+  // the Tauri desktop client so the frontend can track a node locally
+  // before persistence completes.
+  string id = 7;
+  // Sibling node ID to insert after; empty = insert at the beginning of
+  // the parent's children. Matches CreateNodeParams.insert_after_node_id
+  // in packages/core.
+  string insert_after_node_id = 8;
+}
+
+message NodeResponse {
+  string node_id = 1;
+  string node_type = 2;
+  string parent_id = 3;
+  string collection_id = 4;
+  NodeData node_data = 5;
+}
+
+// ---------------------------------------------------------------------------
+// GetNode
+// ---------------------------------------------------------------------------
+
+message GetNodeRequest {
+  string node_id = 1;
+}
+
+// GetNode returns NodeResponse (node_id + node_data populated).
+
+// ---------------------------------------------------------------------------
+// UpdateNode
+// ---------------------------------------------------------------------------
+
+message UpdateNodeRequest {
+  string node_id = 1;
+  // version unset = auto-fetch current version; matches UpdateNodeInput
+  // in the ops layer. prost generates Option<i64>.
+  optional int64 version = 2;
+  string node_type = 3;              // empty string = no change (enum-like; empty is not legitimate)
+  // content and properties use optional so callers can distinguish
+  // "no change" (field absent) from "clear the value" (field present, empty/"{}")
+  optional string content = 4;       // unset = no change; "" is a legitimate value (clear content)
+  optional string properties = 5;    // unset = no change; "{}" is a legitimate value (clear props)
+  string add_to_collection = 6;      // collection path to add node to
+  string remove_from_collection = 7; // collection_id to remove node from
+  string lifecycle_status = 8;       // empty string = no change (enum-like; empty is not legitimate)
+}
+
+// UpdateNode returns NodeResponse.
+
+// ---------------------------------------------------------------------------
+// DeleteNode
+// ---------------------------------------------------------------------------
+
+message DeleteNodeRequest {
+  string node_id = 1;
+  // version unset = auto-fetch (matches ops-layer behaviour).
+  // optional int64 maps to Option<i64> in prost.
+  optional int64 version = 2;
+}
+
+message DeleteNodeResponse {
+  string node_id = 1;
+  bool existed = 2;
+}
+
+// ---------------------------------------------------------------------------
+// GetChildren
+// ---------------------------------------------------------------------------
+
+message GetChildrenRequest {
+  string node_id = 1;
+}
+
+message GetRootsRequest {
+  // 0 = no limit/offset; all roots are returned.
+  // limit/offset are pushed into SurrealDB (LIMIT/START AT) for efficiency.
+  uint32 limit = 1;
+  uint32 offset = 2;
+}
+
+message NodeListResponse {
+  repeated NodeData nodes = 1;
+  int32 count = 2;
+  string collection_id = 3; // empty string when not filtered by collection
+}
+
+// ---------------------------------------------------------------------------
+// SearchNodes (query / semantic)
+// ---------------------------------------------------------------------------
+
+// SearchRequest exposes a subset of SearchSemanticInput from
+// packages/core/src/ops/search_ops.rs. Fields not yet exposed (will be
+// added when consumers need them): exclude_collections, include_markdown,
+// include_archived, scope, include_edges, graph_boost, property_filters.
+message SearchRequest {
+  string query = 1;
+  // node_types filters results to any of the specified node types.
+  // Empty list = all types. Matches the repeated-string shape of
+  // SearchSemanticInput.node_type ([]string on the ops layer).
+  repeated string node_types = 2;
+  string collection = 3;      // optional collection path filter
+  string collection_id = 4;   // optional collection ID filter (alternative to path)
+  int32 limit = 5;            // 0 = use server default (20)
+  int32 offset = 6;
+  float threshold = 7;        // semantic similarity threshold; 0.0 = use default (0.7)
+  bool semantic = 8;          // true = semantic search, false = structured query
+  // JSON-encoded array of {field, operator, value} filter objects; empty = no filters
+  string filters = 9;
+}
+
+// SearchNodes returns NodeListResponse.
+
+// ---------------------------------------------------------------------------
+// WatchNodes — server-streaming change events
+// ---------------------------------------------------------------------------
+
+message WatchRequest {
+  // Filter which nodes to watch. Empty string = watch all nodes.
+  string node_type = 1;
+  // Watch only descendants of this node (empty = global watch)
+  string root_id = 2;
+}
+
+message NodeEvent {
+  oneof event {
+    NodeData created = 1;
+    NodeData updated = 2;
+    NodeDeleted deleted = 3;
+  }
+}
+
+message NodeDeleted {
+  string node_id = 1;
+  // node_type lets consumers apply type-aware logic (e.g. structural cleanup
+  // for schema/collection deletions) without fetching the already-deleted
+  // node. Carries the same value as DomainEvent::NodeDeleted::node_type from
+  // the core event channel.
+  string node_type = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Chat — bidirectional streaming
+// ---------------------------------------------------------------------------
+
+message ChatRequest {
+  string content = 1;
+  string session_id = 2; // client-chosen session identifier; empty = auto-assign
+}
+
+message ChatResponse {
+  string content = 1;
+  bool done = 2;          // true on the final chunk of a response
+  string session_id = 3;  // echoed back so client can correlate streams
+}
+
+// ---------------------------------------------------------------------------
+// Shared envelopes
+// ---------------------------------------------------------------------------
+
+// Empty acknowledgment for RPCs that return Result<(), _> in the ops layer.
+message Empty {}
+
+// Optional NodeResponse for find/get-by-name style RPCs that legitimately
+// return None when the entity does not exist. node unset = None.
+message OptionalNodeResponse {
+  optional NodeResponse node = 1;
+}
+
+// ---------------------------------------------------------------------------
+// GetChildrenTree — full recursive subtree
+// ---------------------------------------------------------------------------
+
+message GetChildrenTreeRequest {
+  string node_id = 1;
+}
+
+// Wrapper that carries the recursive tree as JSON, mirroring the existing
+// NodeService::get_children_tree() return type (serde_json::Value with a
+// nested children array). Kept as JSON because the tree structure is
+// schema-flexible and the frontend already consumes this shape.
+message NodeTreeResponse {
+  // JSON-encoded tree: { id, nodeType, content, properties, children: [...] }
+  string tree_json = 1;
+}
+
+// ---------------------------------------------------------------------------
+// QueryNodesSimple — flexible filter queries
+// ---------------------------------------------------------------------------
+
+// Mirrors packages/core/src/models/node.rs NodeQuery. All fields optional;
+// query selection is priority-based as documented in NodeService::query_nodes_simple.
+message QueryNodesSimpleRequest {
+  optional string id = 1;
+  optional string mentioned_by = 2;
+  optional string content_contains = 3;
+  optional string title_contains = 4;
+  optional string node_type = 5;
+  // limit/offset use 0 as the "unset" sentinel (matches the Rust Option<usize>
+  // None case where the store layer applies its own default).
+  uint32 limit = 6;
+  uint32 offset = 7;
+}
+
+// ---------------------------------------------------------------------------
+// MentionAutocomplete
+// ---------------------------------------------------------------------------
+
+message MentionAutocompleteRequest {
+  string query = 1;
+  // 0 = use server default (10)
+  uint32 limit = 2;
+}
+
+// ---------------------------------------------------------------------------
+// UpsertNodeWithParent — transactional auto-save upsert
+// ---------------------------------------------------------------------------
+
+message UpsertNodeWithParentRequest {
+  string node_id = 1;
+  string content = 2;
+  string node_type = 3;
+  string parent_id = 4;
+  string root_id = 5;
+  // before_sibling_id field is intentionally omitted — packages/core's
+  // upsert_node_with_parent currently passes None per Issue #616 (fractional
+  // ordering on edges).
+}
+
+// ---------------------------------------------------------------------------
+// MoveNode / ReorderNode
+// ---------------------------------------------------------------------------
+
+message MoveNodeRequest {
+  string node_id = 1;
+  int64 version = 2;
+  // new_parent_id empty string = move to root (None on the ops layer).
+  string new_parent_id = 3;
+  // insert_after_node_id empty string = first position (None on the ops layer).
+  string insert_after_node_id = 4;
+}
+
+message ReorderNodeRequest {
+  string node_id = 1;
+  int64 version = 2;
+  // empty string = insert at beginning of siblings
+  string insert_after_node_id = 3;
+}
+
+// reorder_node returns () in the ops layer; we return Empty.
+message ReorderNodeResponse {}
+
+// ---------------------------------------------------------------------------
+// Mentions
+// ---------------------------------------------------------------------------
+
+message CreateMentionRequest {
+  string mentioning_node_id = 1;
+  string mentioned_node_id = 2;
+}
+
+message DeleteMentionRequest {
+  string mentioning_node_id = 1;
+  string mentioned_node_id = 2;
+}
+
+// Acknowledgement for mention create/delete. The ops layer returns () today,
+// but the dedicated message lets us evolve the response shape later without
+// a wire break (e.g. adding a relationship_id).
+message MentionResponse {
+  string mentioning_node_id = 1;
+  string mentioned_node_id = 2;
+}
+
+// Shared request for get_outgoing_mentions / get_incoming_mentions / get_mentioning_roots.
+message MentionTargetRequest {
+  string node_id = 1;
+}
+
+message MentionIdsResponse {
+  repeated string node_ids = 1;
+}
+
+// NodeReference mirrors packages/core/src/models NodeReference: a small
+// {id, title, node_type} struct returned by get_mentioning_containers().
+// Title is optional in the Rust type.
+message NodeReference {
+  string id = 1;
+  optional string title = 2;
+  string node_type = 3;
+}
+
+message NodeReferenceListResponse {
+  repeated NodeReference references = 1;
+}
+
+// ---------------------------------------------------------------------------
+// UpdateTaskNode
+// ---------------------------------------------------------------------------
+
+// TaskNodeUpdate values use a tri-state encoding to match the
+// Option<Option<T>> pattern in packages/core/src/models/task_node.rs:
+//   - field unset                  → no change (outer None)
+//   - field present, clear=true    → clear the value (Some(None))
+//   - field present, clear=false,
+//     value populated              → set the value (Some(Some(T)))
+// We use one wrapper message per optional-clearable field.
+message OptionalStringClear {
+  // true = clear the value (write None on the server)
+  bool clear = 1;
+  // value used only when clear=false
+  string value = 2;
+}
+
+message OptionalTimestampClear {
+  // true = clear the timestamp (write None on the server)
+  bool clear = 1;
+  // RFC 3339 timestamp; used only when clear=false
+  string value = 2;
+}
+
+// status uses a plain optional string because TaskStatus has no "clear" path
+// in TaskNodeUpdate (the field type is Option<TaskStatus>, not
+// Option<Option<TaskStatus>>).
+message UpdateTaskNodeRequest {
+  string node_id = 1;
+  int64 version = 2;
+  optional string status = 3;            // TaskStatus serialized as string
+  optional OptionalStringClear priority = 4;
+  optional OptionalTimestampClear due_date = 5;
+  optional OptionalStringClear assignee = 6;
+  optional OptionalTimestampClear started_at = 7;
+  optional OptionalTimestampClear completed_at = 8;
+  // Generic content/properties updates also accepted; mirrors the
+  // catch-all fields on the Rust TaskNodeUpdate when it falls back to a
+  // NodeUpdate for content changes.
+  optional string content = 9;
+  // JSON-encoded properties patch; unset = no change.
+  optional string properties = 10;
+}
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+message GetAllSchemasRequest {}
+
+message GetSchemaDefinitionRequest {
+  // ID of the schema node (e.g. "task", "person").
+  string schema_id = 1;
+}
+
+// Schema read RPCs reuse NodeResponse / NodeListResponse: SchemaNode is a
+// strongly-typed view onto a node with node_type="schema". The Tauri proxy
+// reconstructs SchemaNode from the returned NodeData by calling
+// SchemaNode::from_node().
+
+// ---------------------------------------------------------------------------
+// Collections
+// ---------------------------------------------------------------------------
+
+message GetAllCollectionsRequest {}
+
+// CollectionInfo is the wire shape of collections.rs::CollectionInfo: a
+// node plus member count and parent collection IDs. Kept as a dedicated
+// message rather than encoding into properties so the structured count
+// and parent_collection_ids stay first-class.
+message CollectionInfo {
+  NodeData node = 1;
+  uint32 member_count = 2;
+  repeated string parent_collection_ids = 3;
+}
+
+message CollectionListResponse {
+  repeated CollectionInfo collections = 1;
+}
+
+message CollectionMembersRequest {
+  string collection_id = 1;
+}
+
+message NodeCollectionsRequest {
+  string node_id = 1;
+}
+
+message CollectionIdsResponse {
+  repeated string collection_ids = 1;
+}
+
+message AddNodeToCollectionRequest {
+  string node_id = 1;
+  string collection_id = 2;
+}
+
+message AddNodeToCollectionByPathRequest {
+  string node_id = 1;
+  // Path like "hr:policy:vacation"
+  string collection_path = 2;
+}
+
+message RemoveNodeFromCollectionRequest {
+  string node_id = 1;
+  string collection_id = 2;
+}
+
+message FindCollectionByPathRequest {
+  string collection_path = 1;
+}
+
+message GetCollectionByNameRequest {
+  string name = 1;
+}
+
+// Returns the leaf collection ID after add_to_collection_by_path resolves
+// (or create_collection succeeds).
+message CollectionIdResponse {
+  string collection_id = 1;
+}
+
+message CreateCollectionRequest {
+  string name = 1;
+  // Optional description stored under properties.description.
+  // Empty string = no description.
+  string description = 2;
+}
+
+message RenameCollectionRequest {
+  string collection_id = 1;
+  int64 version = 2;
+  string new_name = 3;
+}
+
+message DeleteCollectionRequest {
+  string collection_id = 1;
+  int64 version = 2;
+}
+
+// ---------------------------------------------------------------------------
+// EmbeddingsService — semantic search and embedding management
+// ---------------------------------------------------------------------------
+
+service EmbeddingsService {
+  rpc GetEmbeddingStatus(GetEmbeddingStatusRequest)     returns (EmbeddingStatusResponse);
+  rpc SearchSemantic(SearchSemanticRequest)             returns (SearchSemanticResponse);
+  rpc RegenerateEmbedding(RegenerateEmbeddingRequest)   returns (RegenerateEmbeddingResponse);
+  rpc QueueEmbedding(QueueEmbeddingRequest)             returns (QueueEmbeddingResponse);
+  rpc TriggerBatchEmbed(TriggerBatchEmbedRequest)       returns (TriggerBatchEmbedResponse);
+  rpc GetStaleCount(GetStaleCountRequest)               returns (GetStaleCountResponse);
+  rpc BatchQueueEmbeddings(BatchQueueEmbeddingsRequest) returns (BatchQueueEmbeddingsResponse);
+}
+
+// ---------------------------------------------------------------------------
+// EmbeddingsService messages
+// ---------------------------------------------------------------------------
+
+message GetEmbeddingStatusRequest {}
+
+message EmbeddingStatusResponse {
+  bool available = 1;        // true when NLP engine loaded and ready
+  int32 stale_count = 2;     // number of root nodes awaiting (re-)embedding
+}
+
+message SearchSemanticRequest {
+  string query = 1;
+  float threshold = 2;       // 0.0 = use server default (0.7)
+  int32 limit = 3;           // 0 = use server default (20)
+  bool exact = 4;            // reserved for future use
+}
+
+message SearchSemanticResponse {
+  repeated NodeData nodes = 1;
+}
+
+message RegenerateEmbeddingRequest {
+  string node_id = 1;
+}
+
+message RegenerateEmbeddingResponse {}
+
+message QueueEmbeddingRequest {
+  string node_id = 1;
+}
+
+message QueueEmbeddingResponse {}
+
+message TriggerBatchEmbedRequest {}
+
+message TriggerBatchEmbedResponse {}
+
+message GetStaleCountRequest {}
+
+message GetStaleCountResponse {
+  int32 count = 1;
+}
+
+message BatchQueueEmbeddingsRequest {
+  repeated string node_ids = 1;
+}
+
+message BatchEmbeddingFailure {
+  string node_id = 1;
+  string error = 2;
+}
+
+message BatchQueueEmbeddingsResponse {
+  int32 success_count = 1;
+  repeated BatchEmbeddingFailure failures = 2;
+}

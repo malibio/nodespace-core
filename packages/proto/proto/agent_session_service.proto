@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package nodespace;
+
+// AgentSessionService manages PTY/terminal-style agent sessions.
+//
+// A session represents an external agent CLI (Claude Code, Codex, Gemini CLI,
+// Pi, OpenCode) running inside a pseudo-terminal. Clients can launch sessions,
+// stream output, write input, resize the terminal, list active sessions, and
+// terminate sessions.
+service AgentSessionService {
+  rpc LaunchSession(LaunchSessionRequest) returns (LaunchSessionResponse);
+  rpc StreamOutput(StreamOutputRequest) returns (stream OutputChunk);
+  rpc WriteInput(WriteInputRequest) returns (WriteInputResponse);
+  rpc ResizeTerminal(ResizeRequest) returns (ResizeResponse);
+  rpc TerminateSession(TerminateSessionRequest) returns (TerminateSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc CheckAgentAvailability(CheckAvailabilityRequest) returns (CheckAvailabilityResponse);
+}
+
+// ---------------------------------------------------------------------------
+// LaunchSession
+// ---------------------------------------------------------------------------
+
+message LaunchSessionRequest {
+  // Catalogued agent identifier (kebab-case): "claude-code" | "codex" |
+  // "gemini-cli" | "pi" | "open-code". Matches the AgentType enum's serde
+  // form in packages/agent/src/agent_types.rs.
+  string agent_type = 1;
+  // Initial prompt passed as a CLI argument when the agent supports it
+  // (e.g. `claude "<prompt>"`). Omit to launch the agent in its default
+  // interactive mode.
+  optional string prompt = 2;
+  // Initial terminal dimensions. Valid range: [1, 65535]. Zero on either
+  // axis falls back to the engine default (80x24); callers are expected to
+  // call ResizeTerminal as soon as they know the real terminal geometry.
+  // (ResizeTerminal, by contrast, rejects zero — its semantics are "apply
+  // exactly this size", not "use the default".)
+  uint32 cols = 3;
+  uint32 rows = 4;
+}
+
+message LaunchSessionResponse {
+  // UUID assigned to the new session.
+  string session_id = 1;
+  // Unix timestamp (seconds) when the session was created.
+  int64 created_at = 2;
+}
+
+// ---------------------------------------------------------------------------
+// StreamOutput — server-streaming output from a running session
+// ---------------------------------------------------------------------------
+
+message StreamOutputRequest {
+  string session_id = 1;
+}
+
+// OutputChunk is one slice of raw bytes read from the PTY master.
+//
+// PTYs merge stdout and stderr into a single byte stream — there is no way to
+// distinguish them at this layer. The bytes may contain partial UTF-8 sequences
+// and terminal escape codes; consumers are expected to render them the way a
+// terminal would.
+message OutputChunk {
+  // Raw bytes read from the PTY (may include ANSI escape sequences).
+  bytes data = 1;
+  // Unix timestamp in milliseconds when this chunk was produced.
+  int64 timestamp_ms = 2;
+}
+
+// ---------------------------------------------------------------------------
+// WriteInput — send bytes to the session's stdin / PTY
+// ---------------------------------------------------------------------------
+
+message WriteInputRequest {
+  string session_id = 1;
+  // Raw bytes to write (keystrokes, commands, etc.). May include control
+  // characters (Ctrl-C as 0x03, etc.) — they pass through to the PTY verbatim.
+  bytes data = 2;
+}
+
+message WriteInputResponse {
+  // Number of bytes accepted by the PTY writer. The PTY engine writes the
+  // entire buffer atomically and flushes, so this always equals
+  // `data.len()` on success. `int64` because `data` is unbounded and a
+  // `usize → int32` cast could wrap on a 2 GiB+ payload (unlikely for a
+  // PTY, but the contract is the contract).
+  int64 bytes_written = 1;
+}
+
+// ---------------------------------------------------------------------------
+// ResizeTerminal — update PTY dimensions
+// ---------------------------------------------------------------------------
+
+message ResizeRequest {
+  string session_id = 1;
+  // Terminal dimensions. Valid range: [1, 65535] (the underlying PTY uses
+  // u16). Zero is rejected with InvalidArgument — unlike LaunchSession,
+  // ResizeTerminal has no "default" semantic.
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message ResizeResponse {}
+
+// ---------------------------------------------------------------------------
+// TerminateSession
+// ---------------------------------------------------------------------------
+
+message TerminateSessionRequest {
+  string session_id = 1;
+}
+
+message TerminateSessionResponse {
+  string session_id = 1;
+  // False when the session was not in the manager (already cleaned up by the
+  // natural-exit watcher); true when the handler actively terminated it.
+  bool was_running = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ListSessions
+// ---------------------------------------------------------------------------
+
+message ListSessionsRequest {}
+
+message SessionInfo {
+  string session_id = 1;
+  // Catalogued agent identifier (kebab-case), e.g. "claude-code".
+  string agent_type = 2;
+  // Unix timestamp (seconds) when the session was started.
+  int64 started_at = 3;
+}
+
+message ListSessionsResponse {
+  repeated SessionInfo sessions = 1;
+  uint32 count = 2;
+}
+
+// ---------------------------------------------------------------------------
+// CheckAgentAvailability
+// ---------------------------------------------------------------------------
+
+message CheckAvailabilityRequest {}
+
+message AgentAvailability {
+  // Catalogued agent identifier (kebab-case), e.g. "claude-code".
+  string agent_type = 1;
+  // Binary name that was searched on PATH (e.g. "claude").
+  string binary = 2;
+  // True when the binary was found on the augmented PATH.
+  bool binary_found = 3;
+  // True when an auth credential (env var or config file) was found.
+  bool auth_found = 4;
+  // Absolute path to the binary, when found.
+  optional string binary_path = 5;
+  // Human-readable install instruction shown when binary_found is false.
+  optional string install_hint = 6;
+}
+
+message CheckAvailabilityResponse {
+  repeated AgentAvailability agents = 1;
+}

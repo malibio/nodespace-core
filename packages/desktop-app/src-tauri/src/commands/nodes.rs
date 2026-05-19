@@ -9,14 +9,14 @@ use crate::types::{
     NodeReference, NodeUpdate, TaskNodeUpdate,
 };
 use chrono::{DateTime, Utc};
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetNodeRequest, GetSchemaDefinitionRequest,
     MentionAutocompleteRequest, MentionTargetRequest, MoveNodeRequest, NodeData, NodeResponse,
     OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest,
     UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
 };
-use nodespace_daemon::NodeServiceClient;
+use nodespace_proto::NodeServiceClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;

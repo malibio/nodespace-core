@@ -4,7 +4,7 @@
 //! (nodespace-daemon) instead of calling `packages/core` directly.
 
 use crate::types::Node;
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     AddNodeToCollectionByPathRequest, AddNodeToCollectionRequest, CollectionMembersRequest,
     CreateCollectionRequest, DeleteCollectionRequest, FindCollectionByPathRequest,
     GetAllCollectionsRequest, GetCollectionByNameRequest, NodeCollectionsRequest,

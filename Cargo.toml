@@ -3,6 +3,7 @@ members = [
     "packages/core",
     "packages/nlp-engine",
     "packages/agent",
+    "packages/proto",
     "packages/daemon",
     "packages/cli",
     "packages/desktop-app/src-tauri",
@@ -31,6 +32,7 @@ tracing = "0.1"
 nodespace-core = { path = "packages/core" }
 nodespace-nlp-engine = { path = "packages/nlp-engine" }
 nodespace-agent = { path = "packages/agent" }
+nodespace-proto = { path = "packages/proto" }
 nodespace-daemon = { path = "packages/daemon" }
 tonic = "0.12"
 prost = "0.13"

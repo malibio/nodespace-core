@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use nodespace_daemon::{
+use nodespace_proto::{
     AgentSessionServiceClient, EmbeddingsServiceClient, ImportServiceClient,
     LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient,
 };

@@ -30,8 +30,8 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use nodespace_daemon::nodespace::{node_event::Event as NodeEventKind, WatchRequest};
-use nodespace_daemon::NodeServiceClient;
+use nodespace_proto::nodespace::{node_event::Event as NodeEventKind, WatchRequest};
+use nodespace_proto::NodeServiceClient;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio_stream::StreamExt;
@@ -157,7 +157,7 @@ async fn stream_once(app: &AppHandle, sock: &std::path::Path) -> Result<()> {
 }
 
 /// Translate a proto `NodeEvent` into the corresponding Tauri event.
-fn forward(app: &AppHandle, event: nodespace_daemon::nodespace::NodeEvent) {
+fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
     let Some(kind) = event.event else {
         debug!("Received NodeEvent with no event variant; ignoring");
         return;

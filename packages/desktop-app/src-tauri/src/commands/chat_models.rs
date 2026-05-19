@@ -9,7 +9,7 @@
 use crate::agent_events;
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     CancelModelDownloadRequest, DeleteModelRequest, DownloadModelRequest, GetSystemRamRequest,
     ListModelsRequest, LoadModelRequest, OllamaAvailableRequest, RecommendedModelRequest,
     UnloadModelRequest,

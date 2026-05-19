@@ -7,7 +7,7 @@
 //! in Tauri local storage and are never sent to the daemon.
 
 use crate::services::GrpcClient;
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     GetCaptureSettingsRequest, GetDaemonConfigRequest, UpdateCaptureSettingsRequest,
     UpdateDaemonConfigRequest,
 };

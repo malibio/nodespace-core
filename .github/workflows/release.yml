@@ -28,7 +28,7 @@ jobs:
   build-tauri-macos-arm:
     name: Build Tauri (macOS ARM)
     runs-on: macos-latest
-    if: github.event_name == 'release' || inputs.platform == 'all' || inputs.platform == 'macos-arm'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout repository

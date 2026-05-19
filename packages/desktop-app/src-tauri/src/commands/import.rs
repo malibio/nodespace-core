@@ -5,7 +5,7 @@
 //! mid-import. These handlers subscribe to the progress stream and forward
 //! each event to the frontend via Tauri events.
 
-use nodespace_daemon::nodespace::{
+use nodespace_proto::nodespace::{
     ImportMarkdownFilesRequest, ImportMarkdownRequest, ImportOptions as ProtoImportOptions,
 };
 use serde::{Deserialize, Serialize};

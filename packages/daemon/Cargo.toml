@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 tonic = "0.12"
 prost = "0.13"
+nodespace-proto = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = "0.1"
 async-stream = "0.3"
@@ -39,9 +40,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 tower = { version = "0.5", features = ["util"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 
-[build-dependencies]
-tonic-build = "0.12"
-protoc-bin-vendored = "3"
 
 [dev-dependencies]
 tempfile = "3.0"

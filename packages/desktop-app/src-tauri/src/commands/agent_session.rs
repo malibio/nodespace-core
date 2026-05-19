@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use futures::StreamExt;
-use nodespace_daemon::{
+use nodespace_proto::{
     CheckAvailabilityRequest, LaunchSessionRequest, ListSessionsRequest, ResizeRequest,
     TerminateSessionRequest, WriteInputRequest,
 };
@@ -183,7 +183,7 @@ pub async fn launch_session(
     let session_id_for_task = session_id.clone();
     tauri::async_runtime::spawn(async move {
         let stream_result = stream_client
-            .stream_output(Request::new(nodespace_daemon::StreamOutputRequest {
+            .stream_output(Request::new(nodespace_proto::StreamOutputRequest {
                 session_id: session_id_for_task.clone(),
             }))
             .await;
