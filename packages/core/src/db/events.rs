@@ -60,6 +60,43 @@ pub struct RelationshipEvent {
     pub properties: serde_json::Value,
 }
 
+impl RelationshipEvent {
+    /// Construct an event with `from_id` / `to_id` normalized to
+    /// `node:<id>` form. Callers in `NodeService` hold raw node ids
+    /// (e.g. `"2026-05-20"` for date pages, bare UUIDs for normal
+    /// nodes) and the contract for `RelationshipEvent` requires the
+    /// table-prefixed `<table>:<key>` form (see the serialization
+    /// contract test below). Downstream consumers parse on `:` and
+    /// reject bare ids — most notably the Pro sync push consumer's
+    /// `parse_node_thing`, which gets bare date-page ids today and
+    /// fails the cloud RELATE.
+    pub fn new(
+        id: String,
+        from_id: &str,
+        to_id: &str,
+        relationship_type: impl Into<String>,
+        properties: serde_json::Value,
+    ) -> Self {
+        Self {
+            id,
+            from_id: node_thing(from_id),
+            to_id: node_thing(to_id),
+            relationship_type: relationship_type.into(),
+            properties,
+        }
+    }
+}
+
+/// Normalize a node id to its full SurrealDB Thing form
+/// (`node:<key>`). Pass-through if the input already contains `:`.
+fn node_thing(id: &str) -> String {
+    if id.contains(':') {
+        id.to_string()
+    } else {
+        format!("node:{id}")
+    }
+}
+
 /// Describes a single property change for playbook trigger matching (Issue #995)
 ///
 /// Computed by diffing pre-mutation and post-mutation node properties.
