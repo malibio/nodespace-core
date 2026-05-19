@@ -41,6 +41,10 @@
     ],
     "resources": [
       "resources/models/**/*"
+    ],
+    "externalBin": [
+      "binaries/nodespaced",
+      "binaries/nodespace"
     ]
   }
 }

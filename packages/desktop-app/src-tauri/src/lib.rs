@@ -24,6 +24,10 @@ pub mod services;
 // see watcher.rs module docs for activation gating.
 pub mod watcher;
 
+// launchd daemon lifecycle (Issue #1179) — macOS only
+#[cfg(target_os = "macos")]
+pub mod daemon_setup;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -33,6 +37,31 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 fn toggle_sidebar() -> String {
     "Sidebar toggled!".to_string()
+}
+
+/// Report the current daemon health to the frontend.
+///
+/// Returns "healthy", "starting", or "not_running". The frontend uses this
+/// to decide whether to show an error state (Issue #1179).
+#[tauri::command]
+async fn check_daemon_status() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        use daemon_setup::{check_daemon_socket, DaemonStatus};
+
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return "not_running".to_string(),
+        };
+        let socket_path = home.join(crate::constants::DAEMON_SOCKET_RELATIVE);
+        return match check_daemon_socket(socket_path.as_path()).await {
+            DaemonStatus::Healthy => "healthy".to_string(),
+            DaemonStatus::Starting => "starting".to_string(),
+            DaemonStatus::NotRunning => "not_running".to_string(),
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    "healthy".to_string()
 }
 
 // Include test module
@@ -310,6 +339,36 @@ pub fn run() {
             // Register shutdown token as managed state for background task coordination.
             app.manage(shutdown_token_for_setup.clone());
 
+            // Ensure nodespaced is installed as a launchd agent and running (Issue #1179).
+            // Non-fatal: the app continues and lets the frontend display the error state.
+            // macOS only: launchd is not available on other platforms.
+            #[cfg(target_os = "macos")]
+            {
+                use daemon_setup::{ensure_daemon_running, DaemonStatus};
+                use tauri::Emitter;
+
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::block_on(async {
+                    match ensure_daemon_running(&app_handle).await {
+                        Ok(DaemonStatus::Healthy) => {
+                            tracing::info!("nodespaced is running");
+                        }
+                        Ok(status) => {
+                            tracing::warn!("nodespaced not yet healthy after setup: {:?}", status);
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.emit("daemon-status", "not_running");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Daemon setup failed: {:#}", e);
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.emit("daemon-status", "not_running");
+                            }
+                        }
+                    }
+                });
+            }
+
             // Initialize database and all services at startup.
             {
                 use nodespace_core::services::{
@@ -534,6 +593,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             toggle_sidebar,
+            check_daemon_status,
             commands::embeddings::generate_root_embedding,
             commands::embeddings::search_roots,
             commands::embeddings::update_root_embedding,

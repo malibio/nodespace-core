@@ -28,6 +28,10 @@
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
 
+  // Daemon connectivity state (Issue #1179). Set to true when Tauri signals
+  // that nodespaced could not be reached within 5 seconds of app launch.
+  let daemonUnreachable = $state(false);
+
   /**
    * Sets up MCP event listeners for real-time UI updates
    *
@@ -159,6 +163,7 @@
     let unlistenImport: Promise<() => void> | null = null;
     let unlistenDatabase: Promise<() => void> | null = null;
     let unlistenSettings: Promise<() => void> | null = null;
+    let unlistenDaemonStatus: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -177,6 +182,17 @@
         .catch((err) => {
           log.debug('Could not sync theme from backend preferences:', err);
         });
+
+      // Listen for daemon connectivity failures (Issue #1179).
+      // Emitted by lib.rs when nodespaced is not reachable after 5s.
+      unlistenDaemonStatus = listen<string>('daemon-status', (event) => {
+        if (event.payload === 'not_running') {
+          log.warn('nodespaced is not reachable — showing error state');
+          daemonUnreachable = true;
+        } else {
+          daemonUnreachable = false;
+        }
+      });
 
       unlistenMenu = listen('menu-toggle-sidebar', () => {
         toggleSidebar();
@@ -457,6 +473,9 @@
       if (unlistenSettings) {
         (await unlistenSettings)();
       }
+      if (unlistenDaemonStatus) {
+        (await unlistenDaemonStatus)();
+      }
       if (cleanupMCP) {
         await cleanupMCP();
       }
@@ -472,7 +491,7 @@
   });
 
   // Subscribe to layout state
-  $: isCollapsed = $layoutState.sidebarCollapsed;
+  const isCollapsed = $derived($layoutState.sidebarCollapsed);
 
   // Handle global keyboard shortcuts
   function handleKeydown(event: KeyboardEvent) {
@@ -499,6 +518,18 @@
 <ThemeProvider>
   <NodeServiceContext>
     <div class="app-container">
+      {#if daemonUnreachable}
+        <div class="daemon-error-banner" role="alert">
+          <span>
+            NodeSpace background service is not running. Some features may be unavailable.
+          </span>
+          <button
+            onclick={() => invoke('check_daemon_status').then((s) => { if (s === 'healthy') daemonUnreachable = false; })}
+          >
+            Retry
+          </button>
+        </div>
+      {/if}
       <div
         class="app-shell"
         class:sidebar-collapsed={isCollapsed}
@@ -523,6 +554,33 @@
 </ThemeProvider>
 
 <style>
+  .daemon-error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    background: hsl(var(--destructive) / 0.15);
+    border-bottom: 1px solid hsl(var(--destructive) / 0.4);
+    color: hsl(var(--destructive-foreground));
+    font-size: 0.875rem;
+    z-index: 100;
+  }
+
+  .daemon-error-banner button {
+    padding: 0.2rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid hsl(var(--destructive) / 0.6);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .daemon-error-banner button:hover {
+    background: hsl(var(--destructive) / 0.2);
+  }
+
   /* Container for app-shell and status bar (flexbox column) */
   .app-container {
     display: flex;

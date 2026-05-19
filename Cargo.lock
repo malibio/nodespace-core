@@ -4395,6 +4395,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "hyper-util",
+ "libc",
  "nodespace-agent",
  "nodespace-core",
  "nodespace-daemon",
