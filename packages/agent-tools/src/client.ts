@@ -9,7 +9,9 @@ const __dirname = path.dirname(__filename);
 export const PROTO_PATH = path.resolve(__dirname, '../../daemon/proto/node_service.proto');
 
 function resolveAddress(): string {
-  return process.env.NODESPACED_ADDR ?? 'localhost:50051';
+  const sock = process.env.NODESPACED_SOCKET
+    ?? `${process.env.HOME}/.nodespace/daemon.sock`;
+  return `unix:${sock}`;
 }
 
 type UnaryCallback<TResponse> = (

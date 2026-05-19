@@ -17,6 +17,8 @@ crossterm = "0.28"
 tonic = "0.12"
 tokio = { workspace = true }
 tokio-stream = "0.1"
+tower = { version = "0.5", features = ["util"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 nodespace-daemon = { path = "../daemon" }
@@ -24,3 +26,4 @@ nodespace-daemon = { path = "../daemon" }
 [dev-dependencies]
 nodespace-core = { workspace = true }
 tempfile = "3.0"
+tokio = { workspace = true, features = ["full", "test-util"] }

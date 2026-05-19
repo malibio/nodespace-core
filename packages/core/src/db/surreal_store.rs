@@ -8183,7 +8183,7 @@ mod tests {
         let all = store.get_roots(None, None).await?;
         assert_eq!(all.len(), base + 4);
 
-        let page_size = (base + 4 + 1) / 2; // ceiling half
+        let page_size = (base + 4).div_ceil(2);
         let page1 = store.get_roots(Some(page_size), None).await?;
         let page2 = store.get_roots(Some(page_size), Some(page_size)).await?;
 

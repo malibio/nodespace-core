@@ -37,6 +37,7 @@ tray-icon = "0.21"
 tao = "0.31"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tower = { version = "0.5", features = ["util"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 
 [build-dependencies]
 tonic-build = "0.12"

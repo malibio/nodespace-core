@@ -19,8 +19,8 @@
 //!
 //! # Behavior
 //!
-//! - Opens a `WatchNodes` stream against `localhost:50051` (or the address
-//!   from `NODESPACED_ADDR`).
+//! - Opens a `WatchNodes` stream against `~/.nodespace/daemon.sock` (or the path
+//!   from `NODESPACED_SOCKET`).
 //! - Translates each proto `NodeEvent` to a Tauri event with the same payload
 //!   shape as `DomainEventForwarder` (id + optional node_type).
 //! - On stream error or disconnection, reconnects with exponential backoff
@@ -37,10 +37,6 @@ use tauri::{AppHandle, Emitter};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
-/// Default gRPC endpoint for `nodespaced`. Matches the daemon's
-/// `DEFAULT_ADDR` (ADR-031).
-const DEFAULT_ENDPOINT: &str = "http://[::1]:50051";
-
 /// Exponential backoff bounds for reconnection attempts.
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -56,17 +52,21 @@ struct NodeIdPayload {
     node_type: Option<String>,
 }
 
-/// Resolve the daemon endpoint. Honors `NODESPACED_ADDR` so test setups can
-/// redirect to an ephemeral port.
-fn endpoint() -> String {
-    match std::env::var("NODESPACED_ADDR") {
-        Ok(addr) if !addr.is_empty() => format!("http://{}", addr),
-        _ => DEFAULT_ENDPOINT.to_string(),
+/// Resolve the daemon socket path. Honors `NODESPACED_SOCKET`.
+#[cfg(unix)]
+fn socket_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+        return std::path::PathBuf::from(p);
     }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home)
+        .join(".nodespace")
+        .join("daemon.sock")
 }
 
 /// Spawn the watcher as a Tokio task. Returns immediately; the task runs
 /// until `cancel_token` is cancelled or the process exits.
+#[cfg(unix)]
 pub fn spawn(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run(app, cancel_token).await {
@@ -79,9 +79,10 @@ pub fn spawn(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) 
 
 /// Watcher loop. Connects, streams events, and reconnects with exponential
 /// backoff on any failure. Exits when `cancel_token` fires.
+#[cfg(unix)]
 async fn run(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) -> Result<()> {
-    let endpoint = endpoint();
-    info!("Node watcher starting (endpoint={endpoint})");
+    let sock = socket_path();
+    info!("Node watcher starting (sock={})", sock.display());
 
     let mut backoff = BACKOFF_START;
     loop {
@@ -91,7 +92,7 @@ async fn run(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) 
                 info!("Node watcher received shutdown signal, exiting");
                 return Ok(());
             }
-            outcome = stream_once(&app, &endpoint) => {
+            outcome = stream_once(&app, &sock) => {
                 match outcome {
                     Ok(()) => {
                         // Server closed the stream cleanly — reconnect immediately
@@ -122,10 +123,22 @@ async fn run(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) 
 /// Open a single WatchNodes stream and forward events until the stream ends
 /// or errors. Returns `Ok(())` on clean stream end, `Err` on transport or
 /// stream error.
-async fn stream_once(app: &AppHandle, endpoint: &str) -> Result<()> {
-    let mut client = NodeServiceClient::connect(endpoint.to_string())
+#[cfg(unix)]
+async fn stream_once(app: &AppHandle, sock: &std::path::Path) -> Result<()> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    let sock = sock.to_path_buf();
+    let channel = Endpoint::from_static("http://localhost")
+        .connect_with_connector(service_fn(move |_: Uri| {
+            let sock = sock.clone();
+            async move { UnixStream::connect(&sock).await.map(TokioIo::new) }
+        }))
         .await
-        .with_context(|| format!("failed to connect to nodespaced at {endpoint}"))?;
+        .with_context(|| "failed to connect to nodespaced")?;
+    let mut client = NodeServiceClient::new(channel);
 
     let mut stream = client
         .watch_nodes(WatchRequest::default())

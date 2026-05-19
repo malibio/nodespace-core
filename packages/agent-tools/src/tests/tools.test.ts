@@ -47,9 +47,9 @@ const sampleNodeResponse = {
 };
 
 function unavailableError(): grpc.ServiceError {
-  const err = new Error('connect ECONNREFUSED 127.0.0.1:50051') as grpc.ServiceError;
+  const err = new Error('connect ENOENT /tmp/nodespace-no-such-daemon.sock') as grpc.ServiceError;
   err.code = grpc.status.UNAVAILABLE;
-  err.details = 'connect ECONNREFUSED 127.0.0.1:50051';
+  err.details = 'connect ENOENT /tmp/nodespace-no-such-daemon.sock';
   err.metadata = new grpc.Metadata();
   err.name = 'Error';
   return err;
