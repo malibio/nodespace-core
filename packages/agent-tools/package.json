@@ -12,12 +12,13 @@
     }
   },
   "files": [
-    "dist",
-    "src",
-    "shims"
+    "dist/",
+    "src/",
+    "shims/",
+    "*.md"
   ],
   "scripts": {
-    "preinstall": "node ../../enforce-bun.js",
+    "preinstall": "[ -f ../../enforce-bun.js ] && node ../../enforce-bun.js || true",
     "build": "tsc",
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
@@ -31,6 +32,9 @@
     "@types/node": "^24.6.0",
     "typescript": "~5.9.3",
     "vitest": "^2.1.9"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT"
 }
