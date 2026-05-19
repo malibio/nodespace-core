@@ -526,13 +526,40 @@ fn flatten_properties_for_api(node: &mut Node) {
     node.properties = serde_json::Value::Object(flat);
 }
 
+/// Local mirror of core's TaskNode — produces the flat top-level field shape
+/// the frontend TypeScript interface expects:
+/// { id, nodeType, content, version, ..., status, priority, dueDate, ... }
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskNode {
+    id: String,
+    #[serde(rename = "nodeType")]
+    node_type: String,
+    content: String,
+    #[serde(default = "default_version")]
+    version: i64,
+    created_at: DateTime<Utc>,
+    modified_at: DateTime<Utc>,
+    properties: serde_json::Value,
+    #[serde(default, skip_serializing_if = "is_active_lifecycle")]
+    lifecycle_status: String,
+    // Task-specific fields at top level (mirrors core TaskNode layout)
+    status: TaskStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<TaskPriority>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due_date: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assignee: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<DateTime<Utc>>,
+}
+
 fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
-    let task_props = node
-        .properties
-        .get("task")
-        .and_then(|v| v.as_object())
-        .map(|obj| serde_json::Value::Object(obj.clone()));
-    let props = task_props.as_ref().unwrap_or(&node.properties);
+    // Properties are already flattened by flatten_properties_for_api before this call.
+    let props = &node.properties;
 
     let status: TaskStatus = props
         .get("status")
@@ -546,57 +573,49 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         .map(|s| TaskPriority::from_str(s).unwrap_or_default());
 
     let due_date = props
-        .get("due_date")
+        .get("dueDate")
+        .or_else(|| props.get("due_date"))
         .and_then(|v| v.as_str())
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
     let assignee = props
-        .get("assignee_id")
-        .or_else(|| props.get("assignee"))
+        .get("assignee")
+        .or_else(|| props.get("assignee_id"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
     let started_at = props
-        .get("started_at")
+        .get("startedAt")
+        .or_else(|| props.get("started_at"))
         .and_then(|v| v.as_str())
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
     let completed_at = props
-        .get("completed_at")
+        .get("completedAt")
+        .or_else(|| props.get("completed_at"))
         .and_then(|v| v.as_str())
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    let mut task_props_map = serde_json::Map::new();
-    task_props_map.insert("status".to_string(), serde_json::json!(status.as_str()));
-    if let Some(ref p) = priority {
-        task_props_map.insert("priority".to_string(), serde_json::json!(p.as_str()));
-    }
-    if let Some(ref d) = due_date {
-        task_props_map.insert("dueDate".to_string(), serde_json::json!(d.to_rfc3339()));
-    }
-    if let Some(ref a) = assignee {
-        task_props_map.insert("assignee".to_string(), serde_json::json!(a));
-    }
-    if let Some(ref s) = started_at {
-        task_props_map.insert("startedAt".to_string(), serde_json::json!(s.to_rfc3339()));
-    }
-    if let Some(ref c) = completed_at {
-        task_props_map.insert("completedAt".to_string(), serde_json::json!(c.to_rfc3339()));
-    }
+    let lifecycle_status = node.lifecycle_status.clone();
+    let task = TaskNode {
+        id: node.id,
+        node_type: node.node_type,
+        content: node.content,
+        version: node.version,
+        created_at: node.created_at,
+        modified_at: node.modified_at,
+        properties: node.properties,
+        lifecycle_status,
+        status,
+        priority,
+        due_date,
+        assignee,
+        started_at,
+        completed_at,
+    };
 
-    let task_node = serde_json::json!({
-        "id": node.id,
-        "nodeType": node.node_type,
-        "content": node.content,
-        "version": node.version,
-        "createdAt": node.created_at,
-        "modifiedAt": node.modified_at,
-        "properties": task_props_map,
-        "lifecycleStatus": node.lifecycle_status,
-    });
-
-    Ok(task_node)
+    serde_json::to_value(&task).map_err(|e| format!("Failed to serialize task node: {}", e))
 }
