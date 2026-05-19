@@ -9,7 +9,7 @@
 use crate::agent_events;
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
-use nodespace_agent::agent_types::{AgentSession, AgentTurnResult, LocalAgentStatus, ModelInfo};
+use crate::types::{AgentSession, AgentTurnResult, InferenceUsage, LocalAgentStatus};
 use nodespace_daemon::nodespace::{
     CancelGenerationRequest, EndLocalSessionRequest, EnsureModelReadyRequest,
     GetLocalStatusRequest, GetSessionsRequest, ListModelsRequest, SendLocalMessageRequest,
@@ -186,7 +186,7 @@ pub async fn local_agent_send(
     Ok(AgentTurnResult {
         response: response_text,
         tool_calls_made: vec![],
-        usage: nodespace_agent::agent_types::InferenceUsage {
+        usage: InferenceUsage {
             prompt_tokens,
             completion_tokens,
         },
@@ -361,7 +361,7 @@ pub async fn ensure_model_ready(
 #[tauri::command]
 pub async fn list_local_models(
     grpc: State<'_, GrpcClient>,
-) -> Result<Vec<ModelInfo>, CommandError> {
+) -> Result<Vec<serde_json::Value>, CommandError> {
     let mut client = grpc.local_agent_client().await;
     let resp = client
         .list_models(ListModelsRequest {})
@@ -372,22 +372,16 @@ pub async fn list_local_models(
     let models = resp
         .models
         .into_iter()
-        .filter_map(|entry| {
-            let status = serde_json::from_str(&entry.status_json).ok()?;
-            let backend =
-                serde_json::from_str(&format!("\"{}\"", entry.backend)).unwrap_or_default();
-            Some(ModelInfo {
-                id: entry.id,
-                name: entry.name,
-                family: nodespace_agent::agent_types::ModelFamily::Ollama, // placeholder; daemon owns family
-                filename: None,
-                size_bytes: entry.size_bytes as u64,
-                quantization: entry.quantization,
-                url: None,
-                sha256: None,
-                backend,
-                status,
-                min_memory_gb: entry.min_memory_gb.min(u8::MAX as u32) as u8,
+        .map(|entry| {
+            serde_json::json!({
+                "id": entry.id,
+                "name": entry.name,
+                "backend": entry.backend,
+                "status": serde_json::from_str::<serde_json::Value>(&entry.status_json)
+                    .unwrap_or(serde_json::Value::Null),
+                "sizeBytes": entry.size_bytes,
+                "quantization": entry.quantization,
+                "minMemoryGb": entry.min_memory_gb,
             })
         })
         .collect();

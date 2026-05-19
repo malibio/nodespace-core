@@ -619,3 +619,61 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
 
     serde_json::to_value(&task).map_err(|e| format!("Failed to serialize task node: {}", e))
 }
+
+// ---------------------------------------------------------------------------
+// Agent / Model types — local mirrors that sever nodespace-agent dep
+// ---------------------------------------------------------------------------
+
+/// Current status of a local agent session.
+///
+/// Mirrors `nodespace_agent::agent_types::LocalAgentStatus`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LocalAgentStatus {
+    #[default]
+    Idle,
+    Thinking,
+    ToolExecution {
+        tool_name: String,
+    },
+    Streaming,
+    Error {
+        message: String,
+    },
+}
+
+/// Token usage statistics for one inference turn.
+///
+/// Mirrors `nodespace_agent::agent_types::InferenceUsage`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct InferenceUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+/// Result of a completed agent turn.
+///
+/// Mirrors `nodespace_agent::agent_types::AgentTurnResult`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTurnResult {
+    pub response: String,
+    pub tool_calls_made: Vec<serde_json::Value>,
+    pub usage: InferenceUsage,
+}
+
+/// Active local agent session.
+///
+/// Mirrors `nodespace_agent::agent_types::AgentSession`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSession {
+    pub id: String,
+    pub model_id: Option<String>,
+    pub messages: Vec<serde_json::Value>,
+    pub status: LocalAgentStatus,
+    pub created_at: DateTime<Utc>,
+    pub tool_executions: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_override: Option<String>,
+}

@@ -22,14 +22,6 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
     }
 }
 
-fn embeddings_unavailable() -> CommandError {
-    CommandError {
-        message: "Embedding service not available. Model may have failed to load.".to_string(),
-        code: "EMBEDDINGS_UNAVAILABLE".to_string(),
-        details: None,
-    }
-}
-
 fn node_from_proto(data: nodespace_daemon::NodeData) -> Option<Node> {
     let created_at = match data.created_at.parse() {
         Ok(ts) => ts,
@@ -77,10 +69,7 @@ pub async fn generate_root_embedding(
     grpc: State<'_, GrpcClient>,
     root_id: String,
 ) -> Result<(), CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     client
         .queue_embedding(QueueEmbeddingRequest { node_id: root_id })
@@ -127,10 +116,7 @@ pub async fn search_roots(
         }
     }
 
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     let response = client
         .search_semantic(SearchSemanticRequest {
@@ -158,10 +144,7 @@ pub async fn update_root_embedding(
     grpc: State<'_, GrpcClient>,
     root_id: String,
 ) -> Result<(), CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     client
         .regenerate_embedding(RegenerateEmbeddingRequest { node_id: root_id })
@@ -177,10 +160,7 @@ pub async fn on_root_closed(
     grpc: State<'_, GrpcClient>,
     root_id: String,
 ) -> Result<(), CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     client
         .queue_embedding(QueueEmbeddingRequest { node_id: root_id })
@@ -196,10 +176,7 @@ pub async fn on_root_idle(
     grpc: State<'_, GrpcClient>,
     root_id: String,
 ) -> Result<bool, CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     client
         .queue_embedding(QueueEmbeddingRequest { node_id: root_id })
@@ -215,10 +192,7 @@ pub async fn on_root_idle(
 /// Manually sync all stale topics
 #[tauri::command]
 pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     client
         .trigger_batch_embed(TriggerBatchEmbedRequest {})
@@ -231,10 +205,7 @@ pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandE
 /// Get count of stale topics/roots
 #[tauri::command]
 pub async fn get_stale_root_count(grpc: State<'_, GrpcClient>) -> Result<usize, CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     let response = client
         .get_stale_count(GetStaleCountRequest {})
@@ -266,10 +237,7 @@ pub async fn batch_generate_embeddings(
     grpc: State<'_, GrpcClient>,
     root_ids: Vec<String>,
 ) -> Result<BatchEmbeddingResult, CommandError> {
-    let mut client = grpc
-        .embeddings_client()
-        .await
-        .ok_or_else(embeddings_unavailable)?;
+    let mut client = grpc.embeddings_client().await;
 
     let response = client
         .batch_queue_embeddings(BatchQueueEmbeddingsRequest { node_ids: root_ids })

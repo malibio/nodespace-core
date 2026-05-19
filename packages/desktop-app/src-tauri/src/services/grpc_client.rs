@@ -1,58 +1,32 @@
-//! In-process gRPC client for the embedded `nodespaced` service.
+//! gRPC client that connects to the external `nodespaced` daemon over a Unix
+//! Domain Socket.
 //!
-//! The Tauri app proxies node / collection / schema / settings commands through
-//! tonic instead of calling `packages/core` directly. This module:
+//! Socket path resolution order:
+//!   1. `NODESPACED_SOCKET` environment variable
+//!   2. `~/.nodespace/daemon.sock` (default)
 //!
-//!   1. Spawns `NodeServiceImpl`, `ImportServiceImpl`, `EmbeddingsServiceImpl`,
-//!      `SettingsServiceImpl`, `AgentSessionHandler`, and `LocalAgentServiceImpl`
-//!      from `nodespace-daemon` on a localhost port.
-//!   2. Connects clients to that endpoint and stashes the `Channel`
-//!      so commands can clone the client cheaply.
-//!
-//! The same `Arc<NodeService>` that `lib.rs` setup initializes is reused as
-//! the backing implementation, so there is no second database open and no
-//! RocksDB lock contention.
+//! The `GrpcClient` is registered as Tauri managed state once and cloned
+//! cheaply per command (tonic `Channel` is an `Arc` internally).
 
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use nodespace_agent::acp::context_assembly::GraphContextAssembler;
-use nodespace_agent::pty::PtySessionManager;
-use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeService};
 use nodespace_daemon::{
-    AgentSessionHandler, AgentSessionServiceClient, AgentSessionServiceServer,
-    EmbeddingsServiceClient, EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceClient,
-    ImportServiceImpl, ImportServiceServer, LocalAgentServiceClient, LocalAgentServiceImpl,
-    LocalAgentServiceServer, NodeServiceClient, NodeServiceImpl, NodeServiceServer,
-    SettingsServiceClient, SettingsServiceImpl, SettingsServiceServer,
+    AgentSessionServiceClient, EmbeddingsServiceClient, ImportServiceClient,
+    LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient,
 };
-use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::{Channel, Endpoint, Server};
-
-/// Address pattern that asks the OS to choose a free port. The chosen port is
-/// reported via `local_addr()` after the listener binds, then handed to the
-/// gRPC client. The standalone `nodespaced` uses a Unix Domain Socket, so
-/// there is no port collision risk between the two.
-const BIND_ADDR_TEMPLATE: &str = "127.0.0.1:0";
-
-/// Connection timeout for the in-process channel. The server starts in a
-/// background task; the channel may be created before the server has
-/// finished binding, so we give tonic a brief window to retry.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+use tonic::transport::Channel;
 
 struct GrpcClientInner {
     node: NodeServiceClient<Channel>,
     import: ImportServiceClient<Channel>,
     settings: SettingsServiceClient<Channel>,
-    embeddings: Option<EmbeddingsServiceClient<Channel>>,
+    embeddings: EmbeddingsServiceClient<Channel>,
     agent_session: AgentSessionServiceClient<Channel>,
     local_agent: LocalAgentServiceClient<Channel>,
 }
 
-/// Managed Tauri state wrapping the gRPC clients.
+/// Managed Tauri state wrapping the gRPC clients connected to `nodespaced`.
 ///
 /// `Channel` is cheap to clone (it is an `Arc` internally). Commands clone
 /// clients per call since tonic's generated methods take `&mut self`.
@@ -61,112 +35,31 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    /// Start the in-process gRPC server and return a connected client.
+    /// Connect to the `nodespaced` daemon over a Unix Domain Socket and return
+    /// a fully-initialised client bundle.
     ///
-    /// `node_service`, `embedding_service`, and `processor` are the same
-    /// instances used by the Tauri app — one database, no lock contention.
-    /// The server is spawned on a tokio task and runs until the runtime shuts
-    /// down.
-    pub async fn start(
-        node_service: Arc<NodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
-        processor: Option<Arc<EmbeddingProcessor>>,
-    ) -> Result<Self, GrpcClientError> {
-        let inner = Self::start_server(node_service, embedding_service, processor).await?;
-        Ok(Self {
-            inner: Arc::new(RwLock::new(inner)),
-        })
-    }
+    /// Returns an error if the socket cannot be reached. The Tauri app should
+    /// treat this as a fatal startup error (daemon not running).
+    #[cfg(unix)]
+    pub async fn connect() -> Result<Self, GrpcClientError> {
+        let sock = resolve_socket_path();
+        tracing::info!(socket = %sock.display(), "Connecting to nodespaced");
 
-    /// Core server-start logic.
-    async fn start_server(
-        node_service: Arc<NodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
-        processor: Option<Arc<EmbeddingProcessor>>,
-    ) -> Result<GrpcClientInner, GrpcClientError> {
-        let listener = TcpListener::bind(BIND_ADDR_TEMPLATE)
-            .await
-            .map_err(GrpcClientError::Bind)?;
-        let addr: SocketAddr = listener.local_addr().map_err(GrpcClientError::Bind)?;
+        let channel = uds_channel(&sock).await.map_err(GrpcClientError::Connect)?;
 
-        tracing::info!(%addr, "Starting in-process gRPC server");
+        tracing::info!(socket = %sock.display(), "Connected to nodespaced");
 
-        let node_service_impl =
-            NodeServiceImpl::new(node_service.clone(), embedding_service.clone());
-        let import_impl = ImportServiceImpl::new(node_service.clone());
-        let settings_impl =
-            SettingsServiceImpl::with_default_path().map_err(GrpcClientError::InvalidEndpoint)?;
-        let incoming = TcpListenerStream::new(listener);
-
-        let embeddings_impl =
-            embedding_service
-                .as_ref()
-                .zip(processor.as_ref())
-                .map(|(svc, proc)| {
-                    EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
-                });
-        let has_embeddings = embeddings_impl.is_some();
-
-        let pty_manager = Arc::new(PtySessionManager::new());
-        let assembler = Arc::new(GraphContextAssembler::new(
-            node_service.clone(),
-            embedding_service.clone(),
-        ));
-        let capture_config_path = {
-            let home = std::env::var("HOME").unwrap_or_default();
-            std::path::PathBuf::from(home)
-                .join(".nodespace")
-                .join("daemon.toml")
-        };
-        let agent_session_impl = AgentSessionHandler::new(
-            pty_manager,
-            assembler,
-            node_service.clone(),
-            capture_config_path,
-        );
-        let local_agent_impl = LocalAgentServiceImpl::new(node_service.clone());
-
-        tokio::spawn(async move {
-            let builder = Server::builder()
-                .add_service(NodeServiceServer::new(node_service_impl))
-                .add_service(ImportServiceServer::new(import_impl))
-                .add_service(SettingsServiceServer::new(settings_impl))
-                .add_service(AgentSessionServiceServer::new(agent_session_impl))
-                .add_service(LocalAgentServiceServer::new(local_agent_impl));
-            let result = if let Some(emb) = embeddings_impl {
-                builder
-                    .add_service(EmbeddingsServiceServer::new(emb))
-                    .serve_with_incoming(incoming)
-                    .await
-            } else {
-                builder.serve_with_incoming(incoming).await
-            };
-            if let Err(e) = result {
-                tracing::error!(error = %e, "In-process gRPC server terminated unexpectedly");
-            }
-        });
-
-        let endpoint = Endpoint::from_shared(format!("http://{}", addr))
-            .map_err(|e| GrpcClientError::InvalidEndpoint(e.to_string()))?
-            .connect_timeout(CONNECT_TIMEOUT);
-
-        let channel = endpoint.connect().await.map_err(GrpcClientError::Connect)?;
-
-        let embeddings_client = if has_embeddings {
-            Some(EmbeddingsServiceClient::new(channel.clone()))
-        } else {
-            None
-        };
-
-        tracing::info!(%addr, "In-process gRPC client connected");
-
-        Ok(GrpcClientInner {
+        let inner = GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
             import: ImportServiceClient::new(channel.clone()),
             settings: SettingsServiceClient::new(channel.clone()),
-            embeddings: embeddings_client,
+            embeddings: EmbeddingsServiceClient::new(channel.clone()),
             agent_session: AgentSessionServiceClient::new(channel.clone()),
             local_agent: LocalAgentServiceClient::new(channel),
+        };
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(inner)),
         })
     }
 
@@ -185,8 +78,11 @@ impl GrpcClient {
         self.inner.read().await.settings.clone()
     }
 
-    /// Borrow a clone of the `EmbeddingsServiceClient`, if available.
-    pub async fn embeddings_client(&self) -> Option<EmbeddingsServiceClient<Channel>> {
+    /// Borrow a clone of the `EmbeddingsServiceClient`.
+    ///
+    /// Embeddings are always available in the daemon (unlike the old in-process
+    /// optional configuration), so this returns the client directly.
+    pub async fn embeddings_client(&self) -> EmbeddingsServiceClient<Channel> {
         self.inner.read().await.embeddings.clone()
     }
 
@@ -201,14 +97,41 @@ impl GrpcClient {
     }
 }
 
+/// Resolve the daemon socket path.
+///
+/// Checks `NODESPACED_SOCKET` env var first, then falls back to
+/// `~/.nodespace/daemon.sock`.
+#[cfg(unix)]
+fn resolve_socket_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+        return std::path::PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home)
+        .join(".nodespace")
+        .join("daemon.sock")
+}
+
+/// Build a tonic `Channel` connected over a Unix Domain Socket.
+#[cfg(unix)]
+async fn uds_channel(sock: &std::path::Path) -> Result<Channel, tonic::transport::Error> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    let sock = sock.to_path_buf();
+    // The URI host is ignored for UDS — tonic needs a syntactically valid URI.
+    Endpoint::from_static("http://localhost")
+        .connect_with_connector(service_fn(move |_: Uri| {
+            let sock = sock.clone();
+            async move { UnixStream::connect(&sock).await.map(TokioIo::new) }
+        }))
+        .await
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GrpcClientError {
-    #[error("Failed to bind gRPC listener: {0}")]
-    Bind(std::io::Error),
-
-    #[error("Invalid gRPC endpoint: {0}")]
-    InvalidEndpoint(String),
-
-    #[error("Failed to connect to in-process gRPC server: {0}")]
+    #[error("Failed to connect to nodespaced: {0}")]
     Connect(tonic::transport::Error),
 }

@@ -167,7 +167,7 @@ pub async fn configure_mcp() -> Result<(), String> {
     };
 
     // Ensure mcpServers key exists as an object.
-    if !root.get("mcpServers").map_or(false, |v| v.is_object()) {
+    if !root.get("mcpServers").is_some_and(|v| v.is_object()) {
         root["mcpServers"] = serde_json::json!({});
     }
 
