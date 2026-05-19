@@ -5,7 +5,7 @@
 
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
-use nodespace_core::models::Node;
+use crate::types::Node;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
