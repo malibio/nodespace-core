@@ -146,6 +146,14 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
     use tao::platform::run_return::EventLoopExtRunReturn;
 
     let mut event_loop: EventLoop<TrayEvent> = EventLoopBuilder::with_user_event().build();
+
+    // Hide from the macOS dock and app switcher — nodespaced is a background
+    // agent, not a foreground app. Must be set before the event loop starts.
+    #[cfg(target_os = "macos")]
+    {
+        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+        event_loop.set_activation_policy(ActivationPolicy::Accessory);
+    }
     let proxy = event_loop.create_proxy();
 
     // Forward muda's global menu channel into our tao loop. Without this the
