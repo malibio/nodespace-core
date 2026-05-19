@@ -411,19 +411,34 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let model_id_clone = model_id.clone();
         let manager = self.inner.model_manager.clone();
 
-        // Register progress callback that forwards into the channel.
-        let tx_cb = tx.clone();
-        let mid_cb = model_id.clone();
+        // Register progress callbacks for both GGUF and Ollama backends.
+        let tx_gguf = tx.clone();
+        let mid_gguf = model_id.clone();
         manager
             .set_gguf_progress_callback(Box::new(move |evt| {
                 let event = ModelLoadProgressEvent {
                     event_type: "downloading".to_string(),
-                    model_id: mid_cb.clone(),
+                    model_id: mid_gguf.clone(),
                     bytes_downloaded: Some(evt.bytes_downloaded as i64),
                     bytes_total: Some(evt.bytes_total as i64),
                     ..Default::default()
                 };
-                let _ = tx_cb.try_send(Ok(event));
+                let _ = tx_gguf.try_send(Ok(event));
+            }))
+            .await;
+
+        let tx_ollama = tx.clone();
+        let mid_ollama = model_id.clone();
+        manager
+            .set_ollama_progress_callback(Box::new(move |evt| {
+                let event = ModelLoadProgressEvent {
+                    event_type: "downloading".to_string(),
+                    model_id: mid_ollama.clone(),
+                    bytes_downloaded: Some(evt.bytes_downloaded as i64),
+                    bytes_total: Some(evt.bytes_total as i64),
+                    ..Default::default()
+                };
+                let _ = tx_ollama.try_send(Ok(event));
             }))
             .await;
 

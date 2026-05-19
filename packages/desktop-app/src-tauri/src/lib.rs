@@ -230,20 +230,30 @@ pub fn run() {
             }
 
             // Connect to the nodespaced daemon over Unix Domain Socket.
+            // On macOS the daemon may still be starting after ensure_daemon_running returns;
+            // on other Unix platforms users start the daemon manually. Either way, a failed
+            // connection is non-fatal: we emit daemon-status so the frontend can show an error.
             #[cfg(unix)]
             {
+                use tauri::Emitter;
+
                 let app_handle = app.handle().clone();
                 let session_token = shutdown_token_for_setup.child_token();
 
                 tauri::async_runtime::block_on(async {
-                    let grpc_client = crate::services::GrpcClient::connect()
-                        .await
-                        .expect("Failed to connect to nodespaced — is the daemon running?");
-                    app_handle.manage(grpc_client);
-                    tracing::info!("gRPC client connected to nodespaced");
-
-                    // Spawn the watcher that forwards node-change events to the frontend.
-                    watcher::spawn(app_handle.clone(), session_token);
+                    match crate::services::GrpcClient::connect().await {
+                        Ok(grpc_client) => {
+                            app_handle.manage(grpc_client);
+                            tracing::info!("gRPC client connected to nodespaced");
+                            watcher::spawn(app_handle.clone(), session_token);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to connect to nodespaced: {e:#}");
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.emit("daemon-status", "not_running");
+                            }
+                        }
+                    }
                 });
             }
 

@@ -14,7 +14,7 @@ use nodespace_daemon::nodespace::{
     ListModelsRequest, LoadModelRequest, OllamaAvailableRequest, RecommendedModelRequest,
     UnloadModelRequest,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio_stream::StreamExt;
 
@@ -33,20 +33,6 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
         code: "GRPC_ERROR".to_string(),
         details: None,
     }
-}
-
-/// Local mirror of `ModelInfo` for Tauri serialization.
-/// Matches the shape the frontend TypeScript interface expects.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelInfo {
-    pub id: String,
-    pub name: String,
-    pub backend: String,
-    pub status_json: String,
-    pub size_bytes: u64,
-    pub quantization: String,
-    pub min_memory_gb: u32,
 }
 
 /// List all models in the catalog with their current status.
