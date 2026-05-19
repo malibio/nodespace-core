@@ -38,18 +38,8 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 /// Tokens available for conversation history.
 const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 
-/// Returns the test-only system-prompt override on a session, or `None` in
-/// production. The two cfg variants let `run_turn` keep a single
-/// override → assembler → fallback chain without duplicating the assembler
-/// branch under each cfg arm. The `None`-returning variant is optimized
-/// away by the compiler.
-#[cfg(any(test, feature = "testing"))]
 fn session_prompt_override(session: &AgentSession) -> Option<&str> {
     session.system_prompt_override.as_deref()
-}
-#[cfg(not(any(test, feature = "testing")))]
-fn session_prompt_override(_session: &AgentSession) -> Option<&str> {
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -712,7 +702,6 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
             created_at: chrono::Utc::now(),
             tool_executions: Vec::new(),
             dynamic_context: None,
-            #[cfg(any(test, feature = "testing"))]
             system_prompt_override: None,
         };
 

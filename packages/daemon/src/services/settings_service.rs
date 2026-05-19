@@ -17,7 +17,7 @@ use crate::nodespace::{
     GetDaemonConfigRequest, UpdateCaptureSettingsRequest, UpdateDaemonConfigRequest,
 };
 
-const DEFAULT_GRPC_ADDRESS: &str = "[::1]:50051";
+const DEFAULT_GRPC_SOCKET: &str = "~/.nodespace/daemon.sock";
 
 /// On-disk representation of `~/.nodespace/daemon.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -146,7 +146,7 @@ impl SettingsServiceImpl {
             grpc_address: config
                 .grpc_address
                 .clone()
-                .unwrap_or_else(|| DEFAULT_GRPC_ADDRESS.to_string()),
+                .unwrap_or_else(|| DEFAULT_GRPC_SOCKET.to_string()),
         }
     }
 

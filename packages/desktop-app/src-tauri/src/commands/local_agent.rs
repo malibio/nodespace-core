@@ -250,7 +250,6 @@ pub async fn local_agent_get_sessions(
             created_at,
             tool_executions: vec![],
             dynamic_context: None,
-            #[cfg(any(test, feature = "testing"))]
             system_prompt_override: None,
         });
     }

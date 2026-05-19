@@ -34,8 +34,8 @@ use tonic::transport::{Channel, Endpoint, Server};
 
 /// Address pattern that asks the OS to choose a free port. The chosen port is
 /// reported via `local_addr()` after the listener binds, then handed to the
-/// gRPC client. Using port 0 prevents collisions when the dev workflow runs
-/// the standalone `nodespaced` binary in parallel on `[::1]:50051`.
+/// gRPC client. The standalone `nodespaced` uses a Unix Domain Socket, so
+/// there is no port collision risk between the two.
 const BIND_ADDR_TEMPLATE: &str = "127.0.0.1:0";
 
 /// Connection timeout for the in-process channel. The server starts in a

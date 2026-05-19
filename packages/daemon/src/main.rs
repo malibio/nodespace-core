@@ -1,5 +1,5 @@
 //! `nodespaced` — background daemon that owns the RocksDB lock and serves
-//! NodeSpace operations over gRPC on `localhost:50051`.
+//! NodeSpace operations over gRPC on a Unix Domain Socket.
 //!
 //! Lifecycle:
 //!   1. Initialize tracing.
@@ -11,7 +11,6 @@
 //!      `NodeService` handler on a worker tokio runtime.
 //!   6. Tear down cleanly on `SIGTERM`, `SIGINT`, or "Quit" from the tray.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -31,16 +30,19 @@ use nodespace_daemon::{
 use nodespace_nlp_engine::EmbeddingService;
 use tonic::transport::Server;
 
-/// Default address the daemon binds to. ADR-031 standardizes on
-/// `localhost:50051` for the loopback-only gRPC endpoint.
-const DEFAULT_ADDR: &str = "[::1]:50051";
-
-/// Resolve the daemon's bind address. Honors `NODESPACED_ADDR`.
-fn bind_addr() -> Result<SocketAddr> {
-    let raw = std::env::var("NODESPACED_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
-    raw.parse()
-        .with_context(|| format!("Invalid NODESPACED_ADDR: {raw}"))
+#[cfg(unix)]
+fn socket_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+        return std::path::PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home)
+        .join(".nodespace")
+        .join("daemon.sock")
 }
+
+#[cfg(windows)]
+compile_error!("Windows Named Pipe transport is not yet implemented. See issue #1176.");
 
 /// `tao`'s event loop must own the main thread on macOS (NSApplication is
 /// main-thread-only). So `main` builds the tokio runtime explicitly, hands
@@ -95,16 +97,34 @@ fn headless() -> bool {
 /// Headless server loop. Used by Linux CI and any environment without a
 /// display server. Shutdown is signal-driven (SIGTERM / SIGINT), there is
 /// no tray.
+#[cfg(unix)]
 async fn serve_headless() -> Result<()> {
-    let addr = bind_addr()?;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::net::UnixListener;
+    use tokio_stream::wrappers::UnixListenerStream;
+
+    let sock = socket_path();
     let db_path = resolve_db_path()?;
 
-    tracing::info!(db_path = %db_path.display(), %addr, "Starting nodespaced (headless)");
+    tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
     let bundle = build_services(&db_path).await?;
 
-    tracing::info!(%addr, "gRPC server listening");
+    if let Some(parent) = sock.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("Failed to create socket directory: {}", parent.display()))?;
+    }
+    let _ = tokio::fs::remove_file(&sock).await;
+    let listener = UnixListener::bind(&sock)
+        .with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
+    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("Failed to set socket permissions: {}", sock.display()))?;
+
+    tracing::info!(sock = %sock.display(), "gRPC server listening");
+
+    let sock_cleanup = sock.clone();
     let builder = Server::builder()
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
@@ -113,12 +133,13 @@ async fn serve_headless() -> Result<()> {
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_shutdown(addr, shutdown)
+            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
     } else {
-        builder.serve_with_shutdown(addr, shutdown)
+        builder.serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
     };
 
     serve.await.context("gRPC server terminated with error")?;
+    let _ = tokio::fs::remove_file(&sock_cleanup).await;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
 }
@@ -126,18 +147,32 @@ async fn serve_headless() -> Result<()> {
 /// Tray-driven server loop. Shutdown is owned by [`tray::TrayController`];
 /// signal handlers still apply so packaged installs can `kill -TERM` the
 /// daemon without going through the menu.
+#[cfg(unix)]
 async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
-    let addr = bind_addr()?;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::net::UnixListener;
+    use tokio_stream::wrappers::UnixListenerStream;
+
+    let sock = socket_path();
     let db_path = resolve_db_path()?;
 
-    tracing::info!(db_path = %db_path.display(), %addr, "Starting nodespaced (tray)");
+    tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (tray)");
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
     let bundle = build_services(&db_path).await?;
 
-    // `TrayController` is `Clone`; one copy goes to the metrics layer, the
-    // other drives the shutdown future.
+    if let Some(parent) = sock.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("Failed to create socket directory: {}", parent.display()))?;
+    }
+    let _ = tokio::fs::remove_file(&sock).await;
+    let listener = UnixListener::bind(&sock)
+        .with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
+    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("Failed to set socket permissions: {}", sock.display()))?;
+
     let shutdown_controller = controller.clone();
     let combined_shutdown = async move {
         tokio::select! {
@@ -146,7 +181,9 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         }
     };
 
-    tracing::info!(%addr, "gRPC server listening");
+    tracing::info!(sock = %sock.display(), "gRPC server listening");
+
+    let sock_cleanup = sock.clone();
     let builder = Server::builder()
         .layer(TrayMetricsLayer::new(controller))
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
@@ -156,12 +193,13 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_shutdown(addr, combined_shutdown)
+            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
     } else {
-        builder.serve_with_shutdown(addr, combined_shutdown)
+        builder.serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
     };
 
     serve.await.context("gRPC server terminated with error")?;
+    let _ = tokio::fs::remove_file(&sock_cleanup).await;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
 }

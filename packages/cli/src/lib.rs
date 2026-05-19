@@ -12,17 +12,13 @@ use clap::{Parser, Subcommand};
 use nodespace_daemon::{AgentSessionServiceClient, ImportServiceClient, NodeServiceClient};
 use tonic::transport::Channel;
 
-/// Default endpoint the CLI dials. ADR-031 reserves `localhost:50051` for the
-/// loopback-only gRPC endpoint exposed by `nodespaced`.
-pub const DEFAULT_ENDPOINT: &str = "http://[::1]:50051";
-
 #[derive(Parser, Debug)]
 #[command(
     name = "nodespace",
     version,
     about = "Command-line interface for NodeSpace — talks to the local nodespaced daemon over gRPC.",
     long_about = "nodespace is a stateless gRPC client that connects to the nodespaced daemon \
-                  (default: localhost:50051) and exposes the knowledge graph as shell commands.\n\n\
+                  via Unix Domain Socket and exposes the knowledge graph as shell commands.\n\n\
                   Start the daemon with `nodespaced` before invoking subcommands."
 )]
 pub struct Cli {
@@ -30,10 +26,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Override the daemon endpoint (default: http://[::1]:50051).
-    /// Honors the `NODESPACE_ENDPOINT` environment variable when this flag is absent.
-    #[arg(long, global = true, env = "NODESPACE_ENDPOINT")]
-    pub endpoint: Option<String>,
+    /// Override the socket path (default: ~/.nodespace/daemon.sock).
+    /// Honors the `NODESPACED_SOCKET` environment variable when this flag is absent.
+    #[arg(long, global = true, env = "NODESPACED_SOCKET")]
+    pub socket: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -62,77 +58,110 @@ pub enum Command {
     },
 }
 
-/// Resolve the configured endpoint, falling back to `DEFAULT_ENDPOINT`.
-pub fn resolve_endpoint(override_: Option<&str>) -> String {
-    override_
-        .map(str::to_string)
-        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+/// Resolve the socket path from an explicit override or env/default.
+#[cfg(unix)]
+pub fn resolve_socket_path(override_: Option<&str>) -> std::path::PathBuf {
+    if let Some(p) = override_ {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+        return std::path::PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home)
+        .join(".nodespace")
+        .join("daemon.sock")
+}
+
+/// Build a tonic `Channel` connected over a Unix Domain Socket.
+#[cfg(unix)]
+async fn uds_channel(sock: &std::path::Path) -> Result<Channel> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    let sock = sock.to_path_buf();
+    // The URI host is ignored for UDS — tonic needs a syntactically valid URI.
+    let channel = Endpoint::from_static("http://localhost")
+        .connect_with_connector(service_fn(move |_: Uri| {
+            let sock = sock.clone();
+            async move { UnixStream::connect(&sock).await.map(TokioIo::new) }
+        }))
+        .await?;
+    Ok(channel)
 }
 
 /// Connect to the daemon, returning a friendly error if it isn't running.
-///
-/// `tonic` surfaces "connection refused" as a transport error with a tower
-/// hyper cause; users running `nodespace` without first launching `nodespaced`
-/// need a clear remediation, not a stack of generic transport errors.
-pub async fn connect(endpoint: &str) -> Result<NodeServiceClient<Channel>> {
-    NodeServiceClient::connect(endpoint.to_string())
+#[cfg(unix)]
+pub async fn connect(sock: &std::path::Path) -> Result<NodeServiceClient<Channel>> {
+    uds_channel(sock)
         .await
+        .map(NodeServiceClient::new)
         .with_context(|| {
             format!(
-                "Could not connect to nodespaced at {endpoint}.\n\
-                 Is the daemon running? Start it with `nodespaced` in another terminal."
+                "Could not connect to nodespaced at {}.\n\
+                 Is the daemon running? Start it with `nodespaced` in another terminal.",
+                sock.display()
             )
         })
 }
 
 /// Connect an ImportServiceClient to the daemon.
-pub async fn connect_import(endpoint: &str) -> Result<ImportServiceClient<Channel>> {
-    ImportServiceClient::connect(endpoint.to_string())
+#[cfg(unix)]
+pub async fn connect_import(sock: &std::path::Path) -> Result<ImportServiceClient<Channel>> {
+    uds_channel(sock)
         .await
+        .map(ImportServiceClient::new)
         .with_context(|| {
             format!(
-                "Could not connect to nodespaced at {endpoint}.\n\
-                 Is the daemon running? Start it with `nodespaced` in another terminal."
+                "Could not connect to nodespaced at {}.\n\
+                 Is the daemon running? Start it with `nodespaced` in another terminal.",
+                sock.display()
             )
         })
 }
 
 /// Connect an AgentSessionServiceClient to the daemon.
-pub async fn connect_session(endpoint: &str) -> Result<AgentSessionServiceClient<Channel>> {
-    AgentSessionServiceClient::connect(endpoint.to_string())
+#[cfg(unix)]
+pub async fn connect_session(sock: &std::path::Path) -> Result<AgentSessionServiceClient<Channel>> {
+    uds_channel(sock)
         .await
+        .map(AgentSessionServiceClient::new)
         .with_context(|| {
             format!(
-                "Could not connect to nodespaced at {endpoint}.\n\
-                 Is the daemon running? Start it with `nodespaced` in another terminal."
+                "Could not connect to nodespaced at {}.\n\
+                 Is the daemon running? Start it with `nodespaced` in another terminal.",
+                sock.display()
             )
         })
 }
 
 /// Top-level dispatch — wired by `main.rs` and reused by integration tests.
+#[cfg(unix)]
 pub async fn run(cli: Cli) -> Result<()> {
-    let endpoint = resolve_endpoint(cli.endpoint.as_deref());
+    let sock = resolve_socket_path(cli.socket.as_deref());
     let json = cli.json;
 
     match cli.command {
         Command::Node { action } => {
-            let mut client = connect(&endpoint).await?;
+            let mut client = connect(&sock).await?;
             commands::node::run(&mut client, action, json).await
         }
         Command::Search(args) => {
-            let mut client = connect(&endpoint).await?;
+            let mut client = connect(&sock).await?;
             commands::search::run(&mut client, args, json).await
         }
         Command::Diagnostics(args) => {
-            let mut client = connect(&endpoint).await?;
+            let mut client = connect(&sock).await?;
             commands::diagnostics::run(&mut client, args, json).await
         }
         Command::Import { action } => {
-            let mut client = connect_import(&endpoint).await?;
+            let mut client = connect_import(&sock).await?;
             commands::import::run(&mut client, action, json).await
         }
         Command::Session { action } => {
-            let mut client = connect_session(&endpoint).await?;
+            let mut client = connect_session(&sock).await?;
             commands::session::run(&mut client, action, json).await
         }
     }
