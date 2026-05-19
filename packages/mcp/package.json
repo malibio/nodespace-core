@@ -1,0 +1,48 @@
+{
+  "name": "@nodespaceai/mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing NodeSpace knowledge graph operations as AI tools via the nodespace CLI",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "nodespace-mcp": "dist/server.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "preinstall": "node ../../enforce-bun.js",
+    "build": "tsc",
+    "test": "bunx vitest run",
+    "test:watch": "bunx vitest",
+    "quality:fix": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.51"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "~5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "keywords": [
+    "mcp",
+    "nodespace",
+    "ai",
+    "knowledge-graph",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
