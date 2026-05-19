@@ -12,14 +12,15 @@ import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
-const MODEL_NAME = "BAAI-bge-small-en-v1.5";
+const MODEL_FILE = "nomic-embed-text-v1.5.Q8_0.gguf";
+const HF_REPO = "nomic-ai/nomic-embed-text-v1.5-GGUF";
 
 // Determine target directory based on --bundle flag
 const isBundleMode = process.argv.includes("--bundle");
 const MODELS_DIR = isBundleMode
   ? "packages/desktop-app/src-tauri/resources/models"
   : join(homedir(), ".nodespace", "models");
-const MODEL_PATH = join(MODELS_DIR, MODEL_NAME);
+const MODEL_PATH = join(MODELS_DIR, MODEL_FILE);
 
 async function downloadModels() {
   const modeLabel = isBundleMode ? "bundling" : "development";
@@ -40,10 +41,9 @@ async function downloadModels() {
   await $`pip3 install huggingface-hub`.quiet();
 
   // Download model using python3 -m to ensure we use the same Python that pip3 installed to
-  console.log(`⬇️  Downloading BAAI/bge-small-en-v1.5...`);
-  await $`python3 -m huggingface_hub.commands.huggingface_cli download BAAI/bge-small-en-v1.5 \
-    --local-dir ${MODEL_PATH} \
-    --exclude pytorch_model.bin tf_model.h5 \
+  console.log(`⬇️  Downloading ${MODEL_FILE} from ${HF_REPO}...`);
+  await $`python3 -m huggingface_hub.commands.huggingface_cli download ${HF_REPO} ${MODEL_FILE} \
+    --local-dir ${MODELS_DIR} \
     --quiet`;
 
   console.log(`✅ Model downloaded to ${MODEL_PATH}`);
