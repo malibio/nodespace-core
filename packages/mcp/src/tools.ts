@@ -63,7 +63,7 @@ export async function searchNodes(query: string, limit?: number): Promise<string
 }
 
 export async function listNodes(nodeType: string, limit?: number): Promise<string> {
-  const args = ['search', nodeType, '--limit', String(limit ?? 50)];
+  const args = ['search', '--type', nodeType, '--limit', String(limit ?? 50)];
   return runCLI(args);
 }
 

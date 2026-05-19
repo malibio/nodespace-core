@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockExecFile = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFile: mockExecFile }));
 
-import { NodespaceCLIError, createNode, deleteNode, getNode, searchNodes, updateNode } from '../tools.js';
+import { NodespaceCLIError, createNode, deleteNode, getNode, listNodes, searchNodes, updateNode } from '../tools.js';
 
 function resolveExec(stdout: string) {
   mockExecFile.mockImplementation(
@@ -71,6 +71,28 @@ describe('tools', () => {
     expect(mockExecFile).toHaveBeenCalledWith(
       'nodespace',
       ['--json', 'search', 'test query', '--limit', '5'],
+      expect.any(Object),
+      expect.any(Function)
+    );
+  });
+
+  it('listNodes uses --type filter not semantic search', async () => {
+    resolveExec('{"nodes":[]}');
+    await listNodes('task', 20);
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'nodespace',
+      ['--json', 'search', '--type', 'task', '--limit', '20'],
+      expect.any(Object),
+      expect.any(Function)
+    );
+  });
+
+  it('listNodes defaults to limit 50', async () => {
+    resolveExec('{"nodes":[]}');
+    await listNodes('task');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'nodespace',
+      ['--json', 'search', '--type', 'task', '--limit', '50'],
       expect.any(Object),
       expect.any(Function)
     );

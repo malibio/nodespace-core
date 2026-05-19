@@ -60,10 +60,20 @@ function uninstall(): void {
 }
 
 const command = process.argv[2];
-if (command === 'install') {
-  install();
-} else if (command === 'uninstall') {
-  uninstall();
+if (command === 'install' || command === 'uninstall') {
+  if (process.platform !== 'darwin') {
+    console.error(
+      `Error: automatic config install is only supported on macOS (detected: ${process.platform}).\n` +
+        'Add the following to your Claude desktop config manually:\n\n' +
+        JSON.stringify({ mcpServers: { nodespace: MCP_SERVER_ENTRY } }, null, 2)
+    );
+    process.exit(1);
+  }
+  if (command === 'install') {
+    install();
+  } else {
+    uninstall();
+  }
 } else {
   console.error('Usage: nodespace-mcp install | uninstall');
   process.exit(1);

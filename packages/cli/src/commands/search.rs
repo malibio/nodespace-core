@@ -10,8 +10,12 @@ use crate::output;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
-    /// Free-text query.
+    /// Free-text query (pass empty string when using --type for type-only listing).
+    #[arg(default_value = "")]
     pub query: String,
+    /// Filter results to one or more node types (e.g. `--type task --type text`).
+    #[arg(long = "type", value_name = "TYPE")]
+    pub node_types: Vec<String>,
     /// Maximum number of results to return (0 = server default, currently 20).
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(i32).range(0..))]
     pub limit: i32,
@@ -25,7 +29,7 @@ pub async fn run(
     let response = client
         .search_nodes(SearchRequest {
             query: args.query,
-            node_types: vec![],
+            node_types: args.node_types,
             collection: String::new(),
             collection_id: String::new(),
             limit: args.limit,
