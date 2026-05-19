@@ -3,7 +3,7 @@
 //! As of Issue #1113, all commands proxy through the in-process gRPC server
 //! (nodespace-daemon) instead of calling `packages/core` directly.
 
-use nodespace_core::Node;
+use crate::types::Node;
 use nodespace_daemon::nodespace::{
     AddNodeToCollectionByPathRequest, AddNodeToCollectionRequest, CollectionMembersRequest,
     CreateCollectionRequest, DeleteCollectionRequest, FindCollectionByPathRequest,

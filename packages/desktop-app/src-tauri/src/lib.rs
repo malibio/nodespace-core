@@ -5,6 +5,9 @@ pub mod agent_events;
 // Tauri commands module (public for dev-server access)
 pub mod commands;
 
+// Local type mirrors for command layer (severs nodespace_core dep from commands/)
+pub mod types;
+
 // Application preferences management
 pub mod preferences;
 

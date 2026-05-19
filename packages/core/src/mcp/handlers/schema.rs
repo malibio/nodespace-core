@@ -577,7 +577,10 @@ pub async fn handle_update_schema(
         .await
         .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
         .ok_or_else(|| {
-            MCPError::invalid_params(format!("Schema '{}' not found after renames", params.schema_id))
+            MCPError::invalid_params(format!(
+                "Schema '{}' not found after renames",
+                params.schema_id
+            ))
         })?;
 
     // Process fields

@@ -3,9 +3,12 @@
 //! As of Issue #1113, all commands proxy through the in-process gRPC server
 //! (nodespace-daemon) instead of calling `packages/core` directly.
 
+use crate::types::{
+    node_to_typed_value as types_node_to_typed_value,
+    nodes_to_typed_values as types_nodes_to_typed_values, DeleteResult, Node, NodeQuery,
+    NodeReference, NodeUpdate, TaskNodeUpdate,
+};
 use chrono::{DateTime, Utc};
-use nodespace_core::models::{self, DeleteResult, NodeReference, TaskNodeUpdate};
-use nodespace_core::{Node, NodeQuery, NodeUpdate};
 use nodespace_daemon::nodespace::{
     CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetNodeRequest, GetSchemaDefinitionRequest,
@@ -141,10 +144,8 @@ async fn validate_node_type(
 }
 
 /// Convert a Node to its strongly-typed JSON representation (Issue #673)
-///
-/// Delegates to the canonical `models::node_to_typed_value` and maps errors to CommandError.
 pub fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
-    models::node_to_typed_value(node).map_err(|e| CommandError {
+    types_node_to_typed_value(node).map_err(|e| CommandError {
         message: e.clone(),
         code: "CONVERSION_ERROR".to_string(),
         details: Some(e),
@@ -153,7 +154,7 @@ pub fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
 
 /// Convert a list of Nodes to their strongly-typed JSON representations (Issue #673)
 pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, CommandError> {
-    models::nodes_to_typed_values(nodes).map_err(|e| CommandError {
+    types_nodes_to_typed_values(nodes).map_err(|e| CommandError {
         message: e.clone(),
         code: "CONVERSION_ERROR".to_string(),
         details: Some(e),

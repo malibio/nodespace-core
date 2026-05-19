@@ -7,7 +7,7 @@
 //! - `get_all_schemas` - List all schema nodes (returns SchemaNode[] with typed fields)
 //! - `get_schema_definition` - Get a specific schema by ID (returns SchemaNode with typed fields)
 
-use nodespace_core::SchemaNode;
+use crate::types::SchemaNode;
 use nodespace_daemon::nodespace::{GetAllSchemasRequest, GetSchemaDefinitionRequest};
 use tauri::State;
 use tonic::Request;

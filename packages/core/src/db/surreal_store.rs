@@ -1951,9 +1951,7 @@ impl SurrealStore {
         if let Some(off) = offset {
             query_builder = query_builder.bind(("offset", off as i64));
         }
-        let mut response = query_builder
-            .await
-            .context("Failed to get root nodes")?;
+        let mut response = query_builder.await.context("Failed to get root nodes")?;
 
         let surreal_nodes: Vec<SurrealNode> = response
             .take(0)
@@ -8104,13 +8102,25 @@ mod tests {
         let (store, _temp_dir) = create_test_store().await?;
 
         let r1 = store
-            .create_node(Node::new("text".to_string(), "Root 1".to_string(), json!({})), None, None)
+            .create_node(
+                Node::new("text".to_string(), "Root 1".to_string(), json!({})),
+                None,
+                None,
+            )
             .await?;
         let r2 = store
-            .create_node(Node::new("text".to_string(), "Root 2".to_string(), json!({})), None, None)
+            .create_node(
+                Node::new("text".to_string(), "Root 2".to_string(), json!({})),
+                None,
+                None,
+            )
             .await?;
         let r3 = store
-            .create_node(Node::new("text".to_string(), "Root 3".to_string(), json!({})), None, None)
+            .create_node(
+                Node::new("text".to_string(), "Root 3".to_string(), json!({})),
+                None,
+                None,
+            )
             .await?;
         // Child should NOT appear in roots
         store
@@ -8132,14 +8142,22 @@ mod tests {
 
         for i in 0..5 {
             store
-                .create_node(Node::new("text".to_string(), format!("Root {i}"), json!({})), None, None)
+                .create_node(
+                    Node::new("text".to_string(), format!("Root {i}"), json!({})),
+                    None,
+                    None,
+                )
                 .await?;
         }
 
         let roots = store.get_roots(Some(3), None).await?;
         // Schema nodes are also roots; just verify we got at most 3 *extra* nodes.
         // The point is that LIMIT is applied in DB, not in memory.
-        assert!(roots.len() <= 3, "limit=3 should return at most 3 nodes, got {}", roots.len());
+        assert!(
+            roots.len() <= 3,
+            "limit=3 should return at most 3 nodes, got {}",
+            roots.len()
+        );
 
         Ok(())
     }
@@ -8154,7 +8172,11 @@ mod tests {
 
         for i in 0..4 {
             store
-                .create_node(Node::new("text".to_string(), format!("Page root {i}"), json!({})), None, None)
+                .create_node(
+                    Node::new("text".to_string(), format!("Page root {i}"), json!({})),
+                    None,
+                    None,
+                )
                 .await?;
         }
 
