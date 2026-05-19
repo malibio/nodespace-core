@@ -432,10 +432,7 @@ jobs:
           gh pr create \
             --repo NodeSpaceAI/homebrew-nodespace \
             --title "Update NodeSpace cask to v${VERSION}" \
-            --body "Automated cask update from release workflow.
-
-- Version: \`${VERSION}\`
-- Source: NodeSpaceAI/nodespace-core@\`${{ github.ref_name }}\`" \
+            --body "Automated cask update from release workflow. Version ${VERSION}." \
             --base main \
             --head "$BRANCH"
 
