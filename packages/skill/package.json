@@ -1,0 +1,39 @@
+{
+  "name": "@nodespaceai/skill",
+  "version": "0.1.0",
+  "description": "NodeSpace skill package — install NodeSpace tools into PTY agents (Claude Code, Codex, Gemini CLI, OpenCode)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "nodespace-skill": "dist/install.js"
+  },
+  "files": [
+    "dist",
+    "shims",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "preinstall": "[ -f ../../enforce-bun.js ] && node ../../enforce-bun.js || true",
+    "build": "tsc",
+    "test": "bunx vitest run",
+    "test:watch": "bunx vitest",
+    "quality:fix": "bunx tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "~5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "license": "MIT"
+}

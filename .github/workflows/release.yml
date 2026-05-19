@@ -21,16 +21,99 @@ permissions:
   contents: write
 
 jobs:
+  # macOS ARM is a standalone job so publish-npm can depend on it alone,
+  # without being blocked by the Intel or Windows legs.
+  build-tauri-macos-arm:
+    name: Build Tauri (macOS ARM)
+    runs-on: macos-latest
+    if: github.event_name == 'release' || inputs.platform == 'all' || inputs.platform == 'macos-arm'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './packages/desktop-app/src-tauri -> target'
+
+      - name: Install Protobuf
+        run: brew install protobuf
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.38"
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Generate SvelteKit types
+        run: bun run --cwd packages/desktop-app sync
+
+      - name: Download embedding model for bundling
+        run: |
+          mkdir -p packages/desktop-app/src-tauri/resources/models
+          gh release download models-v2 --pattern "nomic-embed-text-v1.5.Q8_0.gguf" --dir packages/desktop-app/src-tauri/resources/models/
+          echo "Model downloaded:"
+          ls -la packages/desktop-app/src-tauri/resources/models/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build nodespaced and nodespace sidecars
+        run: |
+          TRIPLE="aarch64-apple-darwin"
+          BIN_DIR="packages/desktop-app/src-tauri/binaries"
+
+          echo "Building nodespaced for ${TRIPLE}..."
+          cargo build --release --bin nodespaced --target "${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespaced" "${BIN_DIR}/nodespaced-${TRIPLE}"
+          chmod +x "${BIN_DIR}/nodespaced-${TRIPLE}"
+
+          echo "Building nodespace CLI for ${TRIPLE}..."
+          cargo build --release --bin nodespace --target "${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespace" "${BIN_DIR}/nodespace-${TRIPLE}"
+          chmod +x "${BIN_DIR}/nodespace-${TRIPLE}"
+
+          echo "Sidecars built:"
+          ls -la "${BIN_DIR}/"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Michael Libio (F4M5J7YNLS)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: packages/desktop-app
+          tauriScript: bunx tauri
+          args: '--target aarch64-apple-darwin'
+          releaseId: ${{ github.event_name == 'release' && github.event.release.id || '' }}
+
+      - name: Upload artifacts (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-macos-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/bundle/
+          if-no-files-found: warn
+
   build-tauri:
+    name: Build Tauri (other platforms)
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS ARM (Apple Silicon - M1/M2/M3)
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            rust_targets: 'aarch64-apple-darwin'
-            id: 'macos-arm'
           # Windows
           - platform: 'windows-latest'
             args: ''
@@ -199,9 +282,10 @@ jobs:
           if-no-files-found: warn
 
   publish-npm:
-    name: Publish @nodespaceai/agent-tools
+    name: Publish npm packages
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
+    needs: build-tauri-macos-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
@@ -217,17 +301,17 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install dependencies
+      - name: Install dependencies (agent-tools)
         run: bun install
         working-directory: packages/agent-tools
 
-      - name: Set version from release tag
+      - name: Set version from release tag (agent-tools)
         run: |
           TAG="${{ github.event.release.tag_name }}"
           npm version "${TAG#v}" --no-git-tag-version
         working-directory: packages/agent-tools
 
-      - name: Build
+      - name: Build @nodespaceai/agent-tools
         run: bun run build
         working-directory: packages/agent-tools
 
@@ -237,13 +321,31 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Install dependencies (skill)
+        run: bun install
+        working-directory: packages/skill
+
+      - name: Set version from release tag (skill)
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          npm version "${TAG#v}" --no-git-tag-version
+        working-directory: packages/skill
+
+      - name: Build @nodespaceai/skill
+        run: bun run build
+        working-directory: packages/skill
+
+      - name: Publish @nodespaceai/skill
+        run: npm publish --access public
+        working-directory: packages/skill
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   update-homebrew-cask:
     name: Update Homebrew cask
     runs-on: macos-latest
-    # needs: all matrix legs of build-tauri must pass, including Windows.
-    # This is acceptable because release events always run all legs.
-    # workflow_dispatch builds are excluded by the 'if' below.
-    needs: build-tauri
+    # Waits for all platform builds so both DMG SHAs are available.
+    needs: [build-tauri-macos-arm, build-tauri]
     if: github.event_name == 'release'
 
     steps:
