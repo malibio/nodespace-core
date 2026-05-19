@@ -32,6 +32,7 @@
   let currentStep = $state<WizardStep>('path');
   let isLoading = $state(false);
   let stepSuccess = $state(false);
+  let stepError = $state<string | null>(null);
 
   // Which steps are active (some may be skipped if prerequisites missing)
   let showMcp = $state(false);
@@ -63,6 +64,7 @@
     if (idx !== -1 && idx < seq.length - 1) {
       currentStep = seq[idx + 1];
       stepSuccess = false;
+      stepError = null;
     }
   }
 
@@ -89,12 +91,14 @@
 
   async function handleConfigurePath() {
     isLoading = true;
+    stepError = null;
     try {
       await invoke('configure_path');
       pathDone = true;
       stepSuccess = true;
       log.info('PATH configured successfully');
     } catch (err) {
+      stepError = err instanceof Error ? err.message : String(err);
       log.error('Failed to configure PATH', err);
     } finally {
       isLoading = false;
@@ -103,12 +107,14 @@
 
   async function handleConfigureMcp() {
     isLoading = true;
+    stepError = null;
     try {
       await invoke('configure_mcp');
       mcpDone = true;
       stepSuccess = true;
       log.info('MCP configured successfully');
     } catch (err) {
+      stepError = err instanceof Error ? err.message : String(err);
       log.error('Failed to configure MCP', err);
     } finally {
       isLoading = false;
@@ -117,12 +123,14 @@
 
   async function handleConfigureSkill() {
     isLoading = true;
+    stepError = null;
     try {
       await invoke('configure_skill');
       skillDone = true;
       stepSuccess = true;
       log.info('Skill configured successfully');
     } catch (err) {
+      stepError = err instanceof Error ? err.message : String(err);
       log.error('Failed to configure skill', err);
     } finally {
       isLoading = false;
@@ -219,6 +227,9 @@
             <button class="primary-button" onclick={nextStep}>Next</button>
           </div>
         {:else}
+          {#if stepError}
+            <div class="error-banner">{stepError}</div>
+          {/if}
           <div class="step-actions">
             <button class="primary-button" onclick={handleConfigurePath} disabled={isLoading}>
               {isLoading ? 'Configuring…' : 'Add to PATH'}
@@ -247,6 +258,9 @@
             <button class="primary-button" onclick={nextStep}>Next</button>
           </div>
         {:else}
+          {#if stepError}
+            <div class="error-banner">{stepError}</div>
+          {/if}
           <div class="step-actions">
             <button class="primary-button" onclick={handleConfigureMcp} disabled={isLoading}>
               {isLoading ? 'Configuring…' : 'Connect Claude Desktop'}
@@ -274,6 +288,9 @@
             <button class="primary-button" onclick={nextStep}>Next</button>
           </div>
         {:else}
+          {#if stepError}
+            <div class="error-banner">{stepError}</div>
+          {/if}
           <div class="step-actions">
             <button class="primary-button" onclick={handleConfigureSkill} disabled={isLoading}>
               {isLoading ? 'Installing…' : 'Add Skill'}
@@ -489,6 +506,17 @@
     color: hsl(var(--muted-foreground));
     background: hsl(var(--muted) / 0.5);
     border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    padding: 0.625rem 0.875rem;
+    margin-bottom: 1.25rem;
+    line-height: 1.5;
+  }
+
+  .error-banner {
+    font-size: 0.875rem;
+    color: hsl(var(--destructive-foreground));
+    background: hsl(var(--destructive) / 0.1);
+    border: 1px solid hsl(var(--destructive) / 0.3);
     border-radius: 0.375rem;
     padding: 0.625rem 0.875rem;
     margin-bottom: 1.25rem;

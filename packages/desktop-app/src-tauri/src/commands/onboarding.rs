@@ -156,8 +156,12 @@ pub async fn configure_mcp() -> Result<(), String> {
         let raw = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|e| format!("Failed to read Claude Desktop config: {e}"))?;
-        serde_json::from_str(&raw)
-            .map_err(|e| format!("Claude Desktop config contains invalid JSON: {e}"))?
+        let parsed: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("Claude Desktop config contains invalid JSON: {e}"))?;
+        if !parsed.is_object() {
+            return Err("Claude Desktop config is not a JSON object".to_string());
+        }
+        parsed
     } else {
         serde_json::json!({})
     };
