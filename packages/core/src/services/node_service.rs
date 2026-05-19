@@ -2715,6 +2715,101 @@ impl NodeService {
         })
     }
 
+    /// Rename a field across all node instances and update the schema definition (Issue #1088).
+    ///
+    /// Steps performed in order:
+    ///   1. Validate the schema exists, the source field exists, and the destination does not.
+    ///   2. Migrate all node instances via `SurrealStore::rename_schema_field`.
+    ///   3. Update the schema definition (rename the field entry in `fields`).
+    ///
+    /// Steps 2 and 3 are executed sequentially but are not atomic. If step 3 fails after
+    /// step 2 has already migrated data, the error is returned and the caller should retry
+    /// only the schema definition update (data is already correct).
+    pub async fn rename_schema_field(
+        &self,
+        type_id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<u64, NodeServiceError> {
+        // Validate schema exists
+        let schema = self
+            .get_schema_node(type_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(type_id))?;
+
+        // Validate source field exists in schema
+        if !schema.fields.iter().any(|f| f.name == from) {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Field '{}' not found in schema '{}'",
+                from, type_id
+            )));
+        }
+
+        // Validate destination field does not already exist
+        if schema.fields.iter().any(|f| f.name == to) {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Field '{}' already exists in schema '{}'; cannot rename to an existing field",
+                to, type_id
+            )));
+        }
+
+        // Step 1: Migrate all node property data
+        let affected = self
+            .store
+            .rename_schema_field(type_id, from, to)
+            .await
+            .map_err(|e| {
+                NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                    context: format!(
+                        "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
+                        from, to, type_id, e
+                    ),
+                })
+            })?;
+
+        // Step 2: Update schema definition — rename field in the fields list
+        let updated_fields: Vec<crate::models::schema::SchemaField> = schema
+            .fields
+            .into_iter()
+            .map(|mut f| {
+                if f.name == from {
+                    f.name = to.to_string();
+                }
+                f
+            })
+            .collect();
+
+        let mut properties = serde_json::json!({
+            "isCore": schema.is_core,
+            "schemaVersion": schema.schema_version,
+            "description": schema.description,
+            "fields": updated_fields,
+            "relationships": schema.relationships,
+        });
+        if let Some(ref t) = schema.title_template {
+            properties["titleTemplate"] = serde_json::Value::String(t.clone());
+        }
+        if let Some(ref t) = schema.properties_header_summary_template {
+            properties["propertiesHeaderSummaryTemplate"] = serde_json::Value::String(t.clone());
+        }
+
+        let update = crate::models::NodeUpdate {
+            properties: Some(properties),
+            ..Default::default()
+        };
+
+        self.update_node_unchecked(type_id, update)
+            .await
+            .map_err(|e| NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                context: format!(
+                    "Failed to update schema definition after field rename '{}' -> '{}' for type '{}': {}",
+                    from, to, type_id, e
+                ),
+            }))?;
+
+        Ok(affected)
+    }
+
     /// Compute the indexed title for a node (Issue #824).
     ///
     /// Priority:

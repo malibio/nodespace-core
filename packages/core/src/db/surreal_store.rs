@@ -3242,6 +3242,97 @@ impl SurrealStore {
         Ok(())
     }
 
+    /// Rekey a property field for all nodes of a given type (Issue #1088).
+    ///
+    /// Fetches all nodes of the given type, renames the field in the namespace
+    /// object in Rust, then writes back each updated node. This avoids SurrealDB
+    /// query syntax issues with dynamic property paths and is correct for all
+    /// field name formats including `custom:field`.
+    ///
+    /// # Errors
+    /// Returns an error if `from == to`, if either name is empty, or if any DB operation fails.
+    pub async fn rename_schema_field(&self, type_id: &str, from: &str, to: &str) -> Result<u64> {
+        if from.is_empty() || to.is_empty() {
+            return Err(anyhow::anyhow!("Field names must not be empty"));
+        }
+        if from == to {
+            return Err(anyhow::anyhow!(
+                "Source and destination field names are the same: '{}'",
+                from
+            ));
+        }
+
+        // Fetch all nodes of the given type
+        let query = "SELECT * FROM node WHERE node_type = $type_id;";
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("type_id", type_id.to_string()))
+            .await
+            .context(format!(
+                "Failed to fetch nodes for type '{}' during field rename",
+                type_id
+            ))?;
+
+        let nodes: Vec<SurrealNode> = response
+            .take(0)
+            .context("Failed to take node results during field rename")?;
+
+        let mut affected: u64 = 0;
+
+        for node in nodes {
+            let node_id = extract_record_key(&node.id);
+            let mut properties = node.properties.clone();
+
+            // Rename the field in the type's namespace object
+            let had_field = if let Some(ns_obj) = properties
+                .as_object_mut()
+                .and_then(|p| p.get_mut(type_id))
+                .and_then(|ns| ns.as_object_mut())
+            {
+                if let Some(value) = ns_obj.remove(from) {
+                    ns_obj.insert(to.to_string(), value);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if had_field {
+                let update_query =
+                    "UPDATE type::record('node', $id) SET properties = $properties, modified_at = time::now();";
+                self.db
+                    .query(update_query)
+                    .bind(("id", node_id.clone()))
+                    .bind(("properties", properties))
+                    .await
+                    .context(format!(
+                        "Failed to update node '{}' during field rename '{}' -> '{}'",
+                        node_id, from, to
+                    ))?
+                    .check()
+                    .context(format!(
+                        "Update query failed for node '{}' during field rename '{}' -> '{}'",
+                        node_id, from, to
+                    ))?;
+                affected += 1;
+            }
+        }
+
+        tracing::info!(
+            type_id = %type_id,
+            from = %from,
+            to = %to,
+            affected = affected,
+            "rename_schema_field: migrated {} node(s)",
+            affected
+        );
+
+        Ok(affected)
+    }
+
     // NOTE: Old node-based embedding methods REMOVED (Issue #729)
     // The following methods operated on node.embedding_vector and node.embedding_stale:
     // - get_nodes_without_embeddings() - queried node WHERE embedding_vector IS NONE
