@@ -229,6 +229,7 @@ async fn search_without_embedding_service_reports_unavailable() {
         &mut client,
         commands::search::SearchArgs {
             query: "anything".into(),
+            node_types: vec![],
             limit: 0,
         },
         true,
