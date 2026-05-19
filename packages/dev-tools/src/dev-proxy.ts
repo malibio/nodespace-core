@@ -582,12 +582,12 @@ async function handleRequest(req: Request): Promise<Response> {
   if (method === 'GET' && schemaMatch) {
     const schemaId = decodeURIComponent(schemaMatch[1]);
     try {
-      const res = await call<{ schemaId: string }, { node?: { nodeData?: ProtoNodeData } }>(
+      const res = await call<{ schemaId: string }, { nodeData?: ProtoNodeData }>(
         (nodeClient as unknown as Record<string, Function>).getSchemaDefinition,
         { schemaId }
       );
-      if (!res.node?.nodeData) return error('SCHEMA_NOT_FOUND', `Schema '${schemaId}' not found`, 404);
-      return json(nodeDataToSchemaNode(res.node.nodeData));
+      if (!res.nodeData) return error('SCHEMA_NOT_FOUND', `Schema '${schemaId}' not found`, 404);
+      return json(nodeDataToSchemaNode(res.nodeData));
     } catch (err) {
       const grpcErr = err as grpc.ServiceError;
       if (grpcErr.code === grpc.status.NOT_FOUND) {
