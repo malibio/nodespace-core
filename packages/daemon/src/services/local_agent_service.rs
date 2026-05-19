@@ -24,11 +24,15 @@ use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
     local_agent_service_server::LocalAgentService as GrpcLocalAgentService, AgentChunk,
-    CancelGenerationRequest, CancelGenerationResponse, EndLocalSessionRequest,
-    EndLocalSessionResponse, EnsureModelReadyRequest, GetLocalStatusRequest, GetSessionsRequest,
-    GetSessionsResponse, ListModelsRequest, ListModelsResponse, LocalAgentStatusResponse,
-    LocalSessionInfo, ModelEntry, ModelLoadProgressEvent, SendLocalMessageRequest,
-    StartLocalSessionRequest, StartLocalSessionResponse,
+    CancelGenerationRequest, CancelGenerationResponse, CancelModelDownloadRequest,
+    CancelModelDownloadResponse, DeleteModelRequest, DeleteModelResponse, DownloadModelRequest,
+    EndLocalSessionRequest, EndLocalSessionResponse, EnsureModelReadyRequest,
+    GetLocalStatusRequest, GetSessionsRequest, GetSessionsResponse, GetSystemRamRequest,
+    GetSystemRamResponse, ListModelsRequest, ListModelsResponse, LoadModelRequest,
+    LoadModelResponse, LocalAgentStatusResponse, LocalSessionInfo, ModelEntry,
+    ModelLoadProgressEvent, OllamaAvailableRequest, OllamaAvailableResponse,
+    RecommendedModelRequest, RecommendedModelResponse, SendLocalMessageRequest,
+    StartLocalSessionRequest, StartLocalSessionResponse, UnloadModelRequest, UnloadModelResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -393,6 +397,156 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             .collect();
 
         Ok(Response::new(ListModelsResponse { models: entries }))
+    }
+
+    type DownloadModelStream = ReceiverStream<Result<ModelLoadProgressEvent, Status>>;
+
+    async fn download_model(
+        &self,
+        request: Request<DownloadModelRequest>,
+    ) -> Result<Response<Self::DownloadModelStream>, Status> {
+        let model_id = request.into_inner().model_id;
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<ModelLoadProgressEvent, Status>>(16);
+
+        let model_id_clone = model_id.clone();
+        let manager = self.inner.model_manager.clone();
+
+        // Register progress callbacks for both GGUF and Ollama backends.
+        let tx_gguf = tx.clone();
+        let mid_gguf = model_id.clone();
+        manager
+            .set_gguf_progress_callback(Box::new(move |evt| {
+                let event = ModelLoadProgressEvent {
+                    event_type: "downloading".to_string(),
+                    model_id: mid_gguf.clone(),
+                    bytes_downloaded: Some(evt.bytes_downloaded as i64),
+                    bytes_total: Some(evt.bytes_total as i64),
+                    ..Default::default()
+                };
+                let _ = tx_gguf.try_send(Ok(event));
+            }))
+            .await;
+
+        let tx_ollama = tx.clone();
+        let mid_ollama = model_id.clone();
+        manager
+            .set_ollama_progress_callback(Box::new(move |evt| {
+                let event = ModelLoadProgressEvent {
+                    event_type: "downloading".to_string(),
+                    model_id: mid_ollama.clone(),
+                    bytes_downloaded: Some(evt.bytes_downloaded as i64),
+                    bytes_total: Some(evt.bytes_total as i64),
+                    ..Default::default()
+                };
+                let _ = tx_ollama.try_send(Ok(event));
+            }))
+            .await;
+
+        tokio::spawn(async move {
+            match manager.download(&model_id_clone).await {
+                Ok(()) => {
+                    let _ = tx
+                        .send(Ok(ModelLoadProgressEvent {
+                            event_type: "ready".to_string(),
+                            model_id: model_id_clone,
+                            ..Default::default()
+                        }))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(ModelLoadProgressEvent {
+                            event_type: "error".to_string(),
+                            model_id: model_id_clone,
+                            error_message: Some(e.to_string()),
+                            ..Default::default()
+                        }))
+                        .await;
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn delete_model(
+        &self,
+        request: Request<DeleteModelRequest>,
+    ) -> Result<Response<DeleteModelResponse>, Status> {
+        let model_id = request.into_inner().model_id;
+        self.inner
+            .model_manager
+            .delete(&model_id)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to delete model: {e}")))?;
+        Ok(Response::new(DeleteModelResponse {}))
+    }
+
+    async fn load_model(
+        &self,
+        request: Request<LoadModelRequest>,
+    ) -> Result<Response<LoadModelResponse>, Status> {
+        let model_id = request.into_inner().model_id;
+        self.inner
+            .model_manager
+            .load(&model_id)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to load model: {e}")))?;
+        Ok(Response::new(LoadModelResponse {}))
+    }
+
+    async fn unload_model(
+        &self,
+        _request: Request<UnloadModelRequest>,
+    ) -> Result<Response<UnloadModelResponse>, Status> {
+        self.inner
+            .model_manager
+            .unload()
+            .await
+            .map_err(|e| Status::internal(format!("Failed to unload model: {e}")))?;
+        Ok(Response::new(UnloadModelResponse {}))
+    }
+
+    async fn cancel_model_download(
+        &self,
+        request: Request<CancelModelDownloadRequest>,
+    ) -> Result<Response<CancelModelDownloadResponse>, Status> {
+        let model_id = request.into_inner().model_id;
+        self.inner
+            .model_manager
+            .cancel_download(&model_id)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to cancel download: {e}")))?;
+        Ok(Response::new(CancelModelDownloadResponse {}))
+    }
+
+    async fn ollama_available(
+        &self,
+        _request: Request<OllamaAvailableRequest>,
+    ) -> Result<Response<OllamaAvailableResponse>, Status> {
+        let available = self.inner.model_manager.ollama_available().await;
+        Ok(Response::new(OllamaAvailableResponse { available }))
+    }
+
+    async fn recommended_model(
+        &self,
+        _request: Request<RecommendedModelRequest>,
+    ) -> Result<Response<RecommendedModelResponse>, Status> {
+        let model_id = self
+            .inner
+            .model_manager
+            .recommended_model()
+            .await
+            .map_err(|e| Status::internal(format!("Failed to get recommended model: {e}")))?;
+        Ok(Response::new(RecommendedModelResponse { model_id }))
+    }
+
+    async fn get_system_ram(
+        &self,
+        _request: Request<GetSystemRamRequest>,
+    ) -> Result<Response<GetSystemRamResponse>, Status> {
+        let ram_bytes = nodespace_agent::local_agent::model_manager::detect_system_ram();
+        Ok(Response::new(GetSystemRamResponse { ram_bytes }))
     }
 }
 

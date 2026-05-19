@@ -1,19 +1,22 @@
 //! Tauri commands for chat model management.
 //!
-//! Bridges the Svelte frontend to [`CompositeModelManager`] via Tauri IPC.
+//! Thin gRPC proxy to `LocalAgentService` model management RPCs in the daemon.
 //! Download progress is forwarded through the `model://download-progress`
-//! Tauri event channel. When Ollama is running, both built-in GGUF models
-//! and `ollama:`-prefixed Ollama models appear in the unified model list.
+//! Tauri event channel.
 //!
-//! Issue #1058
+//! Issue #1058, #1194
 
 use crate::agent_events;
 use crate::commands::nodes::CommandError;
-use nodespace_agent::agent_types::{DownloadEvent, ModelInfo, ModelManager};
-use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
-use nodespace_agent::local_agent::model_manager::detect_system_ram;
-use std::sync::Arc;
+use crate::services::GrpcClient;
+use nodespace_daemon::nodespace::{
+    CancelModelDownloadRequest, DeleteModelRequest, DownloadModelRequest, GetSystemRamRequest,
+    ListModelsRequest, LoadModelRequest, OllamaAvailableRequest, RecommendedModelRequest,
+    UnloadModelRequest,
+};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
+use tokio_stream::StreamExt;
 
 /// Helper to map model errors into [`CommandError`].
 fn model_error(message: impl Into<String>) -> CommandError {
@@ -24,120 +27,173 @@ fn model_error(message: impl Into<String>) -> CommandError {
     }
 }
 
+fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
+    CommandError {
+        message: msg.to_string(),
+        code: "GRPC_ERROR".to_string(),
+        details: None,
+    }
+}
+
 /// List all models in the catalog with their current status.
 ///
 /// Returns built-in GGUF models plus `ollama:`-prefixed models when the
 /// Ollama daemon is running.
 #[tauri::command]
 pub async fn chat_model_list(
-    manager: State<'_, Arc<CompositeModelManager>>,
-) -> Result<Vec<ModelInfo>, CommandError> {
-    manager
-        .list()
+    grpc: State<'_, GrpcClient>,
+) -> Result<Vec<serde_json::Value>, CommandError> {
+    let mut client = grpc.local_agent_client().await;
+    let resp = client
+        .list_models(ListModelsRequest {})
         .await
-        .map_err(|e| model_error(format!("Failed to list models: {e}")))
+        .map_err(|e| grpc_err(e.message()))?;
+
+    let models = resp
+        .into_inner()
+        .models
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "id": entry.id,
+                "name": entry.name,
+                "backend": entry.backend,
+                "status": serde_json::from_str::<serde_json::Value>(&entry.status_json)
+                    .unwrap_or(serde_json::Value::Null),
+                "sizeBytes": entry.size_bytes,
+                "quantization": entry.quantization,
+                "minMemoryGb": entry.min_memory_gb,
+            })
+        })
+        .collect();
+
+    Ok(models)
 }
 
 /// Get the recommended model based on system RAM.
 #[tauri::command]
-pub async fn chat_model_recommended(
-    manager: State<'_, Arc<CompositeModelManager>>,
-) -> Result<String, CommandError> {
-    manager
-        .recommended_model()
+pub async fn chat_model_recommended(grpc: State<'_, GrpcClient>) -> Result<String, CommandError> {
+    let mut client = grpc.local_agent_client().await;
+    let resp = client
+        .recommended_model(RecommendedModelRequest {})
         .await
-        .map_err(|e| model_error(format!("Failed to get recommended model: {e}")))
+        .map_err(|e| model_error(format!("Failed to get recommended model: {e}")))?;
+    Ok(resp.into_inner().model_id)
 }
 
 /// Download a model. Progress events are emitted on `model://download-progress`.
 ///
-/// This command spawns the download in a background task so the frontend
-/// is not blocked. Progress is delivered via Tauri events.
+/// Streams `ModelLoadProgressEvent` from the daemon, forwarding progress to
+/// the frontend via Tauri events.
 #[tauri::command]
 pub async fn chat_model_download(
     model_id: String,
     app: AppHandle,
-    manager: State<'_, Arc<CompositeModelManager>>,
+    grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
-    // Register progress callbacks for both backends
-    let app_gguf = app.clone();
-    manager
-        .set_gguf_progress_callback(Box::new(move |evt: DownloadEvent| {
-            let _ = app_gguf.emit(agent_events::MODEL_DOWNLOAD_PROGRESS, &evt);
-        }))
-        .await;
-
-    let app_ollama = app.clone();
-    manager
-        .set_ollama_progress_callback(Box::new(move |evt: DownloadEvent| {
-            let _ = app_ollama.emit(agent_events::MODEL_DOWNLOAD_PROGRESS, &evt);
-        }))
-        .await;
-
-    manager
-        .download(&model_id)
+    let mut client = grpc.local_agent_client().await;
+    let mut stream = client
+        .download_model(DownloadModelRequest {
+            model_id: model_id.clone(),
+        })
         .await
-        .map_err(|e| model_error(format!("Download failed for {model_id}: {e}")))
+        .map_err(|e| model_error(format!("Download failed for {model_id}: {e}")))?
+        .into_inner();
+
+    while let Some(event_result) = stream.next().await {
+        let event = event_result.map_err(|e| model_error(e.message().to_string()))?;
+        match event.event_type.as_str() {
+            "downloading" => {
+                #[derive(Serialize)]
+                struct ProgressEvent {
+                    model_id: String,
+                    bytes_downloaded: i64,
+                    bytes_total: i64,
+                }
+                let _ = app.emit(
+                    agent_events::MODEL_DOWNLOAD_PROGRESS,
+                    &ProgressEvent {
+                        model_id: event.model_id,
+                        bytes_downloaded: event.bytes_downloaded.unwrap_or(0),
+                        bytes_total: event.bytes_total.unwrap_or(0),
+                    },
+                );
+            }
+            "error" => {
+                let msg = event
+                    .error_message
+                    .unwrap_or_else(|| "Unknown download error".to_string());
+                return Err(model_error(msg));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 /// Cancel an in-progress model download.
 #[tauri::command]
 pub async fn chat_model_cancel_download(
     model_id: String,
-    manager: State<'_, Arc<CompositeModelManager>>,
+    grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
-    manager
-        .cancel_download(&model_id)
+    let mut client = grpc.local_agent_client().await;
+    client
+        .cancel_model_download(CancelModelDownloadRequest { model_id })
         .await
-        .map_err(|e| model_error(format!("Failed to cancel download: {e}")))
+        .map_err(|e| model_error(format!("Failed to cancel download: {e}")))?;
+    Ok(())
 }
 
 /// Delete a downloaded model from disk.
 #[tauri::command]
 pub async fn chat_model_delete(
     model_id: String,
-    manager: State<'_, Arc<CompositeModelManager>>,
+    grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
-    manager
-        .delete(&model_id)
+    let mut client = grpc.local_agent_client().await;
+    client
+        .delete_model(DeleteModelRequest { model_id })
         .await
-        .map_err(|e| model_error(format!("Failed to delete model {model_id}: {e}")))
+        .map_err(|e| model_error(format!("Failed to delete model: {e}")))?;
+    Ok(())
 }
 
 /// Load a downloaded model into memory for inference.
 #[tauri::command]
 pub async fn chat_model_load(
     model_id: String,
-    manager: State<'_, Arc<CompositeModelManager>>,
+    grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
-    manager
-        .load(&model_id)
+    let mut client = grpc.local_agent_client().await;
+    client
+        .load_model(LoadModelRequest { model_id })
         .await
-        .map_err(|e| model_error(format!("Failed to load model {model_id}: {e}")))
+        .map_err(|e| model_error(format!("Failed to load model: {e}")))?;
+    Ok(())
 }
 
 /// Unload the currently loaded model, freeing resources.
-///
-/// Unloads the currently-loaded chat model from memory.
-///
-/// The local agent inference engine now lives in the daemon (Issue #1137);
-/// active model state is managed there, not in Tauri.
 #[tauri::command]
-pub async fn chat_model_unload(
-    manager: State<'_, Arc<CompositeModelManager>>,
-) -> Result<(), CommandError> {
-    manager
-        .unload()
+pub async fn chat_model_unload(grpc: State<'_, GrpcClient>) -> Result<(), CommandError> {
+    let mut client = grpc.local_agent_client().await;
+    client
+        .unload_model(UnloadModelRequest {})
         .await
-        .map_err(|e| model_error(format!("Failed to unload model: {e}")))
+        .map_err(|e| model_error(format!("Failed to unload model: {e}")))?;
+    Ok(())
 }
 
 /// Check whether the Ollama daemon is running and reachable.
 #[tauri::command]
-pub async fn ollama_available(
-    manager: State<'_, Arc<CompositeModelManager>>,
-) -> Result<bool, CommandError> {
-    Ok(manager.ollama_available().await)
+pub async fn ollama_available(grpc: State<'_, GrpcClient>) -> Result<bool, CommandError> {
+    let mut client = grpc.local_agent_client().await;
+    let resp = client
+        .ollama_available(OllamaAvailableRequest {})
+        .await
+        .map_err(|e| model_error(format!("Failed to check Ollama: {e}")))?;
+    Ok(resp.into_inner().available)
 }
 
 /// Return total system RAM in GiB (rounded down).
@@ -145,6 +201,11 @@ pub async fn ollama_available(
 /// Used by the model manager UI to dim cards for models that exceed the
 /// machine's available RAM.
 #[tauri::command]
-pub fn get_system_ram_gb() -> u64 {
-    detect_system_ram() / (1024 * 1024 * 1024)
+pub async fn get_system_ram_gb(grpc: State<'_, GrpcClient>) -> Result<u64, CommandError> {
+    let mut client = grpc.local_agent_client().await;
+    let resp = client
+        .get_system_ram(GetSystemRamRequest {})
+        .await
+        .map_err(|e| model_error(format!("Failed to get system RAM: {e}")))?;
+    Ok(resp.into_inner().ram_bytes / (1024 * 1024 * 1024))
 }

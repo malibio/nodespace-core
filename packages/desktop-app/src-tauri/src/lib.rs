@@ -14,9 +14,6 @@ pub mod preferences;
 // Shared constants
 pub mod constants;
 
-// Runtime application configuration
-pub mod config;
-
 // Background services
 pub mod services;
 
@@ -68,146 +65,12 @@ async fn check_daemon_status() -> String {
 #[cfg(test)]
 mod tests;
 
-/// Initialize domain event forwarding service for real-time frontend synchronization
-///
-/// Spawns background tasks that subscribe to domain events from NodeService.
-/// When business logic emits domain events (node/edge created/updated/deleted),
-/// they are forwarded to the frontend via Tauri events to trigger UI updates,
-/// achieving real-time sync through event-driven architecture.
-///
-/// Events that originated from this Tauri client are filtered out (prevents feedback loop).
-///
-/// The `cancel_token` is used for graceful shutdown - when cancelled, the forwarder
-/// will stop its event loop and exit cleanly before the Tokio runtime drops.
-pub fn initialize_domain_event_forwarder(
-    app: tauri::AppHandle,
-    node_service: std::sync::Arc<nodespace_core::NodeService>,
-    client_id: String,
-    cancel_token: tokio_util::sync::CancellationToken,
-) -> anyhow::Result<()> {
-    use crate::services::DomainEventForwarder;
-    use futures::FutureExt;
-
-    tracing::info!(
-        "🔧 Initializing domain event forwarding service (client_id: {})...",
-        client_id
-    );
-
-    // Spawn domain event forwarding service background task
-    tauri::async_runtime::spawn(async move {
-        let result = std::panic::AssertUnwindSafe(async {
-            let forwarder = DomainEventForwarder::new(node_service, app, client_id);
-            forwarder.run(cancel_token).await
-        })
-        .catch_unwind()
-        .await;
-
-        match result {
-            Ok(Ok(_)) => {
-                tracing::info!("✅ Domain event forwarding service exited normally");
-            }
-            Ok(Err(e)) => {
-                tracing::error!("❌ Domain event forwarding error: {}", e);
-            }
-            Err(panic_info) => {
-                tracing::error!(
-                    "💥 Domain event forwarding service panicked: {:?}",
-                    panic_info
-                );
-            }
-        }
-    });
-
-    Ok(())
-}
-
-/// Initialize the playbook engine background task.
-///
-/// Subscribes to domain events (as a second subscriber alongside DomainEventForwarder),
-/// loads active playbooks, and begins matching events against trigger rules.
-pub fn initialize_playbook_engine(
-    node_service: std::sync::Arc<nodespace_core::NodeService>,
-    cancel_token: tokio_util::sync::CancellationToken,
-) -> anyhow::Result<()> {
-    use futures::FutureExt;
-
-    tracing::info!("🔧 Initializing playbook engine...");
-
-    // Create a watch channel for shutdown signaling (bridges tokio_util → watch)
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    // Spawn a task that converts cancellation token to watch signal
-    let cancel_for_bridge = cancel_token.clone();
-    tauri::async_runtime::spawn(async move {
-        cancel_for_bridge.cancelled().await;
-        let _ = shutdown_tx.send(true);
-    });
-
-    let engine = std::sync::Arc::new(nodespace_core::PlaybookEngine::new(node_service));
-
-    tauri::async_runtime::spawn(async move {
-        let result = std::panic::AssertUnwindSafe(engine.start(shutdown_rx))
-            .catch_unwind()
-            .await;
-
-        match result {
-            Ok(Ok(_)) => {
-                tracing::info!("✅ Playbook engine exited normally");
-            }
-            Ok(Err(e)) => {
-                tracing::error!("❌ Playbook engine error: {}", e);
-            }
-            Err(panic_info) => {
-                tracing::error!("💥 Playbook engine panicked: {:?}", panic_info);
-            }
-        }
-    });
-
-    Ok(())
-}
-
-/// Initialize the skill updater background task (Issue #1061).
-///
-/// Subscribes to domain events and updates the "Node Creation" skill description
-/// when schemas are created or deleted, so semantic skill discovery stays current.
-pub fn initialize_skill_updater(
-    node_service: std::sync::Arc<nodespace_core::NodeService>,
-    cancel_token: tokio_util::sync::CancellationToken,
-) -> anyhow::Result<()> {
-    use futures::FutureExt;
-    use nodespace_core::ops::skill_updater::SkillUpdater;
-
-    tracing::info!("🔧 Initializing skill updater...");
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let cancel_for_bridge = cancel_token.clone();
-    tauri::async_runtime::spawn(async move {
-        cancel_for_bridge.cancelled().await;
-        let _ = shutdown_tx.send(true);
-    });
-
-    let updater = std::sync::Arc::new(SkillUpdater::new(node_service));
-
-    tauri::async_runtime::spawn(async move {
-        let result = std::panic::AssertUnwindSafe(updater.start(shutdown_rx))
-            .catch_unwind()
-            .await;
-        match result {
-            Ok(_) => tracing::info!("✅ Skill updater exited normally"),
-            Err(panic_info) => tracing::error!("💥 Skill updater panicked: {:?}", panic_info),
-        }
-    });
-
-    Ok(())
-}
-
 /// Shared shutdown token for graceful background task termination.
 ///
 /// Managed as Tauri state so it can be accessed from both the setup phase
 /// (where background tasks are spawned) and the run event handler (where
-/// shutdown is triggered). When cancelled, all background tasks (MCP server,
-/// domain event forwarder) exit their loops before the Tokio runtime drops.
+/// shutdown is triggered). When cancelled, all background tasks exit their
+/// loops before the Tokio runtime drops.
 #[derive(Clone)]
 pub struct ShutdownToken(tokio_util::sync::CancellationToken);
 
@@ -233,14 +96,11 @@ impl ShutdownToken {
 pub fn run() {
     use tauri::{menu::*, Emitter, Manager, RunEvent};
 
-    // Initialize tracing — respects RUST_LOG env var, defaults to info for nodespace_core
+    // Initialize tracing — respects RUST_LOG env var, defaults to info for nodespace_app
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(
-                    "nodespace_core=info,nodespace_app=info,nodespace_nlp_engine=info,nodespace_agent=info",
-                )
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("nodespace_app=info")),
         )
         .try_init()
         .ok();
@@ -369,177 +229,32 @@ pub fn run() {
                 });
             }
 
-            // Initialize database and all services at startup.
+            // Connect to the nodespaced daemon over Unix Domain Socket.
+            // On macOS the daemon may still be starting after ensure_daemon_running returns;
+            // on other Unix platforms users start the daemon manually. Either way, a failed
+            // connection is non-fatal: we emit daemon-status so the frontend can show an error.
+            #[cfg(unix)]
             {
-                use nodespace_core::services::{
-                    EmbeddingProcessor, NodeAccessor, NodeEmbeddingService,
-                };
-                use nodespace_core::{NodeService, SurrealStore};
-                use nodespace_nlp_engine::{EmbeddingConfig, EmbeddingService};
-                use std::sync::Arc;
+                use tauri::Emitter;
 
                 let app_handle = app.handle().clone();
                 let session_token = shutdown_token_for_setup.child_token();
 
                 tauri::async_runtime::block_on(async {
-                    // Migrate legacy DB path if needed, then load preferences.
-                    preferences::migrate_legacy_database_if_needed(&app_handle)
-                        .await
-                        .unwrap_or_else(|e| tracing::warn!("Legacy DB migration skipped: {e}"));
-
-                    let prefs = preferences::load_preferences(&app_handle)
-                        .await
-                        .expect("Failed to load preferences");
-
-                    let db_path = prefs
-                        .database_path
-                        .clone()
-                        .unwrap_or_else(|| preferences::get_default_database_path().expect("Failed to resolve DB path"));
-
-                    if let Some(parent) = db_path.parent() {
-                        tokio::fs::create_dir_all(parent)
-                            .await
-                            .expect("Failed to create database directory");
-                    }
-
-                    let model_path = commands::resolve_bundled_model_path(&app_handle);
-
-                    let config = config::AppConfig::from_preferences(
-                        &prefs,
-                        model_path.clone().unwrap_or_default(),
-                    )
-                    .expect("Failed to build AppConfig");
-
-                    tracing::info!(db_path = %config.database_path.display(), "Database path");
-
-                    let mut store = Arc::new(
-                        SurrealStore::new(config.database_path.clone())
-                            .await
-                            .expect("Failed to initialize SurrealStore"),
-                    );
-
-                    let mut node_service = NodeService::new(&mut store)
-                        .await
-                        .expect("Failed to initialize NodeService");
-
-                    // Seed prompt/skill nodes (idempotent — skips existing nodes).
-                    {
-                        use nodespace_agent::prompt_assembler::PromptAssembler;
-                        use nodespace_agent::skill_pipeline::seed_skill_nodes;
-                        use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
-
-                        let prompt_templates = PromptAssembler::seed_prompt_nodes();
-                        let skill_templates = seed_skill_nodes();
-                        let mut all_template_nodes = Vec::new();
-                        for tmpl in prompt_templates.iter().chain(skill_templates.iter()) {
-                            match prepare_nodes_from_template(tmpl) {
-                                Ok(nodes) => all_template_nodes.push(nodes),
-                                Err(e) => tracing::warn!(error = ?e, title = %tmpl.title, "Failed to expand seed template"),
-                            }
-                        }
-                        if let Err(e) = node_service.seed_nodes_from_templates(all_template_nodes).await {
-                            tracing::warn!(error = %e, "Failed to seed agent nodes (non-fatal)");
-                        }
-                    }
-
-                    // Tiered NLP init: skipped when model is absent, non-fatal on other errors.
-                    let (embedding_service, processor) = if let Some(mp) = model_path {
-                        let result = (|| -> Result<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>), String> {
-                            let embedding_config = EmbeddingConfig {
-                                model_path: Some(mp),
-                                ..Default::default()
-                            };
-                            let mut nlp_engine = EmbeddingService::new(embedding_config)
-                                .map_err(|e| format!("Failed to create NLP engine: {e}"))?;
-                            nlp_engine.initialize().map_err(|e| format!("Failed to load NLP model: {e}"))?;
-                            let nlp_engine_arc = Arc::new(nlp_engine);
-                            let node_accessor: Arc<dyn NodeAccessor> = Arc::new(node_service.clone());
-                            let behaviors = node_service.behaviors().clone();
-                            let svc = Arc::new(NodeEmbeddingService::new(
-                                nlp_engine_arc,
-                                store.clone(),
-                                node_accessor,
-                                behaviors,
-                            ));
-                            let proc = EmbeddingProcessor::new(svc.clone())
-                                .map_err(|e| format!("Failed to init EmbeddingProcessor: {e}"))?;
-                            node_service.set_embedding_waker(proc.waker());
-                            proc.wake();
-                            Ok((svc, Arc::new(proc)))
-                        })();
-                        match result {
-                            Ok((svc, proc)) => (Some(svc), Some(proc)),
-                            Err(e) => {
-                                tracing::warn!("NLP/embedding init failed (semantic search disabled): {e}");
-                                (None, None)
-                            }
-                        }
-                    } else {
-                        (None, None)
-                    };
-
-                    let node_service = Arc::new(node_service);
-                    let client_id = config.tauri_client_id.clone();
-
-                    if let Err(e) = initialize_domain_event_forwarder(
-                        app_handle.clone(),
-                        node_service.clone(),
-                        client_id,
-                        session_token.clone(),
-                    ) {
-                        tracing::error!("Failed to initialize domain event forwarder: {e}");
-                    }
-
-                    if let Err(e) = initialize_playbook_engine(node_service.clone(), session_token.clone()) {
-                        tracing::error!("Failed to initialize playbook engine: {e}");
-                    }
-
-                    if let Err(e) = initialize_skill_updater(node_service.clone(), session_token.clone()) {
-                        tracing::error!("Failed to initialize skill updater: {e}");
-                    }
-
-                    match crate::services::GrpcClient::start(
-                        node_service,
-                        embedding_service,
-                        processor,
-                    )
-                    .await
-                    {
-                        Ok(client) => {
-                            app_handle.manage(client);
-                            tracing::info!("In-process gRPC client registered");
+                    match crate::services::GrpcClient::connect().await {
+                        Ok(grpc_client) => {
+                            app_handle.manage(grpc_client);
+                            tracing::info!("gRPC client connected to nodespaced");
+                            watcher::spawn(app_handle.clone(), session_token);
                         }
                         Err(e) => {
-                            panic!("Failed to start in-process gRPC server: {e}");
+                            tracing::error!("Failed to connect to nodespaced: {e:#}");
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.emit("daemon-status", "not_running");
+                            }
                         }
                     }
                 });
-            }
-
-            // CompositeModelManager for chat_models commands (Issue #1058).
-            // Routes between GGUF and Ollama models in the Tauri process.
-            {
-                use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
-                use nodespace_agent::local_agent::model_manager::GgufModelManager;
-                use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
-
-                let gguf = std::sync::Arc::new(GgufModelManager::new().unwrap_or_else(|e| {
-                    tracing::error!("Failed to initialize GGUF model manager: {e}");
-                    panic!("GgufModelManager initialization failed: {e}");
-                }));
-                let ollama = std::sync::Arc::new(OllamaModelManager::new());
-                let model_manager: std::sync::Arc<CompositeModelManager> =
-                    std::sync::Arc::new(CompositeModelManager::new(gguf, ollama));
-                app.manage(model_manager);
-            }
-
-            // PTY-based agent registry (ADR-032). Catalogs known external agents
-            // (Claude Code, Codex, Gemini CLI, Pi, OpenCode) for PTY-spawned sessions.
-            {
-                use nodespace_agent::acp::registry::SystemAgentRegistry;
-                let registry: std::sync::Arc<SystemAgentRegistry> =
-                    std::sync::Arc::new(SystemAgentRegistry::new());
-                app.manage(registry);
             }
 
             // Streaming task registry for PTY session cancellation (Issue #1120)
@@ -714,17 +429,10 @@ pub fn run() {
     });
 }
 
-/// Perform graceful shutdown: cancel background tasks, wait for them to exit, then release GPU.
+/// Perform graceful shutdown: cancel background tasks and exit cleanly.
 ///
 /// Guarded by an `AtomicBool` because Tauri may fire both `CloseRequested` and
 /// `ExitRequested` events, and we must only run the shutdown sequence once.
-///
-/// NOTE (Issue #992): SurrealDB 3.0 has no explicit `close()` / `flush()` method
-/// for the embedded RocksDB backend (upstream: surrealdb/surrealdb#2399). The
-/// `Surreal<Any>` handle is cleaned up on drop — RocksDB's C++ destructor runs
-/// `CancelAllBackgroundWork(true)` and committed WAL data is safe because each
-/// write is flushed to the OS page cache before returning. If SurrealDB adds a
-/// `close()` API, wire it in here before `release_gpu_resources()`.
 pub(crate) fn graceful_shutdown(app_handle: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::Manager;
@@ -738,53 +446,9 @@ pub(crate) fn graceful_shutdown(app_handle: &tauri::AppHandle) {
     if let Some(shutdown_token) = app_handle.try_state::<ShutdownToken>() {
         shutdown_token.cancel();
     }
-    // Grace period for background tasks (MCP server, domain event forwarder)
-    // to exit their tokio::select! loops and drop their Arc references.
-    // Grace period for background tasks (MCP server, domain event forwarder) to exit
-    // their tokio::select! loops before GPU resource teardown.
+    // Grace period for background tasks (watcher) to exit their tokio::select!
+    // loops and drop their Arc references before the runtime drops.
     std::thread::sleep(std::time::Duration::from_millis(200));
-    release_gpu_resources(app_handle);
-}
 
-/// Release GPU resources (Metal context and backend) to prevent SIGABRT crash on exit.
-///
-/// Unloads the GGUF/Ollama chat model managed by `CompositeModelManager`, then
-/// releases the global llama backend. Embedding GPU contexts are owned by the
-/// in-process gRPC server and released when the tokio runtime shuts down.
-///
-/// Runs on a dedicated thread because `graceful_shutdown()` may be called from
-/// within the Tokio runtime (Tauri run-event handler), where `block_on` would panic.
-pub(crate) fn release_gpu_resources(app_handle: &tauri::AppHandle) {
-    use nodespace_agent::agent_types::ModelManager;
-    use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
-    use std::sync::Arc;
-    use tauri::Manager;
-
-    tracing::debug!("Shutdown: starting GPU resource release sequence");
-
-    // Unload chat model if loaded (Issues #1008, #1058).
-    // Spawns a dedicated OS thread to avoid "cannot start a runtime from within a runtime" panic.
-    if let Some(model_manager) = app_handle.try_state::<Arc<CompositeModelManager>>() {
-        tracing::debug!("Shutdown: unloading chat model");
-        let manager = model_manager.inner().clone();
-        let handle = std::thread::spawn(move || {
-            tauri::async_runtime::block_on(async {
-                if let Err(e) = manager.unload().await {
-                    tracing::warn!("Failed to unload chat model during shutdown: {e}");
-                } else {
-                    tracing::info!("Shutdown: chat model unloaded");
-                }
-            });
-        });
-        if let Err(e) = handle.join() {
-            tracing::error!("Chat model unload thread panicked: {:?}", e);
-        }
-    }
-
-    // Embedding GPU resources are owned by the in-process gRPC server
-    // (GrpcClient / EmbeddingsServiceImpl) and released when the tokio runtime shuts down.
-
-    tracing::info!("Shutdown: releasing llama backend");
-    nodespace_nlp_engine::release_llama_backend();
-    tracing::info!("Shutdown: GPU resource release complete");
+    tracing::info!("Shutdown: complete");
 }

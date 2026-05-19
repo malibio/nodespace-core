@@ -16,6 +16,14 @@ service LocalAgentService {
   rpc GetSessions(GetSessionsRequest)            returns (GetSessionsResponse);
   rpc EnsureModelReady(EnsureModelReadyRequest)  returns (stream ModelLoadProgressEvent);
   rpc ListModels(ListModelsRequest)              returns (ListModelsResponse);
+  rpc DownloadModel(DownloadModelRequest)        returns (stream ModelLoadProgressEvent);
+  rpc DeleteModel(DeleteModelRequest)            returns (DeleteModelResponse);
+  rpc LoadModel(LoadModelRequest)                returns (LoadModelResponse);
+  rpc UnloadModel(UnloadModelRequest)            returns (UnloadModelResponse);
+  rpc CancelModelDownload(CancelModelDownloadRequest) returns (CancelModelDownloadResponse);
+  rpc OllamaAvailable(OllamaAvailableRequest)    returns (OllamaAvailableResponse);
+  rpc RecommendedModel(RecommendedModelRequest)  returns (RecommendedModelResponse);
+  rpc GetSystemRam(GetSystemRamRequest)          returns (GetSystemRamResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -177,4 +185,81 @@ message ModelEntry {
 
 message ListModelsResponse {
   repeated ModelEntry models = 1;
+}
+
+// ---------------------------------------------------------------------------
+// DownloadModel — server-streaming download progress
+// ---------------------------------------------------------------------------
+
+message DownloadModelRequest {
+  string model_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// DeleteModel
+// ---------------------------------------------------------------------------
+
+message DeleteModelRequest {
+  string model_id = 1;
+}
+
+message DeleteModelResponse {}
+
+// ---------------------------------------------------------------------------
+// LoadModel
+// ---------------------------------------------------------------------------
+
+message LoadModelRequest {
+  string model_id = 1;
+}
+
+message LoadModelResponse {}
+
+// ---------------------------------------------------------------------------
+// UnloadModel
+// ---------------------------------------------------------------------------
+
+message UnloadModelRequest {}
+
+message UnloadModelResponse {}
+
+// ---------------------------------------------------------------------------
+// CancelModelDownload
+// ---------------------------------------------------------------------------
+
+message CancelModelDownloadRequest {
+  string model_id = 1;
+}
+
+message CancelModelDownloadResponse {}
+
+// ---------------------------------------------------------------------------
+// OllamaAvailable
+// ---------------------------------------------------------------------------
+
+message OllamaAvailableRequest {}
+
+message OllamaAvailableResponse {
+  bool available = 1;
+}
+
+// ---------------------------------------------------------------------------
+// RecommendedModel
+// ---------------------------------------------------------------------------
+
+message RecommendedModelRequest {}
+
+message RecommendedModelResponse {
+  string model_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// GetSystemRam
+// ---------------------------------------------------------------------------
+
+message GetSystemRamRequest {}
+
+message GetSystemRamResponse {
+  // Total system RAM in bytes.
+  uint64 ram_bytes = 1;
 }
