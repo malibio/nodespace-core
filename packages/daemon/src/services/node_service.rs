@@ -313,18 +313,11 @@ impl GrpcNodeService for NodeServiceImpl {
             Some(req.offset as usize)
         };
 
-        let mut roots = self
+        let roots = self
             .node_service
-            .get_roots()
+            .get_roots(limit, offset)
             .await
             .map_err(service_error_to_status)?;
-
-        if let Some(off) = offset {
-            roots = roots.into_iter().skip(off).collect();
-        }
-        if let Some(lim) = limit {
-            roots.truncate(lim);
-        }
 
         let nodes: Vec<NodeData> = roots
             .into_iter()

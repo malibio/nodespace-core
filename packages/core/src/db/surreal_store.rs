@@ -1898,58 +1898,68 @@ impl SurrealStore {
         Ok(nodes)
     }
 
-    pub async fn get_children(&self, parent_id: Option<&str>) -> Result<Vec<Node>> {
+    pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Node>> {
         // Universal Graph Architecture (Issue #783, #788): Properties embedded in node.properties
         // Use universal relationship table for hierarchy traversal with fractional ordering
-        let surreal_nodes = if let Some(parent_id) = parent_id {
-            // Create RecordId for parent node
-            let parent_thing = node_record_id(parent_id);
+        let parent_thing = node_record_id(parent_id);
 
-            // Single query: get ordered children with full node data in one round-trip
-            // Uses LET to store ordered IDs, then fetches nodes preserving order
-            // Note: ORDER BY field must be included in SELECT, so we select out and properties.order
-            let mut response = self
-                .db
-                .query(
-                    r#"
-                    LET $child_ids = (
-                        SELECT out, properties.order FROM relationship
-                        WHERE in = $parent_thing AND relationship_type = 'has_child'
-                        ORDER BY properties.order ASC
-                    ).out;
-                    SELECT * FROM $child_ids;
-                    "#,
-                )
-                .bind(("parent_thing", parent_thing))
-                .await
-                .context("Failed to get children")?;
+        // Single query: get ordered children with full node data in one round-trip
+        // Uses LET to store ordered IDs, then fetches nodes preserving order
+        // Note: ORDER BY field must be included in SELECT, so we select out and properties.order
+        let mut response = self
+            .db
+            .query(
+                r#"
+                LET $child_ids = (
+                    SELECT out, properties.order FROM relationship
+                    WHERE in = $parent_thing AND relationship_type = 'has_child'
+                    ORDER BY properties.order ASC
+                ).out;
+                SELECT * FROM $child_ids;
+                "#,
+            )
+            .bind(("parent_thing", parent_thing))
+            .await
+            .context("Failed to get children")?;
 
-            // Result is in second statement (index 1)
-            let nodes: Vec<SurrealNode> = response
-                .take(1)
-                .context("Failed to extract children from response")?;
+        // Result is in second statement (index 1)
+        let surreal_nodes: Vec<SurrealNode> = response
+            .take(1)
+            .context("Failed to extract children from response")?;
 
-            nodes
-        } else {
-            // Root nodes: nodes that have NO incoming has_child relationships (Issue #788: universal relationship table)
-            // Uses NOT IN with idx_rel_out index instead of per-node graph traversal (avoids O(N×M) full scan)
-            let mut response = self
-                .db
-                .query("SELECT * FROM node WHERE id NOT IN (SELECT VALUE out FROM relationship WHERE relationship_type = 'has_child');")
-                .await
-                .context("Failed to get root nodes")?;
+        Ok(surreal_nodes.into_iter().map(Into::into).collect())
+    }
 
-            let nodes: Vec<SurrealNode> = response
-                .take(0)
-                .context("Failed to extract root nodes from response")?;
-
-            nodes
+    pub async fn get_roots(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Node>> {
+        // Root nodes: nodes that have NO incoming has_child relationships (Issue #788: universal relationship table)
+        // Uses NOT IN with idx_rel_out index instead of per-node graph traversal (avoids O(N×M) full scan)
+        // ORDER BY id ASC ensures stable pagination across calls (issue #1167)
+        let sql = match (limit, offset) {
+            (Some(_), Some(_)) => "SELECT * FROM node WHERE id NOT IN (SELECT VALUE out FROM relationship WHERE relationship_type = 'has_child') ORDER BY id ASC LIMIT $limit START AT $offset;",
+            (Some(_), None) => "SELECT * FROM node WHERE id NOT IN (SELECT VALUE out FROM relationship WHERE relationship_type = 'has_child') ORDER BY id ASC LIMIT $limit;",
+            (None, Some(_)) => "SELECT * FROM node WHERE id NOT IN (SELECT VALUE out FROM relationship WHERE relationship_type = 'has_child') ORDER BY id ASC START AT $offset;",
+            (None, None) => "SELECT * FROM node WHERE id NOT IN (SELECT VALUE out FROM relationship WHERE relationship_type = 'has_child') ORDER BY id ASC;",
         };
+        let mut query_builder = self.db.query(sql);
+        if let Some(lim) = limit {
+            query_builder = query_builder.bind(("limit", lim as i64));
+        }
+        if let Some(off) = offset {
+            query_builder = query_builder.bind(("offset", off as i64));
+        }
+        let mut response = query_builder
+            .await
+            .context("Failed to get root nodes")?;
 
-        // Convert to nodes (properties already embedded)
-        let nodes: Vec<Node> = surreal_nodes.into_iter().map(Into::into).collect();
+        let surreal_nodes: Vec<SurrealNode> = response
+            .take(0)
+            .context("Failed to extract root nodes from response")?;
 
-        Ok(nodes)
+        Ok(surreal_nodes.into_iter().map(Into::into).collect())
     }
 
     /// Get the parent of a node (via incoming has_child relationship)
@@ -2158,7 +2168,7 @@ impl SurrealStore {
             visited.insert(node.id.clone());
 
             // Get ordered children for this node (get_children returns Vec<Node> already ordered)
-            let children_nodes = self.get_children(Some(&node.id)).await?;
+            let children_nodes = self.get_children(&node.id).await?;
 
             // Recursively build children trees
             let mut children_json = Vec::new();
@@ -5875,7 +5885,7 @@ mod tests {
         assert_eq!(child.node_type, "text");
 
         // Verify parent-child relationship exists
-        let children = store.get_children(Some(&parent.id)).await?;
+        let children = store.get_children(&parent.id).await?;
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].id, child.id);
 
@@ -5960,15 +5970,15 @@ mod tests {
             .await?;
 
         // Verify child is under parent1
-        let children1 = store.get_children(Some(&parent1.id)).await?;
+        let children1 = store.get_children(&parent1.id).await?;
         assert_eq!(children1.len(), 1);
 
         // Move child to parent2 atomically
         store.move_node(&child.id, Some(&parent2.id), None).await?;
 
         // Verify child is now under parent2
-        let children1_after = store.get_children(Some(&parent1.id)).await?;
-        let children2_after = store.get_children(Some(&parent2.id)).await?;
+        let children1_after = store.get_children(&parent1.id).await?;
+        let children2_after = store.get_children(&parent2.id).await?;
 
         assert_eq!(children1_after.len(), 0, "Parent1 should have no children");
         assert_eq!(children2_after.len(), 1, "Parent2 should have 1 child");
@@ -5997,8 +6007,8 @@ mod tests {
         store.move_node(&child.id, None, None).await?;
 
         // Verify child is a root node
-        let parent_children = store.get_children(Some(&parent.id)).await?;
-        let root_nodes = store.get_children(None).await?;
+        let parent_children = store.get_children(&parent.id).await?;
+        let root_nodes = store.get_roots(None, None).await?;
 
         assert_eq!(parent_children.len(), 0);
         assert!(root_nodes.iter().any(|n| n.id == child.id));
@@ -6062,7 +6072,7 @@ mod tests {
         assert!(child_fetched.is_some());
 
         // Verify child is now a root node (no parent relationship)
-        let root_nodes = store.get_children(None).await?;
+        let root_nodes = store.get_roots(None, None).await?;
         assert!(root_nodes.iter().any(|n| n.id == child.id));
 
         Ok(())
@@ -7994,6 +8004,88 @@ mod tests {
         assert_eq!(container.id, root.id, "ID should match");
         assert_eq!(container.node_type, "text", "node_type should be 'text'");
         // Title field may or may not be populated depending on index state
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_roots_no_pagination() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        let r1 = store
+            .create_node(Node::new("text".to_string(), "Root 1".to_string(), json!({})), None, None)
+            .await?;
+        let r2 = store
+            .create_node(Node::new("text".to_string(), "Root 2".to_string(), json!({})), None, None)
+            .await?;
+        let r3 = store
+            .create_node(Node::new("text".to_string(), "Root 3".to_string(), json!({})), None, None)
+            .await?;
+        // Child should NOT appear in roots
+        store
+            .create_child_node_atomic(&r1.id, "text", "Child", json!({}), None)
+            .await?;
+
+        let roots = store.get_roots(None, None).await?;
+        let root_ids: Vec<&str> = roots.iter().map(|n| n.id.as_str()).collect();
+        assert!(root_ids.contains(&r1.id.as_str()));
+        assert!(root_ids.contains(&r2.id.as_str()));
+        assert!(root_ids.contains(&r3.id.as_str()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_roots_limit() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        for i in 0..5 {
+            store
+                .create_node(Node::new("text".to_string(), format!("Root {i}"), json!({})), None, None)
+                .await?;
+        }
+
+        let roots = store.get_roots(Some(3), None).await?;
+        // Schema nodes are also roots; just verify we got at most 3 *extra* nodes.
+        // The point is that LIMIT is applied in DB, not in memory.
+        assert!(roots.len() <= 3, "limit=3 should return at most 3 nodes, got {}", roots.len());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_roots_limit_offset_non_overlapping() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        // Get total root count (includes seeded schema nodes) then create more to ensure 2 pages
+        let all_before = store.get_roots(None, None).await?;
+        let base = all_before.len();
+
+        for i in 0..4 {
+            store
+                .create_node(Node::new("text".to_string(), format!("Page root {i}"), json!({})), None, None)
+                .await?;
+        }
+
+        let all = store.get_roots(None, None).await?;
+        assert_eq!(all.len(), base + 4);
+
+        let page_size = (base + 4 + 1) / 2; // ceiling half
+        let page1 = store.get_roots(Some(page_size), None).await?;
+        let page2 = store.get_roots(Some(page_size), Some(page_size)).await?;
+
+        // Pages must not overlap
+        let ids1: std::collections::HashSet<&str> = page1.iter().map(|n| n.id.as_str()).collect();
+        let ids2: std::collections::HashSet<&str> = page2.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            ids1.is_disjoint(&ids2),
+            "page1 and page2 must not overlap: page1={ids1:?}, page2={ids2:?}"
+        );
+
+        // Together they cover the full set
+        let combined: std::collections::HashSet<&str> = ids1.union(&ids2).copied().collect();
+        let all_ids: std::collections::HashSet<&str> = all.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(combined, all_ids, "page1 ∪ page2 should equal all roots");
 
         Ok(())
     }
