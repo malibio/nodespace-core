@@ -1,5 +1,5 @@
 {
-  "name": "@nodespace/agent-tools",
+  "name": "@nodespaceai/agent-tools",
   "version": "0.1.0",
   "description": "gRPC-backed knowledge graph tools for PTY-spawned agents (Claude Code, Codex, etc.)",
   "type": "module",
