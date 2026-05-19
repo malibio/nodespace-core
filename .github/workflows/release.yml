@@ -145,6 +145,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build nodespaced and nodespace CLI sidecars for macOS bundle (Issue #1179).
+      # The binaries are placed in the exact path tauri.conf.json externalBin expects.
+      - name: Build nodespaced and nodespace sidecars (macOS)
+        if: steps.filter.outputs.skip != 'true' && matrix.platform == 'macos-latest'
+        run: |
+          TRIPLE="${{ matrix.rust_targets }}"
+          BIN_DIR="packages/desktop-app/src-tauri/binaries"
+
+          echo "Building nodespaced for ${TRIPLE}..."
+          cargo build --release --bin nodespaced --target "${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespaced" "${BIN_DIR}/nodespaced-${TRIPLE}"
+          chmod +x "${BIN_DIR}/nodespaced-${TRIPLE}"
+
+          echo "Building nodespace CLI for ${TRIPLE}..."
+          cargo build --release --bin nodespace --target "${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespace" "${BIN_DIR}/nodespace-${TRIPLE}"
+          chmod +x "${BIN_DIR}/nodespace-${TRIPLE}"
+
+          echo "Sidecars built:"
+          ls -la "${BIN_DIR}/"
+
       - name: Build Tauri app
         if: steps.filter.outputs.skip != 'true'
         uses: tauri-apps/tauri-action@v0
