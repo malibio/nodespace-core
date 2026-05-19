@@ -27,7 +27,7 @@
     "check": "bun run --cwd packages/desktop-app check",
     "check:watch": "bun run --cwd packages/desktop-app check:watch",
     "tauri:dev": "bun run dev:tauri",
-    "tauri:build": "bun run download:models:bundle && cd packages/desktop-app && bun run tauri:build",
+    "tauri:build": "cd packages/desktop-app && bun run tauri:build",
     "install:all": "bun install",
     "download:models": "bun run scripts/download-models.ts",
     "download:models:bundle": "bun run scripts/download-models.ts --bundle",
