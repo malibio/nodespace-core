@@ -93,8 +93,19 @@ fn check_auth(agent_type: AgentType) -> bool {
 }
 
 fn claude_credentials_file_exists() -> bool {
-    dirs::home_dir()
-        .map(|h| h.join(".claude").join("credentials").exists())
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let claude_dir = home.join(".claude");
+    // API key file (claude config login --api-key)
+    if claude_dir.join("credentials").exists() {
+        return true;
+    }
+    // OAuth sessions (claude login via browser)
+    claude_dir
+        .join("sessions")
+        .read_dir()
+        .map(|mut d| d.next().is_some())
         .unwrap_or(false)
 }
 

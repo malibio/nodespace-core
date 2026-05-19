@@ -199,40 +199,10 @@ pub fn run() {
             // Register shutdown token as managed state for background task coordination.
             app.manage(shutdown_token_for_setup.clone());
 
-            // Ensure nodespaced is installed as a launchd agent and running (Issue #1179).
-            // Non-fatal: the app continues and lets the frontend display the error state.
-            // macOS only: launchd is not available on other platforms.
-            #[cfg(target_os = "macos")]
-            {
-                use daemon_setup::{ensure_daemon_running, DaemonStatus};
-                use tauri::Emitter;
-
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::block_on(async {
-                    match ensure_daemon_running(&app_handle).await {
-                        Ok(DaemonStatus::Healthy) => {
-                            tracing::info!("nodespaced is running");
-                        }
-                        Ok(status) => {
-                            tracing::warn!("nodespaced not yet healthy after setup: {:?}", status);
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.emit("daemon-status", "not_running");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Daemon setup failed: {:#}", e);
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.emit("daemon-status", "not_running");
-                            }
-                        }
-                    }
-                });
-            }
-
-            // Connect to the nodespaced daemon over Unix Domain Socket.
-            // On macOS the daemon may still be starting after ensure_daemon_running returns;
-            // on other Unix platforms users start the daemon manually. Either way, a failed
-            // connection is non-fatal: we emit daemon-status so the frontend can show an error.
+            // Spawn async task to start daemon (if needed) then connect gRPC client.
+            // setup() is synchronous so we can't block_on here — spawn a task instead.
+            // manage(GrpcClient) happens inside the task; commands that need it will
+            // fail gracefully until the connection is established.
             #[cfg(unix)]
             {
                 use tauri::Emitter;
@@ -240,7 +210,25 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 let session_token = shutdown_token_for_setup.child_token();
 
-                tauri::async_runtime::block_on(async {
+                tauri::async_runtime::spawn(async move {
+                    // macOS: ensure nodespaced launchd agent is installed and running.
+                    #[cfg(target_os = "macos")]
+                    {
+                        use daemon_setup::{ensure_daemon_running, DaemonStatus};
+                        match ensure_daemon_running(&app_handle).await {
+                            Ok(DaemonStatus::Healthy) => {
+                                tracing::info!("nodespaced is running");
+                            }
+                            Ok(status) => {
+                                tracing::warn!("nodespaced not yet healthy: {:?}", status);
+                            }
+                            Err(e) => {
+                                tracing::error!("Daemon setup failed: {:#}", e);
+                            }
+                        }
+                    }
+
+                    // Connect gRPC client over UDS.
                     match crate::services::GrpcClient::connect().await {
                         Ok(grpc_client) => {
                             app_handle.manage(grpc_client);
