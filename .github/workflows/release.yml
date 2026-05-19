@@ -236,3 +236,100 @@ jobs:
         working-directory: packages/agent-tools
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  update-homebrew-cask:
+    name: Update Homebrew cask
+    runs-on: macos-latest
+    # needs: all matrix legs of build-tauri must pass, including Windows.
+    # This is acceptable because release events always run all legs.
+    # workflow_dispatch builds are excluded by the 'if' below.
+    needs: build-tauri
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Compute version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download macOS DMGs and compute SHA256
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # DMG filenames are set by Tauri productName in tauri.conf.json.
+          # Pattern: NodeSpace_<version>_aarch64.dmg / NodeSpace_<version>_x64.dmg
+          gh release download "${{ github.ref_name }}" \
+            --repo NodeSpaceAI/nodespace-core \
+            --pattern "NodeSpace_${VERSION}_aarch64.dmg" \
+            --pattern "NodeSpace_${VERSION}_x64.dmg"
+
+          ARM_SHA=$(shasum -a 256 "NodeSpace_${VERSION}_aarch64.dmg" | cut -d' ' -f1)
+          X64_SHA=$(shasum -a 256 "NodeSpace_${VERSION}_x64.dmg" | cut -d' ' -f1)
+
+          echo "arm_sha=${ARM_SHA}" >> "$GITHUB_OUTPUT"
+          echo "x64_sha=${X64_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone homebrew-nodespace tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/NodeSpaceAI/homebrew-nodespace.git" tap
+
+      - name: Update cask formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARM_SHA: ${{ steps.sha.outputs.arm_sha }}
+          X64_SHA: ${{ steps.sha.outputs.x64_sha }}
+        run: |
+          CASK="tap/Casks/nodespace.rb"
+
+          # Update version (awk used throughout for portability — avoids BSD vs GNU sed differences)
+          awk -v ver="$VERSION" '
+            /^  version "/ { sub(/version ".*"/, "version \"" ver "\""); print; next }
+            { print }
+          ' "$CASK" > "$CASK.tmp" && mv "$CASK.tmp" "$CASK"
+
+          # Update arm SHA256 (line immediately after "on_arm do")
+          awk -v sha="$ARM_SHA" '
+            /on_arm do/ { print; getline; sub(/sha256 ".*"/, "sha256 \"" sha "\""); print; next }
+            { print }
+          ' "$CASK" > "$CASK.tmp" && mv "$CASK.tmp" "$CASK"
+
+          # Update intel SHA256 (line immediately after "on_intel do")
+          awk -v sha="$X64_SHA" '
+            /on_intel do/ { print; getline; sub(/sha256 ".*"/, "sha256 \"" sha "\""); print; next }
+            { print }
+          ' "$CASK" > "$CASK.tmp" && mv "$CASK.tmp" "$CASK"
+
+      - name: Open PR to homebrew-nodespace
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          BRANCH="update-cask-v${VERSION}"
+
+          cd tap
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          # Idempotent: skip if a PR for this version already exists
+          if gh pr view "$BRANCH" --repo NodeSpaceAI/homebrew-nodespace &>/dev/null; then
+            echo "PR for ${BRANCH} already exists — skipping"
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          git add Casks/nodespace.rb
+          git commit -m "Update NodeSpace cask to v${VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --repo NodeSpaceAI/homebrew-nodespace \
+            --title "Update NodeSpace cask to v${VERSION}" \
+            --body "Automated cask update from release workflow.
+
+- Version: \`${VERSION}\`
+- Source: NodeSpaceAI/nodespace-core@\`${{ github.ref_name }}\`" \
+            --base main \
+            --head "$BRANCH"
