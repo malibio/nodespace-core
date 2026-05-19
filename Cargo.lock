@@ -4504,19 +4504,12 @@ name = "nodespace-dev-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-stream",
- "axum 0.7.9",
- "chrono",
  "dirs 5.0.1",
- "futures",
  "nodespace-core",
  "nodespace-nlp-engine",
  "serde",
  "serde_json",
- "surrealdb",
  "tokio",
- "tokio-stream",
- "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
