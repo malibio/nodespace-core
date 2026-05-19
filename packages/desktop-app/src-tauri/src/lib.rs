@@ -675,6 +675,12 @@ pub fn run() {
             commands::agent_session::terminate_session,
             commands::agent_session::list_sessions,
             commands::agent_session::check_agent_availability,
+            // First-launch onboarding wizard (Issue #1180)
+            commands::onboarding::check_onboarding_status,
+            commands::onboarding::configure_path,
+            commands::onboarding::configure_mcp,
+            commands::onboarding::configure_skill,
+            commands::onboarding::complete_onboarding,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

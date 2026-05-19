@@ -24,6 +24,7 @@
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
+  import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -31,6 +32,9 @@
   // Daemon connectivity state (Issue #1179). Set to true when Tauri signals
   // that nodespaced could not be reached within 5 seconds of app launch.
   let daemonUnreachable = $state(false);
+
+  // First-launch onboarding wizard (Issue #1180).
+  let showOnboarding = $state(false);
 
   /**
    * Sets up MCP event listeners for real-time UI updates
@@ -193,6 +197,15 @@
           daemonUnreachable = false;
         }
       });
+
+      // Show first-launch onboarding wizard if setup has not been completed (Issue #1180).
+      invoke<{ completed: boolean }>('check_onboarding_status')
+        .then((status) => {
+          if (!status.completed) {
+            showOnboarding = true;
+          }
+        })
+        .catch((err) => log.debug('Could not check onboarding status:', err));
 
       unlistenMenu = listen('menu-toggle-sidebar', () => {
         toggleSidebar();
@@ -550,6 +563,9 @@
       <!-- Status Bar - shows import progress, etc. (pushes content up, not overlay) -->
       <StatusBar />
     </div>
+
+    <!-- First-launch onboarding wizard (Issue #1180) -->
+    <OnboardingWizard open={showOnboarding} onClose={() => (showOnboarding = false)} />
   </NodeServiceContext>
 </ThemeProvider>
 
