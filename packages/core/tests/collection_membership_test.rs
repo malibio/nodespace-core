@@ -1142,7 +1142,7 @@ mod collection_service_tests {
         );
 
         // Verify parent has no has_child children
-        let parent_children = store.get_children(Some(&parent.id)).await?;
+        let parent_children = store.get_children(&parent.id).await?;
         assert!(
             parent_children.is_empty(),
             "Collections should NOT use has_child - 'parent' should have no has_child children"

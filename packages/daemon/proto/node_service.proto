@@ -173,9 +173,8 @@ message GetChildrenRequest {
 }
 
 message GetRootsRequest {
-  // limit/offset are applied in application memory, not at the store layer.
   // 0 = no limit/offset; all roots are returned.
-  // Pushing pagination into the store is tracked in issue #1167.
+  // limit/offset are pushed into SurrealDB (LIMIT/START AT) for efficiency.
   uint32 limit = 1;
   uint32 offset = 2;
 }

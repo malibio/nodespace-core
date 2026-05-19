@@ -3594,19 +3594,20 @@ impl NodeService {
     pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Node>, NodeServiceError> {
         // Use edge-based query from SurrealStore (graph-native architecture)
         // Children are already sorted by fractional order on edges
-        let children = self
-            .store
-            .get_children(Some(parent_id))
+        self.store
+            .get_children(parent_id)
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-        Ok(children)
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
     /// Returns all root nodes — nodes with no parent edge in the graph.
-    pub async fn get_roots(&self) -> Result<Vec<Node>, NodeServiceError> {
+    pub async fn get_roots(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Node>, NodeServiceError> {
         self.store
-            .get_children(None)
+            .get_roots(limit, offset)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }

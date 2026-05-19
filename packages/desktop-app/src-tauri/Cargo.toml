@@ -49,6 +49,9 @@ surrealdb = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 
+[features]
+testing = ["nodespace-agent/testing"]
+
 [dev-dependencies]
 tempfile = "3"
 
