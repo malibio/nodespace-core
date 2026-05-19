@@ -23,6 +23,9 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 nodespace-daemon = { path = "../daemon" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 nodespace-core = { workspace = true }
 tempfile = "3.0"

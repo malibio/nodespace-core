@@ -15,6 +15,8 @@ on:
           - macos-arm
           - macos-intel
           - windows
+          - linux-arm
+          - linux-x86
 
 # Required permissions for uploading release assets
 permissions:
@@ -286,6 +288,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     needs: build-tauri-macos-arm
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
@@ -435,3 +438,122 @@ jobs:
 - Source: NodeSpaceAI/nodespace-core@\`${{ github.ref_name }}\`" \
             --base main \
             --head "$BRANCH"
+
+  build-headless:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            id: macos-arm
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            id: macos-intel
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            id: linux-arm
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            id: linux-x86
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check platform filter
+        id: filter
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]] || [[ "${{ inputs.platform }}" == "all" ]] || [[ "${{ inputs.platform }}" == "${{ matrix.id }}" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${{ matrix.id }} (selected: ${{ inputs.platform }})"
+          fi
+
+      - name: Checkout repository
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust stable
+        if: steps.filter.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        if: steps.filter.outputs.skip != 'true'
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Install Protobuf (macOS)
+        if: steps.filter.outputs.skip != 'true' && matrix.os == 'macos-latest'
+        run: brew install protobuf
+
+      - name: Install Protobuf (Linux)
+        if: steps.filter.outputs.skip != 'true' && matrix.os == 'ubuntu-22.04'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install cross-compilation toolchain (Linux ARM)
+        if: steps.filter.outputs.skip != 'true' && matrix.id == 'linux-arm'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Build nodespaced
+        if: steps.filter.outputs.skip != 'true'
+        run: cargo build --release --bin nodespaced --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+
+      - name: Build nodespace CLI
+        if: steps.filter.outputs.skip != 'true'
+        run: cargo build --release --bin nodespace --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+
+      - name: Rename binaries with target triple suffix
+        if: steps.filter.outputs.skip != 'true'
+        run: |
+          cp target/${{ matrix.target }}/release/nodespaced nodespaced-${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/nodespace nodespace-${{ matrix.target }}
+
+      - name: Upload binaries to release
+        if: steps.filter.outputs.skip != 'true' && github.event_name == 'release'
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            nodespaced-${{ matrix.target }} \
+            nodespace-${{ matrix.target }} \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-checksums:
+    needs: build-headless
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Download binaries from release
+        run: |
+          gh release download ${{ github.event.release.tag_name }} \
+            --pattern 'nodespaced-*' --pattern 'nodespace-*' \
+            --dir artifacts/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum nodespaced-* nodespace-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS to release
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} artifacts/SHA256SUMS --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

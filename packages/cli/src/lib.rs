@@ -56,6 +56,8 @@ pub enum Command {
         #[command(subcommand)]
         action: commands::session::SessionAction,
     },
+    /// Uninstall NodeSpace: stop daemon, remove binaries and service registration.
+    Uninstall(commands::uninstall::UninstallArgs),
 }
 
 /// Resolve the socket path from an explicit override or env/default.
@@ -164,5 +166,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             let mut client = connect_session(&sock).await?;
             commands::session::run(&mut client, action, json).await
         }
+        Command::Uninstall(args) => commands::uninstall::run(args).await,
     }
 }
