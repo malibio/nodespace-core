@@ -50,6 +50,7 @@ if (command === 'install') {
     process.exit(0);
   }
 
+  let hadPartialFailure = false;
   for (const result of results) {
     if (result.installed.length > 0) {
       console.log(`✓ ${result.agent}: installed ${result.installed.length} file(s)`);
@@ -57,8 +58,12 @@ if (command === 'install') {
         console.log(`  → ${file}`);
       }
     } else {
-      console.log(`⚠ ${result.agent}: no files to install`);
+      console.error(`⚠ ${result.agent}: detected but no files to install (package may be incomplete)`);
+      hadPartialFailure = true;
     }
+  }
+  if (hadPartialFailure) {
+    process.exit(1);
   }
 } else if (command === 'uninstall') {
   const results = uninstall(targetAgents);

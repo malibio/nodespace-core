@@ -24,7 +24,7 @@ All commands use the `nodespace` CLI.
 ```bash
 nodespace node create --type note --content "Your content here"
 nodespace node create --type task --content "Buy groceries" --parent <parent-id>
-nodespace node create --type note --content "Meeting notes" --type note
+nodespace node create --type note --content "Meeting notes" --parent <parent-id>
 ```
 
 **Options:**

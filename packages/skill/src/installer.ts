@@ -1,14 +1,12 @@
 import { existsSync, mkdirSync, copyFileSync, rmSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents.js';
 import type { AgentName, InstallResult, UninstallResult } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Walk up past dist/ if running from compiled output; src/ if running directly.
-const PACKAGE_ROOT = __dirname.endsWith('/dist')
-  ? join(__dirname, '..')
-  : join(__dirname, '..', '..');
+// Walk up past dist/ if running from compiled output; src/ stays at package root.
+const PACKAGE_ROOT = join(__dirname, '..');
 
 function detectAgents(): AgentName[] {
   return AGENTS
@@ -24,13 +22,12 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
     const config = AGENTS.find(a => a.name === agentName);
     if (!config) continue;
 
-    mkdirSync(config.installDir, { recursive: true });
-
     const installed: string[] = [];
     for (const shim of config.shims) {
       const src = join(packageRoot, shim);
-      const dest = join(config.installDir, shim);
+      const dest = join(config.installDir, basename(shim));
       if (existsSync(src)) {
+        mkdirSync(config.installDir, { recursive: true });
         copyFileSync(src, dest);
         installed.push(dest);
       }
@@ -52,7 +49,7 @@ export function uninstall(targetAgents?: AgentName[]): UninstallResult[] {
 
     const removed: string[] = [];
     for (const shim of config.shims) {
-      const dest = join(config.installDir, shim);
+      const dest = join(config.installDir, basename(shim));
       if (existsSync(dest)) {
         rmSync(dest);
         removed.push(dest);

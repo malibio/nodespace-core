@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const TMP = join(tmpdir(), `nodespace-skill-test-${process.pid}`);
@@ -15,6 +15,15 @@ const { install, uninstall } = await import('../installer.js');
 const { AGENTS } = await import('../agents.js');
 
 const SKILL_MD_CONTENT = '# NodeSpace Skill\nTest content';
+const SHIM_CONTENT = '// shim content';
+
+function seedPkgRoot(root: string, agent: typeof AGENTS[number]): void {
+  for (const shim of agent.shims) {
+    const dir = join(root, shim.includes('/') ? shim.split('/').slice(0, -1).join('/') : '');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(root, shim), shim.endsWith('.md') ? SKILL_MD_CONTENT : SHIM_CONTENT, 'utf8');
+  }
+}
 
 beforeEach(() => {
   mkdirSync(TMP, { recursive: true });
@@ -36,11 +45,12 @@ describe('AGENTS config', () => {
     expect(names).toContain('opencode');
   });
 
-  it('each agent has detectionDir, installDir, and shims', () => {
+  it('each agent has detectionDir, installDir, SKILL.md shim, and at least one agent shim', () => {
     for (const agent of AGENTS) {
       expect(agent.detectionDir).toBeTruthy();
       expect(agent.installDir).toBeTruthy();
       expect(agent.shims).toContain('SKILL.md');
+      expect(agent.shims.length).toBeGreaterThan(1);
     }
   });
 
@@ -63,7 +73,7 @@ describe('install', () => {
     expect(results).toEqual([]);
   });
 
-  it('installs SKILL.md when agent dir exists', () => {
+  it('installs SKILL.md when agent dir exists (only SKILL.md seeded)', () => {
     const agentName = 'claude-code';
     const config = AGENTS.find(a => a.name === agentName)!;
     mkdirSync(config.detectionDir, { recursive: true });
@@ -76,6 +86,19 @@ describe('install', () => {
     expect(readFileSync(join(config.installDir, 'SKILL.md'), 'utf8')).toBe(SKILL_MD_CONTENT);
   });
 
+  it('installs all shims (SKILL.md + agent shim) when all source files exist', () => {
+    const agentName = 'claude-code';
+    const config = AGENTS.find(a => a.name === agentName)!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, config);
+
+    const results = install([agentName], FAKE_PKG_ROOT);
+    expect(results[0].installed).toHaveLength(config.shims.length);
+    for (const shim of config.shims) {
+      expect(existsSync(join(config.installDir, basename(shim)))).toBe(true);
+    }
+  });
+
   it('creates install directory if it does not exist', () => {
     const agentName = 'codex';
     const config = AGENTS.find(a => a.name === agentName)!;
@@ -83,6 +106,18 @@ describe('install', () => {
 
     install([agentName], FAKE_PKG_ROOT);
     expect(existsSync(config.installDir)).toBe(true);
+  });
+
+  it('does NOT create install directory when no source files exist', () => {
+    const agentName = 'gemini';
+    const config = AGENTS.find(a => a.name === agentName)!;
+    mkdirSync(config.detectionDir, { recursive: true });
+
+    rmSync(join(FAKE_PKG_ROOT, 'SKILL.md'));
+
+    const results = install([agentName], FAKE_PKG_ROOT);
+    expect(results[0].installed).toHaveLength(0);
+    expect(existsSync(config.installDir)).toBe(false);
   });
 
   it('detects multiple agents when their dirs exist', () => {
@@ -95,17 +130,6 @@ describe('install', () => {
     const results = install(undefined, FAKE_PKG_ROOT);
     expect(results).toHaveLength(2);
     expect(results.map(r => r.agent).sort()).toEqual(['claude-code', 'gemini'].sort());
-  });
-
-  it('returns empty installed array when SKILL.md source does not exist', () => {
-    const agentName = 'gemini';
-    const config = AGENTS.find(a => a.name === agentName)!;
-    mkdirSync(config.detectionDir, { recursive: true });
-
-    rmSync(join(FAKE_PKG_ROOT, 'SKILL.md'));
-
-    const results = install([agentName], FAKE_PKG_ROOT);
-    expect(results[0].installed).toHaveLength(0);
   });
 });
 
@@ -144,13 +168,15 @@ describe('uninstall', () => {
   it('uninstalls from all detected agents when no target specified', () => {
     for (const agent of AGENTS) {
       mkdirSync(agent.installDir, { recursive: true });
-      writeFileSync(join(agent.installDir, 'SKILL.md'), SKILL_MD_CONTENT, 'utf8');
+      for (const shim of agent.shims) {
+        writeFileSync(join(agent.installDir, basename(shim)), SKILL_MD_CONTENT, 'utf8');
+      }
     }
 
     const results = uninstall();
     expect(results).toHaveLength(AGENTS.length);
     for (const result of results) {
-      expect(result.removed).toHaveLength(1);
+      expect(result.removed.length).toBeGreaterThan(0);
     }
   });
 });
