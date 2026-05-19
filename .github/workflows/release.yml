@@ -197,3 +197,42 @@ jobs:
             target/${{ matrix.rust_targets || '' }}/release/bundle/
             target/release/bundle/
           if-no-files-found: warn
+
+  publish-npm:
+    name: Publish @nodespaceai/agent-tools
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.38"
+
+      - name: Setup Node.js (for npm publish)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: bun install
+        working-directory: packages/agent-tools
+
+      - name: Set version from release tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          npm version "${TAG#v}" --no-git-tag-version
+        working-directory: packages/agent-tools
+
+      - name: Build
+        run: bun run build
+        working-directory: packages/agent-tools
+
+      - name: Publish @nodespaceai/agent-tools
+        run: npm publish --access public
+        working-directory: packages/agent-tools
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
