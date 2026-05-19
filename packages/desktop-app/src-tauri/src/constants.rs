@@ -11,3 +11,8 @@ pub const TAURI_CLIENT_ID: &str = "tauri-main";
 /// GGUF model filename for nomic-embed-text-v1.5 embeddings (768 dimensions).
 /// Used by resolve_bundled_model_path() in commands/db.rs to find the model file.
 pub const EMBEDDING_MODEL_FILENAME: &str = "nomic-embed-text-v1.5.Q8_0.gguf";
+
+/// Relative path from HOME to the nodespaced Unix Domain Socket.
+/// Shared by daemon_setup (launchd plist) and lib.rs (health check command).
+/// watcher.rs uses its own resolver that also honors NODESPACED_SOCKET env override.
+pub const DAEMON_SOCKET_RELATIVE: &str = ".nodespace/daemon.sock";

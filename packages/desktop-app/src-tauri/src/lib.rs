@@ -53,7 +53,7 @@ async fn check_daemon_status() -> String {
             Some(h) => h,
             None => return "not_running".to_string(),
         };
-        let socket_path = home.join(".nodespace/daemon.sock");
+        let socket_path = home.join(crate::constants::DAEMON_SOCKET_RELATIVE);
         return match check_daemon_socket(socket_path.as_path()).await {
             DaemonStatus::Healthy => "healthy".to_string(),
             DaemonStatus::Starting => "starting".to_string(),

@@ -2,9 +2,9 @@
 //!
 //! On first launch:
 //!   1. Locate sidecar binaries bundled inside the .app via Tauri's resource resolver.
-//!   2. Copy them to ~/.nodespace/bin/ with executable permissions.
+//!   2. Copy them to ~/.nodespace/bin/ (skipped if dest already matches bundled size).
 //!   3. Write a launchd user-agent plist to ~/Library/LaunchAgents/.
-//!   4. Load the plist via `launchctl load` so the daemon starts immediately.
+//!   4. Bootstrap the agent via `launchctl bootstrap gui/<uid> <plist>`.
 //!
 //! On subsequent launches:
 //!   - Check if the Unix Domain Socket exists and the daemon responds to a gRPC ping.
@@ -19,8 +19,9 @@ use anyhow::{Context, Result};
 use tauri::{AppHandle, Manager};
 use tokio::time::timeout;
 
+use crate::constants::DAEMON_SOCKET_RELATIVE;
+
 const LAUNCH_AGENT_LABEL: &str = "app.nodespace.daemon";
-const DAEMON_SOCKET_PATH: &str = ".nodespace/daemon.sock";
 const DAEMON_BIN_DIR: &str = ".nodespace/bin";
 const DAEMON_LOG_DIR: &str = ".nodespace/logs";
 const DAEMON_DB_DIR: &str = ".nodespace/database";
@@ -48,7 +49,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     let bin_dir = home.join(DAEMON_BIN_DIR);
     let log_dir = home.join(DAEMON_LOG_DIR);
     let plist_path = launch_agents_dir(&home).join(PLIST_FILENAME);
-    let socket_path = home.join(DAEMON_SOCKET_PATH);
+    let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
     let daemon_bin = bin_dir.join(DAEMON_BINARY_NAME);
 
     // Check current daemon health first (cheap path for subsequent launches).
@@ -70,14 +71,14 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
         .context("Failed to create ~/.nodespace/database")?;
 
     // Extract sidecar binaries from the .app bundle if missing or outdated.
-    extract_sidecar(app, DAEMON_BINARY_NAME, &bin_dir).await?;
-    extract_sidecar(app, CLI_BINARY_NAME, &bin_dir).await?;
+    extract_sidecar_if_changed(app, DAEMON_BINARY_NAME, &bin_dir).await?;
+    extract_sidecar_if_changed(app, CLI_BINARY_NAME, &bin_dir).await?;
 
     // Write (or overwrite) the launchd plist with the current username baked in.
     write_plist(&home, &plist_path, &daemon_bin).context("Failed to write launchd plist")?;
 
-    // Load or reload the plist.
-    load_launchd_agent(&plist_path)?;
+    // Bootstrap or restart the launchd agent.
+    bootstrap_launchd_agent(&plist_path)?;
 
     // Wait briefly for the daemon to come up.
     let status = wait_for_daemon(&socket_path, Duration::from_secs(5)).await;
@@ -87,8 +88,8 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
 /// Check daemon health by testing whether the Unix Domain Socket is reachable.
 ///
 /// A full gRPC ping would require importing the proto types; for the health
-/// check a successful TCP-style connect to the UDS is sufficient — the OS
-/// rejects the connect if no process is listening.
+/// check a successful UDS connect is sufficient — the OS rejects the connect
+/// if no process is listening.
 pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
     if !socket_path.exists() {
         return DaemonStatus::NotRunning;
@@ -123,20 +124,35 @@ async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonStatus
     }
 }
 
-/// Extract a sidecar binary from the Tauri bundle to `~/.nodespace/bin/`.
-///
-/// Tauri names sidecar binaries `<name>-<target-triple>` inside the bundle.
-/// We copy the file and set the executable bit.
-async fn extract_sidecar(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<()> {
-    // Tauri resolves the sidecar path using the `externalBin` entries in tauri.conf.json.
-    // The binary is stored as `binaries/<name>-<target-triple>` inside Resources.
+/// Extract a sidecar binary from the Tauri bundle to `~/.nodespace/bin/`,
+/// but only if the destination is missing or has a different file size than
+/// the bundled source. Size comparison is a lightweight proxy for version change:
+/// a real binary size change on every Tauri build guarantees re-extraction.
+async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<()> {
     let src = resolve_sidecar_path(app, name)?;
     let dest = bin_dir.join(name);
 
+    let src_size = tokio::fs::metadata(&src)
+        .await
+        .with_context(|| format!("Cannot stat bundled sidecar {}", src.display()))?
+        .len();
+
+    // Skip extraction if dest exists and matches bundled binary size.
+    if let Ok(dest_meta) = tokio::fs::metadata(&dest).await {
+        if dest_meta.len() == src_size {
+            tracing::debug!(
+                "{} is up-to-date (size={}), skipping extraction",
+                name,
+                src_size
+            );
+            return Ok(());
+        }
+    }
+
     tracing::info!(
-        "Extracting {} from {} to {}",
+        "Extracting {} ({} bytes) to {}",
         name,
-        src.display(),
+        src_size,
         dest.display()
     );
 
@@ -144,9 +160,7 @@ async fn extract_sidecar(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<
         .await
         .with_context(|| format!("Failed to copy {} to {}", src.display(), dest.display()))?;
 
-    // Mark executable (rwxr-xr-x).
     set_executable(&dest)?;
-
     Ok(())
 }
 
@@ -186,7 +200,6 @@ fn launch_agents_dir(home: &Path) -> PathBuf {
 
 /// Write the launchd plist for the nodespaced user agent.
 fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> {
-    // Ensure ~/Library/LaunchAgents exists (it normally does on macOS).
     let launch_agents = plist_path
         .parent()
         .context("plist_path has no parent directory")?;
@@ -194,7 +207,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
-    let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_PATH);
+    let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
     let db_path = format!("{}/{}/nodespace", home_str, DAEMON_DB_DIR);
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
@@ -240,48 +253,59 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         .with_context(|| format!("Cannot write plist to {}", plist_path.display()))
 }
 
-/// Load (or reload) the launchd agent plist.
+/// Register or restart the launchd user agent.
 ///
-/// If already loaded, `launchctl load` exits with an error. We detect that and
-/// use `launchctl kickstart` to restart a crashed daemon instead.
-fn load_launchd_agent(plist_path: &Path) -> Result<()> {
-    tracing::info!("Loading launchd agent: {}", plist_path.display());
+/// Uses the modern `launchctl bootstrap gui/<uid> <plist>` API (macOS 10.10+).
+/// If already bootstrapped, falls back to `launchctl kickstart -k` to restart
+/// a stopped or crashed instance. The legacy `launchctl load -w` is intentionally
+/// avoided — it was deprecated in macOS 10.11 and generates log noise on macOS 15+.
+fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
+    let uid = get_uid();
+    let gui_target = format!("gui/{}", uid);
+    tracing::info!("Bootstrapping launchd agent for {}", gui_target);
 
     let output = std::process::Command::new("launchctl")
-        .args(["load", "-w", &plist_path.to_string_lossy()])
+        .args(["bootstrap", &gui_target, &plist_path.to_string_lossy()])
         .output()
-        .context("Failed to run launchctl load")?;
+        .context("Failed to run launchctl bootstrap")?;
 
     if output.status.success() {
-        tracing::info!("launchd agent loaded successfully");
+        tracing::info!("launchd agent bootstrapped successfully");
         return Ok(());
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // If the agent is already loaded, kick it to restart a stopped/crashed instance.
-    if stderr.contains("already loaded") || stderr.contains("service already loaded") {
-        tracing::info!("Agent already loaded; using kickstart to restart");
+    // Error 37 = EALREADY: service is already registered in this bootstrap context.
+    // Error 36 = ENOTSUP: also seen for "already bootstrapped" on some versions.
+    let already_bootstrapped = output.status.code().is_some_and(|c| c == 37 || c == 36)
+        || stderr.contains("already bootstrapped")
+        || stderr.contains("service already exists");
+
+    if already_bootstrapped {
+        tracing::info!("Agent already bootstrapped; kickstarting to restart");
         let kickstart = std::process::Command::new("launchctl")
             .args([
                 "kickstart",
                 "-k",
-                &format!("gui/{}/{}", get_uid(), LAUNCH_AGENT_LABEL),
+                &format!("{}/{}", gui_target, LAUNCH_AGENT_LABEL),
             ])
             .output()
             .context("Failed to run launchctl kickstart")?;
 
         if !kickstart.status.success() {
             let ks_err = String::from_utf8_lossy(&kickstart.stderr);
-            tracing::warn!("launchctl kickstart failed: {}", ks_err);
+            tracing::warn!(
+                "launchctl kickstart failed (daemon may start on next login): {}",
+                ks_err
+            );
         }
         return Ok(());
     }
 
-    // Non-fatal: log but do not propagate — the daemon may already be running
-    // from a previous invocation and `launchctl load` just doesn't like duplicates.
+    // Non-fatal: log and continue — daemon may still be running from a prior launch.
     tracing::warn!(
-        "launchctl load exited with status {}: {}",
+        "launchctl bootstrap exited with status {}: {}",
         output.status,
         stderr
     );
