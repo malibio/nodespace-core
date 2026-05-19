@@ -187,8 +187,10 @@ fn launch_agents_dir(home: &Path) -> PathBuf {
 /// Write the launchd plist for the nodespaced user agent.
 fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> {
     // Ensure ~/Library/LaunchAgents exists (it normally does on macOS).
-    std::fs::create_dir_all(plist_path.parent().unwrap())
-        .context("Failed to create ~/Library/LaunchAgents")?;
+    let launch_agents = plist_path
+        .parent()
+        .context("plist_path has no parent directory")?;
+    std::fs::create_dir_all(launch_agents).context("Failed to create ~/Library/LaunchAgents")?;
 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();

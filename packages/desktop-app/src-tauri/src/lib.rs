@@ -24,7 +24,8 @@ pub mod services;
 // see watcher.rs module docs for activation gating.
 pub mod watcher;
 
-// launchd daemon lifecycle (Issue #1179)
+// launchd daemon lifecycle (Issue #1179) — macOS only
+#[cfg(target_os = "macos")]
 pub mod daemon_setup;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -44,18 +45,23 @@ fn toggle_sidebar() -> String {
 /// to decide whether to show an error state (Issue #1179).
 #[tauri::command]
 async fn check_daemon_status() -> String {
-    use daemon_setup::{check_daemon_socket, DaemonStatus};
+    #[cfg(target_os = "macos")]
+    {
+        use daemon_setup::{check_daemon_socket, DaemonStatus};
 
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return "not_running".to_string(),
-    };
-    let socket_path = home.join(".nodespace/daemon.sock");
-    match check_daemon_socket(socket_path.as_path()).await {
-        DaemonStatus::Healthy => "healthy".to_string(),
-        DaemonStatus::Starting => "starting".to_string(),
-        DaemonStatus::NotRunning => "not_running".to_string(),
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return "not_running".to_string(),
+        };
+        let socket_path = home.join(".nodespace/daemon.sock");
+        return match check_daemon_socket(socket_path.as_path()).await {
+            DaemonStatus::Healthy => "healthy".to_string(),
+            DaemonStatus::Starting => "starting".to_string(),
+            DaemonStatus::NotRunning => "not_running".to_string(),
+        };
     }
+    #[cfg(not(target_os = "macos"))]
+    "healthy".to_string()
 }
 
 // Include test module
@@ -335,6 +341,8 @@ pub fn run() {
 
             // Ensure nodespaced is installed as a launchd agent and running (Issue #1179).
             // Non-fatal: the app continues and lets the frontend display the error state.
+            // macOS only: launchd is not available on other platforms.
+            #[cfg(target_os = "macos")]
             {
                 use daemon_setup::{ensure_daemon_running, DaemonStatus};
                 use tauri::Emitter;
