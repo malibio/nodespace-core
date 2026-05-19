@@ -1,5 +1,5 @@
 {
-  "name": "@nodespace/agent-tools",
+  "name": "@nodespaceai/agent-tools",
   "version": "0.1.0",
   "description": "gRPC-backed knowledge graph tools for PTY-spawned agents (Claude Code, Codex, etc.)",
   "type": "module",
@@ -12,9 +12,10 @@
     }
   },
   "files": [
-    "dist",
-    "src",
-    "shims"
+    "dist/",
+    "src/",
+    "shims/",
+    "*.md"
   ],
   "scripts": {
     "preinstall": "node ../../enforce-bun.js",
@@ -31,6 +32,9 @@
     "@types/node": "^24.6.0",
     "typescript": "~5.9.3",
     "vitest": "^2.1.9"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT"
 }
