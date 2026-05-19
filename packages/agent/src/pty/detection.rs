@@ -52,10 +52,9 @@ pub fn detect_all_agents() -> Vec<AgentAvailability> {
 // ---------------------------------------------------------------------------
 
 fn detect_one(agent_type: AgentType, binary: &'static str, path: &OsString) -> AgentAvailability {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let binary_path = which::which_in(binary, Some(path), &cwd).ok();
     let binary_found = binary_path.is_some();
-    let auth_found = check_auth(agent_type);
     let install_hint = if binary_found {
         None
     } else {
@@ -66,72 +65,10 @@ fn detect_one(agent_type: AgentType, binary: &'static str, path: &OsString) -> A
         agent_type,
         binary,
         binary_found,
-        auth_found,
+        auth_found: true,
         binary_path,
         install_hint,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Auth checks
-// ---------------------------------------------------------------------------
-
-fn check_auth(agent_type: AgentType) -> bool {
-    match agent_type {
-        AgentType::ClaudeCode => {
-            std::env::var("ANTHROPIC_API_KEY").is_ok() || claude_credentials_file_exists()
-        }
-        AgentType::Codex => std::env::var("OPENAI_API_KEY").is_ok(),
-        AgentType::GeminiCli => {
-            std::env::var("GEMINI_API_KEY").is_ok() || gemini_credentials_file_exists()
-        }
-        AgentType::Pi => std::env::var("PI_API_KEY").is_ok(),
-        AgentType::OpenCode => {
-            std::env::var("OPENCODE_API_KEY").is_ok() || opencode_provider_config_exists()
-        }
-    }
-}
-
-fn claude_credentials_file_exists() -> bool {
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
-    let claude_dir = home.join(".claude");
-    // API key file (claude config login --api-key)
-    if claude_dir.join("credentials").exists() {
-        return true;
-    }
-    // OAuth sessions (claude login via browser)
-    claude_dir
-        .join("sessions")
-        .read_dir()
-        .map(|mut d| d.next().is_some())
-        .unwrap_or(false)
-}
-
-fn gemini_credentials_file_exists() -> bool {
-    dirs::home_dir()
-        .map(|h| {
-            h.join(".config")
-                .join("gemini")
-                .join("credentials")
-                .exists()
-        })
-        .unwrap_or(false)
-}
-
-fn opencode_provider_config_exists() -> bool {
-    // opencode stores provider config in ~/.config/opencode/config.json or
-    // ~/.opencode/config.json; either presence counts as "configured".
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return false,
-    };
-    home.join(".config")
-        .join("opencode")
-        .join("config.json")
-        .exists()
-        || home.join(".opencode").join("config.json").exists()
 }
 
 // ---------------------------------------------------------------------------
