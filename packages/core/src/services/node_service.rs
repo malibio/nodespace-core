@@ -2715,16 +2715,16 @@ impl NodeService {
         })
     }
 
-    /// Rename a field across all node instances and update the schema definition atomically (Issue #1088).
+    /// Rename a field across all node instances and update the schema definition (Issue #1088).
     ///
     /// Steps performed in order:
     ///   1. Validate the schema exists, the source field exists, and the destination does not.
     ///   2. Migrate all node instances via `SurrealStore::rename_schema_field`.
     ///   3. Update the schema definition (rename the field entry in `fields`).
     ///
-    /// Steps 2 and 3 are executed sequentially. If step 3 fails after step 2 has already
-    /// migrated data, the error is returned and the caller should retry only the schema
-    /// definition update (data is already correct).
+    /// Steps 2 and 3 are executed sequentially but are not atomic. If step 3 fails after
+    /// step 2 has already migrated data, the error is returned and the caller should retry
+    /// only the schema definition update (data is already correct).
     pub async fn rename_schema_field(
         &self,
         type_id: &str,

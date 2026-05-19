@@ -498,7 +498,7 @@ fn def_create_schema() -> ToolDefinition {
 fn def_update_schema() -> ToolDefinition {
     ToolDefinition {
         name: "update_schema".into(),
-        description: "Modify an existing schema type: add/remove/rename fields, add/remove relationships, update description or title_template. Use rename_fields to safely rename a field — it migrates all existing node property data to the new key and updates the schema definition atomically.".into(),
+        description: "Modify an existing schema type: add/remove/rename fields, add/remove relationships, update description or title_template. Use rename_fields to safely rename a field — it migrates all existing node property data to the new key and updates the schema definition.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -546,7 +546,8 @@ fn def_update_schema() -> ToolDefinition {
                             "from": { "type": "string", "description": "Current field name" },
                             "to": { "type": "string", "description": "New field name" }
                         },
-                        "required": ["from", "to"]
+                        "required": ["from", "to"],
+                        "additionalProperties": false
                     }
                 },
                 "add_relationships": {

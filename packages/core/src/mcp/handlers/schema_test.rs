@@ -499,8 +499,7 @@ async fn test_rename_field_migrates_node_data() {
         "Value should be migrated to new_field"
     );
     assert!(
-        ns_props.get("old_field").is_none()
-            || ns_props.get("old_field").is_some_and(|v| v.is_null()),
+        ns_props.get("old_field").is_none(),
         "old_field should be removed after rename"
     );
 }

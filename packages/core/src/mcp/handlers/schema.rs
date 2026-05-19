@@ -490,10 +490,21 @@ pub async fn handle_update_schema(
     let params: UpdateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
-    // --- Phase 1: Process renames first (each rename migrates data + updates schema definition) ---
-    let mut fields_renamed = 0;
+    // --- Phase 0: Verify schema exists, validate renames, run playbook impact check ---
+    // Schema existence is verified upfront so rename/playbook validation errors are reported
+    // before any mutations execute.
+    node_service
+        .get_schema_node(&params.schema_id)
+        .await
+        .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
+        .ok_or_else(|| {
+            MCPError::invalid_params(format!("Schema '{}' not found", params.schema_id))
+        })?;
+
+    // Validate renames before executing any mutations (including the playbook guard below)
     if let Some(ref renames) = params.rename_fields {
-        // Validate all renames upfront before executing any
+        let mut seen_sources = std::collections::HashSet::new();
+        let mut seen_destinations = std::collections::HashSet::new();
         for rename in renames {
             if rename.from.trim().is_empty() || rename.to.trim().is_empty() {
                 return Err(MCPError::invalid_params(
@@ -506,10 +517,12 @@ pub async fn handle_update_schema(
                     rename.from
                 )));
             }
-        }
-        // Check for duplicate destinations within the rename list itself
-        let mut seen_destinations = std::collections::HashSet::new();
-        for rename in renames {
+            if !seen_sources.insert(&rename.from) {
+                return Err(MCPError::invalid_params(format!(
+                    "rename_fields: duplicate source field name '{}'",
+                    rename.from
+                )));
+            }
             if !seen_destinations.insert(&rename.to) {
                 return Err(MCPError::invalid_params(format!(
                     "rename_fields: duplicate destination field name '{}'",
@@ -517,6 +530,38 @@ pub async fn handle_update_schema(
                 )));
             }
         }
+    }
+
+    // Issue #1012: Check if any active playbooks would be affected by this schema change.
+    // Done before any mutations so a blocked rename doesn't partially execute.
+    let affected =
+        crate::playbook::validation::check_schema_change_impact(&params.schema_id, node_service)
+            .await
+            .map_err(|e| MCPError::internal_error(format!("Impact analysis failed: {}", e)))?;
+
+    if !affected.is_empty() && !params.force {
+        let names: Vec<String> = affected.iter().map(|a| a.to_string()).collect();
+        return Err(MCPError::invalid_params(format!(
+            "Schema change would affect {} active playbook(s): {}. Use force=true to proceed.",
+            affected.len(),
+            names.join("; ")
+        )));
+    }
+
+    let affected_names: Option<Vec<String>> = if !affected.is_empty() {
+        Some(
+            affected
+                .iter()
+                .map(|a| format!("{} ({})", a.playbook_name, a.playbook_id))
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    // --- Phase 1: Process renames (each rename migrates data + updates schema definition) ---
+    let mut fields_renamed = 0;
+    if let Some(ref renames) = params.rename_fields {
         for rename in renames {
             node_service
                 .rename_schema_field(&params.schema_id, &rename.from, &rename.to)
@@ -526,13 +571,13 @@ pub async fn handle_update_schema(
         }
     }
 
-    // --- Phase 2: Re-fetch schema (may have been updated by renames above) ---
+    // --- Phase 2: Re-fetch schema (reflects any renames applied above) ---
     let schema = node_service
         .get_schema_node(&params.schema_id)
         .await
         .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
         .ok_or_else(|| {
-            MCPError::invalid_params(format!("Schema '{}' not found", params.schema_id))
+            MCPError::invalid_params(format!("Schema '{}' not found after renames", params.schema_id))
         })?;
 
     // Process fields
@@ -624,32 +669,6 @@ pub async fn handle_update_schema(
     SchemaNodeBehavior
         .validate_schema_node(&updated_schema)
         .map_err(|e| MCPError::invalid_params(format!("Schema validation failed: {}", e)))?;
-
-    // Issue #1012: Check if any active playbooks would be affected by this schema change
-    let affected =
-        crate::playbook::validation::check_schema_change_impact(&params.schema_id, node_service)
-            .await
-            .map_err(|e| MCPError::internal_error(format!("Impact analysis failed: {}", e)))?;
-
-    if !affected.is_empty() && !params.force {
-        let names: Vec<String> = affected.iter().map(|a| a.to_string()).collect();
-        return Err(MCPError::invalid_params(format!(
-            "Schema change would affect {} active playbook(s): {}. Use force=true to proceed.",
-            affected.len(),
-            names.join("; ")
-        )));
-    }
-
-    let affected_names: Option<Vec<String>> = if !affected.is_empty() {
-        Some(
-            affected
-                .iter()
-                .map(|a| format!("{} ({})", a.playbook_name, a.playbook_id))
-                .collect(),
-        )
-    } else {
-        None
-    };
 
     let update = NodeUpdate {
         properties: Some(properties),
