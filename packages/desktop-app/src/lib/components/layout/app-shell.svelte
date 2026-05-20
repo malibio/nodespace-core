@@ -25,6 +25,8 @@
   import { createLogger } from '$lib/utils/logger';
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
   import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
+  import ProSyncPill from '$lib/components/pro-sync-pill.svelte';
+  import { proSync } from '$lib/stores/pro-sync.svelte';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -170,11 +172,21 @@
     let unlistenDaemonStatus: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
+    let cleanupProSync: (() => void) | null = null;
 
     if (
       typeof window !== 'undefined' &&
       (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
     ) {
+      // Pro-tier sync listener. The pill component returns null
+      // when the daemon's capability probe says community-tier, so
+      // starting the listener unconditionally is safe and lets the
+      // tier-detected event update the store reactively.
+      proSync
+        .start()
+        .then((stop) => (cleanupProSync = stop))
+        .catch((e) => log.warn('proSync.start failed', { error: e }));
+
       // Sync theme from backend preferences (overrides localStorage if different)
       invoke<{ activeDatabasePath: string; display: { renderMarkdown: boolean; theme: string } }>('get_settings')
         .then((settings) => {
@@ -489,6 +501,7 @@
       if (unlistenDaemonStatus) {
         (await unlistenDaemonStatus)();
       }
+      cleanupProSync?.();
       if (cleanupMCP) {
         await cleanupMCP();
       }
@@ -558,6 +571,13 @@
           <!-- PaneManager now renders content directly via PaneContent components -->
           <PaneManager />
         </div>
+
+        <!-- Pro-tier sync pill. Renders only when the daemon's capability
+             probe finds nodespace.pro.v1.CloudSyncService — community mode
+             hides it entirely. Floats top-right of the app-shell content. -->
+        <div class="pro-sync-pill-slot">
+          <ProSyncPill />
+        </div>
       </div>
 
       <!-- Status Bar - shows import progress, etc. (pushes content up, not overlay) -->
@@ -617,6 +637,17 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    position: relative; /* anchor for .pro-sync-pill-slot */
+  }
+
+  /* Pro-tier sync-status pill (floats over the content grid).
+     Hidden when the capability probe returns community-tier. */
+  .pro-sync-pill-slot {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    z-index: 10;
+    pointer-events: auto;
   }
 
   /* Navigation Sidebar */

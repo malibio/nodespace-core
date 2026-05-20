@@ -231,9 +231,42 @@ pub fn run() {
                     // Connect gRPC client over UDS.
                     match crate::services::GrpcClient::connect().await {
                         Ok(grpc_client) => {
+                            // Snapshot the underlying channel before
+                            // we hand `grpc_client` to managed state —
+                            // ProClient rides the same h2 connection.
+                            let channel = grpc_client.channel().await;
                             app_handle.manage(grpc_client);
                             tracing::info!("gRPC client connected to nodespaced");
                             watcher::spawn(app_handle.clone(), session_token);
+
+                            // Pro capability probe: a single
+                            // WatchSyncStatus call on the same channel.
+                            // Community `nodespaced` returns
+                            // `Status::Unimplemented` → tier=Community
+                            // → sync pill stays hidden. Pro
+                            // `nodespaced-pro` answers the probe →
+                            // tier=Pro → pill renders and listens for
+                            // the `sync:status` stream.
+                            let pro = crate::services::ProClient::probe_on_channel(channel).await;
+                            let tier = pro.tier().await;
+                            let last_status = pro.last_status().await;
+                            let payload = serde_json::json!({
+                                "tier": tier,
+                                "initial_status": last_status.as_ref().map(|s| {
+                                    serde_json::json!({
+                                        "state": s.state,
+                                        "detail": s.detail,
+                                    })
+                                }),
+                            });
+                            app_handle.manage(pro);
+                            if let Err(e) = app_handle.emit("pro:tier-detected", payload) {
+                                tracing::warn!(
+                                    error = %e,
+                                    "failed to emit pro:tier-detected"
+                                );
+                            }
+                            tracing::info!(?tier, "Pro capability probe done");
                         }
                         Err(e) => {
                             tracing::error!("Failed to connect to nodespaced: {e:#}");
@@ -297,6 +330,9 @@ pub fn run() {
             greet,
             toggle_sidebar,
             check_daemon_status,
+            commands::pro_sync::pro_tier,
+            commands::pro_sync::pro_subscribe_sync_status,
+            commands::pro_sync::pro_initiate_oauth,
             commands::embeddings::generate_root_embedding,
             commands::embeddings::search_roots,
             commands::embeddings::update_root_embedding,
