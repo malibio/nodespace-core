@@ -40,9 +40,10 @@ use crate::nodespace::{
     MentionResponse, MentionTargetRequest, MoveNodeRequest, NodeCollectionsRequest, NodeData,
     NodeDeleted, NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse,
     NodeResponse, NodeTreeResponse, OptionalNodeResponse, OptionalStringClear,
-    OptionalTimestampClear, QueryNodesSimpleRequest, RemoveNodeFromCollectionRequest,
-    RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SearchRequest,
-    UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest, WatchRequest,
+    OptionalTimestampClear, QueryNodesSimpleRequest, RelationshipDeletedPayload,
+    RelationshipPayload, RemoveNodeFromCollectionRequest, RenameCollectionRequest,
+    ReorderNodeRequest, ReorderNodeResponse, SearchRequest, UpdateNodeRequest,
+    UpdateTaskNodeRequest, UpsertNodeWithParentRequest, WatchRequest,
 };
 
 /// gRPC adapter that owns shared handles to the core services.
@@ -1203,9 +1204,48 @@ async fn convert_domain_event(
                 node_type: node_type.clone(),
             })),
         }),
-        DomainEvent::RelationshipCreated { .. }
-        | DomainEvent::RelationshipUpdated { .. }
-        | DomainEvent::RelationshipDeleted { .. } => None,
+        DomainEvent::RelationshipCreated { relationship } => Some(NodeEvent {
+            event: Some(NodeEventKind::RelationshipCreated(relationship_to_proto(
+                relationship,
+            ))),
+        }),
+        DomainEvent::RelationshipUpdated { relationship } => Some(NodeEvent {
+            event: Some(NodeEventKind::RelationshipUpdated(relationship_to_proto(
+                relationship,
+            ))),
+        }),
+        DomainEvent::RelationshipDeleted {
+            id,
+            from_id,
+            to_id,
+            relationship_type,
+        } => Some(NodeEvent {
+            event: Some(NodeEventKind::RelationshipDeleted(
+                RelationshipDeletedPayload {
+                    id: id.clone(),
+                    from_id: from_id.clone(),
+                    to_id: to_id.clone(),
+                    relationship_type: relationship_type.clone(),
+                },
+            )),
+        }),
+    }
+}
+
+/// Translate a `RelationshipEvent` from the in-process domain channel
+/// into the proto wire form. `properties` is JSON-encoded as a string
+/// so the proto schema stays stable across additions to the
+/// underlying `serde_json::Value` payload — the desktop watcher
+/// re-parses it back to JSON before emitting the Tauri event.
+fn relationship_to_proto(
+    rel: &nodespace_core::db::events::RelationshipEvent,
+) -> RelationshipPayload {
+    RelationshipPayload {
+        id: rel.id.clone(),
+        from_id: rel.from_id.clone(),
+        to_id: rel.to_id.clone(),
+        relationship_type: rel.relationship_type.clone(),
+        properties: rel.properties.to_string(),
     }
 }
 

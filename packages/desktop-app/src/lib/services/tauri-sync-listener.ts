@@ -35,6 +35,19 @@ import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schem
 const log = createLogger('TauriSync');
 
 /**
+ * Strip the `node:` table prefix from a SurrealDB Thing id so it
+ * matches the bare-id key shape `reactiveStructureTree` uses
+ * elsewhere in the app (the date-page route, the outliner's
+ * local-action `addChild` path, and `sharedNodeStore` all key by
+ * bare ids). Backend `RelationshipEvent` payloads carry the
+ * prefixed form per the serialization contract; the frontend's
+ * tree-keyspace is historically bare, so normalize at the boundary.
+ */
+function stripNodePrefix(id: string): string {
+  return id.startsWith('node:') ? id.slice('node:'.length) : id;
+}
+
+/**
  * Normalize node data from domain events to type-specific format
  *
  * Domain events send generic Node objects where type-specific fields (like task status)
@@ -153,9 +166,16 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // updates the order and re-sorts rather than inserting a duplicate.
         if (structureTree) {
           const order = (rel.properties?.order as number) ?? Date.now();
+          // structureTree is keyed by bare node ids (e.g. the date-
+          // page route uses `2026-05-20`, not `node:2026-05-20`).
+          // Backend events carry the table-prefixed form per the
+          // RelationshipEvent serialization contract — strip the
+          // `node:` prefix here so the local-action path (which
+          // writes bare ids via the outliner) and the sync-event
+          // path agree on the key shape.
           structureTree.addChild({
-            parentId: rel.fromId,
-            childId: rel.toId,
+            parentId: stripNodePrefix(rel.fromId),
+            childId: stripNodePrefix(rel.toId),
             order
           });
         }
@@ -186,7 +206,11 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // far outside the normal fractional order range and will sort the node to the end.
         // In practice, relationship:updated events from the backend always include order.
         const order = (rel.properties?.order as number) ?? Date.now();
-        structureTree.updateChildOrder(rel.fromId, rel.toId, order);
+        structureTree.updateChildOrder(
+          stripNodePrefix(rel.fromId),
+          stripNodePrefix(rel.toId),
+          order
+        );
       }
     });
 
@@ -198,8 +222,8 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // Hierarchy deletion - update ReactiveStructureTree
         if (structureTree) {
           structureTree.removeChild({
-            parentId: fromId,
-            childId: toId,
+            parentId: stripNodePrefix(fromId),
+            childId: stripNodePrefix(toId),
             order: 0 // Order doesn't matter for removal
           });
         }

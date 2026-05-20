@@ -227,6 +227,14 @@ message NodeEvent {
     NodeData created = 1;
     NodeData updated = 2;
     NodeDeleted deleted = 3;
+    // Relationship events (added so cross-window / cloud-sync hierarchy
+    // changes reach the frontend's structureTree — without these, a
+    // pulled child node arrives but never attaches to its parent's
+    // children list and the outliner can't render it. Mirrors the
+    // in-process DomainEventForwarder's `relationship:*` Tauri events.)
+    RelationshipPayload relationship_created = 4;
+    RelationshipPayload relationship_updated = 5;
+    RelationshipDeletedPayload relationship_deleted = 6;
   }
 }
 
@@ -237,6 +245,25 @@ message NodeDeleted {
   // node. Carries the same value as DomainEvent::NodeDeleted::node_type from
   // the core event channel.
   string node_type = 2;
+}
+
+// Mirrors nodespace_core::db::events::RelationshipEvent. `properties`
+// is JSON-encoded as a string (same shape as `NodeData.properties`)
+// so the proto stays stable across additions to the underlying
+// serde_json::Value payload.
+message RelationshipPayload {
+  string id = 1;
+  string from_id = 2;
+  string to_id = 3;
+  string relationship_type = 4;
+  string properties = 5; // JSON
+}
+
+message RelationshipDeletedPayload {
+  string id = 1;
+  string from_id = 2;
+  string to_id = 3;
+  string relationship_type = 4;
 }
 
 // ---------------------------------------------------------------------------

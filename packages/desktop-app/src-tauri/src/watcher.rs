@@ -197,5 +197,72 @@ fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
                 error!("Failed to emit node:deleted for {}: {e}", d.node_id);
             }
         }
+        // Relationship variants — added so cloud-sync / cross-window
+        // hierarchy changes reach the frontend's reactiveStructureTree
+        // (issue #1202). Payload shape mirrors the in-process
+        // DomainEventForwarder's `relationship:*` Tauri events so
+        // `tauri-sync-listener.ts` works unchanged. `properties`
+        // arrives JSON-encoded on the wire (proto schema is stable);
+        // re-parse it here before emitting so the frontend gets a
+        // real object (the `has_child` listener reads
+        // `properties.order`).
+        NodeEventKind::RelationshipCreated(r) => emit_relationship(app, "relationship:created", r),
+        NodeEventKind::RelationshipUpdated(r) => emit_relationship(app, "relationship:updated", r),
+        NodeEventKind::RelationshipDeleted(r) => {
+            let payload = RelationshipDeletedOut {
+                id: r.id.clone(),
+                from_id: r.from_id,
+                to_id: r.to_id,
+                relationship_type: r.relationship_type,
+            };
+            if let Err(e) = app.emit("relationship:deleted", &payload) {
+                error!("Failed to emit relationship:deleted for {}: {e}", r.id);
+            }
+        }
+    }
+}
+
+/// Frontend payload for `relationship:created` / `relationship:updated`.
+/// Must stay structurally identical to the in-process
+/// `DomainEventForwarder`'s emission of the core `RelationshipEvent`
+/// struct (camelCase via serde rename), so `tauri-sync-listener.ts`
+/// works unchanged across the two forwarding paths.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelationshipPayloadOut {
+    id: String,
+    from_id: String,
+    to_id: String,
+    relationship_type: String,
+    properties: serde_json::Value,
+}
+
+/// Frontend payload for `relationship:deleted` — mirrors the
+/// `DomainEventForwarder` shape (no `properties` field).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelationshipDeletedOut {
+    id: String,
+    from_id: String,
+    to_id: String,
+    relationship_type: String,
+}
+
+fn emit_relationship(
+    app: &AppHandle,
+    name: &str,
+    r: nodespace_proto::nodespace::RelationshipPayload,
+) {
+    let props = serde_json::from_str(&r.properties)
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+    let payload = RelationshipPayloadOut {
+        id: r.id.clone(),
+        from_id: r.from_id,
+        to_id: r.to_id,
+        relationship_type: r.relationship_type,
+        properties: props,
+    };
+    if let Err(e) = app.emit(name, &payload) {
+        error!("Failed to emit {name} for {}: {e}", r.id);
     }
 }
