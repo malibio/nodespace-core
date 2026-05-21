@@ -12,6 +12,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Pro-tier proto compilation (nodespace.pro.v1 — vendored from
+# nodespace-sync via scripts/refresh-pro-proto.sh).
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
 
 [[bin]]
 name = "nodespace-app"
@@ -33,6 +37,7 @@ uuid = { workspace = true }
 tauri-plugin-decorum = "1.1.1"
 nodespace-proto = { workspace = true }
 tonic = "0.12"
+prost = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 dirs = "5.0"

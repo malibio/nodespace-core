@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+// Pro-tier gRPC services exposed by `nodespaced-pro`. The community
+// `nodespaced` binary has no knowledge of this package — the Tauri
+// frontend discovers Pro by probing for one of these RPCs at startup
+// (absence => community tier).
+//
+// See nodespace-sync #40 and #41 for the design.
+
+package nodespace.pro.v1;
+
+// CloudSyncService — bridges the local SurrealDB to SurrealDB Cloud.
+//
+// Field shapes mirror the in-process orchestrator that lives in
+// `nodespace-sync::CloudSyncService`. The gRPC layer is a thin
+// adapter; conflict resolution, echo prevention, and stamping all
+// happen below this surface.
+service CloudSyncService {
+  // Begin an OAuth PKCE sign-in. The daemon hosts the localhost
+  // callback listener and opens the system browser. Auth state is
+  // observed via WatchSyncStatus.
+  rpc InitiateOAuth (InitiateOAuthRequest) returns (InitiateOAuthResponse);
+
+  // One-shot bulk-stamp migration of pre-existing local nodes into
+  // a Pro collection. Progress events stream until done or error.
+  rpc InitiateMigration (MigrationRequest) returns (stream MigrationProgressEvent);
+
+  // Long-lived subscription to sync orchestrator state. Replaces the
+  // in-process Tauri event bus from the archived scaffold.
+  rpc WatchSyncStatus (WatchSyncStatusRequest) returns (stream SyncStatusEvent);
+
+  // Force an immediate reconcile cycle (push pending + pull recent).
+  // No-op if the orchestrator is already in SYNCING.
+  rpc TriggerSync (TriggerSyncRequest) returns (TriggerSyncResponse);
+}
+
+// --- Messages -----------------------------------------------------
+
+message InitiateOAuthRequest {
+  // Worker base URL (e.g. "http://127.0.0.1:8787"). The daemon
+  // appends /authorize and /token.
+  string worker_url = 1;
+  // Hint passed to the worker login form so the user knows which
+  // account they're signing into (typically the local OS username).
+  string user_hint = 2;
+}
+
+message InitiateOAuthResponse {
+  // Opaque ID for correlating this auth attempt with WatchSyncStatus
+  // events if/when we surface per-attempt state.
+  string attempt_id = 1;
+}
+
+message MigrationRequest {
+  // Access-tag collection key to stamp every migrated node with.
+  string collection = 1;
+}
+
+message MigrationProgressEvent {
+  enum Phase {
+    PHASE_UNSPECIFIED = 0;
+    SCANNING          = 1;
+    STAMPING          = 2;
+    UPLOADING         = 3;
+    DONE              = 4;
+    ERROR             = 5;
+  }
+  Phase phase = 1;
+  int64 nodes_processed = 2;
+  int64 nodes_total = 3;
+  string detail = 4;
+}
+
+message WatchSyncStatusRequest {}
+
+message SyncStatusEvent {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    DISCONNECTED      = 1;
+    CONNECTING        = 2;
+    AUTHENTICATING    = 3;
+    AUTH_REQUIRED     = 4;
+    SYNCING           = 5;
+    CONNECTED         = 6;
+    ERROR             = 7;
+  }
+  State state = 1;
+  // Free-form context, e.g. error message or current LIVE SELECT cursor.
+  string detail = 2;
+}
+
+message TriggerSyncRequest {}
+message TriggerSyncResponse {}

@@ -24,6 +24,13 @@ struct GrpcClientInner {
     embeddings: EmbeddingsServiceClient<Channel>,
     agent_session: AgentSessionServiceClient<Channel>,
     local_agent: LocalAgentServiceClient<Channel>,
+    /// Underlying transport channel — held so Pro-tier services can
+    /// ride the same h2 connection via `GrpcClient::channel()`. One
+    /// channel, multiple service surfaces. Opening a parallel channel
+    /// caused "Service was not ready: transport error" during the
+    /// PoC when ProClient's separately-built channel got into a bad
+    /// state after the probe stream was dropped.
+    channel: Channel,
 }
 
 /// Managed Tauri state wrapping the gRPC clients connected to `nodespaced`.
@@ -55,7 +62,8 @@ impl GrpcClient {
             settings: SettingsServiceClient::new(channel.clone()),
             embeddings: EmbeddingsServiceClient::new(channel.clone()),
             agent_session: AgentSessionServiceClient::new(channel.clone()),
-            local_agent: LocalAgentServiceClient::new(channel),
+            local_agent: LocalAgentServiceClient::new(channel.clone()),
+            channel,
         };
 
         Ok(Self {
@@ -94,6 +102,13 @@ impl GrpcClient {
     /// Borrow a clone of the `LocalAgentServiceClient`.
     pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
         self.inner.read().await.local_agent.clone()
+    }
+
+    /// Clone of the underlying `tonic::transport::Channel`. Used by
+    /// `ProClient` so the Pro-tier service rides the same h2
+    /// connection (one channel, multiple service surfaces).
+    pub async fn channel(&self) -> Channel {
+        self.inner.read().await.channel.clone()
     }
 }
 

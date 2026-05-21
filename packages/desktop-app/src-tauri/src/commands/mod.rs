@@ -10,5 +10,6 @@ pub mod import;
 pub mod local_agent;
 pub mod nodes;
 pub mod onboarding;
+pub mod pro_sync;
 pub mod schemas;
 pub mod settings;
