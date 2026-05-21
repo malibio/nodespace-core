@@ -826,15 +826,6 @@ impl NodeService {
                 };
 
                 // Send to broadcast channel (ignore if no subscribers).
-                // Trace each emission so duplicate-CREATE investigations
-                // (see Pro sync demo: same node id arrived 3× at the push
-                // consumer) can grep the daemon log and tell whether the
-                // dup originates here or downstream of the receiver.
-                tracing::debug!(
-                    op = ?envelope.event,
-                    source = ?envelope.metadata.source_client_id,
-                    "broadcast emit"
-                );
                 let _ = tx.send(envelope);
             });
 
@@ -2460,12 +2451,15 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit event if relationship was deleted (existed)
+        // Emit event if relationship was deleted (existed). Normalize
+        // ids the same way `RelationshipEvent::new` does for the
+        // created/updated variants — see `db::events::node_thing` for
+        // the rationale (consumers parse on `:` and reject bare ids).
         if let Some(rel_id) = relationship_id {
             self.emit_event(DomainEvent::RelationshipDeleted {
                 id: rel_id,
-                from_id: mentioning_node_id.to_string(),
-                to_id: mentioned_node_id.to_string(),
+                from_id: crate::db::events::node_thing(mentioning_node_id),
+                to_id: crate::db::events::node_thing(mentioned_node_id),
                 relationship_type: "mentions".to_string(),
             });
         }
@@ -6083,12 +6077,14 @@ impl NodeService {
                 NodeServiceError::query_failed(format!("Failed to delete mention: {}", e))
             })?;
 
-        // Emit event if relationship was deleted (existed)
+        // Emit event if relationship was deleted (existed). Normalize
+        // ids — same rationale as the other `RelationshipDeleted`
+        // sites; see `db::events::node_thing`.
         if let Some(rel_id) = relationship_id {
             self.emit_event(DomainEvent::RelationshipDeleted {
                 id: rel_id,
-                from_id: source_id.to_string(),
-                to_id: target_id.to_string(),
+                from_id: crate::db::events::node_thing(source_id),
+                to_id: crate::db::events::node_thing(target_id),
                 relationship_type: "mentions".to_string(),
             });
         }
@@ -6614,12 +6610,14 @@ impl NodeService {
                 NodeServiceError::query_failed(format!("Failed to delete relationship: {}", e))
             })?;
 
-        // Emit RelationshipDeleted event
+        // Emit RelationshipDeleted event. Normalize ids — same
+        // rationale as the other `RelationshipDeleted` sites; see
+        // `db::events::node_thing`.
         if let Some(rel_id) = existing_ids.first() {
             self.emit_event(DomainEvent::RelationshipDeleted {
                 id: extract_record_id_string(rel_id),
-                from_id: source_id.to_string(),
-                to_id: target_id.to_string(),
+                from_id: crate::db::events::node_thing(source_id),
+                to_id: crate::db::events::node_thing(target_id),
                 relationship_type: relationship_name.to_string(),
             });
         }

@@ -61,15 +61,14 @@ pub struct RelationshipEvent {
 }
 
 impl RelationshipEvent {
-    /// Construct an event with `from_id` / `to_id` normalized to
-    /// `node:<id>` form. Callers in `NodeService` hold raw node ids
-    /// (e.g. `"2026-05-20"` for date pages, bare UUIDs for normal
-    /// nodes) and the contract for `RelationshipEvent` requires the
-    /// table-prefixed `<table>:<key>` form (see the serialization
-    /// contract test below). Downstream consumers parse on `:` and
-    /// reject bare ids — most notably the Pro sync push consumer's
-    /// `parse_node_thing`, which gets bare date-page ids today and
-    /// fails the cloud RELATE.
+    /// Construct an event with `from_id` / `to_id` normalized to the
+    /// full SurrealDB Thing form (`node:<key>`). Required by the
+    /// serialization-contract test below — every consumer that
+    /// parses these fields splits on `:` and rejects bare ids.
+    /// Callers in `NodeService` often hold bare ids (date-page
+    /// nodes use `"2026-05-20"`, regular nodes use bare UUIDs), so
+    /// this constructor is the single normalization point producers
+    /// should go through.
     pub fn new(
         id: String,
         from_id: &str,
@@ -89,7 +88,10 @@ impl RelationshipEvent {
 
 /// Normalize a node id to its full SurrealDB Thing form
 /// (`node:<key>`). Pass-through if the input already contains `:`.
-fn node_thing(id: &str) -> String {
+/// `pub(crate)` so the `RelationshipDeleted` inline-field variant
+/// can use the same normalization at its emit sites in
+/// `services::node_service` without duplicating the helper.
+pub(crate) fn node_thing(id: &str) -> String {
     if id.contains(':') {
         id.to_string()
     } else {
@@ -221,6 +223,38 @@ pub enum DomainEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Locks in the `node_thing` normalizer contract: bare ids (date
+    /// pages, raw UUIDs) get prefixed; anything already containing
+    /// `:` passes through unchanged. The producer-side
+    /// `RelationshipEvent::new` and the
+    /// `RelationshipDeleted`-emit-sites both rely on this shape.
+    #[test]
+    fn node_thing_normalizes_bare_ids_and_passes_through_prefixed() {
+        assert_eq!(node_thing("2026-05-20"), "node:2026-05-20");
+        assert_eq!(node_thing("some-uuid"), "node:some-uuid");
+        assert_eq!(node_thing("node:already-prefixed"), "node:already-prefixed");
+        // Edge case: any `:` makes it pass-through, even foreign
+        // tables. Producers are expected to pass ids in the
+        // `<table>:<key>` form when crossing table boundaries.
+        assert_eq!(node_thing("relationship:abc"), "relationship:abc");
+    }
+
+    /// `RelationshipEvent::new` normalizes both endpoint ids through
+    /// `node_thing`. Locks the contract so producers can pass bare
+    /// ids and rely on the constructor for the prefix.
+    #[test]
+    fn relationship_event_new_normalizes_both_endpoints() {
+        let rel = RelationshipEvent::new(
+            "relationship:abc:def".to_string(),
+            "abc",
+            "def",
+            "has_child",
+            serde_json::json!({"order": 1.0}),
+        );
+        assert_eq!(rel.from_id, "node:abc");
+        assert_eq!(rel.to_id, "node:def");
+    }
 
     /// Contract test: Documents and enforces the exact JSON format for RelationshipEvent (Issue #811)
     ///
