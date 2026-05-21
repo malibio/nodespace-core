@@ -6,6 +6,12 @@ fn main() {
     // source-of-truth.
     let protoc = protoc_bin_vendored::protoc_bin_path()
         .expect("protoc-bin-vendored is required for the Pro proto build");
+    // `set_var` is fine on edition 2021 — build scripts are
+    // single-threaded by Cargo's contract. Once the workspace bumps
+    // to edition 2024 (or tonic-build past 0.12 lands a
+    // `protoc_executable` builder), switch to the builder-method
+    // form to stay forward-compatible without the `unsafe` wrap
+    // edition 2024 will require for env mutation.
     std::env::set_var("PROTOC", &protoc);
     tonic_build::configure()
         .build_server(false) // Tauri client only; daemon defines the server.

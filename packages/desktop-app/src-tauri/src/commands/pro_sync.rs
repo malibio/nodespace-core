@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{InitiateOAuthRequest, WatchSyncStatusRequest};
 use crate::services::{ProClient, ProTier};
 
@@ -49,7 +50,11 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let pro: ProClient = (*pro).clone();
+    // `client` is moved into the spawned task by the closure; the
+    // ProClient it was cloned from is `Arc`-backed, so the clone
+    // implicit in `pro.client().await` keeps the underlying
+    // connection alive for the stream's lifetime — no explicit
+    // keep-alive binding is required.
     let mut client = pro.client().await;
     let app_handle = app.clone();
 
@@ -59,6 +64,7 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
             Err(e) => {
                 tracing::warn!(error = %e, "sync-status subscribe failed");
                 STREAM_SPAWNED.store(false, Ordering::SeqCst);
+                emit_disconnected(&app_handle, format!("sync-status subscribe failed: {e}"));
                 return;
             }
         };
@@ -85,12 +91,31 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
         }
         STREAM_SPAWNED.store(false, Ordering::SeqCst);
         tracing::info!("sync-status stream ended");
-        // Keep the ProClient alive for the task's lifetime — no
-        // explicit drop needed; the move semantics handle it.
-        let _ = pro;
+        // Tell the frontend the stream is gone so the pill goes grey
+        // instead of stuck on the last status the daemon emitted.
+        // Without this the Svelte side has no way to distinguish
+        // "still connected, just idle" from "stream dropped"; the
+        // pill would lie about state until the window is reloaded.
+        emit_disconnected(&app_handle, "sync-status stream ended".into());
     });
 
     Ok(())
+}
+
+/// Emit a synthetic `sync:status` event with `state =
+/// STATE_DISCONNECTED` so the frontend can return the pill to its
+/// grey "Sign in" baseline after the WatchSyncStatus stream ends
+/// (subscription failure, daemon stream-close, item error). Without
+/// this the UI keeps showing whatever state the daemon last emitted
+/// and there's no signal that the stream is gone.
+fn emit_disconnected(app: &AppHandle, reason: String) {
+    let payload = serde_json::json!({
+        "state": PbState::Disconnected as i32,
+        "detail": reason,
+    });
+    if let Err(e) = app.emit("sync:status", payload) {
+        tracing::warn!(error = %e, "failed to emit synthetic sync:status DISCONNECTED");
+    }
 }
 
 /// Kick off the daemon's OAuth PKCE flow. The daemon opens the

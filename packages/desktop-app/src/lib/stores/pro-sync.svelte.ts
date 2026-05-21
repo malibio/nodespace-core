@@ -3,13 +3,12 @@
  * the WatchSyncStatus stream from the Pro daemon (nodespaced-pro).
  *
  * Driven by two Tauri events:
- *   - `pro:tier-detected` fired once at startup with { tier, addr,
- *     initial_status }.
+ *   - `pro:tier-detected` fired once at startup with
+ *     `{ tier, initial_status }`.
  *   - `sync:status` fired repeatedly while subscribed to
- *     CloudSyncService.WatchSyncStatus, payload { state, detail }.
+ *     CloudSyncService.WatchSyncStatus, payload `{ state, detail }`.
  *
- * In community mode (or when NODESPACED_ADDR is unset and the embedded
- * daemon is in use), `tier` stays `'community'` and the UI surfaces
+ * In community mode, `tier` stays `'community'` and the UI surfaces
  * gated on `isPro` never render.
  */
 
@@ -23,7 +22,9 @@ export type ProTier = 'pro' | 'community' | 'unknown';
 
 /**
  * SyncStatusEvent.State proto enum mirrored as a TS type. Numbers
- * match nodespace.pro.v1.SyncStatusEvent.State.
+ * match `nodespace.pro.v1.SyncStatusEvent.State` defined in
+ * `nodespace-sync/nodespaced-pro/proto/nodespace_pro.proto`
+ * (vendored at `packages/desktop-app/src-tauri/proto/`).
  */
 export type SyncState =
   | 'unspecified'
@@ -35,6 +36,11 @@ export type SyncState =
   | 'connected'
   | 'error';
 
+/**
+ * Decode `nodespace.pro.v1.SyncStatusEvent.State` numeric enum to the
+ * TS string variant. Update both this switch and the proto file if a
+ * new state is added.
+ */
 function decodeState(n: number): SyncState {
   switch (n) {
     case 1:
@@ -61,7 +67,6 @@ class ProSyncStore {
   tier = $state<ProTier>('unknown');
   state = $state<SyncState>('unspecified');
   detail = $state<string>('');
-  addr = $state<string>('');
 
   isPro = $derived(this.tier === 'pro');
 
@@ -92,13 +97,11 @@ class ProSyncStore {
 
     this.unlistenTier = await listen<{
       tier: ProTier;
-      addr: string;
       initial_status: { state: number; detail: string } | null;
     }>('pro:tier-detected', async (event) => {
       const p = event.payload;
-      log.info('tier detected', { tier: p.tier, addr: p.addr });
+      log.info('tier detected', { tier: p.tier });
       this.tier = p.tier;
-      this.addr = p.addr;
       if (p.initial_status) {
         this.state = decodeState(p.initial_status.state);
         this.detail = p.initial_status.detail;

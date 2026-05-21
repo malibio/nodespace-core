@@ -25,7 +25,6 @@ pub mod pb {
 }
 
 use pb::cloud_sync_service_client::CloudSyncServiceClient;
-use pb::sync_status_event::State as PbState;
 use pb::{SyncStatusEvent, WatchSyncStatusRequest};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -134,14 +133,14 @@ async fn probe(client: &mut CloudSyncServiceClient<Channel>) -> (ProTier, Option
         }
         Ok(None) | Err(_) => {
             // The daemon implements the service but didn't push an
-            // event in time. Still Pro — just no current snapshot.
-            (
-                ProTier::Pro,
-                Some(SyncStatusEvent {
-                    state: PbState::Unspecified as i32,
-                    detail: "probe completed without initial event".into(),
-                }),
-            )
+            // event before the probe timeout. Still Pro — just no
+            // current snapshot. Return `None` rather than a synthetic
+            // `STATE_UNSPECIFIED` event: that synthetic would
+            // decode to "Sign in" on the frontend and could prompt
+            // a PKCE flow the user doesn't need. The real state
+            // arrives via the subsequent `WatchSyncStatus`
+            // subscription.
+            (ProTier::Pro, None)
         }
     }
 }
