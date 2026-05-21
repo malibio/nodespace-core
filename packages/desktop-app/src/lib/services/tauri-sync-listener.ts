@@ -180,14 +180,23 @@ export async function initializeTauriSyncListeners(): Promise<void> {
           });
         }
       } else if (rel.relationshipType === 'member_of') {
-        // Collection membership changed - refresh collections sidebar
-        log.debug(`Member added: ${rel.fromId} to collection ${rel.toId}`);
-        scheduleCollectionRefresh(rel.toId);
+        // Collection membership changed - refresh collections sidebar.
+        // `scheduleCollectionRefresh` compares the passed id against
+        // `state.selectedCollectionId`, which is keyed by bare ids
+        // elsewhere in the app — strip the `node:` prefix the
+        // serialization contract requires.
+        const toId = stripNodePrefix(rel.toId);
+        log.debug(`Member added: ${rel.fromId} to collection ${toId}`);
+        scheduleCollectionRefresh(toId);
       } else if (rel.relationshipType === 'mentions') {
         // Mention relationship created - target node's mentionedIn needs refresh
         // mentionedIn is populated by get_children_tree, so we need to refetch the tree
-        // for the target node to get updated backlinks
-        log.debug(`Mention created: ${rel.fromId} mentions ${rel.toId}`);
+        // for the target node to get updated backlinks. Strip prefix for log clarity;
+        // when this branch grows to call `loadChildrenTree`, normalization will be
+        // necessary for the lookup to hit the bare-id keyspace.
+        log.debug(
+          `Mention created: ${stripNodePrefix(rel.fromId)} mentions ${stripNodePrefix(rel.toId)}`
+        );
 
         // If the target node is currently displayed, its mentionedIn will update
         // on next tree load. For immediate reactivity, the user can refresh the view.
@@ -228,12 +237,17 @@ export async function initializeTauriSyncListeners(): Promise<void> {
           });
         }
       } else if (relationshipType === 'member_of') {
-        // Collection membership removed - refresh collections sidebar
+        // Collection membership removed - refresh collections sidebar.
+        // Bare-id keyspace, same rationale as `relationship:created`
+        // above.
+        const bareToId = stripNodePrefix(toId);
         log.debug(`Member removed from collection: ${id}`);
-        scheduleCollectionRefresh(toId);
+        scheduleCollectionRefresh(bareToId);
       } else if (relationshipType === 'mentions') {
-        // Mention relationship deleted - target node's mentionedIn needs refresh
-        log.debug(`Mention deleted: ${id} (${fromId} -> ${toId})`);
+        // Mention relationship deleted - target node's mentionedIn needs refresh.
+        log.debug(
+          `Mention deleted: ${id} (${stripNodePrefix(fromId)} -> ${stripNodePrefix(toId)})`
+        );
 
         // Same as creation: mentionedIn updates on next tree load for toId.
         // Future enhancement: call loadChildrenTree for toId if it's the current view.

@@ -253,8 +253,26 @@ fn emit_relationship(
     name: &str,
     r: nodespace_proto::nodespace::RelationshipPayload,
 ) {
-    let props = serde_json::from_str(&r.properties)
-        .unwrap_or(serde_json::Value::Object(Default::default()));
+    // `r.properties` arrives JSON-encoded as a string on the wire so
+    // the proto schema stays stable across additions to the
+    // underlying `serde_json::Value`. If parsing fails, we still
+    // emit the event with an empty `{}` so the frontend's
+    // `has_child` listener can fall back via `Date.now()` — but
+    // surface the parse failure as a warning so the silent
+    // ordering-corruption case is visible in logs instead of just
+    // showing up as nodes sorted to the tail of their parent.
+    let props = match serde_json::from_str(&r.properties) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                rel_id = %r.id,
+                rel_type = %r.relationship_type,
+                error = %e,
+                "Failed to parse relationship properties JSON; emitting empty object"
+            );
+            serde_json::Value::Object(Default::default())
+        }
+    };
     let payload = RelationshipPayloadOut {
         id: r.id.clone(),
         from_id: r.from_id,
