@@ -825,7 +825,7 @@ impl NodeService {
                     },
                 };
 
-                // Send to broadcast channel (ignore if no subscribers)
+                // Send to broadcast channel (ignore if no subscribers).
                 let _ = tx.send(envelope);
             });
 
@@ -2398,13 +2398,13 @@ impl NodeService {
         // Emit event if relationship was created (not already existing)
         if let Some(rel_id) = relationship_id {
             self.emit_event(DomainEvent::RelationshipCreated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: rel_id,
-                    from_id: mentioning_node_id.to_string(),
-                    to_id: mentioned_node_id.to_string(),
-                    relationship_type: "mentions".to_string(),
-                    properties: serde_json::json!({}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id,
+                    mentioning_node_id,
+                    mentioned_node_id,
+                    "mentions",
+                    serde_json::json!({}),
+                ),
             });
         }
 
@@ -2451,12 +2451,15 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit event if relationship was deleted (existed)
+        // Emit event if relationship was deleted (existed). Normalize
+        // ids the same way `RelationshipEvent::new` does for the
+        // created/updated variants — see `db::events::node_thing` for
+        // the rationale (consumers parse on `:` and reject bare ids).
         if let Some(rel_id) = relationship_id {
             self.emit_event(DomainEvent::RelationshipDeleted {
                 id: rel_id,
-                from_id: mentioning_node_id.to_string(),
-                to_id: mentioned_node_id.to_string(),
+                from_id: crate::db::events::node_thing(mentioning_node_id),
+                to_id: crate::db::events::node_thing(mentioned_node_id),
                 relationship_type: "mentions".to_string(),
             });
         }
@@ -4313,13 +4316,13 @@ impl NodeService {
         // Emit RelationshipUpdated event (Issue #811: unified relationship events)
         if let Some(parent_id) = new_parent {
             self.emit_event(DomainEvent::RelationshipUpdated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: format!("relationship:{}:{}", parent_id, node_id),
-                    from_id: parent_id.to_string(),
-                    to_id: node_id.to_string(),
-                    relationship_type: "has_child".to_string(),
-                    properties: serde_json::json!({"order": actual_order}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", parent_id, node_id),
+                    parent_id,
+                    node_id,
+                    "has_child",
+                    serde_json::json!({"order": actual_order}),
+                ),
             });
         }
 
@@ -4420,13 +4423,13 @@ impl NodeService {
         // Emit RelationshipUpdated event (Issue #811: unified relationship events)
         if let Some(parent_id) = new_parent {
             self.emit_event(DomainEvent::RelationshipUpdated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: format!("relationship:{}:{}", parent_id, node_id),
-                    from_id: parent_id.to_string(),
-                    to_id: node_id.to_string(),
-                    relationship_type: "has_child".to_string(),
-                    properties: serde_json::json!({"order": actual_order}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", parent_id, node_id),
+                    parent_id,
+                    node_id,
+                    "has_child",
+                    serde_json::json!({"order": actual_order}),
+                ),
             });
         }
 
@@ -4690,13 +4693,13 @@ impl NodeService {
             start.elapsed().as_millis()
         );
         self.emit_event(DomainEvent::RelationshipCreated {
-            relationship: crate::db::events::RelationshipEvent {
-                id: format!("relationship:{}:{}", parent_id, child_id),
-                from_id: parent_id.to_string(),
-                to_id: child_id.to_string(),
-                relationship_type: "has_child".to_string(),
-                properties: serde_json::json!({"order": actual_order}),
-            },
+            relationship: crate::db::events::RelationshipEvent::new(
+                format!("relationship:{}:{}", parent_id, child_id),
+                parent_id,
+                child_id,
+                "has_child",
+                serde_json::json!({"order": actual_order}),
+            ),
         });
 
         tracing::debug!(
@@ -4772,13 +4775,13 @@ impl NodeService {
         // Reordering updates the hierarchy edge's order field
         if let Some(ref parent_id) = parent_id {
             self.emit_event(DomainEvent::RelationshipUpdated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: format!("relationship:{}:{}", parent_id, node_id),
-                    from_id: parent_id.clone(),
-                    to_id: node_id.to_string(),
-                    relationship_type: "has_child".to_string(),
-                    properties: serde_json::json!({"order": actual_order}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", parent_id, node_id),
+                    parent_id,
+                    node_id,
+                    "has_child",
+                    serde_json::json!({"order": actual_order}),
+                ),
             });
         }
 
@@ -5869,13 +5872,13 @@ impl NodeService {
 
             // Emit RelationshipUpdated event (Issue #811: unified relationship events)
             self.emit_event(DomainEvent::RelationshipUpdated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: format!("relationship:{}:{}", parent_id, node_id),
-                    from_id: parent_id.to_string(),
-                    to_id: node_id.to_string(),
-                    relationship_type: "has_child".to_string(),
-                    properties: serde_json::json!({"order": actual_order}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", parent_id, node_id),
+                    parent_id,
+                    node_id,
+                    "has_child",
+                    serde_json::json!({"order": actual_order}),
+                ),
             });
         } else {
             // Create new node
@@ -5912,13 +5915,13 @@ impl NodeService {
 
             // Emit RelationshipCreated event (Issue #811: unified relationship events)
             self.emit_event(DomainEvent::RelationshipCreated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: format!("relationship:{}:{}", parent_id, node_id),
-                    from_id: parent_id.to_string(),
-                    to_id: node_id.to_string(),
-                    relationship_type: "has_child".to_string(),
-                    properties: serde_json::json!({"order": actual_order}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", parent_id, node_id),
+                    parent_id,
+                    node_id,
+                    "has_child",
+                    serde_json::json!({"order": actual_order}),
+                ),
             });
         }
 
@@ -6023,13 +6026,13 @@ impl NodeService {
         // Emit event if relationship was created (not already existing)
         if let Some(rel_id) = relationship_id {
             self.emit_event(DomainEvent::RelationshipCreated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: rel_id,
-                    from_id: source_id.to_string(),
-                    to_id: target_id.to_string(),
-                    relationship_type: "mentions".to_string(),
-                    properties: serde_json::json!({}),
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id,
+                    source_id,
+                    target_id,
+                    "mentions",
+                    serde_json::json!({}),
+                ),
             });
         }
 
@@ -6074,12 +6077,14 @@ impl NodeService {
                 NodeServiceError::query_failed(format!("Failed to delete mention: {}", e))
             })?;
 
-        // Emit event if relationship was deleted (existed)
+        // Emit event if relationship was deleted (existed). Normalize
+        // ids — same rationale as the other `RelationshipDeleted`
+        // sites; see `db::events::node_thing`.
         if let Some(rel_id) = relationship_id {
             self.emit_event(DomainEvent::RelationshipDeleted {
                 id: rel_id,
-                from_id: source_id.to_string(),
-                to_id: target_id.to_string(),
+                from_id: crate::db::events::node_thing(source_id),
+                to_id: crate::db::events::node_thing(target_id),
                 relationship_type: "mentions".to_string(),
             });
         }
@@ -6403,13 +6408,13 @@ impl NodeService {
                     let order = order_result.first().and_then(|r| r.order).unwrap_or(1.0);
 
                     self.emit_event(DomainEvent::RelationshipCreated {
-                        relationship: crate::db::events::RelationshipEvent {
+                        relationship: crate::db::events::RelationshipEvent::new(
                             id,
-                            from_id: source_id.to_string(),
-                            to_id: target_id.to_string(),
-                            relationship_type: "member_of".to_string(),
-                            properties: json!({"order": order}),
-                        },
+                            source_id,
+                            target_id,
+                            "member_of",
+                            json!({"order": order}),
+                        ),
                     });
                 }
                 return Ok(());
@@ -6508,13 +6513,13 @@ impl NodeService {
 
         if let Some(rel_result) = results.first() {
             self.emit_event(DomainEvent::RelationshipCreated {
-                relationship: crate::db::events::RelationshipEvent {
-                    id: extract_record_id_string(&rel_result.id),
-                    from_id: source_id.to_string(),
-                    to_id: target_id.to_string(),
-                    relationship_type: relationship_name.to_string(),
-                    properties: final_edge_data,
-                },
+                relationship: crate::db::events::RelationshipEvent::new(
+                    extract_record_id_string(&rel_result.id),
+                    source_id,
+                    target_id,
+                    relationship_name,
+                    final_edge_data,
+                ),
             });
         }
 
@@ -6605,12 +6610,14 @@ impl NodeService {
                 NodeServiceError::query_failed(format!("Failed to delete relationship: {}", e))
             })?;
 
-        // Emit RelationshipDeleted event
+        // Emit RelationshipDeleted event. Normalize ids — same
+        // rationale as the other `RelationshipDeleted` sites; see
+        // `db::events::node_thing`.
         if let Some(rel_id) = existing_ids.first() {
             self.emit_event(DomainEvent::RelationshipDeleted {
                 id: extract_record_id_string(rel_id),
-                from_id: source_id.to_string(),
-                to_id: target_id.to_string(),
+                from_id: crate::db::events::node_thing(source_id),
+                to_id: crate::db::events::node_thing(target_id),
                 relationship_type: relationship_name.to_string(),
             });
         }
