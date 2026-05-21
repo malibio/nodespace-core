@@ -35,6 +35,19 @@ import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schem
 const log = createLogger('TauriSync');
 
 /**
+ * Strip the `node:` table prefix from a SurrealDB Thing id so it
+ * matches the bare-id key shape `reactiveStructureTree` uses
+ * elsewhere in the app (the date-page route, the outliner's
+ * local-action `addChild` path, and `sharedNodeStore` all key by
+ * bare ids). Backend `RelationshipEvent` payloads carry the
+ * prefixed form per the serialization contract; the frontend's
+ * tree-keyspace is historically bare, so normalize at the boundary.
+ */
+function stripNodePrefix(id: string): string {
+  return id.startsWith('node:') ? id.slice('node:'.length) : id;
+}
+
+/**
  * Normalize node data from domain events to type-specific format
  *
  * Domain events send generic Node objects where type-specific fields (like task status)
@@ -153,21 +166,37 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // updates the order and re-sorts rather than inserting a duplicate.
         if (structureTree) {
           const order = (rel.properties?.order as number) ?? Date.now();
+          // structureTree is keyed by bare node ids (e.g. the date-
+          // page route uses `2026-05-20`, not `node:2026-05-20`).
+          // Backend events carry the table-prefixed form per the
+          // RelationshipEvent serialization contract — strip the
+          // `node:` prefix here so the local-action path (which
+          // writes bare ids via the outliner) and the sync-event
+          // path agree on the key shape.
           structureTree.addChild({
-            parentId: rel.fromId,
-            childId: rel.toId,
+            parentId: stripNodePrefix(rel.fromId),
+            childId: stripNodePrefix(rel.toId),
             order
           });
         }
       } else if (rel.relationshipType === 'member_of') {
-        // Collection membership changed - refresh collections sidebar
-        log.debug(`Member added: ${rel.fromId} to collection ${rel.toId}`);
-        scheduleCollectionRefresh(rel.toId);
+        // Collection membership changed - refresh collections sidebar.
+        // `scheduleCollectionRefresh` compares the passed id against
+        // `state.selectedCollectionId`, which is keyed by bare ids
+        // elsewhere in the app — strip the `node:` prefix the
+        // serialization contract requires.
+        const toId = stripNodePrefix(rel.toId);
+        log.debug(`Member added: ${rel.fromId} to collection ${toId}`);
+        scheduleCollectionRefresh(toId);
       } else if (rel.relationshipType === 'mentions') {
         // Mention relationship created - target node's mentionedIn needs refresh
         // mentionedIn is populated by get_children_tree, so we need to refetch the tree
-        // for the target node to get updated backlinks
-        log.debug(`Mention created: ${rel.fromId} mentions ${rel.toId}`);
+        // for the target node to get updated backlinks. Strip prefix for log clarity;
+        // when this branch grows to call `loadChildrenTree`, normalization will be
+        // necessary for the lookup to hit the bare-id keyspace.
+        log.debug(
+          `Mention created: ${stripNodePrefix(rel.fromId)} mentions ${stripNodePrefix(rel.toId)}`
+        );
 
         // If the target node is currently displayed, its mentionedIn will update
         // on next tree load. For immediate reactivity, the user can refresh the view.
@@ -186,7 +215,11 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // far outside the normal fractional order range and will sort the node to the end.
         // In practice, relationship:updated events from the backend always include order.
         const order = (rel.properties?.order as number) ?? Date.now();
-        structureTree.updateChildOrder(rel.fromId, rel.toId, order);
+        structureTree.updateChildOrder(
+          stripNodePrefix(rel.fromId),
+          stripNodePrefix(rel.toId),
+          order
+        );
       }
     });
 
@@ -198,18 +231,23 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // Hierarchy deletion - update ReactiveStructureTree
         if (structureTree) {
           structureTree.removeChild({
-            parentId: fromId,
-            childId: toId,
+            parentId: stripNodePrefix(fromId),
+            childId: stripNodePrefix(toId),
             order: 0 // Order doesn't matter for removal
           });
         }
       } else if (relationshipType === 'member_of') {
-        // Collection membership removed - refresh collections sidebar
+        // Collection membership removed - refresh collections sidebar.
+        // Bare-id keyspace, same rationale as `relationship:created`
+        // above.
+        const bareToId = stripNodePrefix(toId);
         log.debug(`Member removed from collection: ${id}`);
-        scheduleCollectionRefresh(toId);
+        scheduleCollectionRefresh(bareToId);
       } else if (relationshipType === 'mentions') {
-        // Mention relationship deleted - target node's mentionedIn needs refresh
-        log.debug(`Mention deleted: ${id} (${fromId} -> ${toId})`);
+        // Mention relationship deleted - target node's mentionedIn needs refresh.
+        log.debug(
+          `Mention deleted: ${id} (${stripNodePrefix(fromId)} -> ${stripNodePrefix(toId)})`
+        );
 
         // Same as creation: mentionedIn updates on next tree load for toId.
         // Future enhancement: call loadChildrenTree for toId if it's the current view.
