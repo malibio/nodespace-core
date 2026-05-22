@@ -12,7 +12,7 @@
     "dev:browser": "bun run dev:check && bunx concurrently --success first --names 'Proxy,UI' --prefix-colors 'yellow,green' 'bun run dev:browser:proxy' 'sleep 2 && bun run dev:browser:frontend'",
     "dev:browser:prod": "bun run dev:check && bunx concurrently --success first --names 'Proxy,UI' --prefix-colors 'yellow,green' 'bun run dev:browser:proxy' 'sleep 2 && bun run dev:browser:frontend'",
     "demo:browser": "bun run dev:check && bunx concurrently --success first --names 'Proxy,UI' --prefix-colors 'yellow,green' 'bun run dev:browser:proxy' 'sleep 2 && bun run dev:browser:frontend'",
-    "dev:tauri:frontend": "bunx vite dev --port 1420",
+    "dev:tauri:frontend": "bunx vite dev --port 1422",
     "dev:tauri": "bunx tauri dev -- --bin nodespace-app",
     "demo:tauri": "NODESPACE_DB_PATH=~/.nodespace/database/demo-db bunx tauri dev -- --bin nodespace-app",
     "dev": "bun run dev:browser",
