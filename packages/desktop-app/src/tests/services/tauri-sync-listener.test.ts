@@ -347,6 +347,98 @@ describe('TauriSyncListener', () => {
 		});
 	});
 
+	describe('Relationship Events — node: prefix normalization (Issue #1209)', () => {
+		// Backend's `RelationshipEvent` serialization contract emits
+		// `from_id` / `to_id` already prefixed with `node:` (see
+		// nodespace-core#1206 + #1208). The listener's `stripNodePrefix`
+		// helper normalizes at the boundary so the structureTree's
+		// bare-id keyspace stays consistent with the local-action path.
+		// Without these tests, deleting `stripNodePrefix` from any of
+		// the call sites would silently regress (existing tests pass
+		// bare ids only).
+		beforeEach(async () => {
+			await initializeTauriSyncListeners();
+		});
+
+		it('strips node: prefix on relationship:created → addChild', async () => {
+			emitTauriEvent('relationship:created', {
+				id: 'relationship:parent1:child1',
+				fromId: 'node:parent1',
+				toId: 'node:child1',
+				relationshipType: 'has_child',
+				properties: { order: 150 }
+			});
+
+			// structureTree must see bare ids. If stripNodePrefix were
+			// removed, the key would be "node:parent1" and this lookup
+			// against the bare-id key "parent1" would return empty.
+			const children = structureTree.getChildrenWithOrder('parent1');
+			expect(children).toHaveLength(1);
+			expect(children[0].nodeId).toBe('child1');
+			expect(children[0].order).toBe(150);
+
+			// And the prefixed key must NOT have been used.
+			expect(structureTree.getChildrenWithOrder('node:parent1')).toHaveLength(0);
+		});
+
+		it('strips node: prefix on relationship:updated → updateChildOrder', async () => {
+			// Seed with bare ids (matches what the local-action path does).
+			structureTree.addChild({
+				parentId: 'parent1',
+				childId: 'child1',
+				order: 100
+			});
+
+			emitTauriEvent('relationship:updated', {
+				id: 'relationship:parent1:child1',
+				fromId: 'node:parent1',
+				toId: 'node:child1',
+				relationshipType: 'has_child',
+				properties: { order: 250 }
+			});
+
+			const children = structureTree.getChildrenWithOrder('parent1');
+			expect(children).toHaveLength(1);
+			expect(children[0].order).toBe(250);
+		});
+
+		it('strips node: prefix on relationship:deleted → removeChild', async () => {
+			structureTree.addChild({
+				parentId: 'parent1',
+				childId: 'child1',
+				order: 100
+			});
+			expect(structureTree.getChildrenWithOrder('parent1')).toHaveLength(1);
+
+			emitTauriEvent('relationship:deleted', {
+				id: 'relationship:parent1:child1',
+				fromId: 'node:parent1',
+				toId: 'node:child1',
+				relationshipType: 'has_child'
+			});
+
+			expect(structureTree.getChildrenWithOrder('parent1')).toHaveLength(0);
+		});
+
+		it('handles a mix of prefixed-and-bare ids identically (defensive)', async () => {
+			// In practice the contract is "always prefixed" — but the
+			// helper is a pass-through for already-bare ids, and the
+			// listener shouldn't behave differently if a future
+			// backend (or replay tool) emits the bare form.
+			emitTauriEvent('relationship:created', {
+				id: 'relationship:parent2:child2',
+				fromId: 'parent2', // bare
+				toId: 'node:child2', // prefixed
+				relationshipType: 'has_child',
+				properties: { order: 100 }
+			});
+
+			const children = structureTree.getChildrenWithOrder('parent2');
+			expect(children).toHaveLength(1);
+			expect(children[0].nodeId).toBe('child2');
+		});
+	});
+
 	describe('Unified Relationship Events - Mentions (Issue #811)', () => {
 		beforeEach(async () => {
 			await initializeTauriSyncListeners();
