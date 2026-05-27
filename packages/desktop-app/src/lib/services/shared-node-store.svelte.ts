@@ -529,6 +529,27 @@ export class SharedNodeStore {
   // next OCC carries the freshest version.
   private serverConfirmedVersions = new Map<string, number>();
 
+  // The content this client most-recently sent to the backend per node.
+  // Set by the UpdateNode/CreateNode persistence paths right before the RPC
+  // fires. Used by `isPlausibleOwnEcho` to recognise true own-write echoes
+  // (broadcast.content matches what WE just sent) rather than guessing
+  // from prefix relationships — the previous `local.startsWith(incoming)`
+  // heuristic mis-classified bob's `"hello"` write as alice's echo when
+  // alice's optimistic state was `"hello world"`.
+  private lastPersistedContent = new Map<string, string>();
+
+  /**
+   * Test-only helper to seed the "content this client last sent" cache
+   * without running the persistence path. Production code populates this
+   * cache from the UpdateNode/CreateNode RPC sites; tests don't have a
+   * tauriCommands mock running and need a way to assert the
+   * `isPlausibleOwnEcho` heuristic's gate on real own-write history.
+   * Marked `__test_` to keep it out of the production call surface.
+   */
+  __test_setLastPersistedContent(nodeId: string, content: string): void {
+    this.lastPersistedContent.set(nodeId, content);
+  }
+
   /**
    * Test-only accessor for the non-reactive server-confirmed-version cache.
    * Production code consumes this cache via the persistence path
@@ -559,33 +580,40 @@ export class SharedNodeStore {
   }
 
   /**
-   * Heuristic for "is this database broadcast plausibly an echo of *this
-   * client's own* write?" Used by the skip-while-editing guard to decide
-   * whether to stash the broadcast's `node.version` for the next OCC.
+   * Decide whether an incoming database broadcast is plausibly an echo of
+   * *this client's own* most-recent write. Used by the skip-while-editing
+   * guard to decide whether to stash the broadcast's `node.version` for
+   * the next OCC.
    *
-   * Returns `true` when the local optimistic content equals or extends the
-   * incoming content — i.e., the incoming is an older snapshot of what we
-   * already have. That covers both shapes the daemon's own confirmation
-   * loops back through:
+   * Returns `true` only when `incoming.content` matches the content this
+   * client last sent to the backend for this node (tracked in
+   * `lastPersistedContent`, populated by the persistence path right
+   * before the RPC fires). That covers the canonical case the guard
+   * exists for: our own write looping back through the daemon broadcast.
    *
-   *   - exact match: the broadcast is the just-confirmed write, no further
-   *     keystrokes since;
-   *   - local extension: the user typed more characters in the optimistic
-   *     state while the daemon was confirming the previous version.
+   * Returns `false` for everything else, including any incoming content
+   * we have no last-sent record for. This is deliberately conservative
+   * — false negatives just defer to OCC (the next UpdateNode RPC carries
+   * the local `node.version` and the backend's OCC surfaces any
+   * conflict), while false positives would silently overwrite a foreign
+   * writer's change. The earlier `local.startsWith(incoming)` heuristic
+   * had exactly that false-positive shape: alice with optimistic
+   * `"hello world"` + bob writes `"hello"` → bob's broadcast falsely
+   * classified as own-echo → bob's version stashed → alice's next RPC
+   * overwrites bob.
    *
-   * Returns `false` when the local content diverges from the incoming —
-   * which signals a *foreign* write (e.g., another client editing the
-   * same node concurrently). In that case the cache is intentionally left
-   * untouched so the next UpdateNode RPC uses the local `node.version`,
-   * conflicts with the server's newer version, and surfaces the
-   * divergence via the normal OCC path.
+   * Trade-off: a client that has never persisted this node before
+   * (initial-load path, no edits) reports false for all broadcasts —
+   * including legitimate own-echoes from the daemon's first confirmation
+   * after load. That's fine: with no last-sent record, the local
+   * `node.version` is the load-time version, OCC won't conflict against
+   * the daemon's confirm-of-the-same-state, and the next genuine edit
+   * populates the cache for subsequent echoes.
    */
-  private isPlausibleOwnEcho(local: Node, incoming: Node): boolean {
-    const localContent = local.content ?? '';
-    const incomingContent = incoming.content ?? '';
-    if (localContent === incomingContent) return true;
-    // Local is an extension of incoming → user kept typing past the confirm.
-    return localContent.startsWith(incomingContent);
+  private isPlausibleOwnEcho(_local: Node, incoming: Node): boolean {
+    const lastSent = this.lastPersistedContent.get(incoming.id);
+    if (lastSent === undefined) return false;
+    return lastSent === (incoming.content ?? '');
   }
 
   // Test error tracking (populated only in NODE_ENV='test', cleared between tests)
@@ -1392,6 +1420,10 @@ export class SharedNodeStore {
                   // state. Test coverage:
                   // `shared-node-store-skip-while-editing.test.ts`.
                   const currentVersion = this.computeOccVersionForUpdate(nodeId);
+                  // Record the content we are about to send so the next
+                  // database broadcast for this node can be classified as
+                  // an own-echo (see `isPlausibleOwnEcho`).
+                  this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                   await tauriCommands.updateNode(nodeId, currentVersion, currentNode);
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
@@ -1408,6 +1440,7 @@ export class SharedNodeStore {
                     log.warn(
                       `Node ${nodeId} not found in database, creating instead of updating (error: ${errorMessage})`
                     );
+                    this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                     await tauriCommands.createNode(currentNode);
                     this.persistedNodeIds.add(nodeId);
                   } else {
@@ -1435,6 +1468,7 @@ export class SharedNodeStore {
                   }
                 }
 
+                this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                 await tauriCommands.createNode(currentNode);
                 this.persistedNodeIds.add(nodeId); // Track as persisted
 

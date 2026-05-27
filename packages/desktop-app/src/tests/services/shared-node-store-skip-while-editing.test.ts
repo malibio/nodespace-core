@@ -156,14 +156,16 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // carry bob's version against alice's content and the backend would
     // silently overwrite bob's change.
     //
-    // The "is plausibly an own echo" heuristic resolves this: if our
-    // optimistic content equals or extends the incoming content, treat
-    // it as an own echo (own write looping back, possibly with newer
-    // local chars on top) and stash. Otherwise treat it as foreign and
-    // leave the cache empty so the next OCC conflict-detects.
+    // The "is plausibly an own echo" heuristic resolves this: stash only
+    // when `incoming.content` matches this client's recorded last-sent
+    // content for the node. For any other broadcast (including the
+    // alice="hello world" + bob="hello" prefix-compatible race the
+    // earlier startsWith heuristic mis-classified), treat as foreign.
     const optimistic = makeNode('foreign', 'alice typed this', 3);
     store.setNode(optimistic, viewerSource);
     focusManager.setEditingNode('foreign', 'default');
+    // Alice last persisted "alice typed this" to backend.
+    store.__test_setLastPersistedContent('foreign', 'alice typed this');
 
     // Foreign-looking broadcast (different writer altered the node).
     const foreignBroadcast = makeNode('foreign', 'bob wrote something else', 9);
@@ -171,12 +173,45 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
 
     // Local content is preserved (guard still fired — we keep optimistic).
     expect(store.getNode('foreign')?.content).toBe('alice typed this');
-    // Local version is preserved.
     expect(store.getNode('foreign')?.version).toBe(3);
-    // And crucially: the foreign version was NOT stashed, so the next
-    // UpdateNode RPC will use the local v3, the backend will see its
-    // current v9, and the OCC conflict surfaces.
+    // Foreign version was NOT stashed: next UpdateNode uses local v3,
+    // backend has v9, OCC conflict surfaces.
     expect(store.peekServerConfirmedVersion('foreign')).toBeUndefined();
+  });
+
+  it('does NOT mis-classify a prefix-compatible foreign write as an own-echo (regression for the startsWith hole)', () => {
+    // Previously the heuristic was `localContent.startsWith(incomingContent)`.
+    // That would mis-classify the following case as own-echo and stash
+    // bob's version, defeating OCC for bob's change:
+    //
+    //   alice's optimistic state: "hello world"
+    //   bob writes (in a parallel window): "hello"
+    //   bob's broadcast hits alice with content="hello", version=v_bob
+    //
+    // `"hello world".startsWith("hello")` is true, so the old code
+    // stashed v_bob. Next UpdateNode from alice would have carried
+    // v_bob against "hello world" and silently overwritten bob.
+    //
+    // The current heuristic compares against this client's recorded
+    // last-sent content. Alice never sent "hello" — her last persisted
+    // value (if any) is whatever she actually persisted. So bob's
+    // broadcast is correctly classified as foreign.
+    const aliceOptimistic = makeNode('shared', 'hello world', 5);
+    store.setNode(aliceOptimistic, viewerSource);
+    focusManager.setEditingNode('shared', 'default');
+    // Alice has never persisted "hello" — only "hello world" via her
+    // own typing. (For the regression check the exact prior value
+    // doesn't matter — what matters is that it ISN'T "hello".)
+    store.__test_setLastPersistedContent('shared', 'hello world');
+
+    const bobsBroadcast = makeNode('shared', 'hello', 7);
+    store.setNode(bobsBroadcast, databaseSource);
+
+    // Bob's version must NOT be stashed.
+    expect(store.peekServerConfirmedVersion('shared')).toBeUndefined();
+    // Alice's content and version are preserved (no clobber).
+    expect(store.getNode('shared')?.content).toBe('hello world');
+    expect(store.getNode('shared')?.version).toBe(5);
   });
 
   it('persistence path uses the stashed server-confirmed version for OCC (not the stale local node.version)', () => {
@@ -188,11 +223,15 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // OCC-defeat from nodespace-sync#76 — the unit tests above only
     // assert cache *population*, not *consumption*.
     store.setNode(makeNode('persist', 'abc', 1), databaseSource);
+    // Simulate that the local client just persisted 'abc' (own echo
+    // gate). Without this, the guard correctly treats the next
+    // broadcast as foreign and does NOT stash the version.
+    store.__test_setLastPersistedContent('persist', 'abc');
 
     // Before the guard fires, the OCC version is the local one.
     expect(store.computeOccVersionForUpdate('persist')).toBe(1);
 
-    // Guard fires for a plausible-own-echo broadcast (content matches).
+    // Guard fires for an own-echo broadcast (content matches what we sent).
     focusManager.setEditingNode('persist', 'default');
     store.setNode(makeNode('persist', 'abc', 5), databaseSource);
 
