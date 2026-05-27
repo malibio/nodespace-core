@@ -146,6 +146,61 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // and consumed by the persistence path; not observable via getNode.
   });
 
+  it('does NOT stash the server-confirmed version when the broadcast looks like a foreign write (preserves OCC)', () => {
+    // The guard's whole point is to avoid clobbering local optimistic
+    // content with the server-confirmed snapshot. But the broadcast
+    // mechanism doesn't distinguish "my-own-write echoing back" from
+    // "another client's write to the same node arriving via cloud
+    // round-trip". For the latter case, blindly stashing the foreign
+    // writer's version would defeat OCC: alice's next UpdateNode would
+    // carry bob's version against alice's content and the backend would
+    // silently overwrite bob's change.
+    //
+    // The "is plausibly an own echo" heuristic resolves this: if our
+    // optimistic content equals or extends the incoming content, treat
+    // it as an own echo (own write looping back, possibly with newer
+    // local chars on top) and stash. Otherwise treat it as foreign and
+    // leave the cache empty so the next OCC conflict-detects.
+    const optimistic = makeNode('foreign', 'alice typed this', 3);
+    store.setNode(optimistic, viewerSource);
+    focusManager.setEditingNode('foreign', 'default');
+
+    // Foreign-looking broadcast (different writer altered the node).
+    const foreignBroadcast = makeNode('foreign', 'bob wrote something else', 9);
+    store.setNode(foreignBroadcast, databaseSource);
+
+    // Local content is preserved (guard still fired — we keep optimistic).
+    expect(store.getNode('foreign')?.content).toBe('alice typed this');
+    // Local version is preserved.
+    expect(store.getNode('foreign')?.version).toBe(3);
+    // And crucially: the foreign version was NOT stashed, so the next
+    // UpdateNode RPC will use the local v3, the backend will see its
+    // current v9, and the OCC conflict surfaces.
+    expect(store.peekServerConfirmedVersion('foreign')).toBeUndefined();
+  });
+
+  it('persistence path uses the stashed server-confirmed version for OCC (not the stale local node.version)', () => {
+    // Contract test for the cache's read site. The actual persistence
+    // closure inside SharedNodeStore calls `computeOccVersionForUpdate`,
+    // which routes through the same `serverConfirmedVersions` cache the
+    // skip-while-editing guard populates. Without this test, a future
+    // refactor that drops that read would silently reintroduce the
+    // OCC-defeat from nodespace-sync#76 — the unit tests above only
+    // assert cache *population*, not *consumption*.
+    store.setNode(makeNode('persist', 'abc', 1), databaseSource);
+
+    // Before the guard fires, the OCC version is the local one.
+    expect(store.computeOccVersionForUpdate('persist')).toBe(1);
+
+    // Guard fires for a plausible-own-echo broadcast (content matches).
+    focusManager.setEditingNode('persist', 'default');
+    store.setNode(makeNode('persist', 'abc', 5), databaseSource);
+
+    // Local .version unchanged, but the persistence path now picks 5.
+    expect(store.getNode('persist')?.version).toBe(1);
+    expect(store.computeOccVersionForUpdate('persist')).toBe(5);
+  });
+
   it('clears the server-confirmed-version cache when a non-guarded setNode applies (no shadowing)', () => {
     // Seed via the database path so no persistence is scheduled — we want
     // to exercise just the focus/clear-cache flow without a pending op

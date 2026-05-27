@@ -525,9 +525,68 @@ export class SharedNodeStore {
   // Populated by the skip-while-editing guard in setNode() instead of
   // mutating the reactive `nodes` Map (which would trigger Svelte re-renders
   // that remount the textarea and reset selectionStart — see
-  // nodespace-sync#77). Consumed by the UpdateNode persistence path so the
+  // nodespace-sync#76). Consumed by the UpdateNode persistence path so the
   // next OCC carries the freshest version.
   private serverConfirmedVersions = new Map<string, number>();
+
+  /**
+   * Test-only accessor for the non-reactive server-confirmed-version cache.
+   * Production code consumes this cache via the persistence path
+   * (UpdateNode OCC version selection). Tests use this to assert the cache
+   * was populated/cleared as expected — see
+   * `shared-node-store-skip-while-editing.test.ts`.
+   */
+  peekServerConfirmedVersion(nodeId: string): number | undefined {
+    return this.serverConfirmedVersions.get(nodeId);
+  }
+
+  /**
+   * Returns the version the next UpdateNode RPC would send for this node,
+   * applying the same lookup the persistence closure uses:
+   *
+   *   serverConfirmedVersions[nodeId] ?? localNode.version ?? 1
+   *
+   * Exposed so the skip-while-editing test suite can lock the contract in
+   * place — a future refactor that drops the cache read at the
+   * persistence call site would fail the corresponding test instead of
+   * silently re-introducing the OCC-defeat bug from nodespace-sync#76.
+   */
+  computeOccVersionForUpdate(nodeId: string): number {
+    const confirmed = this.serverConfirmedVersions.get(nodeId);
+    if (typeof confirmed === 'number') return confirmed;
+    const local = this.nodes.get(nodeId);
+    return local?.version ?? 1;
+  }
+
+  /**
+   * Heuristic for "is this database broadcast plausibly an echo of *this
+   * client's own* write?" Used by the skip-while-editing guard to decide
+   * whether to stash the broadcast's `node.version` for the next OCC.
+   *
+   * Returns `true` when the local optimistic content equals or extends the
+   * incoming content — i.e., the incoming is an older snapshot of what we
+   * already have. That covers both shapes the daemon's own confirmation
+   * loops back through:
+   *
+   *   - exact match: the broadcast is the just-confirmed write, no further
+   *     keystrokes since;
+   *   - local extension: the user typed more characters in the optimistic
+   *     state while the daemon was confirming the previous version.
+   *
+   * Returns `false` when the local content diverges from the incoming —
+   * which signals a *foreign* write (e.g., another client editing the
+   * same node concurrently). In that case the cache is intentionally left
+   * untouched so the next UpdateNode RPC uses the local `node.version`,
+   * conflicts with the server's newer version, and surfaces the
+   * divergence via the normal OCC path.
+   */
+  private isPlausibleOwnEcho(local: Node, incoming: Node): boolean {
+    const localContent = local.content ?? '';
+    const incomingContent = incoming.content ?? '';
+    if (localContent === incomingContent) return true;
+    // Local is an extension of incoming → user kept typing past the confirm.
+    return localContent.startsWith(incomingContent);
+  }
 
   // Test error tracking (populated only in NODE_ENV='test', cleared between tests)
   private testErrors: Error[] = [];
@@ -1180,27 +1239,54 @@ export class SharedNodeStore {
     // remount the textarea (the `{#if isEditing}` block in base-node.svelte)
     // and reset selectionStart.
     //
+    // `source.type === 'database'` is the contract for "this update came from
+    // the daemon's domain-event broadcast" — see UpdateSource in
+    // `$lib/types/update-protocol`. Local user actions use `'viewer'`. The
+    // guard relies on no other producer of `'database'` events bypassing the
+    // intended skip behavior; the only consumers today are
+    // `tauri-sync-listener` and `browser-sync-service`.
+    //
     // Fixes nodespace-sync#76 (typing corruption: chars dropped/replaced
     // under sustained input as the optimistic store is clobbered by the
     // daemon's own confirmation looped back through the WatchNodes stream).
+    //
+    // Compute the predicates once into locals: (a) `hasPending` does three
+    // Map lookups, and (b) the coordinator transitions a node between its
+    // pending/executing/queued maps, so reading it twice can return
+    // different answers — the log message would otherwise contradict the
+    // branch taken.
+    const isFocused = focusManager.editingNodeId === node.id;
+    const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
     if (
       source.type === 'database' &&
       existingNode &&
-      (focusManager.editingNodeId === node.id ||
-        PersistenceCoordinator.getInstance().hasPending(node.id))
+      (isFocused || hasPending)
     ) {
       log.debug(
         `setNode: skipping clobber of actively-edited node ${node.id} ` +
-        `(focused=${focusManager.editingNodeId === node.id}, ` +
-        `pending=${PersistenceCoordinator.getInstance().hasPending(node.id)})`
+          `(focused=${isFocused}, pending=${hasPending})`
       );
-      // Stash the server-confirmed version in the non-reactive cache so
-      // the next UpdateNode RPC carries the freshest version. The
-      // persistence path reads from this cache before falling back to the
-      // node's own .version field.
-      if (typeof node.version === 'number') {
+      // Only stash the server-confirmed version when the broadcast is
+      // plausibly an echo of *this client's own write* — otherwise the
+      // next UpdateNode RPC would carry the foreign writer's version
+      // against our content, defeating OCC and silently overwriting the
+      // foreign change.
+      //
+      // Heuristic: if the existing optimistic content equals or starts
+      // with the incoming content, the incoming is an older snapshot of
+      // OUR work (either an exact echo of our most-recent confirm, or a
+      // prefix from before the user typed more characters). Otherwise it
+      // is a foreign change — preserve OCC by leaving the cache empty so
+      // the next RPC uses our local `node.version`, which will conflict
+      // and surface the divergence.
+      if (typeof node.version === 'number' && this.isPlausibleOwnEcho(existingNode, node)) {
         this.serverConfirmedVersions.set(node.id, node.version);
       }
+      // `persistedNodeIds.add` is safe here precisely because the guard
+      // only runs when `existingNode` is truthy — a database event for a
+      // node we've already seen implies the node IS persisted server-side.
+      // Do not remove the `existingNode` check thinking the add is
+      // unconditional bookkeeping; it is not.
       this.persistedNodeIds.add(node.id);
       // Do NOT touch this.nodes or notify subscribers — there is no
       // observable change to the local view, and any reactive write here
@@ -1300,13 +1386,12 @@ export class SharedNodeStore {
 
                 try {
                   // Get current version for optimistic concurrency control.
-                  // Prefer the server-confirmed version stashed by the
-                  // skip-while-editing guard (see setNode) — that's the
-                  // freshest version we know about without having paid the
-                  // Svelte-reactivity cost of updating `currentNode.version`
-                  // in the reactive Map.
-                  const confirmedVersion = this.serverConfirmedVersions.get(nodeId);
-                  const currentVersion = confirmedVersion ?? currentNode.version ?? 1;
+                  // Routes through `computeOccVersionForUpdate` so the
+                  // skip-while-editing guard (see `setNode`) can stash a
+                  // server-confirmed version without mutating reactive
+                  // state. Test coverage:
+                  // `shared-node-store-skip-while-editing.test.ts`.
+                  const currentVersion = this.computeOccVersionForUpdate(nodeId);
                   await tauriCommands.updateNode(nodeId, currentVersion, currentNode);
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
