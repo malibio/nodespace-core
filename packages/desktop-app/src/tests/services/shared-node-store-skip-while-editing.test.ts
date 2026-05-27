@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import { focusManager } from '../../lib/services/focus-manager.svelte';
+import { structureTree } from '../../lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
 
@@ -238,6 +239,41 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // Local .version unchanged, but the persistence path now picks 5.
     expect(store.getNode('persist')?.version).toBe(1);
     expect(store.computeOccVersionForUpdate('persist')).toBe(5);
+  });
+
+  it('preserves insertAfterNodeId when sibling.parentId is null but structureTree agrees on parent (sync#77)', () => {
+    // The persistence-time stale-sibling check used to compare the bare
+    // `Node.parentId` field. Nodes loaded via `getChildrenTree` come back
+    // with `parentId: null` on the wire, so every Enter-key insertion
+    // looked "stale" and the hint got cleared — the backend then
+    // defaulted to "insert at beginning". The fix consults `structureTree`
+    // (the authoritative source for hierarchy via has_child edges) so the
+    // hint survives whenever the tree confirms the same parent.
+    //
+    // Tests the decision via `shouldClearStaleInsertAfter`, the helper
+    // the persistence closure calls — locks in the production code path
+    // without mocking the Tauri-side IPC.
+    structureTree.clear();
+    const existingA = {
+      ...makeNode('a', 'existing', 1),
+      parentId: null as string | null
+    };
+    store.setNode(existingA, databaseSource);
+    structureTree.addChild({ parentId: 'D', childId: 'a', order: 1 });
+
+    // Sibling 'a' has `parentId: null` on the node object but
+    // structureTree says its parent is 'D'. New node 'b' is being
+    // inserted with parentId='D'. The hint must be preserved.
+    expect(store.shouldClearStaleInsertAfter('a', 'D')).toBe(false);
+
+    // Sanity: if structureTree disagrees, the hint IS cleared.
+    expect(store.shouldClearStaleInsertAfter('a', 'OTHER_PARENT')).toBe(true);
+
+    // Sanity: if structureTree has no opinion, the hint is preserved
+    // (backend retry loop will handle it).
+    expect(store.shouldClearStaleInsertAfter('unknown', 'D')).toBe(false);
+
+    structureTree.clear();
   });
 
   it('clears the server-confirmed-version cache when a non-guarded setNode applies (no shadowing)', () => {
