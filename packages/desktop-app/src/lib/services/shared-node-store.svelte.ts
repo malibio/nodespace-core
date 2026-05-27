@@ -551,6 +551,44 @@ export class SharedNodeStore {
   }
 
   /**
+   * Decide whether the persistence path should clear a CREATE's
+   * `insertAfterNodeId` hint as "stale" before talking to the backend.
+   *
+   * **Trust hierarchy**: `structureTree` is the authoritative source for
+   * `has_child` parent-child relationships (it's the in-memory mirror of
+   * the backend's hierarchy edges). The bare `Node.parentId` field is
+   * opportunistically populated by some load paths (e.g. local creates)
+   * but is `null` for nodes loaded via `getChildrenTree`, where the wire
+   * shape strips it. Always consult `structureTree.getParent` for
+   * hierarchy decisions; never rely on `Node.parentId` alone.
+   *
+   * Returns `true` only when `structureTree` reports a parent for the
+   * sibling AND that parent disagrees with the new node's
+   * `currentParentId`. If `structureTree` has no opinion (`null`), the
+   * hint is preserved and the backend's own retry loop handles it —
+   * silently clearing a valid hint here is what produced
+   * nodespace-sync#77's drop-to-the-top behavior.
+   *
+   * If `structureTree.getParent` returns `null` we emit a debug log so
+   * the frequency of "tree not yet populated at persistence time" is
+   * observable; a high rate suggests the persistence call is racing the
+   * structureTree population (different code path bug, not this one).
+   */
+  shouldClearStaleInsertAfter(
+    siblingId: string,
+    currentParentId: string | null | undefined
+  ): boolean {
+    const siblingActualParent = structureTree.getParent(siblingId);
+    if (siblingActualParent === null) {
+      log.debug(
+        `shouldClearStaleInsertAfter: structureTree has no parent for sibling ${siblingId.substring(0, 8)} — preserving hint, backend will validate`
+      );
+      return false;
+    }
+    return siblingActualParent !== (currentParentId ?? null);
+  }
+
+  /**
    * Test-only accessor for the non-reactive server-confirmed-version cache.
    * Production code consumes this cache via the persistence path
    * (UpdateNode OCC version selection). Tests use this to assert the cache
@@ -1448,22 +1486,19 @@ export class SharedNodeStore {
                   }
                 }
               } else {
-                // RACE CONDITION FIX: Validate insertAfterNodeId before CREATE
-                // If the node was moved (indent/outdent) after the CREATE was scheduled,
-                // insertAfterNodeId may reference a sibling under a different parent.
-                // The backend will reject this with "Sibling has different parent" error.
-                // Solution: Clear insertAfterNodeId if it's no longer a valid sibling.
                 const nodeWithInsertHint = currentNode as Node & { insertAfterNodeId?: string | null };
                 if (nodeWithInsertHint.insertAfterNodeId) {
-                  const siblingNode = this.nodes.get(nodeWithInsertHint.insertAfterNodeId);
-                  if (siblingNode && siblingNode.parentId !== currentNode.parentId) {
+                  if (
+                    this.shouldClearStaleInsertAfter(
+                      nodeWithInsertHint.insertAfterNodeId,
+                      currentNode.parentId
+                    )
+                  ) {
                     log.debug(
                       `[CREATE] Clearing stale insertAfterNodeId for ${nodeId.substring(0, 8)}: ` +
-                      `sibling ${nodeWithInsertHint.insertAfterNodeId.substring(0, 8)} has parentId ` +
-                      `${siblingNode.parentId?.substring(0, 8) ?? 'null'} but node has parentId ` +
-                      `${currentNode.parentId?.substring(0, 8) ?? 'null'}`
+                        `sibling ${nodeWithInsertHint.insertAfterNodeId.substring(0, 8)} reports a ` +
+                        `different parent via structureTree (node.parentId=${currentNode.parentId?.substring(0, 8) ?? 'null'})`
                     );
-                    // Clear the stale hint - backend will use sortOrder instead
                     nodeWithInsertHint.insertAfterNodeId = null;
                   }
                 }

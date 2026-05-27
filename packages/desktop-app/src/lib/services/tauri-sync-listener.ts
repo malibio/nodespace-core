@@ -164,18 +164,66 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         // fractional order overwrites any optimistic order set during creation.
         // addChild handles deduplication internally: if the child already exists it
         // updates the order and re-sorts rather than inserting a duplicate.
+        //
+        // **Order-fallback contract** (nodespace-sync#77 root cause):
+        //   - When the local daemon emits this event, `properties.order`
+        //     carries the fractional order from `move_node` — that's the
+        //     authoritative position and we use it directly.
+        //   - When the **cloud LIVE-SELECT echo** re-emits the same edge,
+        //     `properties.order` is `undefined` because the sync layer's
+        //     `RELATE … SET rel_type = $rt` (cloud_writer.rs:430) does NOT
+        //     push the order field to cloud. Before the fix this fell back
+        //     to `Date.now()`, which silently overwrote the correct local
+        //     order with a value 11 orders of magnitude larger — relocating
+        //     the just-created sibling.
+        //
+        // Fix tier 1: when the incoming order is missing, look up the
+        // existing entry in the structureTree and preserve its order.
+        //
+        // Fix tier 2: if the child is genuinely new to this client, append
+        // it after the parent's current last child — order = lastChild.order
+        // + 1 + tiny-jitter. This matches the backend's append-at-end
+        // semantic and keeps brand-new sync-echoed children sorted at the
+        // tail. (Previously `Date.now()` was used here, which dropped the
+        // child to a position far below any sibling — a "stable" but
+        // wrong-looking location.)
+        //
+        // **Performance note**: `getChildrenWithOrder(...).find(...)` is
+        // O(n) per echo. Hot enough to matter for parents with hundreds
+        // of children; consider exposing a Map-backed `getOrderOf(parent,
+        // child)` primitive on structureTree if profiling shows a hotspot.
         if (structureTree) {
-          const order = (rel.properties?.order as number) ?? Date.now();
-          // structureTree is keyed by bare node ids (e.g. the date-
-          // page route uses `2026-05-20`, not `node:2026-05-20`).
-          // Backend events carry the table-prefixed form per the
-          // RelationshipEvent serialization contract — strip the
-          // `node:` prefix here so the local-action path (which
-          // writes bare ids via the outliner) and the sync-event
-          // path agree on the key shape.
+          const parentBare = stripNodePrefix(rel.fromId);
+          const childBare = stripNodePrefix(rel.toId);
+          // `typeof === 'number'` (not `??`) so 0 / negative orders count
+          // as a real value. `rel.properties?.order` is typed `unknown` on
+          // the wire; the `as number | undefined` is unchecked — the
+          // typeof gate IS the runtime check.
+          const incomingOrderRaw = (rel.properties as { order?: unknown } | undefined)?.order;
+          const incomingOrder =
+            typeof incomingOrderRaw === 'number' ? incomingOrderRaw : undefined;
+
+          const siblings = structureTree.getChildrenWithOrder(parentBare);
+          let order: number;
+          if (typeof incomingOrder === 'number') {
+            order = incomingOrder;
+          } else {
+            const existing = siblings.find((c) => c.nodeId === childBare);
+            if (existing) {
+              // Local optimistic path or an earlier authoritative event
+              // already placed this child; keep that order.
+              order = existing.order;
+            } else {
+              // Brand-new child via cloud echo with no order. Land at end
+              // (lastSibling.order + 1) with a tiny jitter so concurrent
+              // appends from different windows don't collide on order.
+              const lastOrder = siblings[siblings.length - 1]?.order ?? 0;
+              order = lastOrder + 1 + Math.random() * 0.001;
+            }
+          }
           structureTree.addChild({
-            parentId: stripNodePrefix(rel.fromId),
-            childId: stripNodePrefix(rel.toId),
+            parentId: parentBare,
+            childId: childBare,
             order
           });
         }
