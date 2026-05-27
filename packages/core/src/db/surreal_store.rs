@@ -7319,11 +7319,12 @@ mod tests {
     async fn test_same_parent_reorder_preserves_created_at() -> Result<()> {
         // Issue #795: Same-parent reorder should preserve created_at.
         //
-        // Use an explicit `insert_after_sibling` for the reorder. Calling
-        // `move_node(child, parent, None)` on an already-present edge is a
-        // no-op in nodespace-sync#77's fix (the pull-side echoes its own
-        // writes as `(child, parent, None)` and the previous behavior of
-        // re-running the order calculation dragged the row to the top).
+        // Use an explicit `insert_after_sibling` so the test exercises a
+        // real position change. The store-level `move_node(child, parent,
+        // None)` still moves the child to the beginning of the parent's
+        // children — see `test_move_node_same_parent_no_hint_moves_to_beginning`
+        // for that layered contract. The `NodeService::create_parent_edge`
+        // *caller* is where nodespace-sync#77's idempotency lives.
         let (store, _temp_dir) = create_test_store().await?;
 
         let parent = store
@@ -7374,9 +7375,9 @@ mod tests {
         // Issue #795: Same-parent reorder should increment version for OCC.
         //
         // Like `test_same_parent_reorder_preserves_created_at`, pass an
-        // explicit `insert_after_sibling` so this exercises an actual
-        // reorder rather than the now-no-op `(child, parent, None)` shape
-        // that nodespace-sync#77 relies on to short-circuit pull-side echoes.
+        // explicit `insert_after_sibling` for a real reorder. Store-level
+        // `move_node` with `None` still moves to the beginning; the layered
+        // idempotency for sync echoes lives at `NodeService::create_parent_edge`.
         let (store, _temp_dir) = create_test_store().await?;
 
         let parent = store
@@ -7472,6 +7473,58 @@ mod tests {
             new_metadata.2, 1,
             "Cross-parent move should reset version to 1"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_move_node_same_parent_no_hint_moves_to_beginning() -> Result<()> {
+        // Locks in the store-level contract used by `reorder_node(_, _, None)`
+        // and the MCP "move to first position" path: when the caller does
+        // not provide `insert_after_sibling_id`, `move_node` places the
+        // child at the *beginning* of its parent's children — even when
+        // the child is already a child of that parent.
+        //
+        // nodespace-sync#77's idempotency lives at the higher
+        // `NodeService::create_parent_edge` layer, NOT here. If a future
+        // change pushes the idempotency into `move_node` (or flips the
+        // None default to "append at end" at this layer), the MCP
+        // index=0 reorder path silently breaks; this test catches that.
+        let (store, _temp_dir) = create_test_store().await?;
+
+        let parent = store
+            .create_node(
+                Node::new("text".to_string(), "Parent".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        let child1 = store
+            .create_child_node_atomic(&parent.id, "text", "Child 1", json!({}), None)
+            .await?;
+        let child2 = store
+            .create_child_node_atomic(&parent.id, "text", "Child 2", json!({}), None)
+            .await?;
+
+        // Sanity: child1 was created first, so it's currently first.
+        let before = store.get_children(&parent.id).await?;
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].id, child1.id);
+        assert_eq!(before[1].id, child2.id);
+
+        // Now move child2 to the beginning via the no-hint shape.
+        store
+            .move_node(&child2.id, Some(&parent.id), None)
+            .await?;
+
+        let after = store.get_children(&parent.id).await?;
+        assert_eq!(after.len(), 2);
+        assert_eq!(
+            after[0].id, child2.id,
+            "move_node with no insert_after must move child to the beginning"
+        );
+        assert_eq!(after[1].id, child1.id);
 
         Ok(())
     }

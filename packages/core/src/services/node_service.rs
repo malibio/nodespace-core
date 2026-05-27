@@ -4552,22 +4552,37 @@ impl NodeService {
         );
 
         // Idempotency guard for nodespace-sync#77 (alice-side echo) — if
-        // `child_id` is already a child of `parent_id`, treat this call as a
-        // no-op. The sync pull-side `apply_remote` re-invokes
+        // `child_id` is already a child of `parent_id` AND no explicit
+        // `insert_after_node_id` was provided, treat this call as a no-op.
+        // The sync pull-side `apply_remote` re-invokes
         // `create_parent_edge(child, parent, None)` for every `has_child` edge
         // it replays from the cloud LIVE-SELECT, including edges JUST created
         // by the local push side. Before this guard, the redundant call ran
         // through `move_node` and re-positioned the child — dragging the row
-        // off its just-computed local order. Callers that want to actually
-        // reorder an existing child should use `reorder_child`.
-        if let Some(existing_parent) = self.get_parent(child_id).await? {
-            if existing_parent.id == parent_id {
-                tracing::debug!(
-                    child_id = %child_id,
-                    parent_id = %parent_id,
-                    "create_parent_edge: edge already exists, treating as no-op"
-                );
-                return Ok(());
+        // off its just-computed local order.
+        //
+        // The `insert_after_node_id.is_none()` clause narrows the guard so a
+        // caller that DOES pass an explicit hint still triggers a real
+        // reorder. Callers wanting to actually reposition an existing child
+        // should pass `Some(target_sibling)` here OR use `reorder_child`.
+        //
+        // `get_parent` is propagated via `?` — a transient DB error aborts
+        // the whole `create_parent_edge` call. The retry budget for the
+        // happy path (`move_node` loop below) is intentionally larger than
+        // for this one-off parent lookup; if `get_parent` flakes, fail fast
+        // and let the caller decide whether to retry. The 10×100ms retry
+        // budget on `move_node` is for the *sibling-not-found* case, which
+        // is a different consistency window.
+        if insert_after_node_id.is_none() {
+            if let Some(existing_parent) = self.get_parent(child_id).await? {
+                if existing_parent.id == parent_id {
+                    tracing::debug!(
+                        child_id = %child_id,
+                        parent_id = %parent_id,
+                        "create_parent_edge: edge already exists with no reorder hint, treating as no-op"
+                    );
+                    return Ok(());
+                }
             }
         }
 
@@ -4581,14 +4596,31 @@ impl NodeService {
         // layer can only call `create_parent_edge(child, parent, None)`.
         // Translating to `Some(last_child_id)` here keeps `move_node`'s
         // semantics intact and gives sync the append-at-end behavior it needs.
+        //
+        // Concurrency note: there is a read-then-write window between this
+        // `get_children` and the `move_node` call below. Two concurrent
+        // `create_parent_edge(_, parent, None)` calls can race: both see
+        // the same `last_child_id`, then `move_node`'s fractional-order
+        // calculation (which re-reads the children) places them at order
+        // values that don't strictly match cloud-canonical ordering. The
+        // rows DO get distinct fractional orders (no collision), but the
+        // *between-which-siblings* placement reflects whichever transaction
+        // landed last. Acceptable for sync echo replay (eventually
+        // consistent across windows); callers needing strict ordering
+        // should serialise their calls or use `reorder_child` afterwards.
+        //
+        // `get_children` is propagated via `?` rather than swallowed —
+        // silently degrading to `None` would re-trigger the very bug this
+        // path was added to fix (the new child would land at the
+        // beginning of the parent's list).
         let effective_after_owned: Option<String> = if insert_after_node_id.is_some() {
             None
         } else {
             // get_children returns siblings in current order; take the last.
-            match self.get_children(parent_id).await {
-                Ok(children) => children.last().map(|c| c.id.clone()),
-                Err(_) => None,
-            }
+            self.get_children(parent_id)
+                .await?
+                .last()
+                .map(|c| c.id.clone())
         };
         let resolved_insert_after: Option<&str> = insert_after_node_id
             .or(effective_after_owned.as_deref());
@@ -9591,6 +9623,61 @@ mod tests {
             assert_eq!(children.len(), 2);
             assert_eq!(children[0].content, "Child 1");
             assert_eq!(children[1].content, "Child 2");
+        }
+
+        #[tokio::test]
+        #[serial(sibling_ordering)]
+        async fn test_create_parent_edge_reorders_when_explicit_hint_against_existing_edge() {
+            // The sync-echo idempotency in `create_parent_edge` is narrowed
+            // to `insert_after_node_id.is_none()`: callers that pass an
+            // explicit `Some(target_sibling)` against an already-present
+            // edge must still see a real reorder. If a future refactor
+            // widens the guard back to "any same-parent edge is a no-op",
+            // this test fails.
+            let (service, _temp) = create_test_service().await;
+
+            let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+            let parent_id = service.create_node(parent).await.unwrap();
+
+            let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+            let child1_id = service.create_node(child1).await.unwrap();
+            service
+                .create_parent_edge(&child1_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
+            let child2_id = service.create_node(child2).await.unwrap();
+            service
+                .create_parent_edge(&child2_id, &parent_id, None)
+                .await
+                .unwrap();
+
+            sleep(Duration::from_millis(50)).await;
+
+            // Initial state: Child 1, Child 2.
+            let before = service.get_children(&parent_id).await.unwrap();
+            assert_eq!(before.len(), 2);
+            assert_eq!(before[0].content, "Child 1");
+            assert_eq!(before[1].content, "Child 2");
+
+            // Re-invoke create_parent_edge for child1 with an explicit hint
+            // pointing AFTER child2 — the edge already exists, but the
+            // explicit hint must take effect (real reorder).
+            service
+                .create_parent_edge(&child1_id, &parent_id, Some(&child2_id))
+                .await
+                .unwrap();
+
+            sleep(Duration::from_millis(50)).await;
+
+            let after = service.get_children(&parent_id).await.unwrap();
+            assert_eq!(after.len(), 2);
+            assert_eq!(
+                after[0].content, "Child 2",
+                "explicit reorder hint on existing edge must take effect"
+            );
+            assert_eq!(after[1].content, "Child 1");
         }
 
         #[tokio::test]
