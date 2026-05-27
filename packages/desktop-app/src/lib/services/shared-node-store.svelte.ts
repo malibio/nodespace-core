@@ -31,6 +31,7 @@ import { isVersionConflict } from '$lib/types/errors';
 import { isValidDateId } from '$lib/types/date-node';
 import { createLogger } from '$lib/utils/logger';
 import { getPendingMoveOperation } from './pending-operations';
+import { focusManager } from './focus-manager.svelte';
 import { contentProcessor } from './content-processor';
 import { stripMarkdown } from './markdown-utils';
 import type { Node } from '$lib/types';
@@ -357,6 +358,21 @@ class SimplePersistenceCoordinator {
   }
 
   /**
+   * Returns true when a persistence operation for this node is either
+   * pending (debounced and not yet fired), executing (in-flight RPC), or
+   * queued behind an executing one. Used by `SharedNodeStore.setNode()` to
+   * recognise "the user has unsaved local changes for this node" and skip
+   * a daemon-broadcast apply that would otherwise clobber them.
+   */
+  hasPending(nodeId: string): boolean {
+    return (
+      this.pendingOperations.has(nodeId) ||
+      this.executingOperations.has(nodeId) ||
+      this.queuedOperations.has(nodeId)
+    );
+  }
+
+  /**
    * Flush ALL pending operations immediately and wait for completion.
    *
    * This is more aggressive than flushAndWaitForNodes - it ensures the entire
@@ -504,6 +520,14 @@ export class SharedNodeStore {
 
   // Version tracking for optimistic concurrency
   private versions = new Map<string, number>();
+
+  // Non-reactive cache of the latest server-confirmed `node.version` per id.
+  // Populated by the skip-while-editing guard in setNode() instead of
+  // mutating the reactive `nodes` Map (which would trigger Svelte re-renders
+  // that remount the textarea and reset selectionStart — see
+  // nodespace-sync#77). Consumed by the UpdateNode persistence path so the
+  // next OCC carries the freshest version.
+  private serverConfirmedVersions = new Map<string, number>();
 
   // Test error tracking (populated only in NODE_ENV='test', cleared between tests)
   private testErrors: Error[] = [];
@@ -1144,8 +1168,53 @@ export class SharedNodeStore {
     const existingNode = this.nodes.get(node.id);
     const isHierarchyChange = !existingNode;
 
+    // Skip-while-editing guard. A daemon-broadcast event (source.type ===
+    // 'database') arriving for a node the user is actively editing — or has
+    // unsaved local changes for — would otherwise overwrite the optimistic
+    // store with the *older* server-confirmed state. The optimistic state is
+    // authoritative until persistence settles, so we keep the local content
+    // and stash the server-confirmed version in a non-reactive cache.
+    //
+    // CRITICAL: do NOT call `this.nodes.set()` or mutate any property of a
+    // node inside the reactive Map. Either triggers Svelte re-renders that
+    // remount the textarea (the `{#if isEditing}` block in base-node.svelte)
+    // and reset selectionStart.
+    //
+    // Fixes nodespace-sync#76 (typing corruption: chars dropped/replaced
+    // under sustained input as the optimistic store is clobbered by the
+    // daemon's own confirmation looped back through the WatchNodes stream).
+    if (
+      source.type === 'database' &&
+      existingNode &&
+      (focusManager.editingNodeId === node.id ||
+        PersistenceCoordinator.getInstance().hasPending(node.id))
+    ) {
+      log.debug(
+        `setNode: skipping clobber of actively-edited node ${node.id} ` +
+        `(focused=${focusManager.editingNodeId === node.id}, ` +
+        `pending=${PersistenceCoordinator.getInstance().hasPending(node.id)})`
+      );
+      // Stash the server-confirmed version in the non-reactive cache so
+      // the next UpdateNode RPC carries the freshest version. The
+      // persistence path reads from this cache before falling back to the
+      // node's own .version field.
+      if (typeof node.version === 'number') {
+        this.serverConfirmedVersions.set(node.id, node.version);
+      }
+      this.persistedNodeIds.add(node.id);
+      // Do NOT touch this.nodes or notify subscribers — there is no
+      // observable change to the local view, and any reactive write here
+      // remounts the focused textarea.
+      return;
+    }
+
     this.nodes.set(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
+    // A non-guarded setNode means the local store has caught up with the
+    // server (either the user blurred, persistence settled, or the node is
+    // arriving fresh). Drop any stale entry from the skip-while-editing
+    // cache so it doesn't shadow a now-current node.version.
+    this.serverConfirmedVersions.delete(node.id);
     this.notifySubscribers(node.id, node, source);
 
     if (isHierarchyChange) {
@@ -1230,8 +1299,14 @@ export class SharedNodeStore {
                 }
 
                 try {
-                  // Get current version for optimistic concurrency control
-                  const currentVersion = currentNode.version ?? 1;
+                  // Get current version for optimistic concurrency control.
+                  // Prefer the server-confirmed version stashed by the
+                  // skip-while-editing guard (see setNode) — that's the
+                  // freshest version we know about without having paid the
+                  // Svelte-reactivity cost of updating `currentNode.version`
+                  // in the reactive Map.
+                  const confirmedVersion = this.serverConfirmedVersions.get(nodeId);
+                  const currentVersion = confirmedVersion ?? currentNode.version ?? 1;
                   await tauriCommands.updateNode(nodeId, currentVersion, currentNode);
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
