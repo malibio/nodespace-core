@@ -2788,7 +2788,14 @@ impl SurrealStore {
                     FractionalOrderCalculator::calculate_order(last_order, None)
                 }
             } else {
-                // No insert_after_sibling specified, insert at beginning
+                // No insert_after_sibling specified, insert at beginning. The
+                // MCP handlers (`handle_insert_child_at_index` with index=0
+                // and `handle_move_child_to_index` with target_index=0) rely
+                // on this: they pass `None` to mean "move to the first
+                // position". Hierarchical-create callers that want "append at
+                // end" semantics (the sync layer's pull-side `apply_remote`
+                // among them) translate `None` to `Some(last_child_id)` at
+                // their layer — see `NodeService::create_parent_edge`.
                 let first_order = relationships.first().map(|e| e.order);
                 FractionalOrderCalculator::calculate_order(None, first_order)
             }
@@ -7310,10 +7317,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_same_parent_reorder_preserves_created_at() -> Result<()> {
-        // Issue #795: Same-parent reorder should preserve created_at
+        // Issue #795: Same-parent reorder should preserve created_at.
+        //
+        // Use an explicit `insert_after_sibling` so the test exercises a
+        // real position change. The store-level `move_node(child, parent,
+        // None)` still moves the child to the beginning of the parent's
+        // children — see `test_move_node_same_parent_no_hint_moves_to_beginning`
+        // for that layered contract. The `NodeService::create_parent_edge`
+        // *caller* is where nodespace-sync#77's idempotency lives.
         let (store, _temp_dir) = create_test_store().await?;
 
-        // Create parent and two children
         let parent = store
             .create_node(
                 Node::new("text".to_string(), "Parent".to_string(), json!({})),
@@ -7322,37 +7335,33 @@ mod tests {
             )
             .await?;
 
-        let _child1 = store
+        let child1 = store
             .create_child_node_atomic(&parent.id, "text", "Child 1", json!({}), None)
             .await?;
         let child2 = store
             .create_child_node_atomic(&parent.id, "text", "Child 2", json!({}), None)
             .await?;
 
-        // Get original relationship metadata for child2
-        let original_metadata = get_relationship_metadata(&store, &child2.id)
+        let original_metadata = get_relationship_metadata(&store, &child1.id)
             .await?
             .expect("Relationship should exist");
         let original_created_at = original_metadata.0.clone();
 
-        // Wait a tiny bit to ensure time difference
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
-        // Reorder child2 to be before child1 (same parent, just reordering)
-        store.move_node(&child2.id, Some(&parent.id), None).await?;
+        // Reorder: move child1 to be AFTER child2 (real position change).
+        store
+            .move_node(&child1.id, Some(&parent.id), Some(&child2.id))
+            .await?;
 
-        // Get new relationship metadata
-        let new_metadata = get_relationship_metadata(&store, &child2.id)
+        let new_metadata = get_relationship_metadata(&store, &child1.id)
             .await?
             .expect("Relationship should still exist");
 
-        // created_at should be PRESERVED (same value)
         assert_eq!(
             new_metadata.0, original_created_at,
             "Same-parent reorder should preserve created_at"
         );
-
-        // modified_at should be UPDATED (different value)
         assert_ne!(
             new_metadata.1, original_metadata.1,
             "Same-parent reorder should update modified_at"
@@ -7363,10 +7372,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_same_parent_reorder_increments_version() -> Result<()> {
-        // Issue #795: Same-parent reorder should increment version for OCC
+        // Issue #795: Same-parent reorder should increment version for OCC.
+        //
+        // Like `test_same_parent_reorder_preserves_created_at`, pass an
+        // explicit `insert_after_sibling` for a real reorder. Store-level
+        // `move_node` with `None` still moves to the beginning; the layered
+        // idempotency for sync echoes lives at `NodeService::create_parent_edge`.
         let (store, _temp_dir) = create_test_store().await?;
 
-        // Create parent and child
         let parent = store
             .create_node(
                 Node::new("text".to_string(), "Parent".to_string(), json!({})),
@@ -7375,25 +7388,26 @@ mod tests {
             )
             .await?;
 
-        let child = store
-            .create_child_node_atomic(&parent.id, "text", "Child", json!({}), None)
+        let child1 = store
+            .create_child_node_atomic(&parent.id, "text", "Child 1", json!({}), None)
+            .await?;
+        let child2 = store
+            .create_child_node_atomic(&parent.id, "text", "Child 2", json!({}), None)
             .await?;
 
-        // Get original version
-        let original_metadata = get_relationship_metadata(&store, &child.id)
+        let original_metadata = get_relationship_metadata(&store, &child1.id)
             .await?
             .expect("Relationship should exist");
         let original_version = original_metadata.2;
 
-        // Reorder (same parent)
-        store.move_node(&child.id, Some(&parent.id), None).await?;
+        store
+            .move_node(&child1.id, Some(&parent.id), Some(&child2.id))
+            .await?;
 
-        // Get new version
-        let new_metadata = get_relationship_metadata(&store, &child.id)
+        let new_metadata = get_relationship_metadata(&store, &child1.id)
             .await?
             .expect("Relationship should still exist");
 
-        // Version should be incremented
         assert_eq!(
             new_metadata.2,
             original_version + 1,
@@ -7463,11 +7477,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_multiple_same_parent_reorders_accumulate_version() -> Result<()> {
-        // Issue #795: Multiple reorders should accumulate version
+    async fn test_move_node_same_parent_no_hint_moves_to_beginning() -> Result<()> {
+        // Locks in the store-level contract used by `reorder_node(_, _, None)`
+        // and the MCP "move to first position" path: when the caller does
+        // not provide `insert_after_sibling_id`, `move_node` places the
+        // child at the *beginning* of its parent's children — even when
+        // the child is already a child of that parent.
+        //
+        // nodespace-sync#77's idempotency lives at the higher
+        // `NodeService::create_parent_edge` layer, NOT here. If a future
+        // change pushes the idempotency into `move_node` (or flips the
+        // None default to "append at end" at this layer), the MCP
+        // index=0 reorder path silently breaks; this test catches that.
         let (store, _temp_dir) = create_test_store().await?;
 
-        // Create parent and child
         let parent = store
             .create_node(
                 Node::new("text".to_string(), "Parent".to_string(), json!({})),
@@ -7476,19 +7499,78 @@ mod tests {
             )
             .await?;
 
+        let child1 = store
+            .create_child_node_atomic(&parent.id, "text", "Child 1", json!({}), None)
+            .await?;
+        let child2 = store
+            .create_child_node_atomic(&parent.id, "text", "Child 2", json!({}), None)
+            .await?;
+
+        // Sanity: child1 was created first, so it's currently first.
+        let before = store.get_children(&parent.id).await?;
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].id, child1.id);
+        assert_eq!(before[1].id, child2.id);
+
+        // Now move child2 to the beginning via the no-hint shape.
+        store.move_node(&child2.id, Some(&parent.id), None).await?;
+
+        let after = store.get_children(&parent.id).await?;
+        assert_eq!(after.len(), 2);
+        assert_eq!(
+            after[0].id, child2.id,
+            "move_node with no insert_after must move child to the beginning"
+        );
+        assert_eq!(after[1].id, child1.id);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_same_parent_reorders_accumulate_version() -> Result<()> {
+        // Issue #795: Multiple reorders should accumulate version.
+        //
+        // Each reorder uses an explicit `insert_after_sibling` (alternating
+        // between the two pivot children) so it's a genuine position change.
+        // The previous shape of this test used `move_node(child, parent,
+        // None)` which is now a no-op (preserves existing order) per the
+        // nodespace-sync#77 fix.
+        let (store, _temp_dir) = create_test_store().await?;
+
+        let parent = store
+            .create_node(
+                Node::new("text".to_string(), "Parent".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        let pivot_a = store
+            .create_child_node_atomic(&parent.id, "text", "Pivot A", json!({}), None)
+            .await?;
+        let pivot_b = store
+            .create_child_node_atomic(&parent.id, "text", "Pivot B", json!({}), None)
+            .await?;
         let child = store
             .create_child_node_atomic(&parent.id, "text", "Child", json!({}), None)
             .await?;
 
-        // Initial version should be 1
         let initial_metadata = get_relationship_metadata(&store, &child.id)
             .await?
             .expect("Relationship should exist");
         assert_eq!(initial_metadata.2, 1, "Initial version should be 1");
 
-        // Reorder multiple times
+        // Alternate insert_after between the two pivots so every reorder is
+        // a real position change. Four iterations → version 2..=5.
         for expected_version in 2..=5 {
-            store.move_node(&child.id, Some(&parent.id), None).await?;
+            let pivot = if expected_version % 2 == 0 {
+                &pivot_a.id
+            } else {
+                &pivot_b.id
+            };
+            store
+                .move_node(&child.id, Some(&parent.id), Some(pivot))
+                .await?;
 
             let metadata = get_relationship_metadata(&store, &child.id)
                 .await?
