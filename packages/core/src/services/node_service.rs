@@ -2125,18 +2125,18 @@ impl NodeService {
             }
 
             if !sibling_valid {
-                // Hint is stale (sibling moved or deleted). Clear it so the
-                // edge-creation step (`create_parent_edge`) takes the
-                // append-at-end path it implements for unspecified hints —
-                // that's the right "fall back to append" semantic the
-                // surrounding comment describes. (Before nodespace-sync#77,
-                // `None` here flowed straight to `move_node` and ended up at
-                // the "insert at beginning" branch, which silently dropped the
-                // new node at the top of the parent's children.)
+                // Hint is stale (sibling moved or deleted). Clear it; the
+                // downstream `create_parent_edge` will pass `None` to
+                // `move_node`, which inserts at the parent's beginning.
+                // (The comment in this block previously promised "fall back
+                // to append" — the underlying implementation never delivered
+                // that, and shifting the receive-side fix to the sync layer
+                // for nodespace-sync#77 leaves `move_node`'s None semantic
+                // intact.)
                 tracing::warn!(
                     sibling_id = %sibling_id,
                     parent_id = ?params.parent_id,
-                    "insert_after_node_id is stale after retries (sibling moved or deleted), falling back to append at end via create_parent_edge"
+                    "insert_after_node_id is stale after retries (sibling moved or deleted), falling back to insert at beginning"
                 );
                 params.insert_after_node_id = None;
             }
@@ -4586,51 +4586,20 @@ impl NodeService {
             }
         }
 
-        // Normalise `insert_after_node_id = None` to "append after the parent's
-        // current last child" (nodespace-sync#77 receive-side). The store's
-        // `move_node` interprets a bare `None` as "insert at beginning" — that
-        // matches what the MCP handlers want for an explicit "move to first
-        // position" reorder, but for a *hierarchical CREATE* it would drop
-        // the new child at the top of its parent's list every time, because
-        // the cloud LIVE-SELECT echo carries no order field and the sync
-        // layer can only call `create_parent_edge(child, parent, None)`.
-        // Translating to `Some(last_child_id)` here keeps `move_node`'s
-        // semantics intact and gives sync the append-at-end behavior it needs.
+        // `insert_after_node_id` is passed straight through to `move_node`,
+        // which interprets `None` as "insert at beginning of children". That
+        // semantic is what the frontend's Enter-at-position-0 path
+        // (`shouldCreateNodeAbove`) relies on — the new empty line is meant
+        // to land ABOVE the cursor's line.
         //
-        // Concurrency note: there is a read-then-write window between this
-        // `get_children` and the `move_node` call below. Two concurrent
-        // `create_parent_edge(_, parent, None)` calls can race: both see
-        // the same `last_child_id`, then `move_node`'s fractional-order
-        // calculation (which re-reads the children) places them at order
-        // values that don't strictly match cloud-canonical ordering. The
-        // rows DO get distinct fractional orders (no collision), but the
-        // *between-which-siblings* placement reflects whichever transaction
-        // landed last. Acceptable for sync echo replay (eventually
-        // consistent across windows); callers needing strict ordering
-        // should serialise their calls or use `reorder_child` afterwards.
-        //
-        // `get_children` is propagated via `?` rather than swallowed —
-        // silently degrading to `None` would re-trigger the very bug this
-        // path was added to fix (the new child would land at the
-        // beginning of the parent's list).
-        let effective_after_owned: Option<String> = if insert_after_node_id.is_some() {
-            None
-        } else {
-            // get_children returns siblings in current order; take the last.
-            self.get_children(parent_id)
-                .await?
-                .last()
-                .map(|c| c.id.clone())
-        };
-        let resolved_insert_after: Option<&str> = insert_after_node_id
-            .or(effective_after_owned.as_deref());
-
-        // Pass insert_after_node_id to store.move_node.
-        // store.move_node semantics:
-        //   Some(id) → "insert AFTER this sibling"
-        //   None     → "insert at beginning" (used by MCP `reorder_node` for
-        //              explicit move-to-first; create-side has translated
-        //              `None` to `Some(last_child_id)` above)
+        // The companion receive-side fix for nodespace-sync#77 lives in the
+        // sync repo (`apply_remote` in `nodespace-sync/src/pull/...`): when
+        // the cloud LIVE-SELECT echo carries no `properties.order` and the
+        // pull-side is creating a brand-new local edge, it computes the
+        // parent's current last-child id and passes that as the explicit
+        // hint here, rather than relying on a backend-side translation that
+        // would conflate "no hint" with "append at end" for all callers.
+        // See nodespace-sync PR D' (referenced from PR #1214's description).
 
         // Use store's move_node which creates the has_child relationship atomically
         // Retry if sibling not found (eventual consistency).
@@ -4646,7 +4615,7 @@ impl NodeService {
             attempt_count += 1;
             match self
                 .store
-                .move_node(child_id, Some(parent_id), resolved_insert_after)
+                .move_node(child_id, Some(parent_id), insert_after_node_id)
                 .await
             {
                 Ok(order) => {
@@ -9580,15 +9549,17 @@ mod tests {
             );
         }
 
-        /// Test that None for `insert_after_node_id` appends at the end of
-        /// the parent's children when the parent already has at least one
-        /// child. Changed in nodespace-sync#77 — the previous default was
-        /// "insert at beginning", which made the receive side of two-window
-        /// sync land replayed has_child edges at the top of the list (cloud
-        /// doesn't carry the order field, so sync passes `None`).
+        /// Test that None for `insert_after_node_id` inserts at the beginning
+        /// of the parent's children. This is the canonical "insert at start"
+        /// path used by the outliner's Enter-at-position-0 UX (frontend's
+        /// `shouldCreateNodeAbove` branch). The companion fix for
+        /// nodespace-sync#77's receive-side ordering lives in the sync
+        /// layer's `apply_remote`, which now passes an explicit
+        /// `last_child_id` hint when replaying a has_child relationship —
+        /// keeping this semantic intact for the legitimate-prepend callers.
         #[tokio::test]
         #[serial(sibling_ordering)]
-        async fn test_insert_at_end_by_default() {
+        async fn test_insert_at_beginning_by_default() {
             let (service, _temp) = create_test_service().await;
 
             let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
@@ -9606,7 +9577,7 @@ mod tests {
 
             sleep(Duration::from_millis(50)).await;
 
-            // No hint provided — should append after Child 1.
+            // No hint provided — should prepend, so Child 2 ends up first.
             let params2 = CreateNodeParams {
                 id: Some("test-child-2".to_string()),
                 node_type: "text".to_string(),
@@ -9621,8 +9592,8 @@ mod tests {
 
             let children = service.get_children(&parent_id).await.unwrap();
             assert_eq!(children.len(), 2);
-            assert_eq!(children[0].content, "Child 1");
-            assert_eq!(children[1].content, "Child 2");
+            assert_eq!(children[0].content, "Child 2");
+            assert_eq!(children[1].content, "Child 1");
         }
 
         #[tokio::test]
@@ -9639,6 +9610,9 @@ mod tests {
             let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
             let parent_id = service.create_node(parent).await.unwrap();
 
+            // Use explicit hints so the test setup is independent of the
+            // `None = insert at beginning` default. After this setup the
+            // order is deterministic: Child 1, Child 2.
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
@@ -9649,13 +9623,12 @@ mod tests {
             let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
             let child2_id = service.create_node(child2).await.unwrap();
             service
-                .create_parent_edge(&child2_id, &parent_id, None)
+                .create_parent_edge(&child2_id, &parent_id, Some(&child1_id))
                 .await
                 .unwrap();
 
             sleep(Duration::from_millis(50)).await;
 
-            // Initial state: Child 1, Child 2.
             let before = service.get_children(&parent_id).await.unwrap();
             assert_eq!(before.len(), 2);
             assert_eq!(before[0].content, "Child 1");

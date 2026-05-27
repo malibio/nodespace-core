@@ -7419,7 +7419,6 @@ mod tests {
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_cross_parent_move_creates_new_relationship() -> Result<()> {
         // Issue #795: Cross-parent move should create new relationship with new created_at
@@ -7514,9 +7513,7 @@ mod tests {
         assert_eq!(before[1].id, child2.id);
 
         // Now move child2 to the beginning via the no-hint shape.
-        store
-            .move_node(&child2.id, Some(&parent.id), None)
-            .await?;
+        store.move_node(&child2.id, Some(&parent.id), None).await?;
 
         let after = store.get_children(&parent.id).await?;
         assert_eq!(after.len(), 2);
