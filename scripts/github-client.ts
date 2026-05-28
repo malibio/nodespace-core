@@ -8,7 +8,7 @@
  */
 
 import { Octokit } from "@octokit/rest";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, statSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 import { $ } from "bun";
@@ -623,11 +623,50 @@ export class GitHubClient {
   }
 
   /**
-   * Get current git branch (no shell commands - reads .git directly)
+   * Resolve the real git directory for the current working directory.
+   *
+   * In a normal checkout `.git` is a directory. In a linked worktree (e.g.
+   * `git worktree add`, EnterWorktree) `.git` is a *file* containing a
+   * `gitdir: <path>` pointer to the worktree's git dir under the main repo's
+   * `.git/worktrees/<name>`. Both cases hold `HEAD` directly, so resolving the
+   * pointer lets the no-shell git reads work from worktrees too.
+   *
+   * Returns null when the cwd is not inside a git repository.
+   */
+  private resolveGitDir(): string | null {
+    const dotGit = path.join(process.cwd(), ".git");
+    if (!existsSync(dotGit)) {
+      return null;
+    }
+
+    if (statSync(dotGit).isDirectory()) {
+      return dotGit;
+    }
+
+    // Worktree: `.git` is a file with a `gitdir: <path>` pointer.
+    const pointer = readFileSync(dotGit, "utf-8").trim();
+    const match = pointer.match(/^gitdir:\s*(.+)$/);
+    if (!match) {
+      return null;
+    }
+    const gitDir = match[1].trim();
+    return path.isAbsolute(gitDir)
+      ? gitDir
+      : path.resolve(process.cwd(), gitDir);
+  }
+
+  /**
+   * Get current git branch (no shell commands - reads .git directly).
+   * Works in both normal checkouts and linked worktrees.
    */
   getCurrentBranch(): string {
     try {
-      const headPath = path.join(process.cwd(), ".git", "HEAD");
+      const gitDir = this.resolveGitDir();
+      if (!gitDir) {
+        throw new Error("Not in a git repository");
+      }
+
+      const headPath = path.join(gitDir, "HEAD");
       if (!existsSync(headPath)) {
         throw new Error("Not in a git repository");
       }
@@ -645,16 +684,14 @@ export class GitHubClient {
   }
 
   /**
-   * Check if git working directory is clean (no shell commands)
+   * Check if git working directory is clean (no shell commands).
+   * Works in both normal checkouts and linked worktrees.
    */
   isWorkingDirectoryClean(): boolean {
     try {
-      const gitDir = path.join(process.cwd(), ".git");
-      const indexPath = path.join(gitDir, "index");
-      
-      // Simple check - if .git exists and index exists, assume we need proper git status
+      // Simple check - if the git dir resolves, assume we need proper git status
       // For now, we'll return true and let the user handle git status manually
-      return existsSync(gitDir);
+      return this.resolveGitDir() !== null;
     } catch {
       return false;
     }
