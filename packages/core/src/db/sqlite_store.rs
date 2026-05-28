@@ -10,6 +10,10 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
+/// KNN over-fetch factor: vec0 returns top-k *chunks*, but search results are grouped
+/// by node and many chunks map to one node, so we fetch `limit * this` to cover enough
+/// distinct nodes.
+const EMBEDDING_KNN_OVERFETCH: i64 = 10;
 const BM25_MAX_TOKENS: usize = 4;
 const BM25_STOP_WORDS: &[&str] = &[
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
@@ -58,6 +62,46 @@ pub struct StoreChange {
 
 pub type StoreNotifier = Arc<dyn Fn(StoreChange) + Send + Sync>;
 
+/// Register the statically-linked `sqlite-vec` extension as a SQLite auto-extension so
+/// every connection opened afterwards has the `vec0` virtual-table module available.
+/// Runs exactly once per process and must complete before any real store connection is
+/// opened — `SqliteStore::new` awaits it first.
+///
+/// Ordering is critical: libsql lazily calls `sqlite3_config(SQLITE_CONFIG_SERIALIZED)`
+/// on its first `connect()` (via a process-global `Once`), and `sqlite3_config` fails
+/// once SQLite has been initialized. Registering an auto-extension auto-initializes
+/// SQLite, so we open (and drop) a throwaway in-memory libsql connection FIRST to run
+/// libsql's config, THEN register. Doing this in a single async `OnceCell` keeps the two
+/// steps atomic so concurrent `new()` calls can't interleave the warm-up and the
+/// registration.
+async fn ensure_sqlite_vec_registered() {
+    /// The libsql FFI signature for a SQLite extension entry point.
+    type EntryPoint = unsafe extern "C" fn(
+        *mut libsql::ffi::sqlite3,
+        *mut *const std::os::raw::c_char,
+        *const libsql::ffi::sqlite3_api_routines,
+    ) -> std::os::raw::c_int;
+
+    static VEC_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    VEC_INIT
+        .get_or_init(|| async {
+            // Warm up libsql so its one-time sqlite3_config(SERIALIZED) runs before we
+            // auto-initialize SQLite via sqlite3_auto_extension.
+            if let Ok(db) = libsql::Builder::new_local(":memory:").build().await {
+                let _ = db.connect();
+            }
+            // SAFETY: `sqlite_vec::sqlite3_vec_init` is the extension's C entry point with
+            // exactly this signature; the transmute reinterprets its fn pointer to the
+            // type `sqlite3_auto_extension` expects.
+            unsafe {
+                let entry: EntryPoint =
+                    std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
+                libsql::ffi::sqlite3_auto_extension(Some(entry));
+            }
+        })
+        .await;
+}
+
 pub struct SqliteStore {
     db: Arc<libsql::Connection>,
     event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
@@ -67,6 +111,10 @@ pub struct SqliteStore {
 
 impl SqliteStore {
     pub async fn new(db_path: PathBuf) -> Result<Self> {
+        // Register sqlite-vec (once per process) BEFORE opening our connection, so the
+        // connection picks up the `vec0` module. See `ensure_sqlite_vec_registered`.
+        ensure_sqlite_vec_registered().await;
+
         let database = libsql::Builder::new_local(&db_path)
             .build()
             .await
@@ -136,6 +184,22 @@ impl SqliteStore {
             END"#,
             ()
         ).await.context("Failed to create FTS5 delete trigger")?;
+
+        // sqlite-vec virtual table for embedding KNN search. Keyed by `embedding.id`
+        // (the per-chunk UUID); holds ONLY real, non-stale vectors (see upsert/delete/
+        // mark-stale paths). vec0 is a fast brute-force SIMD scan, not an ANN index.
+        conn.execute(
+            &format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(\
+                    embedding_id TEXT PRIMARY KEY, \
+                    vector FLOAT[{}] distance_metric=cosine\
+                )",
+                crate::models::embedding::DEFAULT_EMBEDDING_DIMENSION
+            ),
+            (),
+        )
+        .await
+        .context("Failed to create vec0 embeddings table")?;
 
         Ok(())
     }
@@ -630,8 +694,8 @@ impl SqliteStore {
                 .context("Failed to serialize current properties")?,
         };
         let updated_title = match update.title {
-            Some(t) => t,           // Some(Some(x)) sets, Some(None) clears
-            None => current.title,  // None means no change
+            Some(t) => t,          // Some(Some(x)) sets, Some(None) clears
+            None => current.title, // None means no change
         };
         let updated_status = update
             .lifecycle_status
@@ -1983,13 +2047,29 @@ impl SqliteStore {
             return Ok(());
         }
 
-        self.db
-            .execute(
-                "DELETE FROM embedding WHERE node_id = ?1",
-                libsql::params![node_id.to_string()],
-            )
+        // Replace the node's embeddings atomically across both `embedding` and the
+        // `vec_embeddings` vec0 mirror. vec0 is keyed by embedding_id, so the leading
+        // DELETE must clear the node's existing vec rows via its current embedding ids
+        // BEFORE the rows disappear from `embedding`.
+        let tx = self
+            .db
+            .transaction()
             .await
-            .context("Failed to delete existing embeddings")?;
+            .context("Failed to begin upsert_embeddings transaction")?;
+
+        tx.execute(
+            "DELETE FROM vec_embeddings WHERE embedding_id IN (SELECT id FROM embedding WHERE node_id = ?1)",
+            libsql::params![node_id.to_string()],
+        )
+        .await
+        .context("Failed to clear vec_embeddings for node")?;
+
+        tx.execute(
+            "DELETE FROM embedding WHERE node_id = ?1",
+            libsql::params![node_id.to_string()],
+        )
+        .await
+        .context("Failed to delete existing embeddings")?;
 
         let now = Utc::now().to_rfc3339();
         for emb in embeddings {
@@ -2000,12 +2080,12 @@ impl SqliteStore {
                 .model_name
                 .unwrap_or_else(|| "nomic-embed-text-v1.5".to_string());
 
-            self.db.execute(
+            tx.execute(
                 "INSERT INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, NULL, ?12, ?13)",
                 libsql::params![
-                    id,
+                    id.clone(),
                     emb.node_id.clone(),
-                    vector_blob,
+                    vector_blob.clone(),
                     dimension,
                     model_name,
                     emb.chunk_index as i64,
@@ -2018,20 +2098,50 @@ impl SqliteStore {
                     now.clone(),
                 ],
             ).await.context("Failed to insert embedding")?;
+
+            // Mirror the (non-stale) vector into vec0 for KNN search, using the same id.
+            tx.execute(
+                "INSERT INTO vec_embeddings (embedding_id, vector) VALUES (?1, ?2)",
+                libsql::params![id, vector_blob],
+            )
+            .await
+            .context("Failed to insert into vec_embeddings")?;
         }
+
+        tx.commit()
+            .await
+            .context("Failed to commit upsert_embeddings transaction")?;
 
         Ok(())
     }
 
     pub async fn mark_root_embedding_stale(&self, node_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.db
-            .execute(
-                "UPDATE embedding SET stale = 1, modified_at = ?1 WHERE node_id = ?2",
-                libsql::params![now, node_id.to_string()],
-            )
+        let tx = self
+            .db
+            .transaction()
             .await
-            .context("Failed to mark embedding stale")?;
+            .context("Failed to begin mark-stale transaction")?;
+
+        // Stale vectors must not be searchable: drop them from the vec0 mirror.
+        // `upsert_embeddings` repopulates vec0 when the node is re-embedded.
+        tx.execute(
+            "DELETE FROM vec_embeddings WHERE embedding_id IN (SELECT id FROM embedding WHERE node_id = ?1)",
+            libsql::params![node_id.to_string()],
+        )
+        .await
+        .context("Failed to clear vec_embeddings for stale node")?;
+
+        tx.execute(
+            "UPDATE embedding SET stale = 1, modified_at = ?1 WHERE node_id = ?2",
+            libsql::params![now, node_id.to_string()],
+        )
+        .await
+        .context("Failed to mark embedding stale")?;
+
+        tx.commit()
+            .await
+            .context("Failed to commit mark-stale transaction")?;
         Ok(())
     }
 
@@ -2108,13 +2218,30 @@ impl SqliteStore {
     }
 
     pub async fn delete_embeddings(&self, node_id: &str) -> Result<()> {
-        self.db
-            .execute(
-                "DELETE FROM embedding WHERE node_id = ?1",
-                libsql::params![node_id.to_string()],
-            )
+        let tx = self
+            .db
+            .transaction()
             .await
-            .context("Failed to delete embeddings")?;
+            .context("Failed to begin delete_embeddings transaction")?;
+
+        // Clear the vec0 mirror first (keyed by embedding_id, so resolve via embedding).
+        tx.execute(
+            "DELETE FROM vec_embeddings WHERE embedding_id IN (SELECT id FROM embedding WHERE node_id = ?1)",
+            libsql::params![node_id.to_string()],
+        )
+        .await
+        .context("Failed to clear vec_embeddings for node")?;
+
+        tx.execute(
+            "DELETE FROM embedding WHERE node_id = ?1",
+            libsql::params![node_id.to_string()],
+        )
+        .await
+        .context("Failed to delete embeddings")?;
+
+        tx.commit()
+            .await
+            .context("Failed to commit delete_embeddings transaction")?;
         Ok(())
     }
 
@@ -2143,35 +2270,33 @@ impl SqliteStore {
     ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
         let min_score = threshold.unwrap_or(0.5);
 
-        // TODO(#1221): replace with sqlite-vec vec0 KNN query for O(log N) HNSW search.
-        // Current linear scan is correct but O(N) — acceptable until corpus exceeds ~10k nodes.
+        // vec0 KNN over the compact vector store, then JOIN back to recover node_id /
+        // total_chunks. vec0 holds only non-stale vectors (see upsert/delete/mark-stale),
+        // so `e.stale = 0` is a cheap defensive guard. We over-fetch chunks because many
+        // chunks map to one node and results are grouped per node.
+        let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let k = (limit * EMBEDDING_KNN_OVERFETCH).max(limit);
+
         let mut rows = self
             .db
             .query(
-                "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e WHERE e.stale = 0",
-                (),
+                "SELECT e.node_id, e.total_chunks, v.distance \
+                 FROM vec_embeddings v JOIN embedding e ON e.id = v.embedding_id \
+                 WHERE v.vector MATCH ?1 AND k = ?2 AND e.stale = 0",
+                libsql::params![query_blob, k],
             )
             .await
-            .context("Failed to load embeddings for search")?;
+            .context("Failed to run vec0 KNN search")?;
 
         // Group by node_id: track max similarity, chunk counts
         let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new(); // node_id -> (max_sim, matching_chunks, total_chunks)
 
         while let Some(row) = rows.next().await? {
             let node_id: String = row.get(0)?;
-            let vector_blob: Vec<u8> = row.get(1)?;
-            let total_chunks: i64 = row.get(2)?;
-
-            // Decode f32 LE bytes
-            if !vector_blob.len().is_multiple_of(4) {
-                continue;
-            }
-            let embedding: Vec<f32> = vector_blob
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect();
-
-            let similarity = cosine_similarity(query_vector, &embedding);
+            let total_chunks: i64 = row.get(1)?;
+            let distance: f64 = row.get(2)?;
+            // vec0 cosine distance_metric returns distance = 1 - cosine similarity
+            let similarity = 1.0 - distance;
 
             let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
             if similarity > entry.0 {
@@ -2220,27 +2345,33 @@ impl SqliteStore {
     ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
         let min_score = threshold.unwrap_or(0.5);
 
-        let mut rows = self.db.query(
-            "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e JOIN node n ON n.id = e.node_id WHERE e.stale = 0 AND n.node_type = ?1",
-            libsql::params![node_type.to_string()],
-        ).await.context("Failed to load typed embeddings for search")?;
+        // Same vec0 KNN as `search_embeddings`, with the node-type filter folded into the
+        // JOIN. The type filter is applied AFTER KNN, so use a larger over-fetch to keep
+        // enough surviving candidates of the requested type.
+        let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let k = (limit * EMBEDDING_KNN_OVERFETCH * 5).max(limit);
+
+        let mut rows = self
+            .db
+            .query(
+                "SELECT e.node_id, e.total_chunks, v.distance \
+             FROM vec_embeddings v \
+             JOIN embedding e ON e.id = v.embedding_id \
+             JOIN node n ON n.id = e.node_id \
+             WHERE v.vector MATCH ?1 AND k = ?2 AND e.stale = 0 AND n.node_type = ?3",
+                libsql::params![query_blob, k, node_type.to_string()],
+            )
+            .await
+            .context("Failed to run typed vec0 KNN search")?;
 
         let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new();
 
         while let Some(row) = rows.next().await? {
             let node_id: String = row.get(0)?;
-            let vector_blob: Vec<u8> = row.get(1)?;
-            let total_chunks: i64 = row.get(2)?;
+            let total_chunks: i64 = row.get(1)?;
+            let distance: f64 = row.get(2)?;
+            let similarity = 1.0 - distance;
 
-            if !vector_blob.len().is_multiple_of(4) {
-                continue;
-            }
-            let embedding: Vec<f32> = vector_blob
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect();
-
-            let similarity = cosine_similarity(query_vector, &embedding);
             let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
             if similarity > entry.0 {
                 entry.0 = similarity;
@@ -2777,6 +2908,8 @@ impl SqliteStore {
     pub async fn create_stale_embedding_marker(&self, node_id: &str) -> Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
+        // Deliberately NOT mirrored into vec_embeddings: this is a stale (stale=1)
+        // placeholder with a dummy vector and must never surface in KNN results.
         // Unit vector [1, 0, 0, ...] as 768×f32 LE bytes
         let mut vector_bytes = vec![0u8; 768 * 4];
         vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
@@ -2795,6 +2928,8 @@ impl SqliteStore {
 
         let start = std::time::Instant::now();
         let now = Utc::now().to_rfc3339();
+        // Stale placeholders are deliberately NOT mirrored into vec_embeddings (see
+        // create_stale_embedding_marker) — they must never appear in KNN results.
         let mut vector_bytes = vec![0u8; 768 * 4];
         vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
 
@@ -3015,31 +3150,6 @@ impl SqliteStore {
     }
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f64 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| (*x as f64) * (*y as f64))
-        .sum();
-    let mag_a: f64 = a
-        .iter()
-        .map(|x| (*x as f64) * (*x as f64))
-        .sum::<f64>()
-        .sqrt();
-    let mag_b: f64 = b
-        .iter()
-        .map(|x| (*x as f64) * (*x as f64))
-        .sum::<f64>()
-        .sqrt();
-    if mag_a == 0.0 || mag_b == 0.0 {
-        return 0.0;
-    }
-    dot / (mag_a * mag_b)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3096,6 +3206,203 @@ mod tests {
             "Not a valid SQLite file"
         );
 
+        Ok(())
+    }
+
+    // ---- sqlite-vec (#1221) ----
+
+    /// One 768-dim embedding whose only nonzero component is `axis` (a unit vector).
+    /// Two such vectors are identical iff they share an axis (cosine sim 1.0) and
+    /// orthogonal otherwise (cosine sim 0.0) — handy for deterministic KNN assertions.
+    fn unit_embedding(node_id: &str, axis: usize) -> crate::models::NewEmbedding {
+        let mut vector = vec![0.0f32; 768];
+        vector[axis] = 1.0;
+        crate::models::NewEmbedding {
+            node_id: node_id.to_string(),
+            vector,
+            model_name: Some("test-model".to_string()),
+            chunk_index: 0,
+            chunk_start: 0,
+            chunk_end: 100,
+            total_chunks: 1,
+            content_hash: format!("hash-{axis}"),
+            token_count: 10,
+        }
+    }
+
+    fn unit_query(axis: usize) -> Vec<f32> {
+        let mut v = vec![0.0f32; 768];
+        v[axis] = 1.0;
+        v
+    }
+
+    async fn vec_row_count(store: &SqliteStore) -> Result<i64> {
+        let mut rows = store
+            .db
+            .query("SELECT COUNT(*) FROM vec_embeddings", ())
+            .await?;
+        Ok(rows.next().await?.unwrap().get(0)?)
+    }
+
+    #[tokio::test]
+    async fn test_search_embeddings_self_query() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+
+        let results = store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?;
+
+        assert!(!results.is_empty(), "self-query should match");
+        assert_eq!(results[0].node_id, node.id);
+        assert!(
+            (results[0].max_similarity - 1.0).abs() < 1e-3,
+            "self-similarity should be ~1.0, got {}",
+            results[0].max_similarity
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_embeddings_clears_vec0() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+        assert_eq!(vec_row_count(&store).await?, 1);
+        assert!(!store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?
+            .is_empty());
+
+        store.delete_embeddings(&node.id).await?;
+
+        assert_eq!(vec_row_count(&store).await?, 0, "vec0 should be cleared");
+        assert!(
+            store
+                .search_embeddings(&unit_query(0), 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "search should return nothing after delete"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reupsert_replaces_vec0() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        // First embed on axis 0, then re-embed on axis 1.
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 1)])
+            .await?;
+
+        assert_eq!(vec_row_count(&store).await?, 1, "no stale duplicate rows");
+
+        // Query by the NEW axis ranks the node highly...
+        let by_new = store
+            .search_embeddings(&unit_query(1), 10, Some(0.5))
+            .await?;
+        assert_eq!(by_new[0].node_id, node.id);
+        assert!((by_new[0].max_similarity - 1.0).abs() < 1e-3);
+
+        // ...and the OLD axis no longer matches (orthogonal → sim 0).
+        let by_old = store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?;
+        assert!(
+            by_old.iter().all(|r| r.node_id != node.id),
+            "old vector should no longer match"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_stale_excludes_from_search() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+        store.mark_root_embedding_stale(&node.id).await?;
+
+        assert_eq!(
+            vec_row_count(&store).await?,
+            0,
+            "stale node removed from vec0"
+        );
+        assert!(
+            store
+                .search_embeddings(&unit_query(0), 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "stale embeddings must not be searchable"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stale_marker_never_in_knn() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "marker node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        // A placeholder marker carries a dummy unit [1,0,0,...] vector but stale=1.
+        store.create_stale_embedding_marker(&node.id).await?;
+
+        assert_eq!(
+            vec_row_count(&store).await?,
+            0,
+            "markers not mirrored to vec0"
+        );
+        // Search by the placeholder's own vector must not surface the marker node.
+        let results = store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?;
+        assert!(
+            results.iter().all(|r| r.node_id != node.id),
+            "stale marker must never appear in KNN results"
+        );
         Ok(())
     }
 }

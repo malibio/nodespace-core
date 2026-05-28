@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 # Database - SQLite via libsql
 libsql = { workspace = true }
+# Vector search extension (statically linked, registered via sqlite3_auto_extension)
+sqlite-vec = { workspace = true }
 
 # NLP Engine for embeddings
 nodespace-nlp-engine = { path = "../nlp-engine" }
