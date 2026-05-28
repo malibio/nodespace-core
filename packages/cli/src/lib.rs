@@ -166,6 +166,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             let mut client = connect_session(&sock).await?;
             commands::session::run(&mut client, action, json).await
         }
-        Command::Uninstall(args) => commands::uninstall::run(args).await,
+        Command::Uninstall(args) => commands::uninstall::run(args),
     }
 }

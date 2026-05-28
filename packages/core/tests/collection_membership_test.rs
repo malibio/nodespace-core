@@ -34,9 +34,10 @@
 mod collection_membership_tests {
     use anyhow::Result;
     use nodespace_core::db::SurrealStore;
+    use nodespace_core::models::Node;
+    use serde_json::json;
     use tempfile::TempDir;
 
-    /// Helper to create test database
     async fn create_test_db() -> Result<(SurrealStore, TempDir)> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
@@ -44,85 +45,38 @@ mod collection_membership_tests {
         Ok((store, temp_dir))
     }
 
+    fn make_node(id: &str, node_type: &str, content: &str) -> Node {
+        Node::new_with_id(
+            id.to_string(),
+            node_type.to_string(),
+            content.to_string(),
+            json!({}),
+        )
+    }
+
     #[tokio::test]
     async fn test_member_of_edge_creation() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create a collection node
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:collection1 CONTENT {
-                    node_type: 'collection',
-                    content: 'HR Collection',
-                    version: 1,
-                    properties: { description: 'Human resources documents' },
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(
+                make_node("collection1", "collection", "HR Collection"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Create a text node
-        store
-            .db()
-            .query(
-                r#"
-                CREATE node:doc1 CONTENT {
-                    node_type: 'text',
-                    content: 'Employee Handbook',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Create member_of relationship via universal relationship table
-        // Direction: member → relationship → collection
-        store
-            .db()
-            .query(
-                r#"
-                RELATE node:doc1->relationship->node:collection1 CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Verify relationship was created: get in and out as string IDs
-        let result = store
-            .db()
-            .query("SELECT VALUE meta::id(in) FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc1")
             .await?;
-
-        let mut result = result.check()?;
-        let in_ids: Vec<String> = result.take(0)?;
-        assert_eq!(in_ids.len(), 1, "Should find one member_of relationship");
-        assert_eq!(in_ids[0], "doc1");
-
-        // Also verify the out (collection) side
-        let result2 = store
-            .db()
-            .query("SELECT VALUE meta::id(out) FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc1")
+        store
+            .create_node(make_node("doc1", "text", "Employee Handbook"), None, None)
             .await?;
+        store.add_to_collection("doc1", "collection1").await?;
 
-        let mut result2 = result2.check()?;
-        let out_ids: Vec<String> = result2.take(0)?;
-        assert_eq!(out_ids.len(), 1, "Should find one out node");
-        assert_eq!(out_ids[0], "collection1");
+        let memberships = store.get_node_memberships("doc1").await?;
+        assert_eq!(
+            memberships.len(),
+            1,
+            "Should find one member_of relationship"
+        );
+        assert_eq!(memberships[0], "collection1");
 
         Ok(())
     }
@@ -131,76 +85,25 @@ mod collection_membership_tests {
     async fn test_query_node_collections() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create multiple collections
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:coll_hr CONTENT {
-                    node_type: 'collection',
-                    content: 'HR',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:coll_policy CONTENT {
-                    node_type: 'collection',
-                    content: 'Policy',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:doc1 CONTENT {
-                    node_type: 'text',
-                    content: 'Vacation Policy',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Add doc1 to both collections via universal relationship table
+            .create_node(make_node("coll_hr", "collection", "HR"), None, None)
+            .await?;
         store
-            .db()
-            .query(
-                r#"
-                RELATE node:doc1->relationship->node:coll_hr CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                RELATE node:doc1->relationship->node:coll_policy CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Query what collections doc1 belongs to (count relationships)
-        let result = store
-            .db()
-            .query("SELECT count() FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc1 GROUP ALL")
+            .create_node(make_node("coll_policy", "collection", "Policy"), None, None)
+            .await?;
+        store
+            .create_node(make_node("doc1", "text", "Vacation Policy"), None, None)
             .await?;
 
-        let mut result = result.check()?;
-        let count_result: Option<serde_json::Value> = result.take(0)?;
-        let count = count_result.and_then(|v| v["count"].as_u64()).unwrap_or(0);
-        assert_eq!(count, 2, "Document should belong to 2 collections");
+        store.add_to_collection("doc1", "coll_hr").await?;
+        store.add_to_collection("doc1", "coll_policy").await?;
+
+        let memberships = store.get_node_memberships("doc1").await?;
+        assert_eq!(
+            memberships.len(),
+            2,
+            "Document should belong to 2 collections"
+        );
 
         Ok(())
     }
@@ -209,85 +112,32 @@ mod collection_membership_tests {
     async fn test_query_collection_members() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create a collection and multiple documents
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:coll_team CONTENT {
-                    node_type: 'collection',
-                    content: 'Team Docs',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:doc_a CONTENT {
-                    node_type: 'text',
-                    content: 'Document A',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:doc_b CONTENT {
-                    node_type: 'text',
-                    content: 'Document B',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:doc_c CONTENT {
-                    node_type: 'text',
-                    content: 'Document C (not in collection)',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(
+                make_node("coll_team", "collection", "Team Docs"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Add doc_a and doc_b to collection (but not doc_c)
+            .await?;
         store
-            .db()
-            .query(
-                r#"
-                RELATE node:doc_a->relationship->node:coll_team CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                RELATE node:doc_b->relationship->node:coll_team CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(make_node("doc_a", "text", "Document A"), None, None)
+            .await?;
+        store
+            .create_node(make_node("doc_b", "text", "Document B"), None, None)
+            .await?;
+        store
+            .create_node(
+                make_node("doc_c", "text", "Document C (not in collection)"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Query members of collection (count relationships)
-        let result = store
-            .db()
-            .query("SELECT count() FROM relationship WHERE relationship_type = 'member_of' AND out = node:coll_team GROUP ALL")
             .await?;
 
-        let mut result = result.check()?;
-        let count_result: Option<serde_json::Value> = result.take(0)?;
-        let count = count_result.and_then(|v| v["count"].as_u64()).unwrap_or(0);
-        assert_eq!(count, 2, "Collection should have 2 members");
+        store.add_to_collection("doc_a", "coll_team").await?;
+        store.add_to_collection("doc_b", "coll_team").await?;
+
+        let members = store.get_collection_members("coll_team").await?;
+        assert_eq!(members.len(), 2, "Collection should have 2 members");
 
         Ok(())
     }
@@ -296,171 +146,68 @@ mod collection_membership_tests {
     async fn test_remove_membership() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create collection and document
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:coll_remove CONTENT {
-                    node_type: 'collection',
-                    content: 'Collection for removal test',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:doc_remove CONTENT {
-                    node_type: 'text',
-                    content: 'Document to remove',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(
+                make_node("coll_remove", "collection", "Collection for removal test"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Add membership via universal relationship table
+            .await?;
         store
-            .db()
-            .query(
-                r#"
-                RELATE node:doc_remove->relationship->node:coll_remove CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(
+                make_node("doc_remove", "text", "Document to remove"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Verify membership exists (count relationships)
-        let result = store
-            .db()
-            .query("SELECT count() FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc_remove GROUP ALL")
             .await?;
 
-        let mut result = result.check()?;
-        let count_result: Option<serde_json::Value> = result.take(0)?;
-        let count = count_result.and_then(|v| v["count"].as_u64()).unwrap_or(0);
-        assert_eq!(count, 1, "Membership should exist");
+        store.add_to_collection("doc_remove", "coll_remove").await?;
+        let before = store.get_node_memberships("doc_remove").await?;
+        assert_eq!(before.len(), 1, "Membership should exist");
 
-        // Remove membership from universal relationship table
         store
-            .db()
-            .query("DELETE relationship WHERE relationship_type = 'member_of' AND in = node:doc_remove AND out = node:coll_remove")
-            .await?
-            .check()?;
-
-        // Verify membership is removed (count should be 0)
-        let result = store
-            .db()
-            .query("SELECT count() FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc_remove GROUP ALL")
+            .remove_from_collection("doc_remove", "coll_remove")
             .await?;
-
-        let mut result = result.check()?;
-        let count_result: Option<serde_json::Value> = result.take(0)?;
-        // When no rows match GROUP ALL, the result is empty/none
-        let count = count_result.and_then(|v| v["count"].as_u64()).unwrap_or(0);
-        assert_eq!(count, 0, "Membership should be removed");
+        let after = store.get_node_memberships("doc_remove").await?;
+        assert_eq!(after.len(), 0, "Membership should be removed");
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_nested_collections_via_member_of() -> Result<()> {
-        // Issue #808: Collection hierarchy uses member_of relationships in universal relationship table
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create nested collection hierarchy: hr -> policy -> vacation
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:coll_hr CONTENT {
-                    node_type: 'collection',
-                    content: 'HR',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:coll_policy CONTENT {
-                    node_type: 'collection',
-                    content: 'Policy',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:coll_vacation CONTENT {
-                    node_type: 'collection',
-                    content: 'Vacation',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Issue #808: Create hierarchy using member_of relationships (child -> relationship -> parent)
-        // policy is member_of hr, vacation is member_of policy
+            .create_node(make_node("coll_hr", "collection", "HR"), None, None)
+            .await?;
         store
-            .db()
-            .query(
-                r#"
-                RELATE node:coll_policy->relationship->node:coll_hr CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now(),
-                    version: 1
-                };
-
-                RELATE node:coll_vacation->relationship->node:coll_policy CONTENT {
-                    relationship_type: 'member_of',
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now(),
-                    version: 1
-                };
-                "#,
+            .create_node(make_node("coll_policy", "collection", "Policy"), None, None)
+            .await?;
+        store
+            .create_node(
+                make_node("coll_vacation", "collection", "Vacation"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Verify hierarchy: policy is member_of hr
-        let result = store
-            .db()
-            .query("SELECT VALUE out.content FROM relationship WHERE in = node:coll_policy AND relationship_type = 'member_of'")
             .await?;
 
-        let mut result = result.check()?;
-        let parents: Vec<String> = result.take(0)?;
-        assert_eq!(parents.len(), 1, "Policy should have 1 parent (HR)");
-        assert_eq!(parents[0], "HR");
-
-        // Verify hierarchy: vacation is member_of policy
-        let result = store
-            .db()
-            .query("SELECT VALUE out.content FROM relationship WHERE in = node:coll_vacation AND relationship_type = 'member_of'")
+        store.add_to_collection("coll_policy", "coll_hr").await?;
+        store
+            .add_to_collection("coll_vacation", "coll_policy")
             .await?;
 
-        let mut result = result.check()?;
-        let parents: Vec<String> = result.take(0)?;
-        assert_eq!(parents.len(), 1, "Vacation should have 1 parent (Policy)");
-        assert_eq!(parents[0], "Policy");
+        let policy_parents = store.get_node_memberships("coll_policy").await?;
+        assert_eq!(policy_parents.len(), 1, "Policy should have 1 parent (HR)");
+        assert_eq!(policy_parents[0], "coll_hr");
+
+        let vacation_parents = store.get_node_memberships("coll_vacation").await?;
+        assert_eq!(
+            vacation_parents.len(),
+            1,
+            "Vacation should have 1 parent (Policy)"
+        );
+        assert_eq!(vacation_parents[0], "coll_policy");
 
         Ok(())
     }
@@ -469,97 +216,42 @@ mod collection_membership_tests {
     async fn test_collection_with_multiple_node_types() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create a collection
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:coll_mixed CONTENT {
-                    node_type: 'collection',
-                    content: 'Mixed Content Collection',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(
+                make_node("coll_mixed", "collection", "Mixed Content Collection"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Create nodes of different types
-        let uuid = "550e8400-e29b-41d4-a716-446655440100";
+            .await?;
         store
-            .db()
-            .query(format!(
-                r#"
-                -- Text node
-                CREATE node:text_node CONTENT {{
-                    node_type: 'text',
-                    content: 'Text document',
-                    version: 1,
-                    properties: {{}},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                }};
-
-                -- Task node (Universal Graph Architecture)
-                CREATE node:`{uuid}` CONTENT {{
-                    node_type: 'task',
-                    content: 'Task item',
-                    version: 1,
-                    properties: {{ status: 'open', priority: 'high' }},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                }};
-                "#
-            ))
-            .await?
-            .check()?;
-
-        // Add both to collection via universal relationship table
-        store
-            .db()
-            .query(format!(
-                r#"
-                RELATE node:text_node->relationship->node:coll_mixed CONTENT {{
-                    relationship_type: 'member_of',
-                    properties: {{}},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                }};
-                RELATE node:`{uuid}`->relationship->node:coll_mixed CONTENT {{
-                    relationship_type: 'member_of',
-                    properties: {{}},
-                    version: 1,
-                    created_at: time::now(),
-                    modified_at: time::now()
-                }};
-                "#
-            ))
-            .await?
-            .check()?;
-
-        // Query collection members with their types via relationship table
-        let result = store
-            .db()
-            .query("SELECT in.node_type AS node_type FROM relationship WHERE relationship_type = 'member_of' AND out = node:coll_mixed")
+            .create_node(make_node("text_node", "text", "Text document"), None, None)
             .await?;
 
-        let mut result = result.check()?;
-        let members: Vec<serde_json::Value> = result.take(0)?;
+        let uuid = "550e8400-e29b-41d4-a716-446655440100";
+        store
+            .create_node(
+                Node::new_with_id(
+                    uuid.to_string(),
+                    "task".to_string(),
+                    "Task item".to_string(),
+                    json!({"task": {"status": "open", "priority": "high"}}),
+                ),
+                None,
+                None,
+            )
+            .await?;
+
+        store.add_to_collection("text_node", "coll_mixed").await?;
+        store.add_to_collection(uuid, "coll_mixed").await?;
+
+        let members = store.get_collection_members("coll_mixed").await?;
         assert_eq!(
             members.len(),
             2,
             "Collection should have 2 members of different types"
         );
 
-        // Verify we have both types
-        let types: Vec<&str> = members
-            .iter()
-            .filter_map(|m| m["node_type"].as_str())
-            .collect();
+        let types: Vec<&str> = members.iter().map(|n| n.node_type.as_str()).collect();
         assert!(types.contains(&"text"), "Should contain text node");
         assert!(types.contains(&"task"), "Should contain task node");
 
@@ -570,84 +262,27 @@ mod collection_membership_tests {
     async fn test_membership_idempotency() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        // Create collection and document
         store
-            .db()
-            .query(
-                r#"
-                CREATE node:coll_idem CONTENT {
-                    node_type: 'collection',
-                    content: 'Idempotency Test',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-
-                CREATE node:doc_idem CONTENT {
-                    node_type: 'text',
-                    content: 'Test Document',
-                    version: 1,
-                    properties: {},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                };
-                "#,
+            .create_node(
+                make_node("coll_idem", "collection", "Idempotency Test"),
+                None,
+                None,
             )
-            .await?
-            .check()?;
-
-        // Add membership twice - should not create duplicate relationships
-        // Using IF NOT EXISTS pattern with universal relationship table
+            .await?;
         store
-            .db()
-            .query(
-                r#"
-                LET $existing = SELECT * FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc_idem AND out = node:coll_idem;
-                IF array::len($existing) == 0 THEN {
-                    RELATE node:doc_idem->relationship->node:coll_idem CONTENT {
-                        relationship_type: 'member_of',
-                        properties: {},
-                        version: 1,
-                        created_at: time::now(),
-                        modified_at: time::now()
-                    }
-                } END;
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Try to add again
-        store
-            .db()
-            .query(
-                r#"
-                LET $existing = SELECT * FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc_idem AND out = node:coll_idem;
-                IF array::len($existing) == 0 THEN {
-                    RELATE node:doc_idem->relationship->node:coll_idem CONTENT {
-                        relationship_type: 'member_of',
-                        properties: {},
-                        version: 1,
-                        created_at: time::now(),
-                        modified_at: time::now()
-                    }
-                } END;
-                "#,
-            )
-            .await?
-            .check()?;
-
-        // Verify only one relationship exists (count)
-        let result = store
-            .db()
-            .query("SELECT count() FROM relationship WHERE relationship_type = 'member_of' AND in = node:doc_idem AND out = node:coll_idem GROUP ALL")
+            .create_node(make_node("doc_idem", "text", "Test Document"), None, None)
             .await?;
 
-        let mut result = result.check()?;
-        let count_result: Option<serde_json::Value> = result.take(0)?;
-        let count = count_result.and_then(|v| v["count"].as_u64()).unwrap_or(0);
-        assert_eq!(count, 1, "Should have exactly one membership relationship");
+        // add_to_collection is idempotent — add twice, expect only one membership
+        store.add_to_collection("doc_idem", "coll_idem").await?;
+        store.add_to_collection("doc_idem", "coll_idem").await?;
+
+        let memberships = store.get_node_memberships("doc_idem").await?;
+        assert_eq!(
+            memberships.len(),
+            1,
+            "Should have exactly one membership relationship"
+        );
 
         Ok(())
     }
@@ -673,24 +308,20 @@ mod collection_service_tests {
         Ok((store, node_service, temp_dir))
     }
 
-    /// Helper to create a text node via raw SQL
     async fn create_text_node(store: &SurrealStore, id: &str, content: &str) -> Result<()> {
+        use nodespace_core::models::Node;
         store
-            .db()
-            .query(format!(
-                r#"
-                CREATE node:`{id}` CONTENT {{
-                    node_type: 'text',
-                    content: '{content}',
-                    version: 1,
-                    properties: {{}},
-                    created_at: time::now(),
-                    modified_at: time::now()
-                }};
-                "#
-            ))
-            .await?
-            .check()?;
+            .create_node(
+                Node::new_with_id(
+                    id.to_string(),
+                    "text".to_string(),
+                    content.to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await?;
         Ok(())
     }
 
@@ -1389,8 +1020,9 @@ mod collection_service_tests {
         // Drain creation events from resolve_path
         while event_rx.try_recv().is_ok() {}
 
-        // Create a text node via raw SQL (doesn't go through NodeService)
+        // Create a text node (emits NodeCreated — drain it before checking relationship events)
         create_text_node(&store, "event-doc", "Event Test Doc").await?;
+        while event_rx.try_recv().is_ok() {}
 
         // Add node to collection - should emit RelationshipCreated via NodeService
         collection_service
@@ -1404,8 +1036,8 @@ mod collection_service_tests {
             .expect("Should receive event");
         match &envelope.event {
             DomainEvent::RelationshipCreated { relationship } => {
-                assert_eq!(relationship.from_id, "event-doc");
-                assert_eq!(relationship.to_id, collection_id);
+                assert_eq!(relationship.from_id, "node:event-doc");
+                assert_eq!(relationship.to_id, format!("node:{}", collection_id));
                 assert_eq!(relationship.relationship_type, "member_of");
             }
             other => panic!("Expected RelationshipCreated, got {:?}", other),

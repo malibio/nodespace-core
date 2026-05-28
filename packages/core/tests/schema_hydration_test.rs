@@ -6,7 +6,9 @@ use serde_json::json;
 async fn test_schema_property_hydration() -> Result<(), Box<dyn std::error::Error>> {
     // Create a temporary database
     let temp_dir = std::env::temp_dir().join(format!("test_schema_{}", uuid::Uuid::new_v4()));
-    let store = SurrealStore::new(temp_dir.clone()).await?;
+    std::fs::create_dir_all(&temp_dir)?;
+    let db_path = temp_dir.join("test.db");
+    let store = SurrealStore::new(db_path).await?;
 
     println!("✅ Database initialized");
 
@@ -43,21 +45,6 @@ async fn test_schema_property_hydration() -> Result<(), Box<dyn std::error::Erro
         Ok(Some(node)) => println!("✅ Found node: {} (type: {})", node.id, node.node_type),
         Ok(None) => println!("❌ Node not found"),
         Err(e) => println!("❌ Error checking node: {}", e),
-    }
-
-    // Debug: Check what's in the schema table
-    println!("📊 Checking schema table...");
-    let schema_query = "SELECT * FROM schema;";
-    let mut schema_response = store.db().query(schema_query).await;
-    match schema_response {
-        Ok(ref mut response) => {
-            let schema_records: Result<Vec<serde_json::Value>, _> = response.take(0);
-            match schema_records {
-                Ok(records) => println!("Records in schema table: {:?}", records),
-                Err(e) => println!("Error deserializing schema table: {:?}", e),
-            }
-        }
-        Err(e) => println!("Error querying schema table: {:?}", e),
     }
 
     let retrieved = store.get_node("simple").await?;
