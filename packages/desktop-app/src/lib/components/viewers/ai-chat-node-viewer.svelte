@@ -1,9 +1,18 @@
 <!--
   AiChatNodeViewer - Page-level viewer for AI chat conversation nodes
 
-  Renders a conversation from node properties (messages[]) using the existing
-  ChatMessage and ToolCallDisplay components from #1003. Implements write
-  buffering with debounced flush and tool result archival per ADR-028.
+  Per ADR-034, `ai-chat` is one node type with four provider modes. This viewer
+  dispatches on `properties.provider`:
+    - native | ollama | openai  → message UI (chat input + streamed messages[],
+      ADR-028): the conversation lives in the node.
+    - pty                       → embedded terminal (mode 2d) via AiChatPtyView:
+      the terminal IS the node's viewer; capture backfills the node.
+    - unset (placeholder)       → provider picker (a fresh `/ai-chat` node has no
+      provider chosen yet).
+
+  Renders the message UI from node properties (messages[]) using the existing
+  ChatMessage component from #1003. Implements write buffering with debounced
+  flush and tool result archival per ADR-028.
 
   Follows the *NodeViewer pattern but does NOT wrap BaseNodeViewer because
   it renders a chat conversation rather than a hierarchical node collection.
@@ -14,12 +23,23 @@
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import ChatMessage from '$lib/components/chat/chat-message.svelte';
   import ChatInput from '$lib/components/chat/chat-input.svelte';
+  import AiChatPtyView from './ai-chat-pty-view.svelte';
   import { chatStore } from '$lib/stores/chat-store.svelte';
   import type { DisplayMessage } from '$lib/stores/chat-store.svelte';
   import type { ToolExecutionRecord } from '$lib/types/agent-types';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('AiChatNodeViewer');
+
+  /** Provider modes that render the message UI (ADR-034 modes 2a/2b/2c). */
+  const MESSAGE_PROVIDERS = ['native', 'ollama', 'openai'] as const;
+  type MessageProvider = (typeof MESSAGE_PROVIDERS)[number];
+  const PROVIDER_OPTIONS: { id: MessageProvider | 'pty'; label: string; hint: string }[] = [
+    { id: 'native', label: 'Built-in model', hint: 'Local nlp-engine (downloads a model)' },
+    { id: 'ollama', label: 'Ollama', hint: 'Local Ollama via the OpenAI protocol' },
+    { id: 'openai', label: 'OpenAI endpoint', hint: 'Any OpenAI-protocol endpoint (BYO key)' },
+    { id: 'pty', label: 'Agent (terminal)', hint: 'Claude Code, Codex, Gemini, Pi, OpenCode' },
+  ];
 
   let {
     nodeId,
@@ -42,10 +62,22 @@
 
   // --- Reactive node lookup ---
   const node = $derived(sharedNodeStore.getNode(nodeId));
-  const provider = $derived(
-    (node?.properties?.provider as string) ?? 'native'
+  // Undefined = placeholder (a fresh `/ai-chat` node before a mode is chosen).
+  const provider = $derived(node?.properties?.provider as string | undefined);
+  const isMessageProvider = $derived(
+    provider !== undefined && (MESSAGE_PROVIDERS as readonly string[]).includes(provider)
   );
   const model = $derived((node?.properties?.model as string) ?? '');
+
+  /** Persist the chosen provider mode onto the node (placeholder → configured). */
+  function selectProvider(p: MessageProvider | 'pty'): void {
+    const current = sharedNodeStore.getNode(nodeId);
+    sharedNodeStore.updateNode(
+      nodeId,
+      { properties: { ...current?.properties, provider: p } },
+      { type: 'viewer', viewerId: 'ai-chat-viewer' }
+    );
+  }
   const status = $derived(
     (node?.properties?.status as string) ?? 'active'
   );
@@ -249,12 +281,16 @@
 </script>
 
 <div class="ai-chat-viewer">
-  <!-- Header -->
+  <!-- Header (shown in every mode) -->
   <div class="chat-viewer-header">
     <div class="chat-viewer-header-left">
       <h2 class="chat-viewer-title">{node?.content ?? 'AI Chat'}</h2>
       <div class="chat-viewer-meta">
-        <span class="meta-badge">{provider}</span>
+        {#if provider}
+          <span class="meta-badge">{provider}</span>
+        {:else}
+          <span class="meta-badge meta-placeholder">unconfigured</span>
+        {/if}
         {#if model}
           <span class="meta-badge meta-model">{model}</span>
         {/if}
@@ -272,13 +308,31 @@
     {/if}
   </div>
 
-  <!-- Message list -->
-  <div
-    class="chat-viewer-messages"
-    bind:this={messagesContainer}
-    role="list"
-    aria-label="Chat conversation"
-  >
+  {#if provider === undefined}
+    <!-- Placeholder: choose a provider mode (ADR-034). -->
+    <div class="provider-picker">
+      <p class="provider-picker-prompt">How should this conversation be powered?</p>
+      <div class="provider-grid">
+        {#each PROVIDER_OPTIONS as opt (opt.id)}
+          <button class="provider-option" onclick={() => selectProvider(opt.id)}>
+            <span class="provider-option-label">{opt.label}</span>
+            <span class="provider-option-hint">{opt.hint}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+  {:else if provider === 'pty'}
+    <!-- Mode 2d: embedded terminal IS the viewer. -->
+    <AiChatPtyView {nodeId} />
+  {:else if isMessageProvider}
+    <!-- Modes 2a/2b/2c: message UI. -->
+    <!-- Message list -->
+    <div
+      class="chat-viewer-messages"
+      bind:this={messagesContainer}
+      role="list"
+      aria-label="Chat conversation"
+    >
     {#if inMemoryMessages.length === 0}
       <div class="empty-conversation">
         <div class="empty-conversation-icon">
@@ -310,17 +364,18 @@
     {/if}
   </div>
 
-  <!-- Input -->
-  {#if status !== 'archived'}
-    <ChatInput
-      onSend={handleSend}
-      disabled={isStreaming}
-      placeholder={isStreaming ? 'AI is responding...' : 'Type a message...'}
-    />
-  {:else}
-    <div class="archived-notice">
-      This conversation is archived and read-only.
-    </div>
+    <!-- Input -->
+    {#if status !== 'archived'}
+      <ChatInput
+        onSend={handleSend}
+        disabled={isStreaming}
+        placeholder={isStreaming ? 'AI is responding...' : 'Type a message...'}
+      />
+    {:else}
+      <div class="archived-notice">
+        This conversation is archived and read-only.
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -378,6 +433,67 @@
   .meta-archived {
     color: hsl(var(--destructive));
     background: hsl(var(--destructive) / 0.1);
+  }
+
+  .meta-placeholder {
+    font-style: italic;
+  }
+
+  .provider-picker {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem 1rem;
+    overflow-y: auto;
+  }
+
+  .provider-picker-prompt {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+
+  .provider-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    width: 100%;
+    max-width: 32rem;
+  }
+
+  .provider-option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.875rem 1rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--card));
+    text-align: left;
+    cursor: pointer;
+    transition:
+      border-color 0.15s,
+      background 0.15s;
+  }
+
+  .provider-option:hover {
+    border-color: hsl(var(--ring));
+    background: hsl(var(--accent));
+  }
+
+  .provider-option-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .provider-option-hint {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
   }
 
   .save-indicator {

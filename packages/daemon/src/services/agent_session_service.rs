@@ -151,8 +151,13 @@ impl AgentSessionService for AgentSessionHandler {
         }
 
         // Spawn a capture task that waits for the session to exit, then
-        // creates an ai-chat node if capture is enabled. This runs after
-        // the launch response is returned — it does not block session start.
+        // backfills the session's ai-chat node if capture is enabled. This runs
+        // after the launch response is returned — it does not block session
+        // start.
+        //
+        // The node already exists (created up front via `/ai-chat`, provider
+        // mode 2d per ADR-034); `node_id` identifies it so capture backfills
+        // that node rather than minting a new one.
         //
         // Capture config is read once here (at launch time) so finalize_capture
         // doesn't re-hit the filesystem on every session end. Sessions started
@@ -162,6 +167,7 @@ impl AgentSessionService for AgentSessionHandler {
             let node_service = self.node_service.clone();
             let config_path = self.config_path.clone();
             let started_at = session.started_at;
+            let node_id = req.node_id.clone();
 
             tokio::spawn(async move {
                 let config = match read_capture_settings(&config_path).await {
@@ -187,6 +193,7 @@ impl AgentSessionService for AgentSessionHandler {
                 let capture = session.snapshot_capture().await;
                 let completed = CompletedSession {
                     id: session.id,
+                    node_id,
                     agent_type: agent_type_str,
                     started_at,
                     ended_at: Utc::now(),
