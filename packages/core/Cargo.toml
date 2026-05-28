@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Database - SurrealDB as the only backend
-surrealdb = { workspace = true }
+# Database - SQLite via libsql
+libsql = { workspace = true }
 
 # NLP Engine for embeddings
 nodespace-nlp-engine = { path = "../nlp-engine" }
