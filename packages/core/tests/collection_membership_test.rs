@@ -46,19 +46,36 @@ mod collection_membership_tests {
     }
 
     fn make_node(id: &str, node_type: &str, content: &str) -> Node {
-        Node::new_with_id(id.to_string(), node_type.to_string(), content.to_string(), json!({}))
+        Node::new_with_id(
+            id.to_string(),
+            node_type.to_string(),
+            content.to_string(),
+            json!({}),
+        )
     }
 
     #[tokio::test]
     async fn test_member_of_edge_creation() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("collection1", "collection", "HR Collection"), None, None).await?;
-        store.create_node(make_node("doc1", "text", "Employee Handbook"), None, None).await?;
+        store
+            .create_node(
+                make_node("collection1", "collection", "HR Collection"),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .create_node(make_node("doc1", "text", "Employee Handbook"), None, None)
+            .await?;
         store.add_to_collection("doc1", "collection1").await?;
 
         let memberships = store.get_node_memberships("doc1").await?;
-        assert_eq!(memberships.len(), 1, "Should find one member_of relationship");
+        assert_eq!(
+            memberships.len(),
+            1,
+            "Should find one member_of relationship"
+        );
         assert_eq!(memberships[0], "collection1");
 
         Ok(())
@@ -68,15 +85,25 @@ mod collection_membership_tests {
     async fn test_query_node_collections() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("coll_hr", "collection", "HR"), None, None).await?;
-        store.create_node(make_node("coll_policy", "collection", "Policy"), None, None).await?;
-        store.create_node(make_node("doc1", "text", "Vacation Policy"), None, None).await?;
+        store
+            .create_node(make_node("coll_hr", "collection", "HR"), None, None)
+            .await?;
+        store
+            .create_node(make_node("coll_policy", "collection", "Policy"), None, None)
+            .await?;
+        store
+            .create_node(make_node("doc1", "text", "Vacation Policy"), None, None)
+            .await?;
 
         store.add_to_collection("doc1", "coll_hr").await?;
         store.add_to_collection("doc1", "coll_policy").await?;
 
         let memberships = store.get_node_memberships("doc1").await?;
-        assert_eq!(memberships.len(), 2, "Document should belong to 2 collections");
+        assert_eq!(
+            memberships.len(),
+            2,
+            "Document should belong to 2 collections"
+        );
 
         Ok(())
     }
@@ -85,10 +112,26 @@ mod collection_membership_tests {
     async fn test_query_collection_members() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("coll_team", "collection", "Team Docs"), None, None).await?;
-        store.create_node(make_node("doc_a", "text", "Document A"), None, None).await?;
-        store.create_node(make_node("doc_b", "text", "Document B"), None, None).await?;
-        store.create_node(make_node("doc_c", "text", "Document C (not in collection)"), None, None).await?;
+        store
+            .create_node(
+                make_node("coll_team", "collection", "Team Docs"),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .create_node(make_node("doc_a", "text", "Document A"), None, None)
+            .await?;
+        store
+            .create_node(make_node("doc_b", "text", "Document B"), None, None)
+            .await?;
+        store
+            .create_node(
+                make_node("doc_c", "text", "Document C (not in collection)"),
+                None,
+                None,
+            )
+            .await?;
 
         store.add_to_collection("doc_a", "coll_team").await?;
         store.add_to_collection("doc_b", "coll_team").await?;
@@ -103,14 +146,28 @@ mod collection_membership_tests {
     async fn test_remove_membership() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("coll_remove", "collection", "Collection for removal test"), None, None).await?;
-        store.create_node(make_node("doc_remove", "text", "Document to remove"), None, None).await?;
+        store
+            .create_node(
+                make_node("coll_remove", "collection", "Collection for removal test"),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .create_node(
+                make_node("doc_remove", "text", "Document to remove"),
+                None,
+                None,
+            )
+            .await?;
 
         store.add_to_collection("doc_remove", "coll_remove").await?;
         let before = store.get_node_memberships("doc_remove").await?;
         assert_eq!(before.len(), 1, "Membership should exist");
 
-        store.remove_from_collection("doc_remove", "coll_remove").await?;
+        store
+            .remove_from_collection("doc_remove", "coll_remove")
+            .await?;
         let after = store.get_node_memberships("doc_remove").await?;
         assert_eq!(after.len(), 0, "Membership should be removed");
 
@@ -121,19 +178,35 @@ mod collection_membership_tests {
     async fn test_nested_collections_via_member_of() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("coll_hr", "collection", "HR"), None, None).await?;
-        store.create_node(make_node("coll_policy", "collection", "Policy"), None, None).await?;
-        store.create_node(make_node("coll_vacation", "collection", "Vacation"), None, None).await?;
+        store
+            .create_node(make_node("coll_hr", "collection", "HR"), None, None)
+            .await?;
+        store
+            .create_node(make_node("coll_policy", "collection", "Policy"), None, None)
+            .await?;
+        store
+            .create_node(
+                make_node("coll_vacation", "collection", "Vacation"),
+                None,
+                None,
+            )
+            .await?;
 
         store.add_to_collection("coll_policy", "coll_hr").await?;
-        store.add_to_collection("coll_vacation", "coll_policy").await?;
+        store
+            .add_to_collection("coll_vacation", "coll_policy")
+            .await?;
 
         let policy_parents = store.get_node_memberships("coll_policy").await?;
         assert_eq!(policy_parents.len(), 1, "Policy should have 1 parent (HR)");
         assert_eq!(policy_parents[0], "coll_hr");
 
         let vacation_parents = store.get_node_memberships("coll_vacation").await?;
-        assert_eq!(vacation_parents.len(), 1, "Vacation should have 1 parent (Policy)");
+        assert_eq!(
+            vacation_parents.len(),
+            1,
+            "Vacation should have 1 parent (Policy)"
+        );
         assert_eq!(vacation_parents[0], "coll_policy");
 
         Ok(())
@@ -143,20 +216,40 @@ mod collection_membership_tests {
     async fn test_collection_with_multiple_node_types() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("coll_mixed", "collection", "Mixed Content Collection"), None, None).await?;
-        store.create_node(make_node("text_node", "text", "Text document"), None, None).await?;
+        store
+            .create_node(
+                make_node("coll_mixed", "collection", "Mixed Content Collection"),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .create_node(make_node("text_node", "text", "Text document"), None, None)
+            .await?;
 
         let uuid = "550e8400-e29b-41d4-a716-446655440100";
-        store.create_node(
-            Node::new_with_id(uuid.to_string(), "task".to_string(), "Task item".to_string(), json!({"task": {"status": "open", "priority": "high"}})),
-            None, None,
-        ).await?;
+        store
+            .create_node(
+                Node::new_with_id(
+                    uuid.to_string(),
+                    "task".to_string(),
+                    "Task item".to_string(),
+                    json!({"task": {"status": "open", "priority": "high"}}),
+                ),
+                None,
+                None,
+            )
+            .await?;
 
         store.add_to_collection("text_node", "coll_mixed").await?;
         store.add_to_collection(uuid, "coll_mixed").await?;
 
         let members = store.get_collection_members("coll_mixed").await?;
-        assert_eq!(members.len(), 2, "Collection should have 2 members of different types");
+        assert_eq!(
+            members.len(),
+            2,
+            "Collection should have 2 members of different types"
+        );
 
         let types: Vec<&str> = members.iter().map(|n| n.node_type.as_str()).collect();
         assert!(types.contains(&"text"), "Should contain text node");
@@ -169,15 +262,27 @@ mod collection_membership_tests {
     async fn test_membership_idempotency() -> Result<()> {
         let (store, _temp_dir) = create_test_db().await?;
 
-        store.create_node(make_node("coll_idem", "collection", "Idempotency Test"), None, None).await?;
-        store.create_node(make_node("doc_idem", "text", "Test Document"), None, None).await?;
+        store
+            .create_node(
+                make_node("coll_idem", "collection", "Idempotency Test"),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .create_node(make_node("doc_idem", "text", "Test Document"), None, None)
+            .await?;
 
         // add_to_collection is idempotent — add twice, expect only one membership
         store.add_to_collection("doc_idem", "coll_idem").await?;
         store.add_to_collection("doc_idem", "coll_idem").await?;
 
         let memberships = store.get_node_memberships("doc_idem").await?;
-        assert_eq!(memberships.len(), 1, "Should have exactly one membership relationship");
+        assert_eq!(
+            memberships.len(),
+            1,
+            "Should have exactly one membership relationship"
+        );
 
         Ok(())
     }
@@ -205,11 +310,18 @@ mod collection_service_tests {
 
     async fn create_text_node(store: &SurrealStore, id: &str, content: &str) -> Result<()> {
         use nodespace_core::models::Node;
-        store.create_node(
-            Node::new_with_id(id.to_string(), "text".to_string(), content.to_string(), serde_json::json!({})),
-            None,
-            None,
-        ).await?;
+        store
+            .create_node(
+                Node::new_with_id(
+                    id.to_string(),
+                    "text".to_string(),
+                    content.to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await?;
         Ok(())
     }
 

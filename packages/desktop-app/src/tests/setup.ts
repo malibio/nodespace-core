@@ -44,12 +44,12 @@ function createStoragePolyfill(): any {
   return storage;
 }
 
-// Apply storage polyfill to both globalThis and window (Node 25+ has
-// minimal built-in Storage objects that shadow happy-dom's)
+// Apply storage polyfill when localStorage is missing or lacks the Web Storage API
+// (Node 25 exposed a partial Storage object without clear(); Node 26 exposes nothing)
 for (const storageKey of ['localStorage', 'sessionStorage'] as const) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const current = (globalThis as Record<string, unknown>)[storageKey] as any;
-  if (current && typeof current.clear !== 'function') {
+  if (!current || typeof current.clear !== 'function') {
     const polyfill = createStoragePolyfill();
     Object.defineProperty(globalThis, storageKey, { value: polyfill, writable: true, configurable: true });
     if (typeof window !== 'undefined') {

@@ -6373,9 +6373,16 @@ impl NodeService {
 
             // Check cardinality constraint
             if relationship.cardinality == crate::models::schema::RelationshipCardinality::One {
-                let existing_count = self.store.check_relationship_exists(source_id, relationship_name)
+                let existing_count = self
+                    .store
+                    .check_relationship_exists(source_id, relationship_name)
                     .await
-                    .map_err(|e| NodeServiceError::query_failed(format!("Failed to check cardinality: {}", e)))?;
+                    .map_err(|e| {
+                        NodeServiceError::query_failed(format!(
+                            "Failed to check cardinality: {}",
+                            e
+                        ))
+                    })?;
                 if existing_count > 0 {
                     return Err(NodeServiceError::invalid_update(format!(
                         "Relationship '{}' has cardinality 'one' but an edge already exists",
@@ -6427,9 +6434,16 @@ impl NodeService {
         }
 
         // Check for existing relationship (idempotency)
-        let already_exists = self.store.relationship_exists(source_id, target_id, relationship_name)
+        let already_exists = self
+            .store
+            .relationship_exists(source_id, target_id, relationship_name)
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to check existing relationship: {}", e)))?;
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to check existing relationship: {}",
+                    e
+                ))
+            })?;
         if already_exists {
             // Relationship already exists, idempotent success
             return Ok(());
@@ -6462,9 +6476,13 @@ impl NodeService {
             edge_data.clone()
         };
 
-        let rel_id = self.store.create_generic_relationship(source_id, target_id, relationship_name, &final_edge_data)
+        let rel_id = self
+            .store
+            .create_generic_relationship(source_id, target_id, relationship_name, &final_edge_data)
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to create relationship: {}", e)))?;
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to create relationship: {}", e))
+            })?;
 
         self.emit_event(DomainEvent::RelationshipCreated {
             relationship: crate::db::events::RelationshipEvent::new(
@@ -6525,13 +6543,20 @@ impl NodeService {
         // Issue #825: Unified relationship deletion - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
-        let rel_id = self.store.get_relationship_id(source_id, target_id, relationship_name)
+        let rel_id = self
+            .store
+            .get_relationship_id(source_id, target_id, relationship_name)
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to get relationship ID: {}", e)))?;
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to get relationship ID: {}", e))
+            })?;
 
-        self.store.delete_generic_relationship(source_id, target_id, relationship_name)
+        self.store
+            .delete_generic_relationship(source_id, target_id, relationship_name)
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to delete relationship: {}", e)))?;
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to delete relationship: {}", e))
+            })?;
 
         // Emit RelationshipDeleted event. Normalize ids — same
         // rationale as the other `RelationshipDeleted` sites; see
@@ -6599,9 +6624,12 @@ impl NodeService {
                 direction
             )));
         }
-        self.store.get_nodes_by_relationship(node_id, relationship_name, direction)
+        self.store
+            .get_nodes_by_relationship(node_id, relationship_name, direction)
             .await
-            .map_err(|e| NodeServiceError::query_failed(format!("Failed to get related nodes: {}", e)))
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to get related nodes: {}", e))
+            })
     }
 
     // ========================================================================
@@ -6840,12 +6868,16 @@ impl NodeService {
             }
 
             // Check whether at least one edge of this relationship type exists
-            let existing_count = self.store.check_relationship_exists(node_id, &relationship.name)
+            let existing_count = self
+                .store
+                .check_relationship_exists(node_id, &relationship.name)
                 .await
-                .map_err(|e| NodeServiceError::query_failed(format!(
-                    "Failed to check required relationship '{}': {}",
-                    relationship.name, e
-                )))?;
+                .map_err(|e| {
+                    NodeServiceError::query_failed(format!(
+                        "Failed to check required relationship '{}': {}",
+                        relationship.name, e
+                    ))
+                })?;
             if existing_count == 0 {
                 missing.push(relationship.name.clone());
             }
@@ -11066,9 +11098,17 @@ mod tests {
                 .unwrap();
 
             // Query relationships directly to verify order was assigned
-            let count = service.store.get_relationship_count(&collection_id, "member_of", "out_node").await.unwrap();
+            let count = service
+                .store
+                .get_relationship_count(&collection_id, "member_of", "out_node")
+                .await
+                .unwrap();
             assert_eq!(count, 3, "Should have 3 relationships");
-            let orders_raw = service.store.get_relationship_orders(&collection_id, "member_of", "out_node").await.unwrap();
+            let orders_raw = service
+                .store
+                .get_relationship_orders(&collection_id, "member_of", "out_node")
+                .await
+                .unwrap();
             for ord in &orders_raw {
                 assert!(
                     ord.is_some(),
@@ -11202,9 +11242,17 @@ mod tests {
                 .unwrap();
 
             // Query relationships directly to verify order was assigned
-            let count = service.store.get_relationship_count(&parent_id, "has_child", "in_node").await.unwrap();
+            let count = service
+                .store
+                .get_relationship_count(&parent_id, "has_child", "in_node")
+                .await
+                .unwrap();
             assert_eq!(count, 3, "Should have 3 has_child relationships");
-            let orders_raw = service.store.get_relationship_orders(&parent_id, "has_child", "in_node").await.unwrap();
+            let orders_raw = service
+                .store
+                .get_relationship_orders(&parent_id, "has_child", "in_node")
+                .await
+                .unwrap();
 
             // All should have order values
             for ord in &orders_raw {

@@ -184,7 +184,6 @@ impl<'de> Deserialize<'de> for TaskStatus {
     }
 }
 
-
 /// Task priority enumeration
 ///
 /// Represents the priority levels of a task node.

@@ -303,7 +303,7 @@ mod event_emission_tests {
         // Issue #813: Relationship IDs are now from universal `relationship` table
         match &envelope.event {
             DomainEvent::RelationshipDeleted {
-                id,
+                id: _,
                 from_id,
                 to_id,
                 relationship_type,

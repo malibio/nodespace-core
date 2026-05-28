@@ -64,7 +64,7 @@ pub struct QueryDefinition {
 }
 
 /// Filter type category
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, )]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FilterType {
     Property,
@@ -74,7 +74,7 @@ pub enum FilterType {
 }
 
 /// Comparison operator for filters
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, )]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FilterOperator {
     Equals,
@@ -92,7 +92,7 @@ pub enum FilterOperator {
 }
 
 /// Relationship type for graph traversal
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, )]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RelationshipType {
     Parent,
@@ -103,7 +103,7 @@ pub enum RelationshipType {
 }
 
 /// Sort direction
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, )]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SortDirection {
     #[serde(rename = "asc")]
@@ -113,7 +113,7 @@ pub enum SortDirection {
 }
 
 /// Individual filter condition
-#[derive(Debug, Clone, Serialize, Deserialize, )]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryFilter {
     /// Filter category
@@ -134,7 +134,7 @@ pub struct QueryFilter {
 }
 
 /// Sorting configuration
-#[derive(Debug, Clone, Serialize, Deserialize, )]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SortConfig {
     /// Property or field to sort by
@@ -264,7 +264,10 @@ impl QueryService {
 
     /// Execute query and return matching node IDs
     async fn execute_query_for_ids(&self, sql: &str) -> Result<Vec<String>> {
-        self.store.query_node_ids_raw(sql).await.context("Failed to execute ID query")
+        self.store
+            .query_node_ids_raw(sql)
+            .await
+            .context("Failed to execute ID query")
     }
 
     /// Translate QueryDefinition to SurrealQL
@@ -471,7 +474,10 @@ impl QueryService {
                 if filter.case_sensitive.unwrap_or(true) {
                     Ok(format!("INSTR({}, '{}') > 0", content_field, escaped))
                 } else {
-                    Ok(format!("LOWER({}) LIKE LOWER('%{}%')", content_field, escaped))
+                    Ok(format!(
+                        "LOWER({}) LIKE LOWER('%{}%')",
+                        content_field, escaped
+                    ))
                 }
             }
             FilterOperator::Equals => Ok(format!(

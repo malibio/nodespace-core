@@ -97,13 +97,13 @@ impl SqliteStore {
             }
             // PRAGMAs that return rows (e.g. journal_mode) must be queried, not executed
             if stmt.to_uppercase().starts_with("PRAGMA") && stmt.contains('=') {
-                conn.query(stmt, ())
-                    .await
-                    .with_context(|| format!("Failed to execute PRAGMA: {}", &stmt[..stmt.len().min(80)]))?;
+                conn.query(stmt, ()).await.with_context(|| {
+                    format!("Failed to execute PRAGMA: {}", &stmt[..stmt.len().min(80)])
+                })?;
             } else {
-                conn.execute(stmt, ())
-                    .await
-                    .with_context(|| format!("Failed to execute DDL: {}", &stmt[..stmt.len().min(80)]))?;
+                conn.execute(stmt, ()).await.with_context(|| {
+                    format!("Failed to execute DDL: {}", &stmt[..stmt.len().min(80)])
+                })?;
             }
         }
 
@@ -117,8 +117,10 @@ impl SqliteStore {
             r#"CREATE TRIGGER IF NOT EXISTS node_fts_insert AFTER INSERT ON node BEGIN
                 INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
             END"#,
-            ()
-        ).await.context("Failed to create FTS5 insert trigger")?;
+            (),
+        )
+        .await
+        .context("Failed to create FTS5 insert trigger")?;
 
         conn.execute(
             r#"CREATE TRIGGER IF NOT EXISTS node_fts_update AFTER UPDATE ON node BEGIN
@@ -234,8 +236,7 @@ impl SqliteStore {
         let out_node: String = row.get(2)?;
         let relationship_type: String = row.get(3)?;
         let props_str: String = row.get(4)?;
-        let properties: Value =
-            serde_json::from_str(&props_str).unwrap_or(serde_json::json!({}));
+        let properties: Value = serde_json::from_str(&props_str).unwrap_or(serde_json::json!({}));
         Ok(RelationshipRecord {
             id,
             in_node,
@@ -245,8 +246,16 @@ impl SqliteStore {
         })
     }
 
-    async fn query_nodes_from_sql(&self, sql: &str, params: impl libsql::params::IntoParams) -> Result<Vec<Node>> {
-        let mut rows = self.db.query(sql, params).await.context("Failed to query nodes")?;
+    async fn query_nodes_from_sql(
+        &self,
+        sql: &str,
+        params: impl libsql::params::IntoParams,
+    ) -> Result<Vec<Node>> {
+        let mut rows = self
+            .db
+            .query(sql, params)
+            .await
+            .context("Failed to query nodes")?;
         let mut nodes = Vec::new();
         while let Some(row) = rows.next().await? {
             nodes.push(Self::row_to_node(&row)?);
@@ -356,7 +365,11 @@ impl SqliteStore {
             serde_json::to_string(&properties).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();
 
-        let tx = self.db.transaction().await.context("Failed to begin transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin transaction")?;
 
         tx.execute(
             "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, NULL, 'active', 1, ?5, ?6)",
@@ -391,7 +404,10 @@ impl SqliteStore {
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         let mut rows = self
             .db
-            .query("SELECT * FROM node WHERE id = ?1 LIMIT 1", libsql::params![id.to_string()])
+            .query(
+                "SELECT * FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
             .await
             .context("Failed to query node")?;
 
@@ -405,7 +421,10 @@ impl SqliteStore {
     pub async fn node_exists(&self, id: &str) -> Result<bool> {
         let mut rows = self
             .db
-            .query("SELECT 1 FROM node WHERE id = ?1 LIMIT 1", libsql::params![id.to_string()])
+            .query(
+                "SELECT 1 FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
             .await
             .context("Failed to check node existence")?;
         Ok(rows.next().await?.is_some())
@@ -422,7 +441,10 @@ impl SqliteStore {
             placeholders.join(", ")
         );
 
-        let params: Vec<libsql::Value> = ids.iter().map(|id| libsql::Value::Text(id.clone())).collect();
+        let params: Vec<libsql::Value> = ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
         let mut rows = self
             .db
             .query(&sql, params)
@@ -466,7 +488,8 @@ impl SqliteStore {
         let now = Utc::now().to_rfc3339();
 
         if let Some(ref props) = properties_update {
-            let props_json = serde_json::to_string(props).context("Failed to serialize properties")?;
+            let props_json =
+                serde_json::to_string(props).context("Failed to serialize properties")?;
             self.db.execute(
                 "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, version = version + 1, modified_at = ?4 WHERE id = ?5",
                 libsql::params![updated_content.clone(), updated_node_type.clone(), props_json, now.clone(), id.to_string()],
@@ -479,17 +502,23 @@ impl SqliteStore {
         }
 
         if let Some(title) = update.title {
-            self.db.execute(
-                "UPDATE node SET title = ?1 WHERE id = ?2",
-                libsql::params![title, id.to_string()],
-            ).await.context("Failed to update title")?;
+            self.db
+                .execute(
+                    "UPDATE node SET title = ?1 WHERE id = ?2",
+                    libsql::params![title, id.to_string()],
+                )
+                .await
+                .context("Failed to update title")?;
         }
 
         if let Some(status) = update.lifecycle_status {
-            self.db.execute(
-                "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
-                libsql::params![status, id.to_string()],
-            ).await.context("Failed to update lifecycle_status")?;
+            self.db
+                .execute(
+                    "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
+                    libsql::params![status, id.to_string()],
+                )
+                .await
+                .context("Failed to update lifecycle_status")?;
         }
 
         let updated_node = self
@@ -673,7 +702,10 @@ impl SqliteStore {
 
         // FK CASCADE handles relationship and embedding deletion
         self.db
-            .execute("DELETE FROM node WHERE id = ?1", libsql::params![id.to_string()])
+            .execute(
+                "DELETE FROM node WHERE id = ?1",
+                libsql::params![id.to_string()],
+            )
             .await
             .context("Failed to delete node")?;
 
@@ -733,11 +765,22 @@ impl SqliteStore {
             let search_lower = format!("%{}%", search_q.to_lowercase());
             let sql = match (query.limit, query.offset) {
                 (None, None) => "SELECT * FROM node WHERE LOWER(content) LIKE ?1".to_string(),
-                (Some(l), None) => format!("SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}", l),
-                (None, Some(o)) => format!("SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT -1 OFFSET {}", o),
-                (Some(l), Some(o)) => format!("SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {} OFFSET {}", l, o),
+                (Some(l), None) => format!(
+                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}",
+                    l
+                ),
+                (None, Some(o)) => format!(
+                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT -1 OFFSET {}",
+                    o
+                ),
+                (Some(l), Some(o)) => format!(
+                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {} OFFSET {}",
+                    l, o
+                ),
             };
-            return self.query_nodes_from_sql(&sql, libsql::params![search_lower]).await;
+            return self
+                .query_nodes_from_sql(&sql, libsql::params![search_lower])
+                .await;
         }
 
         let mut conditions = Vec::new();
@@ -746,7 +789,10 @@ impl SqliteStore {
 
         if let Some(ref search_q) = query.title_contains {
             let search_lower = format!("%{}%", search_q.to_lowercase());
-            conditions.push(format!("title IS NOT NULL AND LOWER(title) LIKE ?{}", param_idx));
+            conditions.push(format!(
+                "title IS NOT NULL AND LOWER(title) LIKE ?{}",
+                param_idx
+            ));
             bind_values.push(libsql::Value::Text(search_lower));
             param_idx += 1;
         }
@@ -754,7 +800,6 @@ impl SqliteStore {
         if let Some(ref nt) = query.node_type {
             conditions.push(format!("node_type = ?{}", param_idx));
             bind_values.push(libsql::Value::Text(nt.clone()));
-            param_idx += 1;
         }
 
         let where_clause = if !conditions.is_empty() {
@@ -771,7 +816,11 @@ impl SqliteStore {
         };
 
         let sql = format!("SELECT * FROM node {} {}", where_clause, limit_offset);
-        let mut rows = self.db.query(&sql, bind_values).await.context("Failed to query nodes")?;
+        let mut rows = self
+            .db
+            .query(&sql, bind_values)
+            .await
+            .context("Failed to query nodes")?;
         let mut nodes = Vec::new();
         while let Some(row) = rows.next().await? {
             nodes.push(Self::row_to_node(&row)?);
@@ -967,10 +1016,22 @@ impl SqliteStore {
         }
 
         // Fetch all nodes
-        let placeholders: Vec<String> = (1..=descendant_ids.len()).map(|i| format!("?{}", i)).collect();
-        let sql = format!("SELECT * FROM node WHERE id IN ({})", placeholders.join(", "));
-        let params: Vec<libsql::Value> = descendant_ids.iter().map(|id| libsql::Value::Text(id.clone())).collect();
-        let mut node_rows = self.db.query(&sql, params).await.context("Failed to fetch subtree nodes")?;
+        let placeholders: Vec<String> = (1..=descendant_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
+        let sql = format!(
+            "SELECT * FROM node WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<libsql::Value> = descendant_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut node_rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to fetch subtree nodes")?;
         let mut all_nodes = Vec::new();
         while let Some(row) = node_rows.next().await? {
             all_nodes.push(Self::row_to_node(&row)?);
@@ -981,13 +1042,22 @@ impl SqliteStore {
         }
 
         // Fetch relationships within subtree
-        let rel_placeholders: Vec<String> = (1..=descendant_ids.len()).map(|i| format!("?{}", i)).collect();
+        let rel_placeholders: Vec<String> = (1..=descendant_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
         let rel_sql = format!(
             "SELECT id, in_node, out_node, relationship_type, properties FROM relationship WHERE in_node IN ({}) AND relationship_type = 'has_child'",
             rel_placeholders.join(", ")
         );
-        let rel_params: Vec<libsql::Value> = descendant_ids.iter().map(|id| libsql::Value::Text(id.clone())).collect();
-        let mut rel_rows = self.db.query(&rel_sql, rel_params).await.context("Failed to fetch subtree relationships")?;
+        let rel_params: Vec<libsql::Value> = descendant_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rel_rows = self
+            .db
+            .query(&rel_sql, rel_params)
+            .await
+            .context("Failed to fetch subtree relationships")?;
         let mut relationships = Vec::new();
         while let Some(row) = rel_rows.next().await? {
             relationships.push(Self::row_to_relationship(&row)?);
@@ -1018,11 +1088,15 @@ impl SqliteStore {
     ) -> Result<Vec<Node>> {
         let search_lower = format!("%{}%", search_query.to_lowercase());
         let sql = if let Some(l) = limit {
-            format!("SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}", l)
+            format!(
+                "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}",
+                l
+            )
         } else {
             "SELECT * FROM node WHERE LOWER(content) LIKE ?1".to_string()
         };
-        self.query_nodes_from_sql(&sql, libsql::params![search_lower]).await
+        self.query_nodes_from_sql(&sql, libsql::params![search_lower])
+            .await
     }
 
     pub async fn mention_autocomplete(
@@ -1036,7 +1110,8 @@ impl SqliteStore {
             "SELECT * FROM node WHERE title IS NOT NULL AND node_type != 'collection' AND LOWER(title) LIKE ?1 LIMIT {}",
             effective_limit
         );
-        self.query_nodes_from_sql(&sql, libsql::params![search_lower]).await
+        self.query_nodes_from_sql(&sql, libsql::params![search_lower])
+            .await
     }
 
     async fn validate_no_cycle(&self, parent_id: &str, child_id: &str) -> Result<()> {
@@ -1080,14 +1155,20 @@ impl SqliteStore {
         }
 
         let new_orders = FractionalOrderCalculator::rebalance(rels.len());
-        let tx = self.db.transaction().await.context("Failed to begin rebalance transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin rebalance transaction")?;
 
         for (i, (rel_id, _)) in rels.iter().enumerate() {
             let props = serde_json::json!({"order": new_orders[i]}).to_string();
             tx.execute(
                 "UPDATE relationship SET properties = ?1 WHERE id = ?2",
                 libsql::params![props, rel_id.clone()],
-            ).await.context("Failed to rebalance relationship")?;
+            )
+            .await
+            .context("Failed to rebalance relationship")?;
         }
 
         tx.commit().await.context("Failed to commit rebalance")?;
@@ -1155,7 +1236,9 @@ impl SqliteStore {
                                 let ord: Option<f64> = row.get(1)?;
                                 siblings2.push((cid, ord.unwrap_or(0.0)));
                             }
-                            if let Some(after_index2) = siblings2.iter().position(|(id, _)| id == &after_id) {
+                            if let Some(after_index2) =
+                                siblings2.iter().position(|(id, _)| id == &after_id)
+                            {
                                 let prev2 = siblings2[after_index2].1;
                                 let next2 = siblings2.get(after_index2 + 1).map(|(_, o)| *o);
                                 FractionalOrderCalculator::calculate_order(Some(prev2), next2)
@@ -1215,11 +1298,7 @@ impl SqliteStore {
         Ok(new_order)
     }
 
-    pub async fn create_mention(
-        &self,
-        source_id: &str,
-        target_id: &str,
-    ) -> Result<Option<String>> {
+    pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
         let mut rows = self.db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
             libsql::params![source_id.to_string(), target_id.to_string()],
@@ -1239,11 +1318,7 @@ impl SqliteStore {
         Ok(Some(rel_id))
     }
 
-    pub async fn delete_mention(
-        &self,
-        source_id: &str,
-        target_id: &str,
-    ) -> Result<Option<String>> {
+    pub async fn delete_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
         let mut rows = self.db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
             libsql::params![source_id.to_string(), target_id.to_string()],
@@ -1351,13 +1426,22 @@ impl SqliteStore {
         }
 
         // Batch fetch containers
-        let placeholders: Vec<String> = (1..=container_ids.len()).map(|i| format!("?{}", i)).collect();
+        let placeholders: Vec<String> = (1..=container_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
         let sql = format!(
             "SELECT id, title, node_type FROM node WHERE id IN ({})",
             placeholders.join(", ")
         );
-        let params: Vec<libsql::Value> = container_ids.iter().map(|id| libsql::Value::Text(id.clone())).collect();
-        let mut container_rows = self.db.query(&sql, params).await.context("Failed to fetch containers")?;
+        let params: Vec<libsql::Value> = container_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut container_rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to fetch containers")?;
 
         let mut result = Vec::new();
         while let Some(row) = container_rows.next().await? {
@@ -1405,12 +1489,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn rename_schema_field(
-        &self,
-        type_id: &str,
-        from: &str,
-        to: &str,
-    ) -> Result<u64> {
+    pub async fn rename_schema_field(&self, type_id: &str, from: &str, to: &str) -> Result<u64> {
         if from.is_empty() || to.is_empty() {
             return Err(anyhow::anyhow!("Field names must not be empty"));
         }
@@ -1421,10 +1500,14 @@ impl SqliteStore {
             ));
         }
 
-        let mut rows = self.db.query(
-            "SELECT id, properties FROM node WHERE node_type = ?1",
-            libsql::params![type_id.to_string()],
-        ).await.context("Failed to fetch nodes for field rename")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT id, properties FROM node WHERE node_type = ?1",
+                libsql::params![type_id.to_string()],
+            )
+            .await
+            .context("Failed to fetch nodes for field rename")?;
 
         let mut nodes: Vec<(String, Value)> = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -1456,10 +1539,13 @@ impl SqliteStore {
             if had_field {
                 let props_json =
                     serde_json::to_string(&properties).context("Failed to serialize properties")?;
-                self.db.execute(
-                    "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
-                    libsql::params![props_json, now.clone(), node_id],
-                ).await.context("Failed to update node during field rename")?;
+                self.db
+                    .execute(
+                        "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
+                        libsql::params![props_json, now.clone(), node_id],
+                    )
+                    .await
+                    .context("Failed to update node during field rename")?;
                 affected += 1;
             }
         }
@@ -1491,7 +1577,11 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self.db.transaction().await.context("Failed to begin bulk update transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk update transaction")?;
 
         for (id, update) in &updates {
             let current = self
@@ -1522,14 +1612,25 @@ impl SqliteStore {
 
     pub async fn bulk_create_hierarchy(
         &self,
-        nodes: Vec<(String, String, String, Option<String>, f64, serde_json::Value)>,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
     ) -> Result<Vec<String>> {
         if nodes.is_empty() {
             return Ok(Vec::new());
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self.db.transaction().await.context("Failed to begin bulk hierarchy transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk hierarchy transaction")?;
 
         for (id, node_type, content, parent_id, order, properties) in &nodes {
             self.validate_node_type(node_type)?;
@@ -1539,9 +1640,11 @@ impl SqliteStore {
             } else {
                 properties.clone()
             };
-            let props_json = serde_json::to_string(&properties).context("Failed to serialize properties")?;
+            let props_json =
+                serde_json::to_string(&properties).context("Failed to serialize properties")?;
 
-            let title = Self::compute_title_for_bulk_insert(node_type, parent_id.as_deref(), content);
+            let title =
+                Self::compute_title_for_bulk_insert(node_type, parent_id.as_deref(), content);
 
             tx.execute(
                 "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, 'active', 1, ?6, ?7)",
@@ -1558,7 +1661,9 @@ impl SqliteStore {
             }
         }
 
-        tx.commit().await.context("Failed to commit bulk hierarchy")?;
+        tx.commit()
+            .await
+            .context("Failed to commit bulk hierarchy")?;
 
         let ids: Vec<String> = nodes.into_iter().map(|(id, ..)| id).collect();
 
@@ -1580,7 +1685,14 @@ impl SqliteStore {
 
     pub async fn bulk_create_hierarchy_root_notify(
         &self,
-        nodes: Vec<(String, String, String, Option<String>, f64, serde_json::Value)>,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
         root_ids: Vec<String>,
     ) -> Result<Vec<String>> {
         let created = self.bulk_create_hierarchy(nodes).await?;
@@ -1607,7 +1719,8 @@ impl SqliteStore {
         } else {
             properties
         };
-        let props_json = serde_json::to_string(&properties).context("Failed to serialize properties")?;
+        let props_json =
+            serde_json::to_string(&properties).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();
 
         self.db.execute(
@@ -1744,38 +1857,66 @@ impl SqliteStore {
         }
         if let Some(ref priority_opt) = update.priority {
             match priority_opt {
-                Some(p) => { task_obj_owned.insert("priority".to_string(), serde_json::json!(p.as_str())); }
-                None => { task_obj_owned.remove("priority"); }
+                Some(p) => {
+                    task_obj_owned.insert("priority".to_string(), serde_json::json!(p.as_str()));
+                }
+                None => {
+                    task_obj_owned.remove("priority");
+                }
             }
         }
         if let Some(ref due_date_opt) = update.due_date {
             match due_date_opt {
-                Some(dt) => { task_obj_owned.insert("due_date".to_string(), serde_json::json!(dt.to_rfc3339())); }
-                None => { task_obj_owned.remove("due_date"); }
+                Some(dt) => {
+                    task_obj_owned
+                        .insert("due_date".to_string(), serde_json::json!(dt.to_rfc3339()));
+                }
+                None => {
+                    task_obj_owned.remove("due_date");
+                }
             }
         }
         if let Some(ref assignee_opt) = update.assignee {
             match assignee_opt {
-                Some(a) => { task_obj_owned.insert("assignee".to_string(), serde_json::json!(a)); }
-                None => { task_obj_owned.remove("assignee"); }
+                Some(a) => {
+                    task_obj_owned.insert("assignee".to_string(), serde_json::json!(a));
+                }
+                None => {
+                    task_obj_owned.remove("assignee");
+                }
             }
         }
         if let Some(ref started_at_opt) = update.started_at {
             match started_at_opt {
-                Some(dt) => { task_obj_owned.insert("started_at".to_string(), serde_json::json!(dt.to_rfc3339())); }
-                None => { task_obj_owned.remove("started_at"); }
+                Some(dt) => {
+                    task_obj_owned
+                        .insert("started_at".to_string(), serde_json::json!(dt.to_rfc3339()));
+                }
+                None => {
+                    task_obj_owned.remove("started_at");
+                }
             }
         }
         if let Some(ref completed_at_opt) = update.completed_at {
             match completed_at_opt {
-                Some(dt) => { task_obj_owned.insert("completed_at".to_string(), serde_json::json!(dt.to_rfc3339())); }
-                None => { task_obj_owned.remove("completed_at"); }
+                Some(dt) => {
+                    task_obj_owned.insert(
+                        "completed_at".to_string(),
+                        serde_json::json!(dt.to_rfc3339()),
+                    );
+                }
+                None => {
+                    task_obj_owned.remove("completed_at");
+                }
             }
         }
 
         // Re-insert updated task object back into properties
         if let Some(props_obj) = props.as_object_mut() {
-            props_obj.insert("task".to_string(), serde_json::Value::Object(task_obj_owned));
+            props_obj.insert(
+                "task".to_string(),
+                serde_json::Value::Object(task_obj_owned),
+            );
         }
 
         let props_json = serde_json::to_string(&props).context("Failed to serialize properties")?;
@@ -1798,7 +1939,10 @@ impl SqliteStore {
         }
         sql_params.push(libsql::Value::Text(id.to_string()));
 
-        self.db.execute(&sql, sql_params).await.context("Failed to update task node")?;
+        self.db
+            .execute(&sql, sql_params)
+            .await
+            .context("Failed to update task node")?;
 
         self.get_task_node(id)
             .await?
@@ -1806,10 +1950,14 @@ impl SqliteStore {
     }
 
     pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
-        let mut rows = self.db.query(
-            "SELECT * FROM node WHERE id = ?1 AND node_type = 'schema' LIMIT 1",
-            libsql::params![id.to_string()],
-        ).await.context("Failed to query schema node")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT * FROM node WHERE id = ?1 AND node_type = 'schema' LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to query schema node")?;
 
         if let Some(row) = rows.next().await? {
             let node = Self::row_to_node(&row)?;
@@ -1826,10 +1974,14 @@ impl SqliteStore {
     }
 
     pub async fn get_all_schemas(&self) -> Result<Vec<crate::models::SchemaNode>> {
-        let mut rows = self.db.query(
-            "SELECT * FROM node WHERE node_type = 'schema' ORDER BY id",
-            (),
-        ).await.context("Failed to query all schema nodes")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT * FROM node WHERE node_type = 'schema' ORDER BY id",
+                (),
+            )
+            .await
+            .context("Failed to query all schema nodes")?;
 
         let mut schemas = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -1958,10 +2110,14 @@ impl SqliteStore {
     }
 
     pub async fn has_embeddings(&self, node_id: &str) -> Result<bool> {
-        let mut rows = self.db.query(
-            "SELECT COUNT(*) FROM embedding WHERE node_id = ?1",
-            libsql::params![node_id.to_string()],
-        ).await.context("Failed to check for embeddings")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT COUNT(*) FROM embedding WHERE node_id = ?1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .context("Failed to check for embeddings")?;
 
         if let Some(row) = rows.next().await? {
             let count: i64 = row.get(0)?;
@@ -2009,10 +2165,14 @@ impl SqliteStore {
 
         // TODO(#1221): replace with sqlite-vec vec0 KNN query for O(log N) HNSW search.
         // Current linear scan is correct but O(N) — acceptable until corpus exceeds ~10k nodes.
-        let mut rows = self.db.query(
-            "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e WHERE e.stale = 0",
-            (),
-        ).await.context("Failed to load embeddings for search")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e WHERE e.stale = 0",
+                (),
+            )
+            .await
+            .context("Failed to load embeddings for search")?;
 
         // Group by node_id: track max similarity, chunk counts
         let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new(); // node_id -> (max_sim, matching_chunks, total_chunks)
@@ -2023,7 +2183,7 @@ impl SqliteStore {
             let total_chunks: i64 = row.get(2)?;
 
             // Decode f32 LE bytes
-            if vector_blob.len() % 4 != 0 {
+            if !vector_blob.len().is_multiple_of(4) {
                 continue;
             }
             let embedding: Vec<f32> = vector_blob
@@ -2051,7 +2211,7 @@ impl SqliteStore {
             let composite_score = max_similarity * (1.0 + 0.3 * density);
 
             if composite_score > min_score {
-                let node = self.get_node(&node_id).await?.map(|n| n);
+                let node = self.get_node(&node_id).await?;
                 results.push(crate::models::EmbeddingSearchResult {
                     node_id: node_id.clone(),
                     score: composite_score,
@@ -2062,7 +2222,11 @@ impl SqliteStore {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit as usize);
         Ok(results)
     }
@@ -2088,7 +2252,7 @@ impl SqliteStore {
             let vector_blob: Vec<u8> = row.get(1)?;
             let total_chunks: i64 = row.get(2)?;
 
-            if vector_blob.len() % 4 != 0 {
+            if !vector_blob.len().is_multiple_of(4) {
                 continue;
             }
             let embedding: Vec<f32> = vector_blob
@@ -2125,7 +2289,11 @@ impl SqliteStore {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit as usize);
         Ok(results)
     }
@@ -2219,7 +2387,11 @@ impl SqliteStore {
         relationship_type: &str,
         use_out_as_anchor: bool,
     ) -> Result<f64> {
-        let anchor_field = if use_out_as_anchor { "out_node" } else { "in_node" };
+        let anchor_field = if use_out_as_anchor {
+            "out_node"
+        } else {
+            "in_node"
+        };
         let sql = format!(
             "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE {} = ?1 AND relationship_type = ?2 ORDER BY json_extract(properties, '$.order') DESC LIMIT 1",
             anchor_field
@@ -2227,7 +2399,10 @@ impl SqliteStore {
 
         let mut rows = self
             .db
-            .query(&sql, libsql::params![node_id.to_string(), relationship_type.to_string()])
+            .query(
+                &sql,
+                libsql::params![node_id.to_string(), relationship_type.to_string()],
+            )
             .await
             .context("Failed to get last order for relationship")?;
 
@@ -2346,10 +2521,14 @@ impl SqliteStore {
     pub async fn get_collection_by_name(&self, name: &str) -> Result<Option<Node>> {
         let normalized = name.to_lowercase();
 
-        let mut rows = self.db.query(
-            "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 LIMIT 1",
-            libsql::params![normalized],
-        ).await.context("Failed to search for collection by name")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 LIMIT 1",
+                libsql::params![normalized],
+            )
+            .await
+            .context("Failed to search for collection by name")?;
 
         if let Some(row) = rows.next().await? {
             let id: String = row.get(0)?;
@@ -2374,8 +2553,15 @@ impl SqliteStore {
             placeholders.join(", ")
         );
 
-        let params: Vec<libsql::Value> = normalized.iter().map(|n| libsql::Value::Text(n.clone())).collect();
-        let mut rows = self.db.query(&sql, params).await.context("Failed to batch search collections by names")?;
+        let params: Vec<libsql::Value> = normalized
+            .iter()
+            .map(|n| libsql::Value::Text(n.clone()))
+            .collect();
+        let mut rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to batch search collections by names")?;
 
         let mut collections = HashMap::new();
         while let Some(row) = rows.next().await? {
@@ -2395,8 +2581,10 @@ impl SqliteStore {
         collection_id: &str,
     ) -> Result<Vec<String>> {
         // Get all collections in the subtree using WITH RECURSIVE
-        let mut rows = self.db.query(
-            r#"WITH RECURSIVE coll_subtree(node_id) AS (
+        let mut rows = self
+            .db
+            .query(
+                r#"WITH RECURSIVE coll_subtree(node_id) AS (
                 SELECT ?1
                 UNION ALL
                 SELECT r.out_node FROM relationship r
@@ -2406,8 +2594,10 @@ impl SqliteStore {
             SELECT DISTINCT r.in_node FROM relationship r
             JOIN coll_subtree cs ON r.out_node = cs.node_id
             WHERE r.relationship_type = 'member_of'"#,
-            libsql::params![collection_id.to_string()],
-        ).await.context("Failed to get recursive collection members")?;
+                libsql::params![collection_id.to_string()],
+            )
+            .await
+            .context("Failed to get recursive collection members")?;
 
         let mut member_ids: Vec<String> = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -2420,10 +2610,14 @@ impl SqliteStore {
     }
 
     pub async fn get_all_collection_names(&self) -> Result<Vec<String>> {
-        let mut rows = self.db.query(
-            "SELECT content FROM node WHERE node_type = 'collection' ORDER BY content ASC",
-            (),
-        ).await.context("Failed to get all collection names")?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT content FROM node WHERE node_type = 'collection' ORDER BY content ASC",
+                (),
+            )
+            .await
+            .context("Failed to get all collection names")?;
 
         let mut names = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -2480,7 +2674,8 @@ impl SqliteStore {
         self.query_nodes_from_sql(
             "SELECT * FROM node WHERE node_type = 'collection' ORDER BY content ASC",
             (),
-        ).await
+        )
+        .await
     }
 
     pub async fn bulk_add_to_collections(&self, memberships: &[(String, String)]) -> Result<usize> {
@@ -2503,12 +2698,20 @@ impl SqliteStore {
         for (collection_id, node_ids) in &by_collection {
             let base_order = self.get_next_member_order(collection_id).await?;
             for (i, node_id) in node_ids.iter().enumerate() {
-                ordered.push((node_id.to_string(), collection_id.to_string(), base_order + i as f64));
+                ordered.push((
+                    node_id.to_string(),
+                    collection_id.to_string(),
+                    base_order + i as f64,
+                ));
             }
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self.db.transaction().await.context("Failed to begin bulk add transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk add transaction")?;
 
         let mut created = 0;
         for (node_id, collection_id, order) in &ordered {
@@ -2553,7 +2756,11 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self.db.transaction().await.context("Failed to begin bulk mentions transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk mentions transaction")?;
 
         let mut created = 0;
         for (source_id, target_id) in &valid_mentions {
@@ -2574,7 +2781,9 @@ impl SqliteStore {
             created += 1;
         }
 
-        tx.commit().await.context("Failed to commit bulk mentions")?;
+        tx.commit()
+            .await
+            .context("Failed to commit bulk mentions")?;
 
         tracing::debug!(
             "bulk_create_mentions: {} mentions in {:?}",
@@ -2609,7 +2818,11 @@ impl SqliteStore {
         let mut vector_bytes = vec![0u8; 768 * 4];
         vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
 
-        let tx = self.db.transaction().await.context("Failed to begin markers transaction")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin markers transaction")?;
         for node_id in node_ids {
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
@@ -2617,7 +2830,9 @@ impl SqliteStore {
                 libsql::params![id, node_id.clone(), vector_bytes.clone(), now.clone(), now.clone()],
             ).await.context("Failed to insert stale embedding marker")?;
         }
-        tx.commit().await.context("Failed to commit markers transaction")?;
+        tx.commit()
+            .await
+            .context("Failed to commit markers transaction")?;
 
         tracing::debug!(
             "create_stale_embedding_markers_bulk: {} markers in {:?}",
@@ -2633,12 +2848,20 @@ impl SqliteStore {
             "SELECT COUNT(*) as cnt FROM relationship WHERE in_node = ?1 AND relationship_type = ?2",
             libsql::params![source_id.to_string(), rel_type.to_string()],
         ).await.context("Failed to check relationship existence")?;
-        let row = rows.next().await.context("No row returned")?
+        let row = rows
+            .next()
+            .await
+            .context("No row returned")?
             .ok_or_else(|| anyhow::anyhow!("Empty result for relationship count"))?;
         Ok(row.get::<i64>(0).unwrap_or(0))
     }
 
-    pub async fn relationship_exists(&self, source_id: &str, target_id: &str, rel_type: &str) -> Result<bool> {
+    pub async fn relationship_exists(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<bool> {
         let mut rows = self.db.query(
             "SELECT 1 FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
@@ -2663,7 +2886,12 @@ impl SqliteStore {
         Ok(rel_id)
     }
 
-    pub async fn get_relationship_id(&self, source_id: &str, target_id: &str, rel_type: &str) -> Result<Option<String>> {
+    pub async fn get_relationship_id(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<Option<String>> {
         let mut rows = self.db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
@@ -2675,7 +2903,12 @@ impl SqliteStore {
         }
     }
 
-    pub async fn delete_generic_relationship(&self, source_id: &str, target_id: &str, rel_type: &str) -> Result<()> {
+    pub async fn delete_generic_relationship(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<()> {
         self.db.execute(
             "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
@@ -2694,8 +2927,14 @@ impl SqliteStore {
             "in" => "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = ?2",
             _ => return Err(anyhow::anyhow!("Invalid direction: {}", direction)),
         };
-        let mut rows = self.db.query(sql, libsql::params![node_id.to_string(), rel_type.to_string()])
-            .await.context("Failed to get related nodes")?;
+        let mut rows = self
+            .db
+            .query(
+                sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to get related nodes")?;
         let mut nodes = Vec::new();
         while let Some(row) = rows.next().await? {
             nodes.push(Self::row_to_node(&row)?);
@@ -2704,11 +2943,18 @@ impl SqliteStore {
     }
 
     pub async fn count_nodes_by_type(&self, node_type: &str) -> Result<i64> {
-        let mut rows = self.db.query(
-            "SELECT COUNT(*) FROM node WHERE node_type = ?1",
-            libsql::params![node_type.to_string()],
-        ).await.context("Failed to count nodes by type")?;
-        let row = rows.next().await?.ok_or_else(|| anyhow::anyhow!("No result for count"))?;
+        let mut rows = self
+            .db
+            .query(
+                "SELECT COUNT(*) FROM node WHERE node_type = ?1",
+                libsql::params![node_type.to_string()],
+            )
+            .await
+            .context("Failed to count nodes by type")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No result for count"))?;
         Ok(row.get::<i64>(0).unwrap_or(0))
     }
 
@@ -2718,13 +2964,23 @@ impl SqliteStore {
         rel_type: &str,
         direction: &str,
     ) -> Result<Vec<Option<f64>>> {
-        let filter_col = if direction == "in_node" { "in_node" } else { "out_node" };
+        let filter_col = if direction == "in_node" {
+            "in_node"
+        } else {
+            "out_node"
+        };
         let sql = format!(
             "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE {} = ?1 AND relationship_type = ?2 ORDER BY json_extract(properties, '$.order') ASC",
             filter_col
         );
-        let mut rows = self.db.query(&sql, libsql::params![node_id.to_string(), rel_type.to_string()])
-            .await.context("Failed to get relationship orders")?;
+        let mut rows = self
+            .db
+            .query(
+                &sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to get relationship orders")?;
         let mut orders = Vec::new();
         while let Some(row) = rows.next().await? {
             let order: Option<f64> = row.get(0).ok();
@@ -2739,19 +2995,36 @@ impl SqliteStore {
         rel_type: &str,
         direction: &str,
     ) -> Result<usize> {
-        let filter_col = if direction == "in_node" { "in_node" } else { "out_node" };
+        let filter_col = if direction == "in_node" {
+            "in_node"
+        } else {
+            "out_node"
+        };
         let sql = format!(
             "SELECT COUNT(*) FROM relationship WHERE {} = ?1 AND relationship_type = ?2",
             filter_col
         );
-        let mut rows = self.db.query(&sql, libsql::params![node_id.to_string(), rel_type.to_string()])
-            .await.context("Failed to count relationships")?;
-        let row = rows.next().await?.ok_or_else(|| anyhow::anyhow!("No count result"))?;
+        let mut rows = self
+            .db
+            .query(
+                &sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to count relationships")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No count result"))?;
         Ok(row.get::<i64>(0).unwrap_or(0) as usize)
     }
 
     pub async fn query_node_ids_raw(&self, sql: &str) -> Result<Vec<String>> {
-        let mut rows = self.db.query(sql, ()).await.context("Failed to execute node query")?;
+        let mut rows = self
+            .db
+            .query(sql, ())
+            .await
+            .context("Failed to execute node query")?;
         let mut ids = Vec::new();
         while let Some(row) = rows.next().await? {
             if let Ok(id) = row.get::<String>(0) {
@@ -2766,9 +3039,21 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| (*x as f64) * (*y as f64)).sum();
-    let mag_a: f64 = a.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt();
-    let mag_b: f64 = b.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt();
+    let dot: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) * (*y as f64))
+        .sum();
+    let mag_a: f64 = a
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
+    let mag_b: f64 = b
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
     if mag_a == 0.0 || mag_b == 0.0 {
         return 0.0;
     }
@@ -2825,7 +3110,11 @@ mod tests {
         // Verify file exists and starts with SQLite magic bytes
         let file_bytes = std::fs::read(&db_path)?;
         assert!(file_bytes.len() > 16, "DB file too small");
-        assert_eq!(&file_bytes[0..16], b"SQLite format 3\0", "Not a valid SQLite file");
+        assert_eq!(
+            &file_bytes[0..16],
+            b"SQLite format 3\0",
+            "Not a valid SQLite file"
+        );
 
         Ok(())
     }
