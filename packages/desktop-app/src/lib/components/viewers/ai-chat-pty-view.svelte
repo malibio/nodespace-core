@@ -1,16 +1,33 @@
+<!--
+  AiChatPtyView - Provider mode 2d (pty) sub-view of the ai-chat node viewer.
+
+  Per ADR-034, a PTY agent session IS an ai-chat node (provider: pty). This
+  component is the node's *viewer* for that mode: when no session is running it
+  shows an inline agent picker + Launch button; once launched it hosts the
+  embedded xterm terminal (the "iframe"). The conversation node already exists —
+  capture backfills it at session end via the node_id passed to launch.
+
+  This replaces the standalone agent-launch-panel / sessions-panel cluster from
+  the old ADR-032 standalone model.
+-->
+
 <script lang="ts">
   import { onMount } from 'svelte';
+  import PtyTerminal from '$lib/components/agent/pty-terminal.svelte';
+  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import {
     getCaptureSettings,
+    updateCaptureSettings,
     ptyCheckAgentAvailability,
     ptyLaunchSession,
-    updateCaptureSettings,
     type AgentAvailabilityInfo,
     type CaptureContentLevel,
   } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
 
-  const log = createLogger('AgentLaunchPanel');
+  const log = createLogger('AiChatPtyView');
+
+  let { nodeId }: { nodeId: string } = $props();
 
   const AGENT_OPTIONS = [
     { id: 'claude-code', label: 'Claude Code' },
@@ -33,14 +50,19 @@
     | 'binary_missing_and_auth_missing'
     | 'unknown';
 
-  let {
-    onSessionLaunched,
-  }: {
-    onSessionLaunched: (_sessionId: string) => void;
-  } = $props();
+  const node = $derived(sharedNodeStore.getNode(nodeId));
+
+  // A previously-launched session id persisted on the node lets the terminal
+  // re-attach on reopen (the daemon owns the PTY and supports multi-client
+  // streaming per ADR-032).
+  const persistedSessionId = $derived(
+    (node?.properties?.['capture:session_id'] as string | undefined) ?? null
+  );
+
+  let activeSessionId = $state<string | null>(null);
+  const sessionId = $derived(activeSessionId ?? persistedSessionId);
 
   let selectedAgent = $state('claude-code');
-  let prompt = $state('');
   let launching = $state(false);
   let error = $state<string | null>(null);
 
@@ -66,7 +88,7 @@
       }
       availability = map;
     } catch (e) {
-      log.warn('Failed to load panel settings', e);
+      log.warn('Failed to load pty view settings', e);
     } finally {
       availabilityLoading = false;
     }
@@ -88,7 +110,6 @@
     return availability[selectedAgent];
   }
 
-
   function agentStatus(agentId: string): AgentStatus {
     const av = availability[agentId];
     if (!av) return 'unknown';
@@ -104,12 +125,29 @@
     try {
       const result = await ptyLaunchSession({
         agentType: selectedAgent,
-        prompt: prompt.trim() || null,
+        prompt: null,
         cols: 80,
         rows: 24,
+        nodeId,
       });
-      prompt = '';
-      onSessionLaunched(result.sessionId);
+      activeSessionId = result.sessionId;
+
+      // Record the chosen agent + session on the node up front so the node
+      // reflects its mode immediately. Capture backfills the rest at session
+      // end (transcript/summary/exit code) via the node_id passed above.
+      const current = sharedNodeStore.getNode(nodeId);
+      sharedNodeStore.updateNode(
+        nodeId,
+        {
+          properties: {
+            ...current?.properties,
+            'capture:agent_type': selectedAgent,
+            'capture:session_id': result.sessionId,
+            status: 'active',
+          },
+        },
+        { type: 'viewer', viewerId: 'ai-chat-pty-view' }
+      );
     } catch (e) {
       log.error('Failed to launch session', e);
       error = e instanceof Error ? e.message : String(e);
@@ -125,161 +163,161 @@
   }
 </script>
 
-<div class="launch-panel">
-  <div class="launch-panel-header">
-    <h3 class="launch-panel-title">Launch Agent Session</h3>
+{#if sessionId}
+  <!-- Active session: the embedded terminal IS the node's viewer. -->
+  <div class="pty-terminal-host">
+    {#key sessionId}
+      <PtyTerminal {sessionId} />
+    {/key}
   </div>
+{:else}
+  <!-- Config step: pick an agent and launch. -->
+  <div class="pty-config">
+    <div class="pty-config-card">
+      <h3 class="pty-config-title">Launch agent session</h3>
+      <p class="pty-config-subtitle">
+        Run an external agent CLI in an embedded terminal. The session is this node.
+      </p>
 
-  <div class="launch-panel-body">
-    <div class="field">
-      <label class="field-label" for="agent-select">Agent</label>
-      <select
-        id="agent-select"
-        class="field-select"
-        bind:value={selectedAgent}
-        disabled={launching}
-      >
-        {#each AGENT_OPTIONS as option (option.id)}
-          {@const status = agentStatus(option.id)}
-          <option value={option.id}>
-            {option.label}{status === 'ready' || status === 'unknown' ? '' : ' ⚠'}
-          </option>
-        {/each}
-      </select>
-    </div>
+      <div class="field">
+        <label class="field-label" for="agent-select">Agent</label>
+        <select id="agent-select" class="field-select" bind:value={selectedAgent} disabled={launching}>
+          {#each AGENT_OPTIONS as option (option.id)}
+            {@const status = agentStatus(option.id)}
+            <option value={option.id}>
+              {option.label}{status === 'ready' || status === 'unknown' ? '' : ' ⚠'}
+            </option>
+          {/each}
+        </select>
+      </div>
 
-    {#if !availabilityLoading}
-      {@const av = selectedAvailability()}
-      {@const status = agentStatus(selectedAgent)}
-      {#if av && status !== 'ready' && status !== 'unknown'}
-        <div class="availability-banner availability-banner--warning" role="alert">
-          {#if status === 'binary_missing' || status === 'binary_missing_and_auth_missing'}
-            <div class="availability-row">
-              <span class="availability-icon">⚠</span>
-              <span>
-                <strong>{av.binary}</strong> not found on PATH.
-                {#if av.installHint}
-                  <span class="install-hint">{av.installHint}</span>
-                {/if}
-              </span>
-            </div>
-          {/if}
-          {#if status === 'auth_missing' || status === 'binary_missing_and_auth_missing'}
-            <div class="availability-row">
-              <span class="availability-icon">⚠</span>
-              <span>Auth credential not configured for this agent.</span>
-            </div>
-          {/if}
-        </div>
-      {:else if av && status === 'ready'}
-        <div class="availability-banner availability-banner--ready" role="status">
-          <span class="availability-icon">✓</span> Ready
-        </div>
-      {/if}
-    {/if}
-
-    <div class="field">
-      <label class="field-label" for="prompt-input">
-        Initial prompt
-        <span class="field-hint">(optional)</span>
-      </label>
-      <textarea
-        id="prompt-input"
-        class="field-textarea"
-        bind:value={prompt}
-        onkeydown={handleKeydown}
-        placeholder="Enter a task or leave blank for interactive mode…"
-        rows={3}
-        disabled={launching}
-      ></textarea>
-      <span class="field-hint-inline">⌘↩ to launch</span>
-    </div>
-
-    <details class="capture-section">
-      <summary class="capture-summary">Session capture</summary>
-      <div class="capture-body">
-        <label class="capture-row">
-          <input
-            type="checkbox"
-            class="capture-checkbox"
-            bind:checked={captureEnabled}
-            onchange={saveCaptureSettings}
-          />
-          <span class="capture-label">Save session to knowledge graph</span>
-        </label>
-
-        {#if captureEnabled}
-          <div class="capture-row capture-indent">
-            <label class="field-label" for="capture-content">Content</label>
-            <select
-              id="capture-content"
-              class="field-select capture-select"
-              bind:value={captureContent}
-              onchange={saveCaptureSettings}
-            >
-              {#each CONTENT_LEVELS as level (level.value)}
-                <option value={level.value}>{level.label}</option>
-              {/each}
-            </select>
+      {#if !availabilityLoading}
+        {@const av = selectedAvailability()}
+        {@const status = agentStatus(selectedAgent)}
+        {#if av && status !== 'ready' && status !== 'unknown'}
+          <div class="availability-banner availability-banner--warning" role="alert">
+            {#if status === 'binary_missing' || status === 'binary_missing_and_auth_missing'}
+              <div class="availability-row">
+                <span class="availability-icon">⚠</span>
+                <span>
+                  <strong>{av.binary}</strong> not found on PATH.
+                  {#if av.installHint}
+                    <span class="install-hint">{av.installHint}</span>
+                  {/if}
+                </span>
+              </div>
+            {/if}
+            {#if status === 'auth_missing' || status === 'binary_missing_and_auth_missing'}
+              <div class="availability-row">
+                <span class="availability-icon">⚠</span>
+                <span>Auth credential not configured for this agent.</span>
+              </div>
+            {/if}
           </div>
+        {:else if av && status === 'ready'}
+          <div class="availability-banner availability-banner--ready" role="status">
+            <span class="availability-icon">✓</span> Ready
+          </div>
+        {/if}
+      {/if}
 
-          <label class="capture-row capture-indent">
+      <details class="capture-section">
+        <summary class="capture-summary">Session capture</summary>
+        <div class="capture-body">
+          <label class="capture-row">
             <input
               type="checkbox"
               class="capture-checkbox"
-              bind:checked={captureSync}
+              bind:checked={captureEnabled}
               onchange={saveCaptureSettings}
             />
-            <span class="capture-label">Include in sync</span>
+            <span class="capture-label">Save session back to this node</span>
           </label>
-        {/if}
-      </div>
-    </details>
 
-    {#if error}
-      <div class="error-banner" role="alert">{error}</div>
-    {/if}
+          {#if captureEnabled}
+            <div class="capture-row capture-indent">
+              <label class="field-label" for="capture-content">Content</label>
+              <select
+                id="capture-content"
+                class="field-select capture-select"
+                bind:value={captureContent}
+                onchange={saveCaptureSettings}
+              >
+                {#each CONTENT_LEVELS as level (level.value)}
+                  <option value={level.value}>{level.label}</option>
+                {/each}
+              </select>
+            </div>
 
-    <button class="launch-button" onclick={launch} disabled={launching}>
-      {#if launching}
-        <span class="spinner" aria-hidden="true"></span>
-        Launching…
-      {:else}
-        Launch
+            <label class="capture-row capture-indent">
+              <input
+                type="checkbox"
+                class="capture-checkbox"
+                bind:checked={captureSync}
+                onchange={saveCaptureSettings}
+              />
+              <span class="capture-label">Include in sync</span>
+            </label>
+          {/if}
+        </div>
+      </details>
+
+      {#if error}
+        <div class="error-banner" role="alert">{error}</div>
       {/if}
-    </button>
+
+      <button class="launch-button" onclick={launch} onkeydown={handleKeydown} disabled={launching}>
+        {#if launching}
+          <span class="spinner" aria-hidden="true"></span>
+          Launching…
+        {:else}
+          Launch
+        {/if}
+      </button>
+    </div>
   </div>
-</div>
+{/if}
 
 <style>
-  .launch-panel {
+  .pty-terminal-host {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: hsl(222 47% 8%);
+  }
+
+  .pty-config {
+    flex: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 2rem 1rem;
+  }
+
+  .pty-config-card {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: 0.875rem;
+    width: 100%;
+    max-width: 26rem;
+    padding: 1.25rem;
     border: 1px solid hsl(var(--border));
     border-radius: 0.5rem;
     background: hsl(var(--card));
-    overflow: hidden;
   }
 
-  .launch-panel-header {
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid hsl(var(--border));
-    background: hsl(var(--muted) / 0.4);
-  }
-
-  .launch-panel-title {
+  .pty-config-title {
     margin: 0;
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     font-weight: 600;
     color: hsl(var(--foreground));
   }
 
-  .launch-panel-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.875rem;
-    padding: 1rem;
+  .pty-config-subtitle {
+    margin: -0.5rem 0 0;
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
   }
 
   .field {
@@ -294,14 +332,7 @@
     color: hsl(var(--foreground));
   }
 
-  .field-hint {
-    font-weight: 400;
-    color: hsl(var(--muted-foreground));
-    font-size: 0.75rem;
-  }
-
-  .field-select,
-  .field-textarea {
+  .field-select {
     padding: 0.5rem 0.625rem;
     border: 1px solid hsl(var(--border));
     border-radius: 0.375rem;
@@ -309,26 +340,17 @@
     color: hsl(var(--foreground));
     font-size: 0.8125rem;
     font-family: inherit;
-    resize: vertical;
     transition: border-color 0.15s;
   }
 
-  .field-select:focus,
-  .field-textarea:focus {
+  .field-select:focus {
     outline: none;
     border-color: hsl(var(--ring));
   }
 
-  .field-select:disabled,
-  .field-textarea:disabled {
+  .field-select:disabled {
     opacity: 0.6;
     cursor: not-allowed;
-  }
-
-  .field-hint-inline {
-    font-size: 0.6875rem;
-    color: hsl(var(--muted-foreground));
-    align-self: flex-end;
   }
 
   .availability-banner {

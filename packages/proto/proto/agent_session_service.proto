@@ -38,6 +38,12 @@ message LaunchSessionRequest {
   // exactly this size", not "use the default".)
   uint32 cols = 3;
   uint32 rows = 4;
+  // ID of the `ai-chat` node this PTY session is a view onto (provider mode
+  // 2d, per ADR-034). The node is created up front via the `/ai-chat` slash
+  // command; capture backfills *this* node at session end rather than minting
+  // a new one. Always set in the unified model; optional only so the field is
+  // omittable on the wire.
+  optional string node_id = 5;
 }
 
 message LaunchSessionResponse {

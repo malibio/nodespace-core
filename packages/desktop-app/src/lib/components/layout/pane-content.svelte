@@ -7,7 +7,6 @@
   import { createLogger } from '$lib/utils/logger';
   import SettingsPane from '$lib/components/settings/settings-pane.svelte';
   import ChatPanel from '$lib/components/chat/chat-panel.svelte';
-  import AgentSessionsPanel from '$lib/components/agent/agent-sessions-panel.svelte';
 
   const log = createLogger('PaneContent');
 
@@ -100,8 +99,6 @@
   <SettingsPane />
 {:else if activeTab?.type === 'chat'}
   <ChatPanel />
-{:else if activeTab?.type === 'agent-sessions'}
-  <AgentSessionsPanel />
 {:else if activeTab?.content}
   {@const content = activeTab.content}
   {@const nodeType = content.nodeType ?? 'text'}

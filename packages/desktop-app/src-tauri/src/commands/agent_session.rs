@@ -120,6 +120,9 @@ pub struct LaunchSessionInput {
     pub prompt: Option<String>,
     pub cols: u32,
     pub rows: u32,
+    /// ID of the `ai-chat` node this PTY session is a view onto (provider mode
+    /// 2d). Capture backfills this node at session end. See ADR-034.
+    pub node_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +168,7 @@ pub async fn launch_session(
             prompt: input.prompt,
             cols: input.cols,
             rows: input.rows,
+            node_id: input.node_id,
         }))
         .await
         .map_err(status_to_command_error)?;
