@@ -624,47 +624,27 @@ impl SqliteStore {
 
         let updated_content = update.content.unwrap_or(current.content);
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+        let updated_props = match update.properties {
+            Some(p) => serde_json::to_string(&p).context("Failed to serialize properties")?,
+            None => serde_json::to_string(&current.properties)
+                .context("Failed to serialize current properties")?,
+        };
+        let updated_title = match update.title {
+            Some(t) => t,           // Some(Some(x)) sets, Some(None) clears
+            None => current.title,  // None means no change
+        };
+        let updated_status = update
+            .lifecycle_status
+            .unwrap_or(current.lifecycle_status.clone());
         let now = Utc::now().to_rfc3339();
 
         let rows_affected = self.db.execute(
-            "UPDATE node SET content = ?1, node_type = ?2, version = ?3, modified_at = ?4 WHERE id = ?5 AND version = ?6",
-            libsql::params![updated_content, updated_node_type, new_version, now.clone(), id.to_string(), expected_version],
+            "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, title = ?4, lifecycle_status = ?5, version = ?6, modified_at = ?7 WHERE id = ?8 AND version = ?9",
+            libsql::params![updated_content, updated_node_type, updated_props, updated_title, updated_status, new_version, now, id.to_string(), expected_version],
         ).await.context("Failed to update node with version check")?;
 
         if rows_affected == 0 {
             return Ok(None);
-        }
-
-        if let Some(props) = update.properties {
-            let props_json =
-                serde_json::to_string(&props).context("Failed to serialize properties")?;
-            self.db
-                .execute(
-                    "UPDATE node SET properties = ?1 WHERE id = ?2",
-                    libsql::params![props_json, id.to_string()],
-                )
-                .await
-                .context("Failed to update properties")?;
-        }
-
-        if let Some(title) = update.title {
-            self.db
-                .execute(
-                    "UPDATE node SET title = ?1 WHERE id = ?2",
-                    libsql::params![title, id.to_string()],
-                )
-                .await
-                .context("Failed to update title")?;
-        }
-
-        if let Some(status) = update.lifecycle_status {
-            self.db
-                .execute(
-                    "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
-                    libsql::params![status, id.to_string()],
-                )
-                .await
-                .context("Failed to update lifecycle_status")?;
         }
 
         let node = self

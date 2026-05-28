@@ -539,7 +539,7 @@ impl QueryService {
 
     /// Escape single quotes in strings for SQL safety
     fn escape_string(&self, s: &str) -> String {
-        s.replace('\'', "\\'")
+        s.replace('\'', "''")
     }
 }
 
