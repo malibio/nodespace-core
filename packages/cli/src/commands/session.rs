@@ -83,6 +83,9 @@ async fn launch(client: &mut AgentSessionServiceClient<Channel>, args: LaunchArg
             prompt: args.prompt,
             cols,
             rows,
+            // CLI-launched sessions are not tied to an ai-chat node, so there
+            // is nothing to backfill — capture skips when node_id is absent.
+            node_id: None,
         }))
         .await
         .context("LaunchSession RPC failed")?

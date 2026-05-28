@@ -1,9 +1,20 @@
-//! Opt-in session capture: creates an `ai-chat` node at PTY session end.
+//! Opt-in session capture: backfills the `ai-chat` node for a PTY session.
 //!
-//! [`CaptureService::finalize`] is called by the agent session handler after
-//! the PTY process exits. It reads capture settings from the daemon config and,
-//! when `capture.enabled = true`, assembles an `ai-chat` node payload and
-//! writes it via `NodeService`.
+//! Under the unified AIChat model (ADR-034), a PTY session is provider mode 2d
+//! of an `ai-chat` node that already exists — it was created up front via the
+//! `/ai-chat` slash command and its id is passed through `LaunchSession`. At
+//! session end, capture **backfills** that node with the session's
+//! transcript/summary/metadata; it does **not** mint a new node.
+//!
+//! [`finalize_capture`] is called by the agent session handler after the PTY
+//! process exits. It reads capture settings from the daemon config and, when
+//! `capture.enabled = true`, merges a capture payload onto the existing node via
+//! `NodeService`.
+//!
+//! Mode 2d capture is deliberately limited (transcript/session-id/metadata),
+//! not the structured `messages[]` of modes 2a/2b/2c — NodeSpace only sees the
+//! terminal's raw output stream, which has no recoverable turn structure
+//! (ADR-034).
 //!
 //! The call is fire-and-forget from the session lifecycle perspective: any
 //! error is logged but does not surface to the user or block teardown.
@@ -12,7 +23,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use nodespace_agent::pty::{ExitStatus, SessionCapture};
-use nodespace_core::services::{CreateNodeParams, NodeService as CoreNodeService};
+use nodespace_core::models::NodeUpdate;
+use nodespace_core::services::NodeService as CoreNodeService;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -21,21 +33,33 @@ use crate::services::settings_service::{CaptureConfig, CaptureContentSetting};
 /// Parameters describing a completed PTY session.
 pub struct CompletedSession {
     pub id: Uuid,
+    /// ID of the `ai-chat` node this session is a view onto. The node is
+    /// created up front via `/ai-chat`; capture backfills it. `None` only in
+    /// the defensive/legacy case where no node was associated at launch — in
+    /// which case capture is skipped (the unified model always sets this).
+    pub node_id: Option<String>,
     pub agent_type: String,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
     pub exit_status: ExitStatus,
 }
 
-/// Attempt to create an `ai-chat` node for a completed session.
+/// Backfill the session's existing `ai-chat` node with capture data.
 ///
-/// Returns `Ok(Some(node_id))` if a node was created, `Ok(None)` if capture is
-/// disabled, or `Err` on an ops failure. Callers should log errors and
-/// continue — failed capture must not affect session teardown.
+/// Returns `Ok(Some(node_id))` if the node was backfilled, `Ok(None)` if
+/// capture is disabled or no `node_id` was associated with the session, or
+/// `Err` on an ops failure. Callers should log errors and continue — failed
+/// capture must not affect session teardown.
 ///
 /// The caller is responsible for reading `CaptureConfig` once at session-launch
 /// time and passing the snapshot in here, so this function doesn't re-read
 /// daemon.toml on every session end.
+///
+/// Uses `update_node_unchecked`: capture is a single, additive, fire-and-forget
+/// writer (it only merges `capture:*` keys plus `status`/`last_active`), so the
+/// node's optimistic-concurrency version is not a concern here — and a spurious
+/// version conflict from a concurrent viewer edit must not silently drop the
+/// capture. The update deep-merges, so it never clobbers `provider`/`messages`.
 pub async fn finalize_capture(
     session: &CompletedSession,
     capture: &SessionCapture,
@@ -46,55 +70,56 @@ pub async fn finalize_capture(
         return Ok(None);
     }
 
-    let (content, properties) = build_node_payload(session, capture, config.content);
+    let Some(node_id) = session.node_id.as_deref() else {
+        // No node to backfill. Under ADR-034 the node always exists up front,
+        // so this is a defensive/legacy path — skip rather than mint.
+        tracing::warn!(
+            session_id = %session.id,
+            "session capture: no node_id associated with session, skipping backfill"
+        );
+        return Ok(None);
+    };
 
-    let node_id = node_service
-        .create_node_with_parent(CreateNodeParams {
-            id: None,
-            node_type: "ai-chat".to_string(),
-            content,
-            parent_id: None,
-            insert_after_node_id: None,
-            properties,
-        })
+    let properties = build_capture_properties(session, capture, config.content);
+
+    node_service
+        .update_node_unchecked(
+            node_id,
+            NodeUpdate {
+                properties: Some(properties),
+                ..Default::default()
+            },
+        )
         .await
-        .map_err(|e| anyhow::anyhow!("capture: failed to create ai-chat node: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("capture: failed to backfill ai-chat node: {}", e))?;
 
     tracing::info!(
         session_id = %session.id,
         node_id = %node_id,
-        "session capture: created ai-chat node"
+        "session capture: backfilled ai-chat node"
     );
 
-    Ok(Some(node_id))
+    Ok(Some(node_id.to_string()))
 }
 
-/// Build the node content string and properties map for an ai-chat capture node.
+/// Build the capture properties to merge onto an existing ai-chat node.
+///
+/// Only capture-derived fields are emitted — the node's `provider`/`model`/
+/// `messages` were set at launch and are preserved by the deep merge. The
+/// session is marked `archived` (it has ended) and `last_active` refreshed.
+///
+/// Agent-session-specific fields use the "capture:" namespace to avoid
+/// conflicts with future core properties (per CLAUDE.md schema rules).
 ///
 /// Extracted so tests can verify property construction without a NodeService.
-fn build_node_payload(
+fn build_capture_properties(
     session: &CompletedSession,
     capture: &SessionCapture,
     content_level: CaptureContentSetting,
-) -> (String, serde_json::Value) {
-    let content = format!(
-        "{} session — {}",
-        session.agent_type,
-        session.started_at.format("%Y-%m-%d %H:%M UTC")
-    );
-
-    // Core ai-chat schema fields: provider, model, status, last_active,
-    // context_tokens, created_nodes, messages.
-    // Agent-session-specific fields use the "capture:" namespace to avoid
-    // conflicts with future core properties (per CLAUDE.md schema rules).
+) -> serde_json::Value {
     let mut properties = json!({
-        "provider": "native",
-        "model": session.agent_type,
         "status": "archived",
         "last_active": session.ended_at.to_rfc3339(),
-        "context_tokens": 0,
-        "created_nodes": [],
-        "messages": [],
         "capture:agent_type": session.agent_type,
         "capture:started_at": session.started_at.to_rfc3339(),
         "capture:ended_at": session.ended_at.to_rfc3339(),
@@ -113,7 +138,7 @@ fn build_node_payload(
         properties["capture:transcript"] = json!(capture.transcript());
     }
 
-    (content, properties)
+    properties
 }
 
 #[cfg(test)]
@@ -126,6 +151,7 @@ mod tests {
         let ts = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
         CompletedSession {
             id: Uuid::nil(),
+            node_id: Some("ai-chat-node-1".to_string()),
             agent_type: "claude-code".to_string(),
             started_at: ts,
             ended_at: ts,
@@ -149,8 +175,8 @@ mod tests {
     fn metadata_only_omits_transcript_and_summary() {
         let session = make_session();
         let capture = make_capture_with("hello world");
-        let (_, props) =
-            build_node_payload(&session, &capture, CaptureContentSetting::MetadataOnly);
+        let props =
+            build_capture_properties(&session, &capture, CaptureContentSetting::MetadataOnly);
         assert!(props.get("capture:summary").is_none());
         assert!(props.get("capture:transcript").is_none());
     }
@@ -159,7 +185,7 @@ mod tests {
     fn summary_level_includes_summary_not_transcript() {
         let session = make_session();
         let capture = make_capture_with("hello world");
-        let (_, props) = build_node_payload(&session, &capture, CaptureContentSetting::Summary);
+        let props = build_capture_properties(&session, &capture, CaptureContentSetting::Summary);
         assert!(props.get("capture:summary").is_some());
         assert!(props.get("capture:transcript").is_none());
     }
@@ -168,7 +194,7 @@ mod tests {
     fn full_level_includes_both() {
         let session = make_session();
         let capture = make_capture_with("hello world");
-        let (_, props) = build_node_payload(&session, &capture, CaptureContentSetting::Full);
+        let props = build_capture_properties(&session, &capture, CaptureContentSetting::Full);
         assert!(props.get("capture:summary").is_some());
         assert!(props.get("capture:transcript").is_some());
         assert_eq!(props["capture:transcript"].as_str().unwrap(), "hello world");
@@ -178,17 +204,30 @@ mod tests {
     fn status_field_is_archived() {
         let session = make_session();
         let capture = SessionCapture::new();
-        let (_, props) =
-            build_node_payload(&session, &capture, CaptureContentSetting::MetadataOnly);
+        let props =
+            build_capture_properties(&session, &capture, CaptureContentSetting::MetadataOnly);
         assert_eq!(props["status"].as_str().unwrap(), "archived");
+    }
+
+    #[test]
+    fn backfill_does_not_emit_provider_or_messages() {
+        // Capture only merges capture-derived fields; provider/model/messages
+        // were set at launch and must be preserved by the node's deep merge.
+        let session = make_session();
+        let capture = SessionCapture::new();
+        let props =
+            build_capture_properties(&session, &capture, CaptureContentSetting::MetadataOnly);
+        assert!(props.get("provider").is_none());
+        assert!(props.get("model").is_none());
+        assert!(props.get("messages").is_none());
     }
 
     #[test]
     fn namespace_prefixed_fields_present() {
         let session = make_session();
         let capture = SessionCapture::new();
-        let (_, props) =
-            build_node_payload(&session, &capture, CaptureContentSetting::MetadataOnly);
+        let props =
+            build_capture_properties(&session, &capture, CaptureContentSetting::MetadataOnly);
         assert!(props.get("capture:agent_type").is_some());
         assert!(props.get("capture:session_id").is_some());
         assert!(props.get("capture:exit_code").is_some());
