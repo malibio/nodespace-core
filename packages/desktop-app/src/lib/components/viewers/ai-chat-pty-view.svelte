@@ -12,7 +12,8 @@
 -->
 
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import PtyTerminal from '$lib/components/agent/pty-terminal.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import {
@@ -52,15 +53,84 @@
 
   const node = $derived(sharedNodeStore.getNode(nodeId));
 
-  // A previously-launched session id persisted on the node lets the terminal
-  // re-attach on reopen (the daemon owns the PTY and supports multi-client
-  // streaming per ADR-032).
+  // A previously-launched session id persisted on the node. While the session
+  // is live (status 'active') this lets the terminal re-attach on reopen (the
+  // daemon owns the PTY and supports multi-client streaming per ADR-032). Once
+  // the session has ended (status 'archived', set by capture backfill) the PTY
+  // is gone — re-attaching would just show a blank, silent terminal — so we
+  // render a read-only summary instead.
   const persistedSessionId = $derived(
     (node?.properties?.['capture:session_id'] as string | undefined) ?? null
   );
 
+  // Latches when *this* viewer's just-launched session exits, so the UI flips
+  // to the ended state live without waiting for a reload (the daemon's capture
+  // backfill updates the DB out-of-band, not sharedNodeStore).
+  let sessionEnded = $state(false);
+
   let activeSessionId = $state<string | null>(null);
-  const sessionId = $derived(activeSessionId ?? persistedSessionId);
+
+  // The session has ended if capture marked the node archived, or we observed
+  // its exit this session.
+  const isEnded = $derived(
+    sessionEnded || (node?.properties?.status as string | undefined) === 'archived'
+  );
+  // Only host a live terminal when the session is still running.
+  const sessionId = $derived(isEnded ? null : (activeSessionId ?? persistedSessionId));
+
+  const agentType = $derived(
+    (node?.properties?.['capture:agent_type'] as string | undefined) ?? null
+  );
+  const summary = $derived(
+    (node?.properties?.['capture:summary'] as string | undefined) ?? null
+  );
+  const transcript = $derived(
+    (node?.properties?.['capture:transcript'] as string | undefined) ?? null
+  );
+
+  let unlistenClosed: UnlistenFn | null = null;
+
+  // Listen for the live session's exit so the view flips to the ended state
+  // immediately (finding from review: a re-attached dead session would
+  // otherwise render a blank terminal).
+  $effect(() => {
+    const id = activeSessionId;
+    if (!id) return;
+    let cancelled = false;
+    listen(`pty-closed-${id}`, () => {
+      sessionEnded = true;
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlistenClosed = fn;
+      })
+      .catch((e) => log.warn('Failed to register pty-closed listener', e));
+    return () => {
+      cancelled = true;
+      unlistenClosed?.();
+      unlistenClosed = null;
+    };
+  });
+
+  onDestroy(() => {
+    unlistenClosed?.();
+  });
+
+  /** Reset to the config step to launch a fresh session on this node. */
+  function startNewSession(): void {
+    sessionEnded = false;
+    activeSessionId = null;
+    error = null;
+    const current = sharedNodeStore.getNode(nodeId);
+    const props = { ...current?.properties };
+    delete props['capture:session_id'];
+    props.status = 'active';
+    sharedNodeStore.updateNode(
+      nodeId,
+      { properties: props },
+      { type: 'viewer', viewerId: 'ai-chat-pty-view' }
+    );
+  }
 
   let selectedAgent = $state('claude-code');
   let launching = $state(false);
@@ -163,7 +233,37 @@
   }
 </script>
 
-{#if sessionId}
+{#if isEnded}
+  <!-- Ended session: the PTY is gone. Show a read-only summary of what the
+       session was about (mode 2d capture is a reference, not a transcript a
+       terminal can replay) + an affordance to start a fresh session. -->
+  <div class="pty-ended">
+    <div class="pty-ended-card">
+      <h3 class="pty-ended-title">Session ended</h3>
+      <p class="pty-ended-meta">
+        {#if agentType}<span class="pty-ended-agent">{agentType}</span>{/if}
+        <span class="pty-ended-badge">archived</span>
+      </p>
+
+      {#if summary}
+        <p class="pty-ended-summary">{summary}</p>
+      {/if}
+
+      {#if transcript}
+        <details class="pty-ended-transcript">
+          <summary>Transcript</summary>
+          <pre>{transcript}</pre>
+        </details>
+      {:else if !summary}
+        <p class="pty-ended-empty">
+          No transcript or summary was captured for this session.
+        </p>
+      {/if}
+
+      <button class="launch-button" onclick={startNewSession}>Start new session</button>
+    </div>
+  </div>
+{:else if sessionId}
   <!-- Active session: the embedded terminal IS the node's viewer. -->
   <div class="pty-terminal-host">
     {#key sessionId}
@@ -284,6 +384,99 @@
     min-height: 0;
     overflow: hidden;
     background: hsl(222 47% 8%);
+  }
+
+  .pty-ended {
+    flex: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 2rem 1rem;
+  }
+
+  .pty-ended-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: 100%;
+    max-width: 32rem;
+    padding: 1.25rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--card));
+  }
+
+  .pty-ended-title {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .pty-ended-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    font-size: 0.75rem;
+  }
+
+  .pty-ended-agent {
+    color: hsl(var(--muted-foreground));
+    font-family: ui-monospace, monospace;
+  }
+
+  .pty-ended-badge {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted));
+    border-radius: 0.25rem;
+    padding: 0 0.375rem;
+  }
+
+  .pty-ended-summary {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: hsl(var(--foreground));
+    white-space: pre-wrap;
+  }
+
+  .pty-ended-empty {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .pty-ended-transcript {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+
+  .pty-ended-transcript > summary {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    background: hsl(var(--muted) / 0.3);
+    color: hsl(var(--foreground));
+  }
+
+  .pty-ended-transcript pre {
+    margin: 0;
+    padding: 0.75rem;
+    max-height: 24rem;
+    overflow: auto;
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: hsl(var(--foreground));
   }
 
   .pty-config {
