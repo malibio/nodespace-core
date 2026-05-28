@@ -392,6 +392,7 @@ mod tests {
                 mentioned_in: vec![],
                 title: Some("Cron Playbook".to_string()),
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
             lm.activate_playbook(&playbook_node).unwrap();
 

@@ -26,6 +26,7 @@ mod playbook_tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 
@@ -1045,6 +1046,7 @@ mod playbook_tests {
             mentioned_in: vec![],
             title: Some("My task".to_string()),
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
 
         let envelope = EventEnvelope {
@@ -1091,6 +1093,7 @@ mod playbook_tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
 
         let envelope = EventEnvelope {
@@ -1153,6 +1156,7 @@ mod playbook_tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
 
         let envelope = EventEnvelope {
@@ -1196,6 +1200,7 @@ mod playbook_tests {
                 mentioned_in: vec![],
                 title: None,
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
             let envelope = EventEnvelope {
                 event: DomainEvent::NodeCreated {

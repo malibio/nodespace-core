@@ -1103,6 +1103,7 @@ pub async fn handle_update_nodes_batch(
             properties: update.properties,
             title: None,            // Title is managed by NodeService
             lifecycle_status: None, // Batch update doesn't support lifecycle_status yet
+            access_tags: None,
         };
 
         // Apply update via NodeService (enforces all business rules)

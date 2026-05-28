@@ -234,6 +234,7 @@ impl SchemaNode {
             mentioned_in: Vec::new(),
             title: None, // Schema nodes don't have indexed titles
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 

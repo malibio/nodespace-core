@@ -770,6 +770,7 @@ mod tests {
             mentioned_in: vec![],
             title: Some("Test Node".to_string()),
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 

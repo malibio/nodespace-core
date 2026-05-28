@@ -21,7 +21,7 @@ use tracing::warn;
 #[derive(Debug, Clone)]
 pub enum ResolvedValue {
     /// A single node
-    Node(Node),
+    Node(Box<Node>),
     /// A collection of nodes (from a "many" relationship)
     Collection(Vec<Node>),
     /// A scalar property value
@@ -60,7 +60,7 @@ impl GraphResolver {
     /// Uses the segment cache: if a prefix has already been resolved, starts from there.
     pub fn resolve_path(&mut self, root_node: &Node, segments: &[String]) -> ResolvedValue {
         if segments.is_empty() {
-            return ResolvedValue::Node(root_node.clone());
+            return ResolvedValue::Node(Box::new(root_node.clone()));
         }
 
         // Check cache for the full path first
@@ -77,7 +77,7 @@ impl GraphResolver {
             if let Some(cached) = self.cache.get(prefix) {
                 match cached {
                     ResolvedValue::Node(n) => {
-                        current_node = n.clone();
+                        current_node = *n.clone();
                         start_idx = i;
                         break;
                     }
@@ -126,10 +126,12 @@ impl GraphResolver {
                 }
                 Ok(nodes) if nodes.len() == 1 => {
                     let node = nodes.into_iter().next().unwrap();
-                    self.cache
-                        .insert(segments[..=i].to_vec(), ResolvedValue::Node(node.clone()));
+                    self.cache.insert(
+                        segments[..=i].to_vec(),
+                        ResolvedValue::Node(Box::new(node.clone())),
+                    );
                     if is_last {
-                        let result = ResolvedValue::Node(node);
+                        let result = ResolvedValue::Node(Box::new(node.clone()));
                         self.cache.insert(segments.to_vec(), result.clone());
                         return result;
                     }
@@ -160,7 +162,7 @@ impl GraphResolver {
             }
         }
 
-        ResolvedValue::Node(current_node)
+        ResolvedValue::Node(Box::new(current_node))
     }
 
     /// Resolve a collection path and return the collection nodes.
@@ -177,7 +179,7 @@ impl GraphResolver {
 
         match self.resolve_path(root_node, &segments[1..]) {
             ResolvedValue::Collection(nodes) => nodes,
-            ResolvedValue::Node(n) => vec![n],
+            ResolvedValue::Node(n) => vec![*n],
             _ => vec![],
         }
     }
@@ -536,6 +538,7 @@ mod tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
         assert_eq!(get_node_property(&node, "status"), Some(json!("open")));
         assert_eq!(get_node_property(&node, "missing"), None);
@@ -555,6 +558,7 @@ mod tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
         // "amount" should match "custom:amount"
         assert_eq!(get_node_property(&node, "amount"), Some(json!(1500)));
@@ -575,6 +579,7 @@ mod tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
         assert_eq!(get_node_property(&node, "status"), Some(json!("open")));
         assert_eq!(get_node_property(&node, "priority"), Some(json!("high")));
@@ -657,6 +662,7 @@ mod tests {
                 mentioned_in: vec![],
                 title: Some(format!("{} title", id)),
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             }
         }
 

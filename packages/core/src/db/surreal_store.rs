@@ -223,6 +223,9 @@ struct SurrealNode {
     /// Lifecycle status for knowledge governance (Issue #755)
     #[serde(default = "default_lifecycle_status")]
     lifecycle_status: String,
+    /// Stamped ACL tags (Issue #1217)
+    #[serde(default)]
+    access_tags: Vec<String>,
 }
 
 /// Default lifecycle status ("active") for serde
@@ -254,6 +257,7 @@ impl From<SurrealNode> for Node {
             mentioned_in: Vec::new(), // Populated at fetch time by get_children_tree
             title: sn.title,
             lifecycle_status: sn.lifecycle_status,
+            access_tags: sn.access_tags,
         }
     }
 }
@@ -705,7 +709,8 @@ impl SurrealStore {
                 created_at: time::now(),
                 modified_at: time::now(),
                 properties: $properties,
-                title: $title
+                title: $title,
+                access_tags: $access_tags
             }};
         "#,
             node.id
@@ -727,6 +732,7 @@ impl SurrealStore {
             .bind(("version", node.version))
             .bind(("properties", properties))
             .bind(("title", node.title.clone()))
+            .bind(("access_tags", node.access_tags.clone()))
             .await
             .context("Failed to create node in universal table")?;
 
@@ -1053,6 +1059,10 @@ impl SurrealStore {
         if title_update.is_some() {
             set_clauses.push("title = $title".to_string());
         }
+        let access_tags_update = update.access_tags;
+        if access_tags_update.is_some() {
+            set_clauses.push("access_tags = $access_tags".to_string());
+        }
 
         let query = format!(
             "UPDATE type::record('node', $id) SET {};",
@@ -1071,6 +1081,9 @@ impl SurrealStore {
         }
         if let Some(title) = title_update {
             query_builder = query_builder.bind(("title", title));
+        }
+        if let Some(tags) = access_tags_update {
+            query_builder = query_builder.bind(("access_tags", tags));
         }
 
         query_builder.await.context("Failed to update node")?;
@@ -1557,6 +1570,16 @@ impl SurrealStore {
                 .bind(("lifecycle_status", status))
                 .await
                 .context("Failed to update lifecycle_status")?;
+        }
+
+        // Issue #1217: Update access_tags if provided
+        if let Some(tags) = update.access_tags {
+            self.db
+                .query("UPDATE type::record('node', $id) SET access_tags = $access_tags;")
+                .bind(("id", id.to_string()))
+                .bind(("access_tags", tags))
+                .await
+                .context("Failed to update access_tags")?;
         }
 
         // Fetch fresh node
@@ -3587,6 +3610,7 @@ impl SurrealStore {
                 mentioned_in: vec![],
                 title: None, // Child nodes don't have titles
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
             self.notify(StoreChange {
                 operation: StoreOperation::Created,
@@ -3702,6 +3726,7 @@ impl SurrealStore {
                     mentioned_in: vec![],
                     title: None,
                     lifecycle_status: "active".to_string(),
+                    access_tags: vec![],
                 };
                 self.notify(StoreChange {
                     operation: StoreOperation::Created,
@@ -3801,6 +3826,7 @@ impl SurrealStore {
             mentioned_in: vec![],
             title: None, // Streaming nodes don't have titles (typically child nodes)
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
         self.notify(StoreChange {
             operation: StoreOperation::Created,

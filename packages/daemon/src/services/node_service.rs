@@ -170,6 +170,7 @@ impl GrpcNodeService for NodeServiceImpl {
             properties,
             title: None,
             lifecycle_status: empty_to_none(req.lifecycle_status),
+            access_tags: None,
         };
 
         // Auto-fetch version if not supplied (matches the prior ops-layer behaviour).

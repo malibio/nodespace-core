@@ -580,6 +580,7 @@ impl TaskNode {
             mentioned_in: Vec::new(),
             title: Some(crate::utils::strip_markdown(&self.content)), // Task nodes have indexed titles
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 

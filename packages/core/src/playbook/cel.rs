@@ -494,6 +494,7 @@ mod tests {
             mentioned_in: vec![],
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 

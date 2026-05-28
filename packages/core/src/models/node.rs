@@ -236,6 +236,13 @@ pub struct Node {
     #[serde(default = "default_lifecycle_status")]
     #[serde(skip_serializing_if = "is_active_lifecycle")]
     pub lifecycle_status: String,
+
+    /// Stamped ACL tags for cloud-side LIVE SELECT filtering.
+    /// Identifies which collections this node belongs to (e.g., ["col:hr", "user:uuid"]).
+    /// Empty means unrestricted (local-only nodes without cloud sync).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub access_tags: Vec<String>,
 }
 
 impl Node {
@@ -282,6 +289,7 @@ impl Node {
             mentioned_in: Vec::new(),
             title: None, // Title is set by NodeService based on root/task status
             lifecycle_status: "active".to_string(),
+            access_tags: Vec::new(),
         }
     }
 
@@ -326,6 +334,7 @@ impl Node {
             mentioned_in: Vec::new(),
             title: None, // Title is set by NodeService based on root/task status
             lifecycle_status: "active".to_string(),
+            access_tags: Vec::new(),
         }
     }
 
@@ -450,6 +459,11 @@ pub struct NodeUpdate {
     /// Valid values: "active" (default), "archived", "deleted"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_status: Option<String>,
+
+    /// Update Stamped ACL tags (replaces the full set).
+    /// Propagates to all outgoing relationships via NodeService.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_tags: Option<Vec<String>>,
 }
 
 impl NodeUpdate {
@@ -489,6 +503,12 @@ impl NodeUpdate {
         self
     }
 
+    /// Set access_tags update (Stamped ACL, Issue #1217)
+    pub fn with_access_tags(mut self, access_tags: Vec<String>) -> Self {
+        self.access_tags = Some(access_tags);
+        self
+    }
+
     /// Check if update contains any changes
     pub fn is_empty(&self) -> bool {
         self.node_type.is_none()
@@ -496,6 +516,7 @@ impl NodeUpdate {
             && self.properties.is_none()
             && self.title.is_none()
             && self.lifecycle_status.is_none()
+            && self.access_tags.is_none()
     }
 }
 

@@ -49,6 +49,11 @@ DEFINE FIELD IF NOT EXISTS title ON TABLE node TYPE option<string>;
 --   - "deleted": Soft-deleted, in trash, excluded from all queries, purgeable
 DEFINE FIELD IF NOT EXISTS lifecycle_status ON TABLE node TYPE string DEFAULT "active";
 
+-- Stamped ACL tags for cloud-side LIVE SELECT filtering (Issue #1217)
+-- Identifies which collections this node belongs to (e.g., ["col:hr", "user:uuid"]).
+-- Empty means unrestricted (local-only nodes without cloud sync).
+DEFINE FIELD IF NOT EXISTS access_tags ON TABLE node TYPE array<string> DEFAULT [];
+
 -- Indexes for performance
 DEFINE INDEX IF NOT EXISTS idx_node_type ON TABLE node COLUMNS node_type;
 DEFINE INDEX IF NOT EXISTS idx_node_modified ON TABLE node COLUMNS modified_at;
@@ -95,6 +100,10 @@ DEFINE FIELD IF NOT EXISTS relationship_type ON TABLE relationship TYPE string A
 
 -- Type-specific data stored in properties
 DEFINE FIELD IF NOT EXISTS properties ON TABLE relationship TYPE object FLEXIBLE DEFAULT {};
+
+-- Stamped ACL: inherited from the `in` node's access_tags at creation time,
+-- re-stamped when the in node's access_tags change.
+DEFINE FIELD IF NOT EXISTS access_tags ON TABLE relationship TYPE array<string> DEFAULT [];
 
 -- System metadata
 DEFINE FIELD IF NOT EXISTS version ON TABLE relationship TYPE int DEFAULT 1;

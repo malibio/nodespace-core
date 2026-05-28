@@ -412,6 +412,7 @@ mod tests {
             mentioned_in: vec![],
             title: Some(format!("Playbook {}", id)),
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 

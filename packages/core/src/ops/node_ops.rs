@@ -232,6 +232,7 @@ pub async fn update_node(
         properties: input.properties,
         title: None,
         lifecycle_status: input.lifecycle_status,
+        access_tags: None,
     };
 
     // Auto-fetch version if not provided

@@ -1116,6 +1116,7 @@ impl NodeService {
             modified_at: chrono::Utc::now(),
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
         behavior.get_embeddable_content(&probe).is_some()
     }
@@ -2206,6 +2207,7 @@ impl NodeService {
                 modified_at: chrono::Utc::now(),
                 title: None,
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
             // is_root = parent_id.is_none() — avoids a DB lookup at create time
             self.compute_title(&temp_node, Some(params.parent_id.is_none()))
@@ -2224,6 +2226,7 @@ impl NodeService {
             modified_at: chrono::Utc::now(),
             title,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
 
         tracing::debug!(
@@ -2531,6 +2534,7 @@ impl NodeService {
                     mentioned_in: vec![],
                     title: None, // Date nodes don't have indexed titles
                     lifecycle_status: "active".to_string(),
+                    access_tags: vec![],
                 };
                 return Ok(Some(virtual_date));
             }
@@ -2955,6 +2959,7 @@ impl NodeService {
         let mut content_changed = false;
         let mut node_type_changed = false;
         let mut properties_changed = false;
+        let new_access_tags = update.access_tags.clone();
 
         if let Some(node_type) = update.node_type {
             node_type_changed = updated.node_type != node_type;
@@ -3037,6 +3042,7 @@ impl NodeService {
             properties: Some(updated.properties.clone()),
             title: title_update,
             lifecycle_status: None, // Schema update doesn't change lifecycle_status
+            access_tags: new_access_tags.clone(),
         };
 
         // For schema nodes, use atomic update with DDL generation (Issue #690, #703)
@@ -3074,6 +3080,17 @@ impl NodeService {
         }
 
         // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
+
+        // Issue #1217: Re-stamp outgoing relationships if access_tags changed
+        if let Some(ref tags) = new_access_tags {
+            if let Err(e) = self.restamp_outgoing_relationships(id, tags).await {
+                tracing::warn!(
+                    "Failed to restamp relationship access_tags for node {}: {}",
+                    id,
+                    e
+                );
+            }
+        }
 
         // Sync mentions if content changed
         if content_changed {
@@ -3205,6 +3222,7 @@ impl NodeService {
             properties: Some(updated.properties.clone()),
             title: title_update,
             lifecycle_status: update.lifecycle_status,
+            access_tags: update.access_tags.clone(),
         };
 
         // Perform atomic update with version check
@@ -3245,6 +3263,17 @@ impl NodeService {
                 )
                 .await;
             });
+        }
+
+        // Issue #1217: Re-stamp outgoing relationships if access_tags changed
+        if let Some(ref tags) = update.access_tags {
+            if let Err(e) = self.restamp_outgoing_relationships(id, tags).await {
+                tracing::warn!(
+                    "Failed to restamp relationship access_tags for node {}: {}",
+                    id,
+                    e
+                );
+            }
         }
 
         // Sync mentions if content changed
@@ -4142,6 +4171,7 @@ impl NodeService {
             modified_at: chrono::Utc::now(),
             title: None,
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         };
         if behavior.get_embeddable_content(&probe).is_none() {
             tracing::debug!(
@@ -4872,6 +4902,7 @@ impl NodeService {
             properties: Some(node.properties.clone()),
             title: None,            // Don't update title on version bump
             lifecycle_status: None, // Don't update lifecycle_status on version bump
+            access_tags: None,      // Don't update access_tags on version bump
         };
 
         // Perform atomic update with version check
@@ -5411,6 +5442,7 @@ impl NodeService {
                 modified_at: chrono::Utc::now(),
                 title: None, // Bulk nodes don't need titles (validated only)
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
 
             // Validate via behaviors
@@ -5522,6 +5554,7 @@ impl NodeService {
                 modified_at: chrono::Utc::now(),
                 title: None,
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
 
             self.behaviors.validate_node(&temp_node)?;
@@ -5625,6 +5658,7 @@ impl NodeService {
                 modified_at: chrono::Utc::now(),
                 title: None,
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
 
             // Only behavior validation - skip schema validation
@@ -5947,6 +5981,7 @@ impl NodeService {
                 modified_at: chrono::Utc::now(),
                 title: None, // Title managed by NodeService for root/task nodes
                 lifecycle_status: "active".to_string(),
+                access_tags: vec![],
             };
             self.store
                 .create_node(node, self.client_id.clone(), self.execution_context.clone())
@@ -6530,6 +6565,13 @@ impl NodeService {
             edge_data.clone()
         };
 
+        // Issue #1217: fetch access_tags from the source (in) node to stamp onto the relationship
+        let source_access_tags: Vec<String> = self
+            .get_node(source_id)
+            .await?
+            .map(|n| n.access_tags)
+            .unwrap_or_default();
+
         // Build and execute the RELATE query - all relationships use the same table
         let properties_json =
             serde_json::to_string(&final_edge_data).unwrap_or_else(|_| "{}".to_string());
@@ -6538,6 +6580,7 @@ impl NodeService {
             r#"RELATE $source->relationship->$target CONTENT {{
                 relationship_type: $rel_type,
                 properties: {},
+                access_tags: $access_tags,
                 created_at: time::now(),
                 modified_at: time::now(),
                 version: 1
@@ -6552,6 +6595,7 @@ impl NodeService {
             .bind(("source", source_thing))
             .bind(("target", target_thing))
             .bind(("rel_type", relationship_name.to_string()))
+            .bind(("access_tags", source_access_tags))
             .await
             .map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to create relationship: {}", e))
@@ -6576,6 +6620,31 @@ impl NodeService {
             });
         }
 
+        Ok(())
+    }
+
+    /// Re-stamp access_tags on all outgoing relationships for a node (Issue #1217).
+    ///
+    /// Called after a node's access_tags are updated. Updates every relationship where
+    /// `in = node_id` so that cloud LIVE SELECT filters stay consistent.
+    async fn restamp_outgoing_relationships(
+        &self,
+        node_id: &str,
+        access_tags: &[String],
+    ) -> Result<(), NodeServiceError> {
+        let node_thing = surrealdb::types::RecordId::new("node", node_id);
+        self.store
+            .db()
+            .query("UPDATE relationship SET access_tags = $access_tags WHERE in = $node_id;")
+            .bind(("node_id", node_thing))
+            .bind(("access_tags", access_tags.to_vec()))
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to restamp relationship access_tags for node {}: {}",
+                    node_id, e
+                ))
+            })?;
         Ok(())
     }
 
@@ -11922,6 +11991,174 @@ mod tests {
             assert!(contents.contains("Batch 1"));
             assert!(contents.contains("Batch 2"));
             assert!(contents.contains("Batch 3"));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #1217: Stamped ACL — access_tags on relationships
+    // -------------------------------------------------------------------------
+
+    mod access_tags_stamping {
+        use super::*;
+        use serde_json::json;
+
+        #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
+        struct RelAccessTags {
+            access_tags: Vec<String>,
+        }
+
+        async fn get_rel_access_tags(
+            service: &NodeService,
+            source_id: &str,
+            rel_type: &str,
+            target_id: &str,
+        ) -> Vec<String> {
+            let source_thing = surrealdb::types::RecordId::new("node", source_id);
+            let target_thing = surrealdb::types::RecordId::new("node", target_id);
+            let mut resp = service
+                .store
+                .db()
+                .query(
+                    "SELECT access_tags FROM relationship WHERE in = $src AND out = $tgt AND relationship_type = $rt LIMIT 1",
+                )
+                .bind(("src", source_thing))
+                .bind(("tgt", target_thing))
+                .bind(("rt", rel_type.to_string()))
+                .await
+                .unwrap();
+            let rows: Vec<RelAccessTags> = resp.take(0).unwrap_or_default();
+            rows.into_iter()
+                .next()
+                .map(|r| r.access_tags)
+                .unwrap_or_default()
+        }
+
+        #[tokio::test]
+        async fn test_create_relationship_stamps_access_tags_from_source() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create source node with access_tags
+            let mut source = Node::new("text".to_string(), "source".to_string(), json!({}));
+            source.access_tags = vec!["col:work".to_string(), "user:alice".to_string()];
+            service.create_node(source.clone()).await.unwrap();
+
+            let target = Node::new("text".to_string(), "target".to_string(), json!({}));
+            service.create_node(target.clone()).await.unwrap();
+
+            service
+                .create_relationship(&source.id, "mentions", &target.id, json!({}))
+                .await
+                .unwrap();
+
+            let tags = get_rel_access_tags(&service, &source.id, "mentions", &target.id).await;
+            assert_eq!(tags, vec!["col:work".to_string(), "user:alice".to_string()]);
+        }
+
+        #[tokio::test]
+        async fn test_create_relationship_empty_tags_when_source_has_none() {
+            let (service, _temp) = create_test_service().await;
+
+            // Source with no access_tags (default empty)
+            let source = Node::new("text".to_string(), "source".to_string(), json!({}));
+            service.create_node(source.clone()).await.unwrap();
+
+            let target = Node::new("text".to_string(), "target".to_string(), json!({}));
+            service.create_node(target.clone()).await.unwrap();
+
+            service
+                .create_relationship(&source.id, "mentions", &target.id, json!({}))
+                .await
+                .unwrap();
+
+            let tags = get_rel_access_tags(&service, &source.id, "mentions", &target.id).await;
+            assert!(tags.is_empty());
+        }
+
+        #[tokio::test]
+        async fn test_restamp_propagates_to_outgoing_relationships() {
+            let (service, _temp) = create_test_service().await;
+
+            // Create source with no tags initially
+            let source = Node::new("text".to_string(), "source".to_string(), json!({}));
+            let source_id = service.create_node(source.clone()).await.unwrap();
+
+            let target1 = Node::new("text".to_string(), "t1".to_string(), json!({}));
+            service.create_node(target1.clone()).await.unwrap();
+            let target2 = Node::new("text".to_string(), "t2".to_string(), json!({}));
+            service.create_node(target2.clone()).await.unwrap();
+
+            service
+                .create_relationship(&source_id, "mentions", &target1.id, json!({}))
+                .await
+                .unwrap();
+            service
+                .create_relationship(&source_id, "mentions", &target2.id, json!({}))
+                .await
+                .unwrap();
+
+            // Initially both relationships have empty tags
+            assert!(
+                get_rel_access_tags(&service, &source_id, "mentions", &target1.id)
+                    .await
+                    .is_empty()
+            );
+            assert!(
+                get_rel_access_tags(&service, &source_id, "mentions", &target2.id)
+                    .await
+                    .is_empty()
+            );
+
+            // Update source node's access_tags
+            let new_tags = vec!["col:hr".to_string()];
+            let current = service.get_node(&source_id).await.unwrap().unwrap();
+            service
+                .update_node(
+                    &source_id,
+                    current.version,
+                    crate::models::NodeUpdate::new().with_access_tags(new_tags.clone()),
+                )
+                .await
+                .unwrap();
+
+            // Both outgoing relationships should now carry the new tags
+            assert_eq!(
+                get_rel_access_tags(&service, &source_id, "mentions", &target1.id).await,
+                new_tags
+            );
+            assert_eq!(
+                get_rel_access_tags(&service, &source_id, "mentions", &target2.id).await,
+                new_tags
+            );
+        }
+
+        #[tokio::test]
+        async fn test_delete_cascade_independent_of_access_tags() {
+            // Ensure cascade delete (already implemented) still works when access_tags present
+            let (service, _temp) = create_test_service().await;
+
+            let mut source = Node::new("text".to_string(), "source".to_string(), json!({}));
+            source.access_tags = vec!["col:x".to_string()];
+            let source_id = service.create_node(source.clone()).await.unwrap();
+
+            let target = Node::new("text".to_string(), "target".to_string(), json!({}));
+            service.create_node(target.clone()).await.unwrap();
+
+            service
+                .create_relationship(&source_id, "mentions", &target.id, json!({}))
+                .await
+                .unwrap();
+
+            // Tags stamped correctly
+            let tags = get_rel_access_tags(&service, &source_id, "mentions", &target.id).await;
+            assert_eq!(tags, vec!["col:x".to_string()]);
+
+            // Delete source — cascade should remove the relationship
+            let v = service.get_node(&source_id).await.unwrap().unwrap().version;
+            service.delete_node(&source_id, v).await.unwrap();
+
+            // Relationship gone
+            let remaining = get_rel_access_tags(&service, &source_id, "mentions", &target.id).await;
+            assert!(remaining.is_empty());
         }
     }
 }

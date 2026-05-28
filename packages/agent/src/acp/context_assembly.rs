@@ -587,6 +587,7 @@ mod tests {
             mentioned_in: vec![],
             title: title.map(|s| s.to_string()),
             lifecycle_status: "active".to_string(),
+            access_tags: vec![],
         }
     }
 
