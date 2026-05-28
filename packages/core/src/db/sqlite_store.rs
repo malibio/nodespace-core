@@ -90,9 +90,11 @@ async fn ensure_sqlite_vec_registered() {
             if let Ok(db) = libsql::Builder::new_local(":memory:").build().await {
                 let _ = db.connect();
             }
-            // SAFETY: `sqlite_vec::sqlite3_vec_init` is the extension's C entry point with
-            // exactly this signature; the transmute reinterprets its fn pointer to the
-            // type `sqlite3_auto_extension` expects.
+            // SAFETY: the `sqlite-vec` crate declares `sqlite3_vec_init` as a zero-arg
+            // `extern "C"` fn, but its real C entry point has the 3-arg SQLite signature
+            // `EntryPoint`. We transmute via `*const ()` to that true signature — the same
+            // pattern the crate's own rusqlite example uses — and hand it to
+            // `sqlite3_auto_extension`, which expects exactly that type.
             unsafe {
                 let entry: EntryPoint =
                     std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
@@ -2274,6 +2276,11 @@ impl SqliteStore {
         // total_chunks. vec0 holds only non-stale vectors (see upsert/delete/mark-stale),
         // so `e.stale = 0` is a cheap defensive guard. We over-fetch chunks because many
         // chunks map to one node and results are grouped per node.
+        //
+        // Note: with KNN, `matching_chunks` counts a node's chunks that landed in the
+        // top-k near the query — not all of its chunks (as the old full scan did). So
+        // `density` now genuinely measures "fraction of the node's chunks near the query"
+        // rather than always being ~1.0; it still feeds the same composite formula.
         let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         let k = (limit * EMBEDDING_KNN_OVERFETCH).max(limit);
 
@@ -2405,6 +2412,21 @@ impl SqliteStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // The node_type filter runs after the global top-k, so a type that is rare
+        // relative to the corpus can be crowded out of the KNN window — surfacing as
+        // fewer than `limit` results. Surface that as a debug signal rather than failing
+        // silently; raising EMBEDDING_KNN_OVERFETCH is the lever if recall suffers.
+        if (results.len() as i64) < limit {
+            tracing::debug!(
+                node_type,
+                returned = results.len(),
+                limit,
+                k,
+                "typed embedding search returned fewer than `limit` results; node_type may be under-represented in the KNN window"
+            );
+        }
+
         results.truncate(limit as usize);
         Ok(results)
     }
