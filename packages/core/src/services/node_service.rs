@@ -26,7 +26,7 @@
 
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
-use crate::db::{extract_record_key, StoreChange, StoreOperation, SurrealStore};
+use crate::db::{StoreChange, StoreOperation, SurrealStore};
 use crate::models::schema::SchemaRelationship;
 use crate::models::{FilterOperator, Node, NodeFilter, NodeUpdate, PropertyFilter};
 use crate::services::error::NodeServiceError;
@@ -37,13 +37,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
-use surrealdb::types::{RecordId, SurrealValue};
 use tokio::sync::broadcast;
-
-/// Formats a RecordId as `table:key` for use in event emission IDs.
-fn extract_record_id_string(record_id: &RecordId) -> String {
-    format!("{}:{}", record_id.table, extract_record_key(record_id))
-}
 
 /// Compute property changes between pre-mutation and post-mutation node properties (Issue #995)
 ///
@@ -5543,7 +5537,7 @@ impl NodeService {
         // Delegate to store - use root-only notify variant
         let result = self
             .store
-            .bulk_create_hierarchy_root_notify(nodes_normalized)
+            .bulk_create_hierarchy_root_notify(nodes_normalized, vec![])
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -5647,7 +5641,7 @@ impl NodeService {
         // Delegate to store - use root-only notify variant for efficiency
         let result = self
             .store
-            .bulk_create_hierarchy_root_notify(nodes_normalized)
+            .bulk_create_hierarchy_root_notify(nodes_normalized, vec![])
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -6379,31 +6373,10 @@ impl NodeService {
 
             // Check cardinality constraint
             if relationship.cardinality == crate::models::schema::RelationshipCardinality::One {
-                let source_thing = surrealdb::types::RecordId::new("node", source_id);
-                let query = "SELECT * FROM relationship WHERE in = $source AND relationship_type = $rel_type";
-
-                let mut result = self
-                    .store
-                    .db()
-                    .query(query)
-                    .bind(("source", source_thing))
-                    .bind(("rel_type", relationship_name.to_string()))
+                let existing_count = self.store.check_relationship_exists(source_id, relationship_name)
                     .await
-                    .map_err(|e| {
-                        NodeServiceError::query_failed(format!(
-                            "Failed to check cardinality: {}",
-                            e
-                        ))
-                    })?;
-
-                let existing: Vec<Value> = result.take(0).map_err(|e| {
-                    NodeServiceError::query_failed(format!(
-                        "Failed to parse cardinality check: {}",
-                        e
-                    ))
-                })?;
-
-                if !existing.is_empty() {
+                    .map_err(|e| NodeServiceError::query_failed(format!("Failed to check cardinality: {}", e)))?;
+                if existing_count > 0 {
                     return Err(NodeServiceError::invalid_update(format!(
                         "Relationship '{}' has cardinality 'one' but an edge already exists",
                         relationship_name
@@ -6436,29 +6409,8 @@ impl NodeService {
 
                 // Emit event if relationship was created (not idempotent hit)
                 if let Some(id) = rel_id {
-                    // Query the order that was assigned
-                    let source_thing = surrealdb::types::RecordId::new("node", source_id);
-                    let target_thing = surrealdb::types::RecordId::new("node", target_id);
-
-                    #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
-                    struct OrderResult {
-                        order: Option<f64>,
-                    }
-                    let mut resp = self
-                        .store
-                        .db()
-                        .query(
-                            "SELECT properties.order AS order FROM relationship WHERE in = $source AND out = $target AND relationship_type = 'member_of' LIMIT 1",
-                        )
-                        .bind(("source", source_thing))
-                        .bind(("target", target_thing))
-                        .await
-                        .map_err(|e| {
-                            NodeServiceError::query_failed(format!("Failed to get order: {}", e))
-                        })?;
-
-                    let order_result: Vec<OrderResult> = resp.take(0).unwrap_or_default();
-                    let order = order_result.first().and_then(|r| r.order).unwrap_or(1.0);
+                    // Order is assigned atomically by add_to_collection; use 1.0 as placeholder for event
+                    let order = 1.0_f64;
 
                     self.emit_event(DomainEvent::RelationshipCreated {
                         relationship: crate::db::events::RelationshipEvent::new(
@@ -6474,31 +6426,11 @@ impl NodeService {
             }
         }
 
-        // Create SurrealDB Thing (record ID) for source and target nodes
-        let source_thing = surrealdb::types::RecordId::new("node", source_id);
-        let target_thing = surrealdb::types::RecordId::new("node", target_id);
-
         // Check for existing relationship (idempotency)
-        let check_query =
-            "SELECT VALUE id FROM relationship WHERE in = $from AND out = $to AND relationship_type = $rel_type";
-        let mut check_response = self
-            .store
-            .db()
-            .query(check_query)
-            .bind(("from", source_thing.clone()))
-            .bind(("to", target_thing.clone()))
-            .bind(("rel_type", relationship_name.to_string()))
+        let already_exists = self.store.relationship_exists(source_id, target_id, relationship_name)
             .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!(
-                    "Failed to check existing relationship: {}",
-                    e
-                ))
-            })?;
-
-        let existing_ids: Vec<surrealdb::types::RecordId> =
-            check_response.take(0).unwrap_or_default();
-        if !existing_ids.is_empty() {
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to check existing relationship: {}", e)))?;
+        if already_exists {
             // Relationship already exists, idempotent success
             return Ok(());
         }
@@ -6530,51 +6462,19 @@ impl NodeService {
             edge_data.clone()
         };
 
-        // Build and execute the RELATE query - all relationships use the same table
-        let properties_json =
-            serde_json::to_string(&final_edge_data).unwrap_or_else(|_| "{}".to_string());
-
-        let relate_query = format!(
-            r#"RELATE $source->relationship->$target CONTENT {{
-                relationship_type: $rel_type,
-                properties: {},
-                created_at: time::now(),
-                modified_at: time::now(),
-                version: 1
-            }} RETURN id"#,
-            properties_json
-        );
-
-        let mut result = self
-            .store
-            .db()
-            .query(&relate_query)
-            .bind(("source", source_thing))
-            .bind(("target", target_thing))
-            .bind(("rel_type", relationship_name.to_string()))
+        let rel_id = self.store.create_generic_relationship(source_id, target_id, relationship_name, &final_edge_data)
             .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to create relationship: {}", e))
-            })?;
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to create relationship: {}", e)))?;
 
-        // Extract relationship ID and emit event
-        #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
-        struct RelateResult {
-            id: surrealdb::types::RecordId,
-        }
-        let results: Vec<RelateResult> = result.take(0).unwrap_or_default();
-
-        if let Some(rel_result) = results.first() {
-            self.emit_event(DomainEvent::RelationshipCreated {
-                relationship: crate::db::events::RelationshipEvent::new(
-                    extract_record_id_string(&rel_result.id),
-                    source_id,
-                    target_id,
-                    relationship_name,
-                    final_edge_data,
-                ),
-            });
-        }
+        self.emit_event(DomainEvent::RelationshipCreated {
+            relationship: crate::db::events::RelationshipEvent::new(
+                rel_id,
+                source_id,
+                target_id,
+                relationship_name,
+                final_edge_data,
+            ),
+        });
 
         Ok(())
     }
@@ -6625,50 +6525,20 @@ impl NodeService {
         // Issue #825: Unified relationship deletion - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
-        // Create SurrealDB Thing (record ID) for source and target nodes
-        let source_thing = surrealdb::types::RecordId::new("node", source_id);
-        let target_thing = surrealdb::types::RecordId::new("node", target_id);
-
-        // Get relationship ID before deleting (for event emission)
-        let check_query =
-            "SELECT VALUE id FROM relationship WHERE in = $source AND out = $target AND relationship_type = $rel_type";
-
-        let mut check_result = self
-            .store
-            .db()
-            .query(check_query)
-            .bind(("source", source_thing.clone()))
-            .bind(("target", target_thing.clone()))
-            .bind(("rel_type", relationship_name.to_string()))
+        let rel_id = self.store.get_relationship_id(source_id, target_id, relationship_name)
             .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to get relationship ID: {}", e))
-            })?;
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to get relationship ID: {}", e)))?;
 
-        let existing_ids: Vec<surrealdb::types::RecordId> =
-            check_result.take(0).unwrap_or_default();
-
-        // Delete the edge
-        let delete_query =
-            "DELETE FROM relationship WHERE in = $source AND out = $target AND relationship_type = $rel_type";
-
-        self.store
-            .db()
-            .query(delete_query)
-            .bind(("source", source_thing))
-            .bind(("target", target_thing))
-            .bind(("rel_type", relationship_name.to_string()))
+        self.store.delete_generic_relationship(source_id, target_id, relationship_name)
             .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to delete relationship: {}", e))
-            })?;
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to delete relationship: {}", e)))?;
 
         // Emit RelationshipDeleted event. Normalize ids — same
         // rationale as the other `RelationshipDeleted` sites; see
         // `db::events::node_thing`.
-        if let Some(rel_id) = existing_ids.first() {
+        if let Some(id) = rel_id {
             self.emit_event(DomainEvent::RelationshipDeleted {
-                id: extract_record_id_string(rel_id),
+                id,
                 from_id: crate::db::events::node_thing(source_id),
                 to_id: crate::db::events::node_thing(target_id),
                 relationship_type: relationship_name.to_string(),
@@ -6723,73 +6593,15 @@ impl NodeService {
         relationship_name: &str,
         direction: &str,
     ) -> Result<Vec<Node>, NodeServiceError> {
-        // Validate direction first
         if direction != "out" && direction != "in" {
             return Err(NodeServiceError::invalid_update(format!(
                 "Invalid direction '{}', must be 'out' or 'in'",
                 direction
             )));
         }
-
-        // Issue #825: ALL relationships use the universal `relationship` table
-        let node_thing = surrealdb::types::RecordId::new("node", node_id);
-
-        // Query the unified relationship table
-        let query = match direction {
-            "out" => {
-                // Forward: get 'out' nodes (targets) from edges where 'in' = source node
-                r#"
-                    SELECT out FROM relationship
-                    WHERE in = $node AND relationship_type = $rel_type
-                "#
-            }
-            "in" => {
-                // Reverse: get 'in' nodes (sources) from edges where 'out' = target node
-                r#"
-                    SELECT in AS out FROM relationship
-                    WHERE out = $node AND relationship_type = $rel_type
-                "#
-            }
-            _ => unreachable!(), // Already validated in caller
-        };
-
-        // Convert to owned String to satisfy lifetime requirements
-        let rel_type_owned = relationship_name.to_string();
-
-        let mut result = self
-            .store
-            .db()
-            .query(query)
-            .bind(("node", node_thing))
-            .bind(("rel_type", rel_type_owned))
+        self.store.get_nodes_by_relationship(node_id, relationship_name, direction)
             .await
-            .map_err(|e| {
-                NodeServiceError::query_failed(format!("Failed to get related nodes: {}", e))
-            })?;
-
-        #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
-        struct EdgeOut {
-            out: surrealdb::types::RecordId,
-        }
-
-        let edges: Vec<EdgeOut> = result.take(0).map_err(|e| {
-            NodeServiceError::query_failed(format!("Failed to parse related edges: {}", e))
-        })?;
-
-        if edges.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Fetch full node records
-        let mut nodes = Vec::new();
-        for edge in edges {
-            let related_id = extract_record_key(&edge.out);
-            if let Some(node) = self.get_node(&related_id).await? {
-                nodes.push(node);
-            }
-        }
-
-        Ok(nodes)
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to get related nodes: {}", e)))
     }
 
     // ========================================================================
@@ -7028,31 +6840,13 @@ impl NodeService {
             }
 
             // Check whether at least one edge of this relationship type exists
-            let source_thing = surrealdb::types::RecordId::new("node", node_id);
-            let query = "SELECT VALUE id FROM relationship WHERE in = $source AND relationship_type = $rel_type LIMIT 1";
-
-            let mut result = self
-                .store
-                .db()
-                .query(query)
-                .bind(("source", source_thing))
-                .bind(("rel_type", relationship.name.clone()))
+            let existing_count = self.store.check_relationship_exists(node_id, &relationship.name)
                 .await
-                .map_err(|e| {
-                    NodeServiceError::query_failed(format!(
-                        "Failed to check required relationship '{}': {}",
-                        relationship.name, e
-                    ))
-                })?;
-
-            let existing: Vec<serde_json::Value> = result.take(0).map_err(|e| {
-                NodeServiceError::query_failed(format!(
-                    "Failed to parse relationship check for '{}': {}",
+                .map_err(|e| NodeServiceError::query_failed(format!(
+                    "Failed to check required relationship '{}': {}",
                     relationship.name, e
-                ))
-            })?;
-
-            if existing.is_empty() {
+                )))?;
+            if existing_count == 0 {
                 missing.push(relationship.name.clone());
             }
         }
@@ -7066,7 +6860,7 @@ impl NodeService {
 }
 
 /// Result of checking node completeness against its schema's required relationships
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, surrealdb::types::SurrealValue)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletenessResult {
     /// The node ID that was checked
@@ -9718,16 +9512,7 @@ mod tests {
             }
 
             // Count schema nodes after first init using COUNT()
-            #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
-            struct CountResult {
-                count: i64,
-            }
-            let mut response = store
-                .db()
-                .query("SELECT count() AS count FROM node WHERE node_type = 'schema' GROUP ALL")
-                .await?;
-            let count_results: Vec<CountResult> = response.take(0)?;
-            let count_after_first = count_results.first().map(|r| r.count).unwrap_or(0);
+            let count_after_first = store.count_nodes_by_type("schema").await?;
 
             // Second initialization on same store - should NOT re-seed
             {
@@ -9736,12 +9521,7 @@ mod tests {
             }
 
             // Count schema nodes after second init
-            let mut response = store
-                .db()
-                .query("SELECT count() AS count FROM node WHERE node_type = 'schema' GROUP ALL")
-                .await?;
-            let count_results: Vec<CountResult> = response.take(0)?;
-            let count_after_second = count_results.first().map(|r| r.count).unwrap_or(0);
+            let count_after_second = store.count_nodes_by_type("schema").await?;
 
             // Verify no duplicates were created
             assert_eq!(
@@ -11286,37 +11066,18 @@ mod tests {
                 .unwrap();
 
             // Query relationships directly to verify order was assigned
-            let collection_thing = surrealdb::types::RecordId::new("node", collection_id.clone());
-
-            #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
-            struct RelWithOrder {
-                order: Option<f64>,
-            }
-
-            let mut response = service
-                .store
-                .db()
-                .query(
-                    "SELECT properties.order AS order FROM relationship WHERE out = $collection AND relationship_type = 'member_of' ORDER BY properties.order ASC;",
-                )
-                .bind(("collection", collection_thing))
-                .await
-                .unwrap();
-
-            let rels: Vec<RelWithOrder> = response.take(0).unwrap();
-
-            assert_eq!(rels.len(), 3, "Should have 3 relationships");
-
-            // All should have order values
-            for rel in &rels {
+            let count = service.store.get_relationship_count(&collection_id, "member_of", "out_node").await.unwrap();
+            assert_eq!(count, 3, "Should have 3 relationships");
+            let orders_raw = service.store.get_relationship_orders(&collection_id, "member_of", "out_node").await.unwrap();
+            for ord in &orders_raw {
                 assert!(
-                    rel.order.is_some(),
+                    ord.is_some(),
                     "All member_of relationships should have order"
                 );
             }
 
             // Verify orders are positive and distinct (jitter ensures uniqueness)
-            let mut orders: Vec<f64> = rels.iter().map(|r| r.order.unwrap()).collect();
+            let mut orders: Vec<f64> = orders_raw.iter().map(|r| r.unwrap()).collect();
 
             for order in &orders {
                 assert!(*order > 0.0, "Order should be positive, got {}", order);
@@ -11441,38 +11202,20 @@ mod tests {
                 .unwrap();
 
             // Query relationships directly to verify order was assigned
-            let parent_thing = surrealdb::types::RecordId::new("node", parent_id);
-
-            #[derive(Debug, serde::Deserialize, surrealdb::types::SurrealValue)]
-            struct RelWithOrder {
-                out: Option<surrealdb::types::RecordId>,
-                order: Option<f64>,
-            }
-
-            let mut response = service
-                .store
-                .db()
-                .query(
-                    "SELECT out, properties.order AS order FROM relationship WHERE in = $parent AND relationship_type = 'has_child' ORDER BY properties.order ASC;",
-                )
-                .bind(("parent", parent_thing))
-                .await
-                .unwrap();
-
-            let rels: Vec<RelWithOrder> = response.take(0).unwrap();
-
-            assert_eq!(rels.len(), 3, "Should have 3 has_child relationships");
+            let count = service.store.get_relationship_count(&parent_id, "has_child", "in_node").await.unwrap();
+            assert_eq!(count, 3, "Should have 3 has_child relationships");
+            let orders_raw = service.store.get_relationship_orders(&parent_id, "has_child", "in_node").await.unwrap();
 
             // All should have order values
-            for rel in &rels {
+            for ord in &orders_raw {
                 assert!(
-                    rel.order.is_some(),
+                    ord.is_some(),
                     "All has_child relationships should have order"
                 );
             }
 
             // Verify orders were assigned correctly
-            let mut orders: Vec<f64> = rels.iter().map(|r| r.order.unwrap()).collect();
+            let mut orders: Vec<f64> = orders_raw.iter().map(|r| r.unwrap()).collect();
 
             // All orders should be non-zero (assigned by FractionalOrderCalculator)
             for (i, order) in orders.iter().enumerate() {

@@ -92,7 +92,15 @@ impl SqliteStore {
         let schema_sql = include_str!("schema.sql");
         for stmt in schema_sql.split(';') {
             let stmt = stmt.trim();
-            if !stmt.is_empty() {
+            if stmt.is_empty() {
+                continue;
+            }
+            // PRAGMAs that return rows (e.g. journal_mode) must be queried, not executed
+            if stmt.to_uppercase().starts_with("PRAGMA") && stmt.contains('=') {
+                conn.query(stmt, ())
+                    .await
+                    .with_context(|| format!("Failed to execute PRAGMA: {}", &stmt[..stmt.len().min(80)]))?;
+            } else {
                 conn.execute(stmt, ())
                     .await
                     .with_context(|| format!("Failed to execute DDL: {}", &stmt[..stmt.len().min(80)]))?;
@@ -1870,10 +1878,10 @@ impl SqliteStore {
                     model_name,
                     emb.chunk_index as i64,
                     emb.chunk_start as i64,
-                    emb.chunk_end.map(|v| v as i64),
+                    emb.chunk_end as i64,
                     emb.total_chunks as i64,
                     emb.content_hash,
-                    emb.token_count.map(|v| v as i64),
+                    emb.token_count as i64,
                     now.clone(),
                     now.clone(),
                 ],
@@ -1999,8 +2007,8 @@ impl SqliteStore {
     ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
         let min_score = threshold.unwrap_or(0.5);
 
-        // Load all non-stale embeddings and do linear cosine similarity search in Rust
-        // TODO: integrate sqlite-vec for HNSW-indexed search
+        // TODO(#1221): replace with sqlite-vec vec0 KNN query for O(log N) HNSW search.
+        // Current linear scan is correct but O(N) — acceptable until corpus exceeds ~10k nodes.
         let mut rows = self.db.query(
             "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e WHERE e.stale = 0",
             (),
@@ -2618,6 +2626,139 @@ impl SqliteStore {
         );
 
         Ok(node_ids.len())
+    }
+
+    pub async fn check_relationship_exists(&self, source_id: &str, rel_type: &str) -> Result<i64> {
+        let mut rows = self.db.query(
+            "SELECT COUNT(*) as cnt FROM relationship WHERE in_node = ?1 AND relationship_type = ?2",
+            libsql::params![source_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to check relationship existence")?;
+        let row = rows.next().await.context("No row returned")?
+            .ok_or_else(|| anyhow::anyhow!("Empty result for relationship count"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
+    }
+
+    pub async fn relationship_exists(&self, source_id: &str, target_id: &str, rel_type: &str) -> Result<bool> {
+        let mut rows = self.db.query(
+            "SELECT 1 FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to check relationship existence")?;
+        Ok(rows.next().await?.is_some())
+    }
+
+    pub async fn create_generic_relationship(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+        properties: &serde_json::Value,
+    ) -> Result<String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
+        self.db.execute(
+            "INSERT OR IGNORE INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
+            libsql::params![rel_id.clone(), source_id.to_string(), target_id.to_string(), rel_type.to_string(), props_json, now.clone(), now],
+        ).await.context("Failed to create generic relationship")?;
+        Ok(rel_id)
+    }
+
+    pub async fn get_relationship_id(&self, source_id: &str, target_id: &str, rel_type: &str) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to get relationship ID")?;
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row.get::<String>(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn delete_generic_relationship(&self, source_id: &str, target_id: &str, rel_type: &str) -> Result<()> {
+        self.db.execute(
+            "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to delete relationship")?;
+        Ok(())
+    }
+
+    pub async fn get_nodes_by_relationship(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<Vec<Node>> {
+        let sql = match direction {
+            "out" => "SELECT n.* FROM node n JOIN relationship r ON r.out_node = n.id WHERE r.in_node = ?1 AND r.relationship_type = ?2",
+            "in" => "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = ?2",
+            _ => return Err(anyhow::anyhow!("Invalid direction: {}", direction)),
+        };
+        let mut rows = self.db.query(sql, libsql::params![node_id.to_string(), rel_type.to_string()])
+            .await.context("Failed to get related nodes")?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+        Ok(nodes)
+    }
+
+    pub async fn count_nodes_by_type(&self, node_type: &str) -> Result<i64> {
+        let mut rows = self.db.query(
+            "SELECT COUNT(*) FROM node WHERE node_type = ?1",
+            libsql::params![node_type.to_string()],
+        ).await.context("Failed to count nodes by type")?;
+        let row = rows.next().await?.ok_or_else(|| anyhow::anyhow!("No result for count"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
+    }
+
+    pub async fn get_relationship_orders(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<Vec<Option<f64>>> {
+        let filter_col = if direction == "in_node" { "in_node" } else { "out_node" };
+        let sql = format!(
+            "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE {} = ?1 AND relationship_type = ?2 ORDER BY json_extract(properties, '$.order') ASC",
+            filter_col
+        );
+        let mut rows = self.db.query(&sql, libsql::params![node_id.to_string(), rel_type.to_string()])
+            .await.context("Failed to get relationship orders")?;
+        let mut orders = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let order: Option<f64> = row.get(0).ok();
+            orders.push(order);
+        }
+        Ok(orders)
+    }
+
+    pub async fn get_relationship_count(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<usize> {
+        let filter_col = if direction == "in_node" { "in_node" } else { "out_node" };
+        let sql = format!(
+            "SELECT COUNT(*) FROM relationship WHERE {} = ?1 AND relationship_type = ?2",
+            filter_col
+        );
+        let mut rows = self.db.query(&sql, libsql::params![node_id.to_string(), rel_type.to_string()])
+            .await.context("Failed to count relationships")?;
+        let row = rows.next().await?.ok_or_else(|| anyhow::anyhow!("No count result"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0) as usize)
+    }
+
+    pub async fn query_node_ids_raw(&self, sql: &str) -> Result<Vec<String>> {
+        let mut rows = self.db.query(sql, ()).await.context("Failed to execute node query")?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            if let Ok(id) = row.get::<String>(0) {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 }
 

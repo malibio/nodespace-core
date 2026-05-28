@@ -264,38 +264,7 @@ impl QueryService {
 
     /// Execute query and return matching node IDs
     async fn execute_query_for_ids(&self, sql: &str) -> Result<Vec<String>> {
-        // Keep SELECT * for proper sorting, but extract only IDs from results
-        // This avoids "Missing order idiom" errors with SELECT VALUE id
-
-        let mut response = self
-            .store
-            .db()
-            .query(sql)
-            .await
-            .context("Failed to execute ID query")?;
-
-        // Extract records with RecordId IDs
-        #[derive(Debug, Serialize, Deserialize, )]
-        struct IdRecord {
-            id: surrealdb::types::RecordId,
-        }
-
-        let records: Vec<IdRecord> = response
-            .take(0)
-            .context("Failed to extract IDs from query")?;
-
-        // Convert RecordId to String (extract key part)
-        let ids: Vec<String> = records
-            .into_iter()
-            .map(|record| match &record.id.key {
-                RecordIdKey::String(s) => s.clone(),
-                RecordIdKey::Number(n) => n.to_string(),
-                RecordIdKey::Uuid(u) => u.to_string(),
-                other => format!("{other:?}"),
-            })
-            .collect();
-
-        Ok(ids)
+        self.store.query_node_ids_raw(sql).await.context("Failed to execute ID query")
     }
 
     /// Translate QueryDefinition to SurrealQL
@@ -365,22 +334,17 @@ impl QueryService {
         Ok(sql)
     }
 
-    /// Resolve field name for queries (Issue #794: Namespaced property access)
+    /// Resolve field name for SQLite queries (Issue #794: Namespaced property access)
     ///
     /// Metadata fields accessed directly: created_at, modified_at, content, node_type
-    /// Type-specific fields accessed via namespaced properties JSON: properties.task.status
-    ///
-    /// For wildcard queries (*), we can't namespace, so we fall back to flat access.
+    /// Type-specific fields use json_extract: json_extract(properties, '$.task.status')
     fn resolve_field(&self, field: &str, target_type: &str) -> String {
         if ["created_at", "modified_at", "content", "node_type"].contains(&field) {
             field.to_string()
         } else if target_type == "*" {
-            // Wildcard query - can't namespace (would need to check each node's type)
-            // Fall back to flat access for wildcard queries
-            format!("properties.{}", field)
+            format!("json_extract(properties, '$.{}')", field)
         } else {
-            // Namespaced property access: properties[node_type][field]
-            format!("properties.{}.{}", target_type, field)
+            format!("json_extract(properties, '$.{}.{}')", target_type, field)
         }
     }
 
@@ -388,7 +352,7 @@ impl QueryService {
 
     /// Build property filter (Issue #794: Namespaced property access)
     ///
-    /// Access via namespaced properties JSON: properties.task.status = 'open'
+    /// Uses SQLite json_extract for property access.
     fn build_property_filter(&self, filter: &QueryFilter, target_type: &str) -> Result<String> {
         let property = filter
             .property
@@ -396,11 +360,9 @@ impl QueryService {
             .ok_or_else(|| anyhow::anyhow!("Property filter missing 'property' field"))?;
 
         let field = if target_type == "*" {
-            // Wildcard query - can't namespace
-            format!("properties.{}", property)
+            format!("json_extract(properties, '$.{}')", property)
         } else {
-            // Namespaced property access
-            format!("properties.{}.{}", target_type, property)
+            format!("json_extract(properties, '$.{}.{}')", target_type, property)
         };
         self.build_filter_condition(&field, &filter.operator, filter)
     }
@@ -455,18 +417,12 @@ impl QueryService {
                     .as_ref()
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Contains requires string value"))?;
+                let escaped = self.escape_string(value);
                 if filter.case_sensitive.unwrap_or(true) {
-                    Ok(format!(
-                        "{} CONTAINS '{}'",
-                        field,
-                        self.escape_string(value)
-                    ))
+                    // INSTR is case-sensitive in SQLite
+                    Ok(format!("INSTR({}, '{}') > 0", field, escaped))
                 } else {
-                    Ok(format!(
-                        "string::lowercase({}) CONTAINS string::lowercase('{}')",
-                        field,
-                        self.escape_string(value)
-                    ))
+                    Ok(format!("LOWER({}) LIKE LOWER('%{}%')", field, escaped))
                 }
             }
             FilterOperator::GreaterThan => {
@@ -495,9 +451,9 @@ impl QueryService {
                     .iter()
                     .map(|v| self.format_value(Some(v)))
                     .collect::<Result<_>>()?;
-                Ok(format!("{} IN [{}]", field, list.join(", ")))
+                Ok(format!("{} IN ({})", field, list.join(", ")))
             }
-            FilterOperator::Exists => Ok(format!("{} IS NOT NONE", field)),
+            FilterOperator::Exists => Ok(format!("{} IS NOT NULL", field)),
         }
     }
 
@@ -511,18 +467,11 @@ impl QueryService {
 
         match filter.operator {
             FilterOperator::Contains => {
+                let escaped = self.escape_string(value);
                 if filter.case_sensitive.unwrap_or(true) {
-                    Ok(format!(
-                        "{} CONTAINS '{}'",
-                        content_field,
-                        self.escape_string(value)
-                    ))
+                    Ok(format!("INSTR({}, '{}') > 0", content_field, escaped))
                 } else {
-                    Ok(format!(
-                        "string::lowercase({}) CONTAINS string::lowercase('{}')",
-                        content_field,
-                        self.escape_string(value)
-                    ))
+                    Ok(format!("LOWER({}) LIKE LOWER('%{}%')", content_field, escaped))
                 }
             }
             FilterOperator::Equals => Ok(format!(
@@ -545,25 +494,25 @@ impl QueryService {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Missing nodeId"))?;
 
-        // Issue #788: Universal Relationship Architecture - use relationship table with type filter
+        // Use SQLite subqueries with in_node/out_node column names
         match rel_type {
             RelationshipType::Children => Ok(format!(
-                "{} IN (SELECT VALUE out FROM relationship WHERE in = node:⟨{}⟩ AND relationship_type = 'has_child')",
+                "{} IN (SELECT out_node FROM relationship WHERE in_node = '{}' AND relationship_type = 'has_child')",
                 id_field,
                 self.escape_string(node_id)
             )),
             RelationshipType::Parent => Ok(format!(
-                "{} IN (SELECT VALUE in FROM relationship WHERE out = node:⟨{}⟩ AND relationship_type = 'has_child')",
+                "{} IN (SELECT in_node FROM relationship WHERE out_node = '{}' AND relationship_type = 'has_child')",
                 id_field,
                 self.escape_string(node_id)
             )),
             RelationshipType::Mentions => Ok(format!(
-                "{} IN (SELECT VALUE out FROM relationship WHERE in = node:⟨{}⟩ AND relationship_type = 'mentions')",
+                "{} IN (SELECT out_node FROM relationship WHERE in_node = '{}' AND relationship_type = 'mentions')",
                 id_field,
                 self.escape_string(node_id)
             )),
             RelationshipType::MentionedBy => Ok(format!(
-                "{} IN (SELECT VALUE in FROM relationship WHERE out = node:⟨{}⟩ AND relationship_type = 'mentions')",
+                "{} IN (SELECT in_node FROM relationship WHERE out_node = '{}' AND relationship_type = 'mentions')",
                 id_field,
                 self.escape_string(node_id)
             )),
@@ -576,7 +525,7 @@ impl QueryService {
             Some(serde_json::Value::String(s)) => Ok(format!("'{}'", self.escape_string(s))),
             Some(serde_json::Value::Number(n)) => Ok(n.to_string()),
             Some(serde_json::Value::Bool(b)) => Ok(b.to_string()),
-            Some(serde_json::Value::Null) => Ok("NONE".to_string()),
+            Some(serde_json::Value::Null) => Ok("NULL".to_string()),
             Some(v) => anyhow::bail!("Unsupported value type: {:?}", v),
             None => anyhow::bail!("Missing value"),
         }

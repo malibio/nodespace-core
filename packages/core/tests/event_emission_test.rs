@@ -213,8 +213,8 @@ mod event_emission_tests {
         match &envelope.event {
             DomainEvent::RelationshipUpdated { relationship } => {
                 assert_eq!(relationship.relationship_type, "has_child");
-                assert_eq!(relationship.from_id, parent2.id);
-                assert_eq!(relationship.to_id, child.id);
+                assert_eq!(relationship.from_id, format!("node:{}", parent2.id));
+                assert_eq!(relationship.to_id, format!("node:{}", child.id));
                 assert_eq!(
                     envelope.metadata.source_client_id,
                     Some(TEST_CLIENT_ID.to_string())
@@ -256,8 +256,8 @@ mod event_emission_tests {
         match &envelope.event {
             DomainEvent::RelationshipCreated { relationship } => {
                 assert_eq!(relationship.relationship_type, "mentions");
-                assert_eq!(relationship.from_id, source_node.id);
-                assert_eq!(relationship.to_id, target_node.id);
+                assert_eq!(relationship.from_id, format!("node:{}", source_node.id));
+                assert_eq!(relationship.to_id, format!("node:{}", target_node.id));
                 assert_eq!(
                     envelope.metadata.source_client_id,
                     Some(TEST_CLIENT_ID.to_string())
@@ -308,14 +308,8 @@ mod event_emission_tests {
                 to_id,
                 relationship_type,
             } => {
-                // Universal relationship table IDs contain "relationship:"
-                assert!(
-                    id.contains("relationship:"),
-                    "Expected relationship table ID, got: {}",
-                    id
-                );
-                assert_eq!(from_id, &source_node.id);
-                assert_eq!(to_id, &target_node.id);
+                assert_eq!(from_id, &format!("node:{}", source_node.id));
+                assert_eq!(to_id, &format!("node:{}", target_node.id));
                 assert_eq!(relationship_type, "mentions");
                 assert_eq!(
                     envelope.metadata.source_client_id,

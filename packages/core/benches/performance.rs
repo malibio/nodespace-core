@@ -26,23 +26,13 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-/// Setup a test service with a fresh database
-async fn setup_test_service() -> (Arc<NodeService>, TempDir) {
+async fn setup_test_service() -> (Arc<SurrealStore>, Arc<NodeService>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("bench.db");
 
     let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
     let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
-    (node_service, temp_dir)
-}
-
-/// Setup a SurrealStore directly for low-level benchmarks
-async fn setup_test_store() -> (Arc<SurrealStore>, TempDir) {
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("bench.db");
-
-    let store = Arc::new(SurrealStore::new(db_path).await.unwrap());
-    (store, temp_dir)
+    (store, node_service, temp_dir)
 }
 
 /// Generate markdown with N nodes for benchmarking
@@ -77,7 +67,7 @@ fn bench_atomic_operations(c: &mut Criterion) {
     c.bench_function("create_child_node_atomic", |b| {
         b.iter_custom(|iters| {
             rt.block_on(async {
-                let (store, _temp) = setup_test_store().await;
+                let (store, _node_service, _temp) = setup_test_service().await;
 
                 // Create parent node
                 let parent = store
@@ -126,7 +116,7 @@ fn bench_markdown_import(c: &mut Criterion) {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
-                    let (node_service, _temp) = setup_test_service().await;
+                    let (_store, node_service, _temp) = setup_test_service().await;
 
                     let params = json!({
                         "markdown_content": markdown.clone(),
@@ -159,7 +149,7 @@ fn bench_occ_overhead(c: &mut Criterion) {
     c.bench_function("occ_update_cycle", |b| {
         b.iter_custom(|iters| {
             rt.block_on(async {
-                let (node_service, _temp) = setup_test_service().await;
+                let (_store, node_service, _temp) = setup_test_service().await;
 
                 // Create test node
                 let node_id = node_service
@@ -238,7 +228,7 @@ fn bench_batch_get(c: &mut Criterion) {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
-                    let (node_service, _temp) = setup_test_service().await;
+                    let (_store, node_service, _temp) = setup_test_service().await;
 
                     // Create 50 test nodes
                     let mut node_ids = Vec::new();
@@ -276,7 +266,7 @@ fn bench_batch_get(c: &mut Criterion) {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
-                    let (node_service, _temp) = setup_test_service().await;
+                    let (_store, node_service, _temp) = setup_test_service().await;
 
                     // Create 50 test nodes
                     let mut node_ids = Vec::new();
@@ -329,7 +319,7 @@ fn bench_batch_update(c: &mut Criterion) {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
-                    let (node_service, _temp) = setup_test_service().await;
+                    let (_store, node_service, _temp) = setup_test_service().await;
 
                     // Create root
                     let root = node_service
@@ -394,7 +384,7 @@ fn bench_batch_update(c: &mut Criterion) {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
-                    let (node_service, _temp) = setup_test_service().await;
+                    let (_store, node_service, _temp) = setup_test_service().await;
 
                     // Create root
                     let root = node_service
