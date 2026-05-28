@@ -12,7 +12,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import PtyTerminal from '$lib/components/agent/pty-terminal.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
@@ -68,15 +68,27 @@
   // backfill updates the DB out-of-band, not sharedNodeStore).
   let sessionEnded = $state(false);
 
+  // Set when the user explicitly chooses "Start new session" from the ended
+  // view, forcing the config step even though a stale `capture:session_id` is
+  // still persisted (capture backfill only overwrites it once the *next*
+  // session ends — see startNewSession()).
+  let configuring = $state(false);
+
   let activeSessionId = $state<string | null>(null);
 
   // The session has ended if capture marked the node archived, or we observed
   // its exit this session.
   const isEnded = $derived(
-    sessionEnded || (node?.properties?.status as string | undefined) === 'archived'
+    !configuring &&
+      (sessionEnded || (node?.properties?.status as string | undefined) === 'archived')
   );
-  // Only host a live terminal when the session is still running.
-  const sessionId = $derived(isEnded ? null : (activeSessionId ?? persistedSessionId));
+  // Only host a live terminal when the session is still running. A session this
+  // viewer launched (activeSessionId) always wins; otherwise re-attach to the
+  // persisted id — but never while configuring a replacement, since the
+  // persisted id may point at the previous (dead) session.
+  const sessionId = $derived(
+    isEnded || configuring ? activeSessionId : (activeSessionId ?? persistedSessionId)
+  );
 
   const agentType = $derived(
     (node?.properties?.['capture:agent_type'] as string | undefined) ?? null
@@ -88,48 +100,44 @@
     (node?.properties?.['capture:transcript'] as string | undefined) ?? null
   );
 
-  let unlistenClosed: UnlistenFn | null = null;
-
   // Listen for the live session's exit so the view flips to the ended state
   // immediately (finding from review: a re-attached dead session would
-  // otherwise render a blank terminal).
+  // otherwise render a blank terminal). The $effect cleanup runs on both
+  // activeSessionId change and component unmount, so the listener never leaks.
   $effect(() => {
     const id = activeSessionId;
     if (!id) return;
     let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
     listen(`pty-closed-${id}`, () => {
       sessionEnded = true;
     })
       .then((fn) => {
+        // If cleanup already ran before the listener registered, unlisten now.
         if (cancelled) fn();
-        else unlistenClosed = fn;
+        else unlisten = fn;
       })
       .catch((e) => log.warn('Failed to register pty-closed listener', e));
     return () => {
       cancelled = true;
-      unlistenClosed?.();
-      unlistenClosed = null;
+      unlisten?.();
     };
   });
 
-  onDestroy(() => {
-    unlistenClosed?.();
-  });
-
-  /** Reset to the config step to launch a fresh session on this node. */
+  /**
+   * Return to the config step to launch a fresh session on this node.
+   *
+   * Note: we do NOT clear the persisted `capture:session_id` here. The store's
+   * property merge is additive (it cannot remove a key by omission, and writing
+   * null would persist a literal null), so the stale id is left in place and
+   * launch() overwrites it with the new session id. The `configuring` flag
+   * suppresses re-attach to that stale id in the meantime.
+   */
   function startNewSession(): void {
     sessionEnded = false;
     activeSessionId = null;
     error = null;
-    const current = sharedNodeStore.getNode(nodeId);
-    const props = { ...current?.properties };
-    delete props['capture:session_id'];
-    props.status = 'active';
-    sharedNodeStore.updateNode(
-      nodeId,
-      { properties: props },
-      { type: 'viewer', viewerId: 'ai-chat-pty-view' }
-    );
+    configuring = true;
   }
 
   let selectedAgent = $state('claude-code');
@@ -201,6 +209,7 @@
         nodeId,
       });
       activeSessionId = result.sessionId;
+      configuring = false;
 
       // Record the chosen agent + session on the node up front so the node
       // reflects its mode immediately. Capture backfills the rest at session
