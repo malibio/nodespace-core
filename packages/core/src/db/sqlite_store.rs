@@ -1,0 +1,3101 @@
+use crate::db::fractional_ordering::FractionalOrderCalculator;
+use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
+const BM25_MAX_TOKENS: usize = 4;
+const BM25_STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+    "need", "dare", "ought", "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+    "they", "them", "their", "what", "which", "who", "whom", "this", "that", "these", "those",
+    "to", "of", "in", "on", "at", "by", "for", "with", "about", "as", "how", "when", "where",
+    "why",
+];
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelationshipRecord {
+    pub id: String,
+    #[serde(rename = "in")]
+    pub in_node: String,
+    pub out_node: String,
+    pub relationship_type: String,
+    #[serde(default)]
+    pub properties: Value,
+}
+
+impl RelationshipRecord {
+    pub fn order(&self) -> f64 {
+        self.properties
+            .get("order")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreOperation {
+    Created,
+    Updated,
+    Deleted,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoreChange {
+    pub operation: StoreOperation,
+    pub node: Node,
+    pub source: Option<String>,
+    pub previous_node: Option<Node>,
+    pub playbook_context: Option<crate::db::events::PlaybookExecutionContext>,
+}
+
+pub type StoreNotifier = Arc<dyn Fn(StoreChange) + Send + Sync>;
+
+pub struct SqliteStore {
+    db: Arc<libsql::Connection>,
+    event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
+    valid_node_types: HashSet<String>,
+    notifier: Option<StoreNotifier>,
+}
+
+impl SqliteStore {
+    pub async fn new(db_path: PathBuf) -> Result<Self> {
+        let database = libsql::Builder::new_local(&db_path)
+            .build()
+            .await
+            .context("Failed to build libsql database")?;
+        let conn = database
+            .connect()
+            .context("Failed to connect to libsql database")?;
+
+        Self::initialize_schema(&conn).await?;
+
+        let valid_node_types = Self::build_schema_caches(&conn).await?;
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+
+        Ok(Self {
+            db: Arc::new(conn),
+            event_tx,
+            valid_node_types,
+            notifier: None,
+        })
+    }
+
+    async fn initialize_schema(conn: &libsql::Connection) -> Result<()> {
+        let schema_sql = include_str!("schema.sql");
+        for stmt in schema_sql.split(';') {
+            let stmt = stmt.trim();
+            if stmt.is_empty() {
+                continue;
+            }
+            // PRAGMAs that return rows (e.g. journal_mode) must be queried, not executed
+            if stmt.to_uppercase().starts_with("PRAGMA") && stmt.contains('=') {
+                conn.query(stmt, ()).await.with_context(|| {
+                    format!("Failed to execute PRAGMA: {}", &stmt[..stmt.len().min(80)])
+                })?;
+            } else {
+                conn.execute(stmt, ()).await.with_context(|| {
+                    format!("Failed to execute DDL: {}", &stmt[..stmt.len().min(80)])
+                })?;
+            }
+        }
+
+        // FTS5 virtual table for BM25 full-text search
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS node_fts USING fts5(id UNINDEXED, content, content='node', content_rowid='rowid')",
+            ()
+        ).await.context("Failed to create FTS5 table")?;
+
+        conn.execute(
+            r#"CREATE TRIGGER IF NOT EXISTS node_fts_insert AFTER INSERT ON node BEGIN
+                INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
+            END"#,
+            (),
+        )
+        .await
+        .context("Failed to create FTS5 insert trigger")?;
+
+        conn.execute(
+            r#"CREATE TRIGGER IF NOT EXISTS node_fts_update AFTER UPDATE ON node BEGIN
+                INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
+                INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
+            END"#,
+            ()
+        ).await.context("Failed to create FTS5 update trigger")?;
+
+        conn.execute(
+            r#"CREATE TRIGGER IF NOT EXISTS node_fts_delete AFTER DELETE ON node BEGIN
+                INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
+            END"#,
+            ()
+        ).await.context("Failed to create FTS5 delete trigger")?;
+
+        Ok(())
+    }
+
+    async fn build_schema_caches(conn: &libsql::Connection) -> Result<HashSet<String>> {
+        let mut rows = conn
+            .query("SELECT id FROM node WHERE node_type = 'schema'", ())
+            .await
+            .context("Failed to query schema nodes for cache")?;
+
+        let mut types = HashSet::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            types.insert(id);
+        }
+        Ok(types)
+    }
+
+    pub fn set_notifier(&mut self, notifier: StoreNotifier) {
+        self.notifier = Some(notifier);
+    }
+
+    fn notify(&self, change: StoreChange) {
+        if let Some(notifier) = &self.notifier {
+            notifier(change);
+        }
+    }
+
+    pub fn subscribe_to_events(&self) -> broadcast::Receiver<crate::db::events::EventEnvelope> {
+        self.event_tx.subscribe()
+    }
+
+    fn validate_node_type(&self, node_type: &str) -> Result<()> {
+        if node_type.is_empty() {
+            return Err(anyhow::anyhow!("Node type cannot be empty"));
+        }
+        if self.valid_node_types.contains(node_type) {
+            return Ok(());
+        }
+        // Allow schema node type always
+        if node_type == "schema" {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Invalid node type '{}'. Valid types: {:?}",
+            node_type,
+            self.valid_node_types
+        ))
+    }
+
+    pub(crate) fn add_to_schema_cache(&mut self, type_name: String) {
+        self.valid_node_types.insert(type_name);
+    }
+
+    pub fn close(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn row_to_node(row: &libsql::Row) -> Result<Node> {
+        let id: String = row.get(0)?;
+        let node_type: String = row.get(1)?;
+        let content: String = row.get(2)?;
+        let properties_str: String = row.get(3)?;
+        let title: Option<String> = row.get(4)?;
+        let lifecycle_status: String = row.get(5)?;
+        let version: i64 = row.get(6)?;
+        // col 7 = sync_seq (ignored)
+        let created_at_str: String = row.get(8)?;
+        let modified_at_str: String = row.get(9)?;
+
+        let properties: Value =
+            serde_json::from_str(&properties_str).unwrap_or(serde_json::json!({}));
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .with_context(|| format!("Invalid created_at timestamp: {}", created_at_str))?
+            .with_timezone(&Utc);
+        let modified_at = DateTime::parse_from_rfc3339(&modified_at_str)
+            .with_context(|| format!("Invalid modified_at timestamp: {}", modified_at_str))?
+            .with_timezone(&Utc);
+
+        Ok(Node {
+            id,
+            node_type,
+            content,
+            version,
+            created_at,
+            modified_at,
+            properties,
+            mentions: Vec::new(),
+            mentioned_in: Vec::new(),
+            title,
+            lifecycle_status,
+        })
+    }
+
+    fn row_to_relationship(row: &libsql::Row) -> Result<RelationshipRecord> {
+        let id: String = row.get(0)?;
+        let in_node: String = row.get(1)?;
+        let out_node: String = row.get(2)?;
+        let relationship_type: String = row.get(3)?;
+        let props_str: String = row.get(4)?;
+        let properties: Value = serde_json::from_str(&props_str).unwrap_or(serde_json::json!({}));
+        Ok(RelationshipRecord {
+            id,
+            in_node,
+            out_node,
+            relationship_type,
+            properties,
+        })
+    }
+
+    async fn query_nodes_from_sql(
+        &self,
+        sql: &str,
+        params: impl libsql::params::IntoParams,
+    ) -> Result<Vec<Node>> {
+        let mut rows = self
+            .db
+            .query(sql, params)
+            .await
+            .context("Failed to query nodes")?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+        Ok(nodes)
+    }
+}
+
+impl SqliteStore {
+    pub async fn create_node(
+        &self,
+        node: Node,
+        source: Option<String>,
+        playbook_context: Option<crate::db::events::PlaybookExecutionContext>,
+    ) -> Result<Node> {
+        if node.node_type == "collection" {
+            if let Some(existing) = self.get_collection_by_name(&node.content).await? {
+                anyhow::bail!(
+                    "Collection with name '{}' already exists (id: {})",
+                    node.content,
+                    existing.id
+                );
+            }
+        }
+
+        let properties = if node.properties.is_null() {
+            serde_json::json!({})
+        } else {
+            node.properties.clone()
+        };
+        let props_json =
+            serde_json::to_string(&properties).context("Failed to serialize properties")?;
+        let now = Utc::now().to_rfc3339();
+
+        self.db
+            .execute(
+                "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                libsql::params![
+                    node.id.clone(),
+                    node.node_type.clone(),
+                    node.content.clone(),
+                    props_json,
+                    node.title.clone(),
+                    node.lifecycle_status.clone(),
+                    node.version,
+                    now.clone(),
+                    now,
+                ],
+            )
+            .await
+            .context("Failed to create node")?;
+
+        self.notify(StoreChange {
+            operation: StoreOperation::Created,
+            node: node.clone(),
+            source,
+            previous_node: None,
+            playbook_context,
+        });
+
+        Ok(node)
+    }
+
+    pub async fn create_child_node_atomic(
+        &self,
+        parent_id: &str,
+        node_type: &str,
+        content: &str,
+        properties: Value,
+        source: Option<String>,
+    ) -> Result<Node> {
+        self.validate_node_type(node_type)?;
+
+        let node_id = uuid::Uuid::new_v4().to_string();
+
+        let parent_exists = self.get_node(parent_id).await?;
+        if parent_exists.is_none() {
+            return Err(anyhow::anyhow!("Parent node not found: {}", parent_id));
+        }
+
+        self.validate_no_cycle(parent_id, &node_id).await?;
+
+        // Get last child order
+        let mut rows = self.db.query(
+            "SELECT json_extract(r.properties, '$.order') as ord FROM relationship r WHERE r.in_node = ?1 AND r.relationship_type = 'has_child' ORDER BY json_extract(r.properties, '$.order') DESC LIMIT 1",
+            libsql::params![parent_id.to_string()],
+        ).await.context("Failed to get last child order")?;
+
+        let last_order = if let Some(row) = rows.next().await? {
+            row.get::<Option<f64>>(0)?.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        let new_order = if last_order > 0.0 {
+            FractionalOrderCalculator::calculate_order(Some(last_order), None)
+        } else {
+            FractionalOrderCalculator::calculate_order(None, None)
+        };
+
+        let properties = if properties.is_null() {
+            serde_json::json!({})
+        } else {
+            properties
+        };
+        let props_json =
+            serde_json::to_string(&properties).context("Failed to serialize properties")?;
+        let now = Utc::now().to_rfc3339();
+
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin transaction")?;
+
+        tx.execute(
+            "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, NULL, 'active', 1, ?5, ?6)",
+            libsql::params![node_id.clone(), node_type.to_string(), content.to_string(), props_json, now.clone(), now.clone()],
+        ).await.context("Failed to insert child node")?;
+
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let rel_props = serde_json::json!({"order": new_order}).to_string();
+        tx.execute(
+            "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+            libsql::params![rel_id, parent_id.to_string(), node_id.clone(), rel_props, now.clone(), now],
+        ).await.context("Failed to insert parent-child relationship")?;
+
+        tx.commit().await.context("Failed to commit transaction")?;
+
+        let node = self
+            .get_node(&node_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found after creation: {}", node_id))?;
+
+        self.notify(StoreChange {
+            operation: StoreOperation::Created,
+            node: node.clone(),
+            source,
+            previous_node: None,
+            playbook_context: None,
+        });
+
+        Ok(node)
+    }
+
+    pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT * FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to query node")?;
+
+        if let Some(row) = rows.next().await? {
+            Ok(Some(Self::row_to_node(&row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn node_exists(&self, id: &str) -> Result<bool> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT 1 FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to check node existence")?;
+        Ok(rows.next().await?.is_some())
+    }
+
+    pub async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<HashMap<String, Node>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT * FROM node WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+
+        let params: Vec<libsql::Value> = ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to batch query nodes")?;
+
+        let mut result = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let node = Self::row_to_node(&row)?;
+            result.insert(node.id.clone(), node);
+        }
+        Ok(result)
+    }
+
+    pub async fn update_node(
+        &self,
+        id: &str,
+        update: NodeUpdate,
+        source: Option<String>,
+    ) -> Result<Node> {
+        let current = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
+
+        let updated_content = update.content.unwrap_or(current.content);
+        let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+
+        let properties_update = if let Some(ref updated_props) = update.properties {
+            let mut merged = current.properties.as_object().cloned().unwrap_or_default();
+            if let Some(new_props) = updated_props.as_object() {
+                for (key, value) in new_props {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+            Some(serde_json::Value::Object(merged))
+        } else {
+            None
+        };
+
+        let now = Utc::now().to_rfc3339();
+
+        if let Some(ref props) = properties_update {
+            let props_json =
+                serde_json::to_string(props).context("Failed to serialize properties")?;
+            self.db.execute(
+                "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, version = version + 1, modified_at = ?4 WHERE id = ?5",
+                libsql::params![updated_content.clone(), updated_node_type.clone(), props_json, now.clone(), id.to_string()],
+            ).await.context("Failed to update node")?;
+        } else {
+            self.db.execute(
+                "UPDATE node SET content = ?1, node_type = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
+                libsql::params![updated_content.clone(), updated_node_type.clone(), now.clone(), id.to_string()],
+            ).await.context("Failed to update node")?;
+        }
+
+        if let Some(title) = update.title {
+            self.db
+                .execute(
+                    "UPDATE node SET title = ?1 WHERE id = ?2",
+                    libsql::params![title, id.to_string()],
+                )
+                .await
+                .context("Failed to update title")?;
+        }
+
+        if let Some(status) = update.lifecycle_status {
+            self.db
+                .execute(
+                    "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
+                    libsql::params![status, id.to_string()],
+                )
+                .await
+                .context("Failed to update lifecycle_status")?;
+        }
+
+        let updated_node = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
+
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: updated_node.clone(),
+            source,
+            previous_node: None,
+            playbook_context: None,
+        });
+
+        Ok(updated_node)
+    }
+
+    pub async fn create_schema_node_atomic(
+        &self,
+        node: Node,
+        _ddl_statements: Vec<String>,
+        source: Option<String>,
+    ) -> Result<Node> {
+        if node.node_type != "schema" {
+            return Err(anyhow::anyhow!(
+                "create_schema_node_atomic only accepts schema nodes, got '{}'",
+                node.node_type
+            ));
+        }
+        // DDL statements are SurrealDB-specific (DEFINE TABLE etc.) — ignore for SQLite
+        self.create_node(node, source, None).await
+    }
+
+    pub async fn update_schema_node_atomic(
+        &self,
+        id: &str,
+        update: NodeUpdate,
+        _ddl_statements: Vec<String>,
+        source: Option<String>,
+    ) -> Result<Node> {
+        // DDL statements are SurrealDB-specific — ignore for SQLite
+        self.update_node(id, update, source).await
+    }
+
+    pub async fn switch_node_type_atomic(
+        &self,
+        node_id: &str,
+        new_type: &str,
+        new_properties: Value,
+        source: Option<String>,
+    ) -> Result<Node> {
+        self.validate_node_type(new_type)?;
+
+        let new_properties = if new_properties.is_null() {
+            serde_json::json!({})
+        } else {
+            new_properties
+        };
+        let props_json =
+            serde_json::to_string(&new_properties).context("Failed to serialize properties")?;
+        let now = Utc::now().to_rfc3339();
+
+        self.db
+            .execute(
+                "UPDATE node SET node_type = ?1, properties = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
+                libsql::params![new_type.to_string(), props_json, now, node_id.to_string()],
+            )
+            .await
+            .context("Failed to switch node type")?;
+
+        let node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found after type switch: {}", node_id))?;
+
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: node.clone(),
+            source,
+            previous_node: None,
+            playbook_context: None,
+        });
+
+        Ok(node)
+    }
+
+    pub async fn update_node_with_version_check(
+        &self,
+        id: &str,
+        expected_version: i64,
+        update: NodeUpdate,
+        source: Option<String>,
+        playbook_context: Option<crate::db::events::PlaybookExecutionContext>,
+    ) -> Result<Option<Node>> {
+        let current = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
+
+        let previous_node = current.clone();
+        let new_version = expected_version + 1;
+
+        let updated_content = update.content.unwrap_or(current.content);
+        let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+        let updated_props = match update.properties {
+            Some(p) => serde_json::to_string(&p).context("Failed to serialize properties")?,
+            None => serde_json::to_string(&current.properties)
+                .context("Failed to serialize current properties")?,
+        };
+        let updated_title = match update.title {
+            Some(t) => t,           // Some(Some(x)) sets, Some(None) clears
+            None => current.title,  // None means no change
+        };
+        let updated_status = update
+            .lifecycle_status
+            .unwrap_or(current.lifecycle_status.clone());
+        let now = Utc::now().to_rfc3339();
+
+        let rows_affected = self.db.execute(
+            "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, title = ?4, lifecycle_status = ?5, version = ?6, modified_at = ?7 WHERE id = ?8 AND version = ?9",
+            libsql::params![updated_content, updated_node_type, updated_props, updated_title, updated_status, new_version, now, id.to_string(), expected_version],
+        ).await.context("Failed to update node with version check")?;
+
+        if rows_affected == 0 {
+            return Ok(None);
+        }
+
+        let node = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Node not found after update"))?;
+
+        self.notify(StoreChange {
+            operation: StoreOperation::Updated,
+            node: node.clone(),
+            source,
+            previous_node: Some(previous_node),
+            playbook_context,
+        });
+
+        Ok(Some(node))
+    }
+
+    pub async fn update_lifecycle_status(&self, id: &str, status: &str) -> Result<()> {
+        self.db
+            .execute(
+                "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
+                libsql::params![status.to_string(), id.to_string()],
+            )
+            .await
+            .context("Failed to update lifecycle_status")?;
+        Ok(())
+    }
+
+    pub async fn delete_node(&self, id: &str, source: Option<String>) -> Result<DeleteResult> {
+        let node = match self.get_node(id).await? {
+            Some(n) => n,
+            None => return Ok(DeleteResult { existed: false }),
+        };
+
+        // FK CASCADE handles relationship and embedding deletion
+        self.db
+            .execute(
+                "DELETE FROM node WHERE id = ?1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to delete node")?;
+
+        self.notify(StoreChange {
+            operation: StoreOperation::Deleted,
+            node,
+            source,
+            previous_node: None,
+            playbook_context: None,
+        });
+
+        Ok(DeleteResult { existed: true })
+    }
+
+    pub async fn delete_node_cascade_atomic(
+        &self,
+        node_id: &str,
+        source: Option<String>,
+    ) -> Result<DeleteResult> {
+        // FK CASCADE on schema.sql handles relationships and embeddings automatically
+        self.delete_node(node_id, source).await
+    }
+
+    pub async fn delete_with_version_check(
+        &self,
+        id: &str,
+        expected_version: i64,
+        source: Option<String>,
+    ) -> Result<usize> {
+        let node = match self.get_node(id).await? {
+            Some(n) => n,
+            None => return Ok(0),
+        };
+
+        if node.version != expected_version {
+            return Ok(0);
+        }
+
+        let result = self.delete_node(id, source).await?;
+        Ok(if result.existed { 1 } else { 0 })
+    }
+
+    pub async fn query_nodes(&self, query: NodeQuery) -> Result<Vec<Node>> {
+        if let Some(ref mentioned_node_id) = query.mentioned_by {
+            let mut rows = self.db.query(
+                "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'mentions'",
+                libsql::params![mentioned_node_id.clone()],
+            ).await.context("Failed to query mentioned_by nodes")?;
+            let mut nodes = Vec::new();
+            while let Some(row) = rows.next().await? {
+                nodes.push(Self::row_to_node(&row)?);
+            }
+            return Ok(nodes);
+        }
+
+        if let Some(ref search_q) = query.content_contains {
+            let search_lower = format!("%{}%", search_q.to_lowercase());
+            let sql = match (query.limit, query.offset) {
+                (None, None) => "SELECT * FROM node WHERE LOWER(content) LIKE ?1".to_string(),
+                (Some(l), None) => format!(
+                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}",
+                    l
+                ),
+                (None, Some(o)) => format!(
+                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT -1 OFFSET {}",
+                    o
+                ),
+                (Some(l), Some(o)) => format!(
+                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {} OFFSET {}",
+                    l, o
+                ),
+            };
+            return self
+                .query_nodes_from_sql(&sql, libsql::params![search_lower])
+                .await;
+        }
+
+        let mut conditions = Vec::new();
+        let mut bind_values: Vec<libsql::Value> = Vec::new();
+        let mut param_idx = 1usize;
+
+        if let Some(ref search_q) = query.title_contains {
+            let search_lower = format!("%{}%", search_q.to_lowercase());
+            conditions.push(format!(
+                "title IS NOT NULL AND LOWER(title) LIKE ?{}",
+                param_idx
+            ));
+            bind_values.push(libsql::Value::Text(search_lower));
+            param_idx += 1;
+        }
+
+        if let Some(ref nt) = query.node_type {
+            conditions.push(format!("node_type = ?{}", param_idx));
+            bind_values.push(libsql::Value::Text(nt.clone()));
+        }
+
+        let where_clause = if !conditions.is_empty() {
+            format!("WHERE {}", conditions.join(" AND "))
+        } else {
+            String::new()
+        };
+
+        let limit_offset = match (query.limit, query.offset) {
+            (None, None) => String::new(),
+            (Some(l), None) => format!(" LIMIT {}", l),
+            (None, Some(o)) => format!(" LIMIT -1 OFFSET {}", o),
+            (Some(l), Some(o)) => format!(" LIMIT {} OFFSET {}", l, o),
+        };
+
+        let sql = format!("SELECT * FROM node {} {}", where_clause, limit_offset);
+        let mut rows = self
+            .db
+            .query(&sql, bind_values)
+            .await
+            .context("Failed to query nodes")?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+        Ok(nodes)
+    }
+
+    pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Node>> {
+        let mut rows = self.db.query(
+            "SELECT n.* FROM node n JOIN relationship r ON r.out_node = n.id WHERE r.in_node = ?1 AND r.relationship_type = 'has_child' ORDER BY json_extract(r.properties, '$.order') ASC",
+            libsql::params![parent_id.to_string()],
+        ).await.context("Failed to get children")?;
+
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+        Ok(nodes)
+    }
+
+    pub async fn get_roots(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Node>> {
+        let limit_offset = match (limit, offset) {
+            (None, None) => String::new(),
+            (Some(l), None) => format!(" LIMIT {}", l),
+            (None, Some(o)) => format!(" LIMIT -1 OFFSET {}", o),
+            (Some(l), Some(o)) => format!(" LIMIT {} OFFSET {}", l, o),
+        };
+
+        let sql = format!(
+            "SELECT * FROM node WHERE id NOT IN (SELECT out_node FROM relationship WHERE relationship_type = 'has_child') ORDER BY id ASC{}",
+            limit_offset
+        );
+
+        self.query_nodes_from_sql(&sql, ()).await
+    }
+
+    pub async fn get_parent(&self, child_id: &str) -> Result<Option<Node>> {
+        let mut rows = self.db.query(
+            "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'has_child' LIMIT 1",
+            libsql::params![child_id.to_string()],
+        ).await.context("Failed to get parent")?;
+
+        if let Some(row) = rows.next().await? {
+            Ok(Some(Self::row_to_node(&row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_parent_id(&self, child_id: &str) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child' LIMIT 1",
+            libsql::params![child_id.to_string()],
+        ).await.context("Failed to get parent id")?;
+
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_node_type(&self, node_id: &str) -> Result<Option<String>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT node_type FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .context("Failed to get node type")?;
+
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_node_tree(&self, root_id: &str) -> Result<Option<serde_json::Value>> {
+        let root_node = match self.get_node(root_id).await? {
+            Some(node) => node,
+            None => return Ok(None),
+        };
+
+        let tree = self.build_node_tree_recursive(&root_node).await?;
+        Ok(Some(tree))
+    }
+
+    fn build_node_tree_recursive<'a>(
+        &'a self,
+        node: &'a Node,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>
+    {
+        const MAX_DEPTH: usize = 100;
+        Box::pin(async move {
+            self.build_node_tree_with_guards(node, 0, MAX_DEPTH, &mut HashSet::new())
+                .await
+        })
+    }
+
+    fn build_node_tree_with_guards<'a>(
+        &'a self,
+        node: &'a Node,
+        depth: usize,
+        max_depth: usize,
+        visited: &'a mut HashSet<String>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            if depth >= max_depth {
+                return Err(anyhow::anyhow!(
+                    "Maximum tree depth ({}) exceeded at node '{}'",
+                    max_depth,
+                    node.id
+                ));
+            }
+            if visited.contains(&node.id) {
+                return Err(anyhow::anyhow!(
+                    "Cycle detected: node '{}' appears multiple times",
+                    node.id
+                ));
+            }
+            visited.insert(node.id.clone());
+
+            let children_nodes = self.get_children(&node.id).await?;
+            let mut children_json = Vec::new();
+            for child in &children_nodes {
+                let child_tree = self
+                    .build_node_tree_with_guards(child, depth + 1, max_depth, visited)
+                    .await?;
+                children_json.push(child_tree);
+            }
+            visited.remove(&node.id);
+
+            Ok(serde_json::json!({
+                "id": node.id,
+                "type": node.node_type,
+                "content": node.content,
+                "version": node.version,
+                "created_at": node.created_at,
+                "modified_at": node.modified_at,
+                "mentions": node.mentions,
+                "mentionedIn": node.mentioned_in,
+                "data": node.properties,
+                "variants": serde_json::Value::Null,
+                "_schema_version": 1,
+                "children": children_json
+            }))
+        })
+    }
+
+    pub async fn get_nodes_in_subtree(&self, root_id: &str) -> Result<Vec<Node>> {
+        let (all_nodes, _) = self.get_subtree_with_relationships(root_id).await?;
+        Ok(all_nodes.into_iter().filter(|n| n.id != root_id).collect())
+    }
+
+    pub async fn get_subtree_with_relationships(
+        &self,
+        root_id: &str,
+    ) -> Result<(Vec<Node>, Vec<RelationshipRecord>)> {
+        let start = std::time::Instant::now();
+
+        // WITH RECURSIVE to collect all descendants
+        let mut id_rows = self.db.query(
+            r#"WITH RECURSIVE subtree(node_id, depth) AS (
+                SELECT out_node, 1 FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                UNION ALL
+                SELECT r.out_node, s.depth + 1 FROM relationship r
+                JOIN subtree s ON r.in_node = s.node_id
+                WHERE r.relationship_type = 'has_child' AND s.depth < 100
+            )
+            SELECT DISTINCT node_id FROM subtree"#,
+            libsql::params![root_id.to_string()],
+        ).await.context("Failed to query descendants")?;
+
+        let mut descendant_ids = vec![root_id.to_string()];
+        while let Some(row) = id_rows.next().await? {
+            descendant_ids.push(row.get(0)?);
+        }
+
+        if descendant_ids.len() == 1 {
+            // Just the root — verify it exists
+            let root = match self.get_node(root_id).await? {
+                Some(n) => n,
+                None => return Ok((vec![], vec![])),
+            };
+            return Ok((vec![root], vec![]));
+        }
+
+        // Fetch all nodes
+        let placeholders: Vec<String> = (1..=descendant_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
+        let sql = format!(
+            "SELECT * FROM node WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<libsql::Value> = descendant_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut node_rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to fetch subtree nodes")?;
+        let mut all_nodes = Vec::new();
+        while let Some(row) = node_rows.next().await? {
+            all_nodes.push(Self::row_to_node(&row)?);
+        }
+
+        if all_nodes.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+
+        // Fetch relationships within subtree
+        let rel_placeholders: Vec<String> = (1..=descendant_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
+        let rel_sql = format!(
+            "SELECT id, in_node, out_node, relationship_type, properties FROM relationship WHERE in_node IN ({}) AND relationship_type = 'has_child'",
+            rel_placeholders.join(", ")
+        );
+        let rel_params: Vec<libsql::Value> = descendant_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rel_rows = self
+            .db
+            .query(&rel_sql, rel_params)
+            .await
+            .context("Failed to fetch subtree relationships")?;
+        let mut relationships = Vec::new();
+        while let Some(row) = rel_rows.next().await? {
+            relationships.push(Self::row_to_relationship(&row)?);
+        }
+
+        tracing::debug!(
+            "get_subtree_with_relationships: {:?} for root_id={} ({} nodes)",
+            start.elapsed(),
+            root_id,
+            all_nodes.len()
+        );
+
+        Ok((all_nodes, relationships))
+    }
+
+    pub async fn get_relationships_in_subtree(
+        &self,
+        root_id: &str,
+    ) -> Result<Vec<RelationshipRecord>> {
+        let (_, relationships) = self.get_subtree_with_relationships(root_id).await?;
+        Ok(relationships)
+    }
+
+    pub async fn search_nodes_by_content(
+        &self,
+        search_query: &str,
+        limit: Option<i64>,
+    ) -> Result<Vec<Node>> {
+        let search_lower = format!("%{}%", search_query.to_lowercase());
+        let sql = if let Some(l) = limit {
+            format!(
+                "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}",
+                l
+            )
+        } else {
+            "SELECT * FROM node WHERE LOWER(content) LIKE ?1".to_string()
+        };
+        self.query_nodes_from_sql(&sql, libsql::params![search_lower])
+            .await
+    }
+
+    pub async fn mention_autocomplete(
+        &self,
+        search_query: &str,
+        limit: Option<i64>,
+    ) -> Result<Vec<Node>> {
+        let effective_limit = limit.unwrap_or(10);
+        let search_lower = format!("%{}%", search_query.to_lowercase());
+        let sql = format!(
+            "SELECT * FROM node WHERE title IS NOT NULL AND node_type != 'collection' AND LOWER(title) LIKE ?1 LIMIT {}",
+            effective_limit
+        );
+        self.query_nodes_from_sql(&sql, libsql::params![search_lower])
+            .await
+    }
+
+    async fn validate_no_cycle(&self, parent_id: &str, child_id: &str) -> Result<()> {
+        // Check if parent_id is a descendant of child_id (would create cycle)
+        let mut rows = self.db.query(
+            r#"WITH RECURSIVE desc(node_id, depth) AS (
+                SELECT out_node, 1 FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                UNION ALL
+                SELECT r.out_node, d.depth + 1 FROM relationship r
+                JOIN desc d ON r.in_node = d.node_id
+                WHERE r.relationship_type = 'has_child' AND d.depth < 100
+            )
+            SELECT node_id FROM desc WHERE node_id = ?2 LIMIT 1"#,
+            libsql::params![child_id.to_string(), parent_id.to_string()],
+        ).await.context("Failed to check for cycles")?;
+
+        if rows.next().await?.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot create parent-child relationship: would create cycle. \
+                Node '{}' is a descendant of node '{}'.",
+                parent_id,
+                child_id
+            ));
+        }
+        Ok(())
+    }
+
+    async fn rebalance_children_for_parent(&self, parent_id: &str) -> Result<()> {
+        let mut rows = self.db.query(
+            "SELECT id, out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' ORDER BY json_extract(properties, '$.order') ASC",
+            libsql::params![parent_id.to_string()],
+        ).await.context("Failed to get children for rebalancing")?;
+
+        let mut rels: Vec<(String, String)> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            rels.push((row.get(0)?, row.get(1)?));
+        }
+
+        if rels.is_empty() {
+            return Ok(());
+        }
+
+        let new_orders = FractionalOrderCalculator::rebalance(rels.len());
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin rebalance transaction")?;
+
+        for (i, (rel_id, _)) in rels.iter().enumerate() {
+            let props = serde_json::json!({"order": new_orders[i]}).to_string();
+            tx.execute(
+                "UPDATE relationship SET properties = ?1 WHERE id = ?2",
+                libsql::params![props, rel_id.clone()],
+            )
+            .await
+            .context("Failed to rebalance relationship")?;
+        }
+
+        tx.commit().await.context("Failed to commit rebalance")?;
+        Ok(())
+    }
+
+    pub async fn move_node(
+        &self,
+        node_id: &str,
+        new_parent_id: Option<&str>,
+        insert_after_sibling_id: Option<&str>,
+    ) -> Result<f64> {
+        let node_id = node_id.to_string();
+        let new_parent_id = new_parent_id.map(|s| s.to_string());
+        let insert_after_sibling_id = insert_after_sibling_id.map(|s| s.to_string());
+
+        if !self.node_exists(&node_id).await? {
+            return Err(anyhow::anyhow!("Node not found: {}", node_id));
+        }
+
+        let current_parent_id = self.get_parent_id(&node_id).await?;
+        let is_same_parent_reorder = match (&new_parent_id, &current_parent_id) {
+            (Some(new_pid), Some(cur_pid)) => new_pid == cur_pid,
+            (None, None) => true,
+            _ => false,
+        };
+
+        if let Some(ref parent_id) = new_parent_id {
+            if !self.node_exists(parent_id).await? {
+                return Err(anyhow::anyhow!("Parent node not found: {}", parent_id));
+            }
+            self.validate_no_cycle(parent_id, &node_id).await?;
+        }
+
+        let new_order = if let Some(ref parent_id) = new_parent_id {
+            // Get ordered siblings excluding the moving node
+            let mut rows = self.db.query(
+                "SELECT out_node, json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' AND out_node != ?2 ORDER BY json_extract(properties, '$.order') ASC",
+                libsql::params![parent_id.clone(), node_id.clone()],
+            ).await.context("Failed to get sibling relationships")?;
+
+            let mut siblings: Vec<(String, f64)> = Vec::new();
+            while let Some(row) = rows.next().await? {
+                let child_id: String = row.get(0)?;
+                let ord: Option<f64> = row.get(1)?;
+                siblings.push((child_id, ord.unwrap_or(0.0)));
+            }
+
+            if let Some(after_id) = insert_after_sibling_id {
+                if let Some(after_index) = siblings.iter().position(|(id, _)| id == &after_id) {
+                    let prev_order = siblings[after_index].1;
+                    let next_order = siblings.get(after_index + 1).map(|(_, o)| *o);
+
+                    if let Some(next) = next_order {
+                        if (next - prev_order) < 0.0001 {
+                            self.rebalance_children_for_parent(parent_id).await?;
+                            // Re-query after rebalancing
+                            let mut rows2 = self.db.query(
+                                "SELECT out_node, json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' AND out_node != ?2 ORDER BY json_extract(properties, '$.order') ASC",
+                                libsql::params![parent_id.clone(), node_id.clone()],
+                            ).await.context("Failed to get siblings after rebalancing")?;
+                            let mut siblings2: Vec<(String, f64)> = Vec::new();
+                            while let Some(row) = rows2.next().await? {
+                                let cid: String = row.get(0)?;
+                                let ord: Option<f64> = row.get(1)?;
+                                siblings2.push((cid, ord.unwrap_or(0.0)));
+                            }
+                            if let Some(after_index2) =
+                                siblings2.iter().position(|(id, _)| id == &after_id)
+                            {
+                                let prev2 = siblings2[after_index2].1;
+                                let next2 = siblings2.get(after_index2 + 1).map(|(_, o)| *o);
+                                FractionalOrderCalculator::calculate_order(Some(prev2), next2)
+                            } else {
+                                let last = siblings2.last().map(|(_, o)| *o);
+                                FractionalOrderCalculator::calculate_order(last, None)
+                            }
+                        } else {
+                            FractionalOrderCalculator::calculate_order(Some(prev_order), next_order)
+                        }
+                    } else {
+                        FractionalOrderCalculator::calculate_order(Some(prev_order), None)
+                    }
+                } else {
+                    let last = siblings.last().map(|(_, o)| *o);
+                    FractionalOrderCalculator::calculate_order(last, None)
+                }
+            } else {
+                let first = siblings.first().map(|(_, o)| *o);
+                FractionalOrderCalculator::calculate_order(None, first)
+            }
+        } else {
+            0.0
+        };
+
+        let now = Utc::now().to_rfc3339();
+
+        if let Some(ref parent_id) = new_parent_id {
+            if is_same_parent_reorder {
+                let props = serde_json::json!({"order": new_order}).to_string();
+                self.db.execute(
+                    "UPDATE relationship SET properties = ?1, version = version + 1, modified_at = ?2 WHERE in_node = ?3 AND out_node = ?4 AND relationship_type = 'has_child'",
+                    libsql::params![props, now, parent_id.clone(), node_id.clone()],
+                ).await.context("Failed to update relationship order")?;
+            } else {
+                // Delete old parent relationship, create new one
+                self.db.execute(
+                    "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
+                    libsql::params![node_id.clone()],
+                ).await.context("Failed to delete old parent relationship")?;
+
+                let rel_id = uuid::Uuid::new_v4().to_string();
+                let props = serde_json::json!({"order": new_order}).to_string();
+                self.db.execute(
+                    "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                    libsql::params![rel_id, parent_id.clone(), node_id.clone(), props, now.clone(), now],
+                ).await.context("Failed to create new parent relationship")?;
+            }
+        } else {
+            // Make root: delete parent relationship
+            self.db.execute(
+                "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
+                libsql::params![node_id.clone()],
+            ).await.context("Failed to delete parent relationship")?;
+        }
+
+        Ok(new_order)
+    }
+
+    pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
+            libsql::params![source_id.to_string(), target_id.to_string()],
+        ).await.context("Failed to check for existing mention")?;
+
+        if rows.next().await?.is_some() {
+            return Ok(None);
+        }
+
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.db.execute(
+            "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'mentions', '{}', 1, ?4, ?5)",
+            libsql::params![rel_id.clone(), source_id.to_string(), target_id.to_string(), now.clone(), now],
+        ).await.context("Failed to create mention")?;
+
+        Ok(Some(rel_id))
+    }
+
+    pub async fn delete_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
+            libsql::params![source_id.to_string(), target_id.to_string()],
+        ).await.context("Failed to get mention id")?;
+
+        let existing_id: Option<String> = if let Some(row) = rows.next().await? {
+            Some(row.get(0)?)
+        } else {
+            None
+        };
+
+        self.db.execute(
+            "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
+            libsql::params![source_id.to_string(), target_id.to_string()],
+        ).await.context("Failed to delete mention")?;
+
+        Ok(existing_id.map(|id| format!("relationship:{}", id)))
+    }
+
+    pub async fn get_outgoing_mentions(&self, node_id: &str) -> Result<Vec<String>> {
+        let mut rows = match self.db.query(
+            "SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'mentions'",
+            libsql::params![node_id.to_string()],
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to query outgoing mentions for {}: {}", node_id, e);
+                return Ok(Vec::new());
+            }
+        };
+
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(row.get(0)?);
+        }
+        Ok(ids)
+    }
+
+    pub async fn get_incoming_mentions(&self, node_id: &str) -> Result<Vec<String>> {
+        let mut rows = self.db.query(
+            "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
+            libsql::params![node_id.to_string()],
+        ).await.context("Failed to get incoming mentions")?;
+
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(row.get(0)?);
+        }
+        Ok(ids)
+    }
+
+    pub async fn get_incoming_mention_containers(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<crate::models::NodeReference>> {
+        let start = std::time::Instant::now();
+
+        // Get all nodes that mention this node
+        let mut rows = self.db.query(
+            "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
+            libsql::params![node_id.to_string()],
+        ).await.context("Failed to get mentioning sources")?;
+
+        let mut source_ids: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            source_ids.push(row.get(0)?);
+        }
+
+        if source_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // For each source, determine its container (task=itself, else walk up to root)
+        let mut container_ids: HashSet<String> = HashSet::new();
+
+        for source_id in &source_ids {
+            let node_type = self.get_node_type(source_id).await?;
+            if node_type.as_deref() == Some("task") {
+                container_ids.insert(source_id.clone());
+            } else {
+                // Walk up to root using recursive CTE
+                let mut root_rows = self.db.query(
+                    r#"WITH RECURSIVE ancestors(node_id, depth) AS (
+                        SELECT in_node, 1 FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'
+                        UNION ALL
+                        SELECT r.in_node, a.depth + 1 FROM relationship r
+                        JOIN ancestors a ON r.out_node = a.node_id
+                        WHERE r.relationship_type = 'has_child' AND a.depth < 100
+                    )
+                    SELECT node_id FROM ancestors ORDER BY depth DESC LIMIT 1"#,
+                    libsql::params![source_id.clone()],
+                ).await.context("Failed to get ancestor chain")?;
+
+                if let Some(row) = root_rows.next().await? {
+                    container_ids.insert(row.get(0)?);
+                } else {
+                    // Source is already a root
+                    container_ids.insert(source_id.clone());
+                }
+            }
+        }
+
+        if container_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Batch fetch containers
+        let placeholders: Vec<String> = (1..=container_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
+        let sql = format!(
+            "SELECT id, title, node_type FROM node WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<libsql::Value> = container_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut container_rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to fetch containers")?;
+
+        let mut result = Vec::new();
+        while let Some(row) = container_rows.next().await? {
+            result.push(crate::models::NodeReference {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                node_type: row.get(2)?,
+            });
+        }
+
+        tracing::debug!(
+            "get_incoming_mention_containers: {} containers in {:?} for node_id={}",
+            result.len(),
+            start.elapsed(),
+            node_id
+        );
+
+        Ok(result)
+    }
+
+    pub async fn get_schema(&self, node_type: &str) -> Result<Option<Value>> {
+        let node = self.get_node(node_type).await?;
+        Ok(node.map(|n| n.properties))
+    }
+
+    pub async fn update_schema(&self, node_type: &str, schema: &Value) -> Result<()> {
+        let schema_id = node_type.to_string();
+
+        if self.get_node(&schema_id).await?.is_some() {
+            let update = NodeUpdate {
+                properties: Some(schema.clone()),
+                ..Default::default()
+            };
+            self.update_node(&schema_id, update, None).await?;
+        } else {
+            let node = Node::new_with_id(
+                schema_id,
+                "schema".to_string(),
+                node_type.to_string(),
+                schema.clone(),
+            );
+            self.create_node(node, None, None).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn rename_schema_field(&self, type_id: &str, from: &str, to: &str) -> Result<u64> {
+        if from.is_empty() || to.is_empty() {
+            return Err(anyhow::anyhow!("Field names must not be empty"));
+        }
+        if from == to {
+            return Err(anyhow::anyhow!(
+                "Source and destination field names are the same: '{}'",
+                from
+            ));
+        }
+
+        let mut rows = self
+            .db
+            .query(
+                "SELECT id, properties FROM node WHERE node_type = ?1",
+                libsql::params![type_id.to_string()],
+            )
+            .await
+            .context("Failed to fetch nodes for field rename")?;
+
+        let mut nodes: Vec<(String, Value)> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            let props_str: String = row.get(1)?;
+            let props: Value = serde_json::from_str(&props_str).unwrap_or(serde_json::json!({}));
+            nodes.push((id, props));
+        }
+
+        let mut affected = 0u64;
+        let now = Utc::now().to_rfc3339();
+
+        for (node_id, mut properties) in nodes {
+            let had_field = if let Some(ns_obj) = properties
+                .as_object_mut()
+                .and_then(|p| p.get_mut(type_id))
+                .and_then(|ns| ns.as_object_mut())
+            {
+                if let Some(value) = ns_obj.remove(from) {
+                    ns_obj.insert(to.to_string(), value);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if had_field {
+                let props_json =
+                    serde_json::to_string(&properties).context("Failed to serialize properties")?;
+                self.db
+                    .execute(
+                        "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
+                        libsql::params![props_json, now.clone(), node_id],
+                    )
+                    .await
+                    .context("Failed to update node during field rename")?;
+                affected += 1;
+            }
+        }
+
+        tracing::info!(
+            type_id = %type_id,
+            from = %from,
+            to = %to,
+            affected = affected,
+            "rename_schema_field: migrated {} node(s)",
+            affected
+        );
+
+        Ok(affected)
+    }
+
+    pub async fn bulk_update(&self, updates: Vec<(String, NodeUpdate)>) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        const MAX_BATCH_SIZE: usize = 1000;
+        if updates.len() > MAX_BATCH_SIZE {
+            return Err(anyhow::anyhow!(
+                "Bulk update batch size ({}) exceeds maximum ({})",
+                updates.len(),
+                MAX_BATCH_SIZE
+            ));
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk update transaction")?;
+
+        for (id, update) in &updates {
+            let current = self
+                .get_node(id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
+
+            let updated_content = update.content.clone().unwrap_or(current.content);
+            let updated_node_type = update.node_type.clone().unwrap_or(current.node_type);
+
+            tx.execute(
+                "UPDATE node SET content = ?1, node_type = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
+                libsql::params![updated_content, updated_node_type, now.clone(), id.clone()],
+            ).await.context("Failed to update node in bulk update")?;
+        }
+
+        tx.commit().await.context("Failed to commit bulk update")?;
+        Ok(())
+    }
+
+    pub async fn batch_create_nodes(&self, nodes: Vec<Node>) -> Result<Vec<Node>> {
+        let mut created = Vec::new();
+        for node in nodes {
+            created.push(self.create_node(node, None, None).await?);
+        }
+        Ok(created)
+    }
+
+    pub async fn bulk_create_hierarchy(
+        &self,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+    ) -> Result<Vec<String>> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk hierarchy transaction")?;
+
+        for (id, node_type, content, parent_id, order, properties) in &nodes {
+            self.validate_node_type(node_type)?;
+
+            let properties = if properties.is_null() {
+                serde_json::json!({})
+            } else {
+                properties.clone()
+            };
+            let props_json =
+                serde_json::to_string(&properties).context("Failed to serialize properties")?;
+
+            let title =
+                Self::compute_title_for_bulk_insert(node_type, parent_id.as_deref(), content);
+
+            tx.execute(
+                "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, 'active', 1, ?6, ?7)",
+                libsql::params![id.clone(), node_type.clone(), content.clone(), props_json, title, now.clone(), now.clone()],
+            ).await.context("Failed to insert node in bulk hierarchy")?;
+
+            if let Some(parent) = parent_id {
+                let rel_id = uuid::Uuid::new_v4().to_string();
+                let rel_props = serde_json::json!({"order": order}).to_string();
+                tx.execute(
+                    "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                    libsql::params![rel_id, parent.clone(), id.clone(), rel_props, now.clone(), now.clone()],
+                ).await.context("Failed to insert relationship in bulk hierarchy")?;
+            }
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit bulk hierarchy")?;
+
+        let ids: Vec<String> = nodes.into_iter().map(|(id, ..)| id).collect();
+
+        // Notify for each created node
+        for id in &ids {
+            if let Ok(Some(node)) = self.get_node(id).await {
+                self.notify(StoreChange {
+                    operation: StoreOperation::Created,
+                    node,
+                    source: None,
+                    previous_node: None,
+                    playbook_context: None,
+                });
+            }
+        }
+
+        Ok(ids)
+    }
+
+    pub async fn bulk_create_hierarchy_root_notify(
+        &self,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+        root_ids: Vec<String>,
+    ) -> Result<Vec<String>> {
+        let created = self.bulk_create_hierarchy(nodes).await?;
+
+        // Create stale embedding markers for roots
+        self.create_stale_embedding_markers_bulk(&root_ids).await?;
+
+        Ok(created)
+    }
+
+    pub async fn create_node_streaming(
+        &self,
+        id: String,
+        node_type: String,
+        content: String,
+        parent_id: Option<String>,
+        order: f64,
+        properties: serde_json::Value,
+    ) -> Result<String> {
+        self.validate_node_type(&node_type)?;
+
+        let properties = if properties.is_null() {
+            serde_json::json!({})
+        } else {
+            properties
+        };
+        let props_json =
+            serde_json::to_string(&properties).context("Failed to serialize properties")?;
+        let now = Utc::now().to_rfc3339();
+
+        self.db.execute(
+            "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, NULL, 'active', 1, ?5, ?6)",
+            libsql::params![id.clone(), node_type.clone(), content.clone(), props_json, now.clone(), now.clone()],
+        ).await.context("Failed to create node (streaming)")?;
+
+        if let Some(ref parent) = parent_id {
+            let rel_id = uuid::Uuid::new_v4().to_string();
+            let rel_props = serde_json::json!({"order": order}).to_string();
+            self.db.execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                libsql::params![rel_id, parent.clone(), id.clone(), rel_props, now.clone(), now],
+            ).await.context("Failed to create relationship (streaming)")?;
+        }
+
+        let node = Node {
+            id: id.clone(),
+            node_type: node_type.clone(),
+            content,
+            version: 1,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            properties,
+            mentions: vec![],
+            mentioned_in: vec![],
+            title: None,
+            lifecycle_status: "active".to_string(),
+        };
+        self.notify(StoreChange {
+            operation: StoreOperation::Created,
+            node,
+            source: Some("streaming_import".to_string()),
+            previous_node: None,
+            playbook_context: None,
+        });
+
+        Ok(id)
+    }
+
+    fn compute_title_for_bulk_insert(
+        node_type: &str,
+        parent_id: Option<&str>,
+        content: &str,
+    ) -> Option<String> {
+        if matches!(node_type, "date" | "schema" | "checkbox") {
+            None
+        } else if parent_id.is_none() || matches!(node_type, "task" | "collection") {
+            let stripped = crate::utils::strip_markdown(content);
+            Some(stripped)
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_task_node(&self, id: &str) -> Result<Option<crate::models::TaskNode>> {
+        let node = self.get_node(id).await?;
+        Ok(node.and_then(|n| {
+            if n.node_type != "task" {
+                return None;
+            }
+            let props = &n.properties;
+            let task_props = props.get("task").cloned().unwrap_or(serde_json::json!({}));
+            Some(crate::models::TaskNode {
+                id: n.id,
+                node_type: n.node_type,
+                content: n.content,
+                version: n.version,
+                created_at: n.created_at,
+                modified_at: n.modified_at,
+                properties: n.properties,
+                status: task_props
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_default(),
+                priority: task_props
+                    .get("priority")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok()),
+                due_date: task_props
+                    .get("due_date")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok()),
+                assignee: task_props
+                    .get("assignee")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                started_at: task_props
+                    .get("started_at")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok()),
+                completed_at: task_props
+                    .get("completed_at")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok()),
+            })
+        }))
+    }
+
+    pub async fn update_task_node(
+        &self,
+        id: &str,
+        expected_version: i64,
+        update: crate::models::TaskNodeUpdate,
+    ) -> Result<crate::models::TaskNode> {
+        let current = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Task node not found: {}", id))?;
+
+        if current.version != expected_version {
+            return Err(anyhow::anyhow!(
+                "VersionMismatch: expected {}, got {}",
+                expected_version,
+                current.version
+            ));
+        }
+
+        let mut props = current.properties.clone();
+        let task_obj = props
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("Invalid properties"))?
+            .entry("task")
+            .or_insert(serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("Invalid task properties"))?
+            .clone();
+
+        let mut task_obj_owned = task_obj;
+
+        if let Some(ref status) = update.status {
+            task_obj_owned.insert("status".to_string(), serde_json::json!(status.as_str()));
+        }
+        if let Some(ref priority_opt) = update.priority {
+            match priority_opt {
+                Some(p) => {
+                    task_obj_owned.insert("priority".to_string(), serde_json::json!(p.as_str()));
+                }
+                None => {
+                    task_obj_owned.remove("priority");
+                }
+            }
+        }
+        if let Some(ref due_date_opt) = update.due_date {
+            match due_date_opt {
+                Some(dt) => {
+                    task_obj_owned
+                        .insert("due_date".to_string(), serde_json::json!(dt.to_rfc3339()));
+                }
+                None => {
+                    task_obj_owned.remove("due_date");
+                }
+            }
+        }
+        if let Some(ref assignee_opt) = update.assignee {
+            match assignee_opt {
+                Some(a) => {
+                    task_obj_owned.insert("assignee".to_string(), serde_json::json!(a));
+                }
+                None => {
+                    task_obj_owned.remove("assignee");
+                }
+            }
+        }
+        if let Some(ref started_at_opt) = update.started_at {
+            match started_at_opt {
+                Some(dt) => {
+                    task_obj_owned
+                        .insert("started_at".to_string(), serde_json::json!(dt.to_rfc3339()));
+                }
+                None => {
+                    task_obj_owned.remove("started_at");
+                }
+            }
+        }
+        if let Some(ref completed_at_opt) = update.completed_at {
+            match completed_at_opt {
+                Some(dt) => {
+                    task_obj_owned.insert(
+                        "completed_at".to_string(),
+                        serde_json::json!(dt.to_rfc3339()),
+                    );
+                }
+                None => {
+                    task_obj_owned.remove("completed_at");
+                }
+            }
+        }
+
+        // Re-insert updated task object back into properties
+        if let Some(props_obj) = props.as_object_mut() {
+            props_obj.insert(
+                "task".to_string(),
+                serde_json::Value::Object(task_obj_owned),
+            );
+        }
+
+        let props_json = serde_json::to_string(&props).context("Failed to serialize properties")?;
+        let now = Utc::now().to_rfc3339();
+        let new_version = expected_version + 1;
+
+        let mut sql = "UPDATE node SET properties = ?1, version = ?2, modified_at = ?3".to_string();
+        let mut sql_params: Vec<libsql::Value> = vec![
+            libsql::Value::Text(props_json),
+            libsql::Value::Integer(new_version),
+            libsql::Value::Text(now),
+        ];
+
+        if let Some(ref content) = update.content {
+            sql.push_str(", content = ?4");
+            sql_params.push(libsql::Value::Text(content.clone()));
+            sql.push_str(&format!(" WHERE id = ?{}", sql_params.len() + 1));
+        } else {
+            sql.push_str(&format!(" WHERE id = ?{}", sql_params.len() + 1));
+        }
+        sql_params.push(libsql::Value::Text(id.to_string()));
+
+        self.db
+            .execute(&sql, sql_params)
+            .await
+            .context("Failed to update task node")?;
+
+        self.get_task_node(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Task node '{}' not found after update", id))
+    }
+
+    pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT * FROM node WHERE id = ?1 AND node_type = 'schema' LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to query schema node")?;
+
+        if let Some(row) = rows.next().await? {
+            let node = Self::row_to_node(&row)?;
+            match crate::models::SchemaNode::from_node(node) {
+                Ok(schema) => Ok(Some(schema)),
+                Err(e) => {
+                    tracing::warn!("Failed to parse schema node '{}': {}", id, e);
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_all_schemas(&self) -> Result<Vec<crate::models::SchemaNode>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT * FROM node WHERE node_type = 'schema' ORDER BY id",
+                (),
+            )
+            .await
+            .context("Failed to query all schema nodes")?;
+
+        let mut schemas = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let node = Self::row_to_node(&row)?;
+            match crate::models::SchemaNode::from_node(node) {
+                Ok(schema) => schemas.push(schema),
+                Err(e) => tracing::warn!("Skipping invalid schema node: {}", e),
+            }
+        }
+        Ok(schemas)
+    }
+
+    pub async fn upsert_embeddings(
+        &self,
+        node_id: &str,
+        embeddings: Vec<crate::models::NewEmbedding>,
+    ) -> Result<()> {
+        if embeddings.is_empty() {
+            return Ok(());
+        }
+
+        self.db
+            .execute(
+                "DELETE FROM embedding WHERE node_id = ?1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .context("Failed to delete existing embeddings")?;
+
+        let now = Utc::now().to_rfc3339();
+        for emb in embeddings {
+            let id = uuid::Uuid::new_v4().to_string();
+            let dimension = emb.vector.len() as i64;
+            let vector_blob: Vec<u8> = emb.vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let model_name = emb
+                .model_name
+                .unwrap_or_else(|| "nomic-embed-text-v1.5".to_string());
+
+            self.db.execute(
+                "INSERT INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, NULL, ?12, ?13)",
+                libsql::params![
+                    id,
+                    emb.node_id.clone(),
+                    vector_blob,
+                    dimension,
+                    model_name,
+                    emb.chunk_index as i64,
+                    emb.chunk_start as i64,
+                    emb.chunk_end as i64,
+                    emb.total_chunks as i64,
+                    emb.content_hash,
+                    emb.token_count as i64,
+                    now.clone(),
+                    now.clone(),
+                ],
+            ).await.context("Failed to insert embedding")?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn mark_root_embedding_stale(&self, node_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.db
+            .execute(
+                "UPDATE embedding SET stale = 1, modified_at = ?1 WHERE node_id = ?2",
+                libsql::params![now, node_id.to_string()],
+            )
+            .await
+            .context("Failed to mark embedding stale")?;
+        Ok(())
+    }
+
+    pub async fn get_stale_embedding_root_ids(
+        &self,
+        limit: Option<i64>,
+        debounce_secs: u64,
+        max_retries: u8,
+    ) -> Result<Vec<String>> {
+        let cutoff = Utc::now() - chrono::Duration::seconds(debounce_secs as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        let max_retries_i = max_retries as i64;
+
+        let sql = if let Some(l) = limit {
+            format!(
+                "SELECT DISTINCT node_id FROM embedding WHERE stale = 1 AND error_count < ?1 AND modified_at < ?2 LIMIT {}",
+                l
+            )
+        } else {
+            "SELECT DISTINCT node_id FROM embedding WHERE stale = 1 AND error_count < ?1 AND modified_at < ?2".to_string()
+        };
+
+        let mut rows = self
+            .db
+            .query(&sql, libsql::params![max_retries_i, cutoff_str])
+            .await
+            .context("Failed to get stale embedding root IDs")?;
+
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(row.get(0)?);
+        }
+        Ok(ids)
+    }
+
+    pub async fn has_pending_stale_embeddings(
+        &self,
+        debounce_secs: u64,
+        max_retries: u8,
+    ) -> Result<bool> {
+        let cutoff = Utc::now() - chrono::Duration::seconds(debounce_secs as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        let max_retries_i = max_retries as i64;
+
+        let mut rows = self.db.query(
+            "SELECT COUNT(*) FROM embedding WHERE stale = 1 AND error_count < ?1 AND modified_at >= ?2",
+            libsql::params![max_retries_i, cutoff_str],
+        ).await.context("Failed to check for pending stale embeddings")?;
+
+        if let Some(row) = rows.next().await? {
+            let count: i64 = row.get(0)?;
+            Ok(count > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn has_embeddings(&self, node_id: &str) -> Result<bool> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT COUNT(*) FROM embedding WHERE node_id = ?1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .context("Failed to check for embeddings")?;
+
+        if let Some(row) = rows.next().await? {
+            let count: i64 = row.get(0)?;
+            Ok(count > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn delete_embeddings(&self, node_id: &str) -> Result<()> {
+        self.db
+            .execute(
+                "DELETE FROM embedding WHERE node_id = ?1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .context("Failed to delete embeddings")?;
+        Ok(())
+    }
+
+    pub async fn record_embedding_error(
+        &self,
+        node_id: &str,
+        error: &str,
+        max_retries: u8,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let max_retries_i = max_retries as i64;
+
+        // Increment error_count, set last_error, clear stale if error_count reaches max_retries
+        self.db.execute(
+            "UPDATE embedding SET error_count = error_count + 1, last_error = ?1, modified_at = ?2, stale = CASE WHEN error_count + 1 >= ?3 THEN 0 ELSE stale END WHERE node_id = ?4",
+            libsql::params![error.to_string(), now, max_retries_i, node_id.to_string()],
+        ).await.context("Failed to record embedding error")?;
+        Ok(())
+    }
+
+    pub async fn search_embeddings(
+        &self,
+        query_vector: &[f32],
+        limit: i64,
+        threshold: Option<f64>,
+    ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
+        let min_score = threshold.unwrap_or(0.5);
+
+        // TODO(#1221): replace with sqlite-vec vec0 KNN query for O(log N) HNSW search.
+        // Current linear scan is correct but O(N) — acceptable until corpus exceeds ~10k nodes.
+        let mut rows = self
+            .db
+            .query(
+                "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e WHERE e.stale = 0",
+                (),
+            )
+            .await
+            .context("Failed to load embeddings for search")?;
+
+        // Group by node_id: track max similarity, chunk counts
+        let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new(); // node_id -> (max_sim, matching_chunks, total_chunks)
+
+        while let Some(row) = rows.next().await? {
+            let node_id: String = row.get(0)?;
+            let vector_blob: Vec<u8> = row.get(1)?;
+            let total_chunks: i64 = row.get(2)?;
+
+            // Decode f32 LE bytes
+            if !vector_blob.len().is_multiple_of(4) {
+                continue;
+            }
+            let embedding: Vec<f32> = vector_blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+
+            let similarity = cosine_similarity(query_vector, &embedding);
+
+            let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
+            if similarity > entry.0 {
+                entry.0 = similarity;
+            }
+            entry.1 += 1;
+        }
+
+        // Compute composite scores and filter
+        let mut results: Vec<crate::models::EmbeddingSearchResult> = Vec::new();
+        for (node_id, (max_similarity, matching_chunks, total_chunks)) in node_scores {
+            let density = if total_chunks > 0 {
+                matching_chunks as f64 / total_chunks as f64
+            } else {
+                1.0
+            };
+            let composite_score = max_similarity * (1.0 + 0.3 * density);
+
+            if composite_score > min_score {
+                let node = self.get_node(&node_id).await?;
+                results.push(crate::models::EmbeddingSearchResult {
+                    node_id: node_id.clone(),
+                    score: composite_score,
+                    max_similarity,
+                    matching_chunks,
+                    node,
+                });
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit as usize);
+        Ok(results)
+    }
+
+    pub async fn search_embeddings_by_node_type(
+        &self,
+        query_vector: &[f32],
+        node_type: &str,
+        limit: i64,
+        threshold: Option<f64>,
+    ) -> Result<Vec<crate::models::EmbeddingSearchResult>> {
+        let min_score = threshold.unwrap_or(0.5);
+
+        let mut rows = self.db.query(
+            "SELECT e.node_id, e.vector, e.total_chunks FROM embedding e JOIN node n ON n.id = e.node_id WHERE e.stale = 0 AND n.node_type = ?1",
+            libsql::params![node_type.to_string()],
+        ).await.context("Failed to load typed embeddings for search")?;
+
+        let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new();
+
+        while let Some(row) = rows.next().await? {
+            let node_id: String = row.get(0)?;
+            let vector_blob: Vec<u8> = row.get(1)?;
+            let total_chunks: i64 = row.get(2)?;
+
+            if !vector_blob.len().is_multiple_of(4) {
+                continue;
+            }
+            let embedding: Vec<f32> = vector_blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+
+            let similarity = cosine_similarity(query_vector, &embedding);
+            let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
+            if similarity > entry.0 {
+                entry.0 = similarity;
+            }
+            entry.1 += 1;
+        }
+
+        let mut results = Vec::new();
+        for (node_id, (max_similarity, matching_chunks, total_chunks)) in node_scores {
+            let density = if total_chunks > 0 {
+                matching_chunks as f64 / total_chunks as f64
+            } else {
+                1.0
+            };
+            let composite_score = max_similarity * (1.0 + 0.3 * density);
+
+            if composite_score > min_score {
+                let node = self.get_node(&node_id).await?;
+                results.push(crate::models::EmbeddingSearchResult {
+                    node_id: node_id.clone(),
+                    score: composite_score,
+                    max_similarity,
+                    matching_chunks,
+                    node,
+                });
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit as usize);
+        Ok(results)
+    }
+
+    pub async fn bm25_search_roots(
+        &self,
+        query: &str,
+        candidate_limit: i64,
+    ) -> Result<HashSet<String>> {
+        let tokens: Vec<String> = query
+            .split_whitespace()
+            .map(|t| {
+                t.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
+            .filter(|t| !t.is_empty() && !BM25_STOP_WORDS.contains(&t.as_str()))
+            .take(BM25_MAX_TOKENS)
+            .collect();
+
+        if tokens.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        // Build FTS5 query: "token1" OR "token2" OR ...
+        let fts_query = tokens
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
+        let sql = format!(
+            "SELECT n.id FROM node n JOIN node_fts f ON f.id = n.id WHERE node_fts MATCH ?1 AND n.lifecycle_status != 'deleted' ORDER BY rank LIMIT {}",
+            candidate_limit
+        );
+
+        let mut rows = self
+            .db
+            .query(&sql, libsql::params![fts_query])
+            .await
+            .context("Failed to execute BM25 search")?;
+
+        let mut matching_ids: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            matching_ids.push(row.get(0)?);
+        }
+
+        if matching_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        // Resolve each match to its root using recursive CTE
+        let mut root_ids = HashSet::new();
+
+        for node_id in matching_ids {
+            let mut rows = self.db.query(
+                r#"WITH RECURSIVE ancestors(node_id, depth) AS (
+                    SELECT in_node, 1 FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'
+                    UNION ALL
+                    SELECT r.in_node, a.depth + 1 FROM relationship r
+                    JOIN ancestors a ON r.out_node = a.node_id
+                    WHERE r.relationship_type = 'has_child' AND a.depth < 100
+                )
+                SELECT node_id FROM ancestors ORDER BY depth DESC LIMIT 1"#,
+                libsql::params![node_id.clone()],
+            ).await.context("Failed to get root for BM25 match")?;
+
+            if let Some(row) = rows.next().await? {
+                let root_id: String = row.get(0)?;
+                // Verify root is not deleted
+                if let Ok(Some(n)) = self.get_node(&root_id).await {
+                    if n.lifecycle_status != "deleted" {
+                        root_ids.insert(root_id);
+                    }
+                }
+            } else {
+                // node_id is itself the root
+                if let Ok(Some(n)) = self.get_node(&node_id).await {
+                    if n.lifecycle_status != "deleted" {
+                        root_ids.insert(node_id);
+                    }
+                }
+            }
+        }
+
+        Ok(root_ids)
+    }
+
+    async fn get_next_order_for_relationship(
+        &self,
+        node_id: &str,
+        relationship_type: &str,
+        use_out_as_anchor: bool,
+    ) -> Result<f64> {
+        let anchor_field = if use_out_as_anchor {
+            "out_node"
+        } else {
+            "in_node"
+        };
+        let sql = format!(
+            "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE {} = ?1 AND relationship_type = ?2 ORDER BY json_extract(properties, '$.order') DESC LIMIT 1",
+            anchor_field
+        );
+
+        let mut rows = self
+            .db
+            .query(
+                &sql,
+                libsql::params![node_id.to_string(), relationship_type.to_string()],
+            )
+            .await
+            .context("Failed to get last order for relationship")?;
+
+        let last_order = if let Some(row) = rows.next().await? {
+            row.get::<Option<f64>>(0)?.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        Ok(if last_order > 0.0 {
+            FractionalOrderCalculator::calculate_order(Some(last_order), None)
+        } else {
+            FractionalOrderCalculator::calculate_order(None, None)
+        })
+    }
+
+    pub async fn get_next_member_order(&self, collection_id: &str) -> Result<f64> {
+        self.get_next_order_for_relationship(collection_id, "member_of", true)
+            .await
+    }
+
+    pub async fn get_next_child_order(&self, parent_id: &str) -> Result<f64> {
+        self.get_next_order_for_relationship(parent_id, "has_child", false)
+            .await
+    }
+
+    pub async fn add_to_collection(
+        &self,
+        member_id: &str,
+        collection_id: &str,
+    ) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of' LIMIT 1",
+            libsql::params![member_id.to_string(), collection_id.to_string()],
+        ).await.context("Failed to check existing membership")?;
+
+        if rows.next().await?.is_some() {
+            return Ok(None);
+        }
+
+        let jitter = FractionalOrderCalculator::generate_jitter();
+        let base_order = self.get_next_member_order(collection_id).await?;
+        let new_order = base_order + jitter;
+
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let props = serde_json::json!({"order": new_order}).to_string();
+
+        self.db.execute(
+            "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'member_of', ?4, 1, ?5, ?6)",
+            libsql::params![rel_id.clone(), member_id.to_string(), collection_id.to_string(), props, now.clone(), now],
+        ).await.context("Failed to add to collection")?;
+
+        Ok(Some(rel_id))
+    }
+
+    pub async fn remove_from_collection(
+        &self,
+        member_id: &str,
+        collection_id: &str,
+    ) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
+            libsql::params![member_id.to_string(), collection_id.to_string()],
+        ).await.context("Failed to get membership ID")?;
+
+        let existing_id: Option<String> = if let Some(row) = rows.next().await? {
+            Some(row.get(0)?)
+        } else {
+            None
+        };
+
+        self.db.execute(
+            "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
+            libsql::params![member_id.to_string(), collection_id.to_string()],
+        ).await.context("Failed to remove from collection")?;
+
+        Ok(existing_id.map(|id| format!("relationship:{}", id)))
+    }
+
+    pub async fn get_node_memberships(&self, node_id: &str) -> Result<Vec<String>> {
+        let mut rows = self.db.query(
+            "SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'member_of'",
+            libsql::params![node_id.to_string()],
+        ).await.context("Failed to get node memberships")?;
+
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(row.get(0)?);
+        }
+        Ok(ids)
+    }
+
+    pub async fn get_collection_members(&self, collection_id: &str) -> Result<Vec<Node>> {
+        let start = std::time::Instant::now();
+
+        let mut rows = self.db.query(
+            "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'member_of' ORDER BY json_extract(r.properties, '$.order') ASC",
+            libsql::params![collection_id.to_string()],
+        ).await.context("Failed to get collection members")?;
+
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+
+        tracing::debug!(
+            "get_collection_members: {:?} for {} nodes",
+            start.elapsed(),
+            nodes.len()
+        );
+
+        Ok(nodes)
+    }
+
+    pub async fn get_collection_by_name(&self, name: &str) -> Result<Option<Node>> {
+        let normalized = name.to_lowercase();
+
+        let mut rows = self
+            .db
+            .query(
+                "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 LIMIT 1",
+                libsql::params![normalized],
+            )
+            .await
+            .context("Failed to search for collection by name")?;
+
+        if let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            self.get_node(&id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_collections_by_names(
+        &self,
+        names: &[String],
+    ) -> Result<HashMap<String, Node>> {
+        if names.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let normalized: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
+        let placeholders: Vec<String> = (1..=normalized.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT id, title FROM node WHERE node_type = 'collection' AND LOWER(title) IN ({})",
+            placeholders.join(", ")
+        );
+
+        let params: Vec<libsql::Value> = normalized
+            .iter()
+            .map(|n| libsql::Value::Text(n.clone()))
+            .collect();
+        let mut rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to batch search collections by names")?;
+
+        let mut collections = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            if let Ok(Some(node)) = self.get_node(&id).await {
+                let key = title.unwrap_or_default().to_lowercase();
+                collections.insert(key, node);
+            }
+        }
+
+        Ok(collections)
+    }
+
+    pub async fn get_collection_members_recursive(
+        &self,
+        collection_id: &str,
+    ) -> Result<Vec<String>> {
+        // Get all collections in the subtree using WITH RECURSIVE
+        let mut rows = self
+            .db
+            .query(
+                r#"WITH RECURSIVE coll_subtree(node_id) AS (
+                SELECT ?1
+                UNION ALL
+                SELECT r.out_node FROM relationship r
+                JOIN coll_subtree cs ON r.in_node = cs.node_id
+                WHERE r.relationship_type = 'has_child'
+            )
+            SELECT DISTINCT r.in_node FROM relationship r
+            JOIN coll_subtree cs ON r.out_node = cs.node_id
+            WHERE r.relationship_type = 'member_of'"#,
+                libsql::params![collection_id.to_string()],
+            )
+            .await
+            .context("Failed to get recursive collection members")?;
+
+        let mut member_ids: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            member_ids.push(row.get(0)?);
+        }
+
+        member_ids.sort();
+        member_ids.dedup();
+        Ok(member_ids)
+    }
+
+    pub async fn get_all_collection_names(&self) -> Result<Vec<String>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT content FROM node WHERE node_type = 'collection' ORDER BY content ASC",
+                (),
+            )
+            .await
+            .context("Failed to get all collection names")?;
+
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().await? {
+            names.push(row.get(0)?);
+        }
+        Ok(names)
+    }
+
+    pub async fn get_all_collections_with_member_counts(
+        &self,
+    ) -> Result<Vec<(Node, usize, Vec<String>)>> {
+        let collections = self.get_all_collections().await?;
+        if collections.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Count members per collection
+        let mut rows = self.db.query(
+            "SELECT out_node, COUNT(*) FROM relationship WHERE relationship_type = 'member_of' GROUP BY out_node",
+            (),
+        ).await.context("Failed to get member counts")?;
+
+        let mut count_map: HashMap<String, usize> = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let coll_id: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            count_map.insert(coll_id, count as usize);
+        }
+
+        // Get collection-to-collection hierarchy edges
+        let mut rows2 = self.db.query(
+            "SELECT r.in_node, r.out_node FROM relationship r JOIN node n1 ON n1.id = r.in_node JOIN node n2 ON n2.id = r.out_node WHERE r.relationship_type = 'member_of' AND n1.node_type = 'collection' AND n2.node_type = 'collection'",
+            (),
+        ).await.context("Failed to get collection hierarchy")?;
+
+        let mut parent_map: HashMap<String, Vec<String>> = HashMap::new();
+        while let Some(row) = rows2.next().await? {
+            let child: String = row.get(0)?;
+            let parent: String = row.get(1)?;
+            parent_map.entry(child).or_default().push(parent);
+        }
+
+        Ok(collections
+            .into_iter()
+            .map(|node| {
+                let count = count_map.get(&node.id).copied().unwrap_or(0);
+                let parents = parent_map.get(&node.id).cloned().unwrap_or_default();
+                (node, count, parents)
+            })
+            .collect())
+    }
+
+    async fn get_all_collections(&self) -> Result<Vec<Node>> {
+        self.query_nodes_from_sql(
+            "SELECT * FROM node WHERE node_type = 'collection' ORDER BY content ASC",
+            (),
+        )
+        .await
+    }
+
+    pub async fn bulk_add_to_collections(&self, memberships: &[(String, String)]) -> Result<usize> {
+        if memberships.is_empty() {
+            return Ok(0);
+        }
+
+        let start = std::time::Instant::now();
+
+        // Group by collection to calculate orders correctly
+        let mut by_collection: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (node_id, collection_id) in memberships {
+            by_collection
+                .entry(collection_id.as_str())
+                .or_default()
+                .push(node_id.as_str());
+        }
+
+        let mut ordered: Vec<(String, String, f64)> = Vec::with_capacity(memberships.len());
+        for (collection_id, node_ids) in &by_collection {
+            let base_order = self.get_next_member_order(collection_id).await?;
+            for (i, node_id) in node_ids.iter().enumerate() {
+                ordered.push((
+                    node_id.to_string(),
+                    collection_id.to_string(),
+                    base_order + i as f64,
+                ));
+            }
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk add transaction")?;
+
+        let mut created = 0;
+        for (node_id, collection_id, order) in &ordered {
+            let mut rows = tx.query(
+                "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of' LIMIT 1",
+                libsql::params![node_id.clone(), collection_id.clone()],
+            ).await.context("Failed to check existing membership")?;
+
+            if rows.next().await?.is_some() {
+                continue;
+            }
+
+            let rel_id = uuid::Uuid::new_v4().to_string();
+            let props = serde_json::json!({"order": order}).to_string();
+            tx.execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'member_of', ?4, 1, ?5, ?6)",
+                libsql::params![rel_id, node_id.clone(), collection_id.clone(), props, now.clone(), now.clone()],
+            ).await.context("Failed to insert membership")?;
+            created += 1;
+        }
+
+        tx.commit().await.context("Failed to commit bulk add")?;
+
+        tracing::debug!(
+            "bulk_add_to_collections: {} memberships in {:?}",
+            created,
+            start.elapsed()
+        );
+
+        Ok(created)
+    }
+
+    pub async fn bulk_create_mentions(&self, mentions: &[(String, String)]) -> Result<usize> {
+        if mentions.is_empty() {
+            return Ok(0);
+        }
+
+        let start = std::time::Instant::now();
+        let valid_mentions: Vec<_> = mentions.iter().filter(|(s, t)| s != t).collect();
+        if valid_mentions.is_empty() {
+            return Ok(0);
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk mentions transaction")?;
+
+        let mut created = 0;
+        for (source_id, target_id) in &valid_mentions {
+            let mut rows = tx.query(
+                "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions' LIMIT 1",
+                libsql::params![source_id.clone().to_string(), target_id.clone().to_string()],
+            ).await.context("Failed to check existing mention")?;
+
+            if rows.next().await?.is_some() {
+                continue;
+            }
+
+            let rel_id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'mentions', '{}', 1, ?4, ?5)",
+                libsql::params![rel_id, source_id.clone().to_string(), target_id.clone().to_string(), now.clone(), now.clone()],
+            ).await.context("Failed to insert mention")?;
+            created += 1;
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit bulk mentions")?;
+
+        tracing::debug!(
+            "bulk_create_mentions: {} mentions in {:?}",
+            created,
+            start.elapsed()
+        );
+
+        Ok(created)
+    }
+
+    pub async fn create_stale_embedding_marker(&self, node_id: &str) -> Result<()> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        // Unit vector [1, 0, 0, ...] as 768×f32 LE bytes
+        let mut vector_bytes = vec![0u8; 768 * 4];
+        vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
+
+        self.db.execute(
+            "INSERT OR IGNORE INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, 768, 'nomic-embed-text-v1.5', 0, 0, NULL, 1, NULL, NULL, 1, 0, NULL, ?4, ?5)",
+            libsql::params![id, node_id.to_string(), vector_bytes, now.clone(), now],
+        ).await.context("Failed to create stale embedding marker")?;
+        Ok(())
+    }
+
+    pub async fn create_stale_embedding_markers_bulk(&self, node_ids: &[String]) -> Result<usize> {
+        if node_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let start = std::time::Instant::now();
+        let now = Utc::now().to_rfc3339();
+        let mut vector_bytes = vec![0u8; 768 * 4];
+        vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
+
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin markers transaction")?;
+        for node_id in node_ids {
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT OR IGNORE INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, 768, 'nomic-embed-text-v1.5', 0, 0, NULL, 1, NULL, NULL, 1, 0, NULL, ?4, ?5)",
+                libsql::params![id, node_id.clone(), vector_bytes.clone(), now.clone(), now.clone()],
+            ).await.context("Failed to insert stale embedding marker")?;
+        }
+        tx.commit()
+            .await
+            .context("Failed to commit markers transaction")?;
+
+        tracing::debug!(
+            "create_stale_embedding_markers_bulk: {} markers in {:?}",
+            node_ids.len(),
+            start.elapsed()
+        );
+
+        Ok(node_ids.len())
+    }
+
+    pub async fn check_relationship_exists(&self, source_id: &str, rel_type: &str) -> Result<i64> {
+        let mut rows = self.db.query(
+            "SELECT COUNT(*) as cnt FROM relationship WHERE in_node = ?1 AND relationship_type = ?2",
+            libsql::params![source_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to check relationship existence")?;
+        let row = rows
+            .next()
+            .await
+            .context("No row returned")?
+            .ok_or_else(|| anyhow::anyhow!("Empty result for relationship count"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
+    }
+
+    pub async fn relationship_exists(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<bool> {
+        let mut rows = self.db.query(
+            "SELECT 1 FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to check relationship existence")?;
+        Ok(rows.next().await?.is_some())
+    }
+
+    pub async fn create_generic_relationship(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+        properties: &serde_json::Value,
+    ) -> Result<String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
+        self.db.execute(
+            "INSERT OR IGNORE INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
+            libsql::params![rel_id.clone(), source_id.to_string(), target_id.to_string(), rel_type.to_string(), props_json, now.clone(), now],
+        ).await.context("Failed to create generic relationship")?;
+        Ok(rel_id)
+    }
+
+    pub async fn get_relationship_id(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<Option<String>> {
+        let mut rows = self.db.query(
+            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to get relationship ID")?;
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row.get::<String>(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn delete_generic_relationship(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<()> {
+        self.db.execute(
+            "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to delete relationship")?;
+        Ok(())
+    }
+
+    pub async fn get_nodes_by_relationship(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<Vec<Node>> {
+        let sql = match direction {
+            "out" => "SELECT n.* FROM node n JOIN relationship r ON r.out_node = n.id WHERE r.in_node = ?1 AND r.relationship_type = ?2",
+            "in" => "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = ?2",
+            _ => return Err(anyhow::anyhow!("Invalid direction: {}", direction)),
+        };
+        let mut rows = self
+            .db
+            .query(
+                sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to get related nodes")?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+        Ok(nodes)
+    }
+
+    pub async fn count_nodes_by_type(&self, node_type: &str) -> Result<i64> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT COUNT(*) FROM node WHERE node_type = ?1",
+                libsql::params![node_type.to_string()],
+            )
+            .await
+            .context("Failed to count nodes by type")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No result for count"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
+    }
+
+    pub async fn get_relationship_orders(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<Vec<Option<f64>>> {
+        let filter_col = if direction == "in_node" {
+            "in_node"
+        } else {
+            "out_node"
+        };
+        let sql = format!(
+            "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE {} = ?1 AND relationship_type = ?2 ORDER BY json_extract(properties, '$.order') ASC",
+            filter_col
+        );
+        let mut rows = self
+            .db
+            .query(
+                &sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to get relationship orders")?;
+        let mut orders = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let order: Option<f64> = row.get(0).ok();
+            orders.push(order);
+        }
+        Ok(orders)
+    }
+
+    pub async fn get_relationship_count(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<usize> {
+        let filter_col = if direction == "in_node" {
+            "in_node"
+        } else {
+            "out_node"
+        };
+        let sql = format!(
+            "SELECT COUNT(*) FROM relationship WHERE {} = ?1 AND relationship_type = ?2",
+            filter_col
+        );
+        let mut rows = self
+            .db
+            .query(
+                &sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to count relationships")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No count result"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0) as usize)
+    }
+
+    pub async fn query_node_ids_raw(&self, sql: &str) -> Result<Vec<String>> {
+        let mut rows = self
+            .db
+            .query(sql, ())
+            .await
+            .context("Failed to execute node query")?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            if let Ok(id) = row.get::<String>(0) {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) * (*y as f64))
+        .sum();
+    let mag_a: f64 = a
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
+    let mag_b: f64 = b
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
+    if mag_a == 0.0 || mag_b == 0.0 {
+        return 0.0;
+    }
+    dot / (mag_a * mag_b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn create_test_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        use crate::services::NodeService;
+
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let mut store_arc = Arc::new(SqliteStore::new(db_path).await?);
+
+        let _ = NodeService::new(&mut store_arc)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize NodeService: {}", e))?;
+
+        Ok((store_arc, temp_dir))
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_node() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        let node = Node::new("text".to_string(), "Test content".to_string(), json!({}));
+        let created = store.create_node(node.clone(), None, None).await?;
+        assert_eq!(created.id, node.id);
+        assert_eq!(created.content, "Test content");
+
+        let fetched = store.get_node(&node.id).await?;
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().id, node.id);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_file_format() -> Result<()> {
+        // Phase 1 acceptance criterion: verify the file is a valid SQLite file
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test_node.db");
+
+        let store = SqliteStore::new(db_path.clone()).await?;
+
+        let node = Node::new("text".to_string(), "Hello SQLite".to_string(), json!({}));
+        store.create_node(node, None, None).await?;
+
+        // Verify file exists and starts with SQLite magic bytes
+        let file_bytes = std::fs::read(&db_path)?;
+        assert!(file_bytes.len() > 16, "DB file too small");
+        assert_eq!(
+            &file_bytes[0..16],
+            b"SQLite format 3\0",
+            "Not a valid SQLite file"
+        );
+
+        Ok(())
+    }
+}

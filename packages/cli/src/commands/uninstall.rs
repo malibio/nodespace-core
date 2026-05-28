@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Args, Debug)]
@@ -22,7 +22,7 @@ fn read_yn_prompt() -> bool {
     trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")
 }
 
-pub async fn run(_args: UninstallArgs) -> Result<()> {
+pub fn run(_args: UninstallArgs) -> Result<()> {
     stop_daemon();
 
     let home = home_dir()?;
@@ -75,22 +75,22 @@ fn stop_daemon() {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn stop_daemon() {}
 
-fn remove_bin_dir(home: &PathBuf) {
+fn remove_bin_dir(home: &Path) {
     let bin_dir = home.join(".nodespace").join("bin");
     let _ = fs::remove_dir_all(&bin_dir);
 }
 
-fn remove_sock(home: &PathBuf) {
+fn remove_sock(home: &Path) {
     let sock = home.join(".nodespace").join("daemon.sock");
     let _ = fs::remove_file(&sock);
 }
 
-fn remove_claude_skill(home: &PathBuf) {
+fn remove_claude_skill(home: &Path) {
     let skill_dir = home.join(".claude").join("skills").join("nodespace");
     let _ = fs::remove_dir_all(&skill_dir);
 }
 
-fn prompt_remove_mcp(home: &PathBuf) -> Result<()> {
+fn prompt_remove_mcp(home: &Path) -> Result<()> {
     print!("Remove MCP entry from Claude Desktop config? [Y/n] ");
     io::stdout().flush().context("flush stdout")?;
 
