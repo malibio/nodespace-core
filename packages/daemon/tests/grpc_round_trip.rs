@@ -601,7 +601,10 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
 
     let nodes = children.nodes;
     assert_eq!(nodes.len(), 2, "parent should have 2 children");
-    assert_eq!(nodes[0].content, "Child B", "Beginning: Child B should be first");
+    assert_eq!(
+        nodes[0].content, "Child B",
+        "Beginning: Child B should be first"
+    );
     assert_eq!(nodes[1].content, "Child A", "End: Child A should be second");
 
     // Now reorder Child A to Beginning via ReorderNode
@@ -623,8 +626,14 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
         .into_inner();
 
     let nodes2 = children2.nodes;
-    assert_eq!(nodes2[0].content, "Child A", "After reorder, Child A should be first");
-    assert_eq!(nodes2[1].content, "Child B", "After reorder, Child B should be second");
+    assert_eq!(
+        nodes2[0].content, "Child A",
+        "After reorder, Child A should be first"
+    );
+    assert_eq!(
+        nodes2[1].content, "Child B",
+        "After reorder, Child B should be second"
+    );
 
     // Reorder Child B to After(Child A) — B should end up second again
     client

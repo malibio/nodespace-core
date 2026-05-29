@@ -3,9 +3,12 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
-    CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, UpdateNodeRequest,
+    CreateNodeRequest, DeleteNodeRequest, ExportMarkdownRequest, GetChildrenRequest,
+    GetNodeRequest, GetNodesBatchRequest, QueryNodesSimpleRequest, UpdateNodeRequest,
+    UpdateNodesBatchRequest,
 };
 use nodespace_daemon::NodeServiceClient;
+use serde_json::json;
 use tonic::transport::Channel;
 
 use crate::output;
@@ -22,6 +25,16 @@ pub enum NodeAction {
     Delete(DeleteArgs),
     /// List the direct children of a node.
     Children(ChildrenArgs),
+    /// Query nodes with structured filters.
+    Query(QueryArgs),
+    /// Export a node and its subtree as markdown.
+    Export(ExportArgs),
+    /// Fetch multiple nodes in one request.
+    #[command(name = "batch-get")]
+    BatchGet(BatchGetArgs),
+    /// Update multiple nodes in one request (OCC-aware).
+    #[command(name = "batch-update")]
+    BatchUpdate(BatchUpdateArgs),
 }
 
 #[derive(Args, Debug)]
@@ -64,6 +77,61 @@ pub struct ChildrenArgs {
     pub id: String,
 }
 
+#[derive(Args, Debug)]
+pub struct QueryArgs {
+    /// Filter by exact node ID.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// Filter nodes that mention this node ID.
+    #[arg(long)]
+    pub mentioned_by: Option<String>,
+    /// Filter by substring in content.
+    #[arg(long)]
+    pub content_contains: Option<String>,
+    /// Filter by substring in title.
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Filter by node type (e.g. `text`, `task`).
+    #[arg(long = "type")]
+    pub node_type: Option<String>,
+    /// Maximum number of results (0 = server default).
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..))]
+    pub limit: u32,
+    /// Result offset for pagination.
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..))]
+    pub offset: u32,
+}
+
+#[derive(Args, Debug)]
+pub struct ExportArgs {
+    /// Node ID to export.
+    pub id: String,
+    /// Include children recursively (default: true).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub children: bool,
+    /// Maximum recursion depth (0 = server default of 20).
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..))]
+    pub max_depth: u32,
+    /// Embed HTML comments with node IDs for OCC (default: true).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub node_ids: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct BatchGetArgs {
+    /// Node IDs to fetch (repeatable: --id <id1> --id <id2>).
+    #[arg(long = "id", required = true)]
+    pub ids: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct BatchUpdateArgs {
+    /// JSON-encoded array of update objects: [{"node_id":"…","content":"…","version":N}].
+    /// Each item may have: node_id (required), version (optional), content, node_type, properties.
+    #[arg(long)]
+    pub updates: String,
+}
+
 pub async fn run(
     client: &mut NodeServiceClient<Channel>,
     action: NodeAction,
@@ -75,6 +143,10 @@ pub async fn run(
         NodeAction::Update(args) => update(client, args, json).await,
         NodeAction::Delete(args) => delete(client, args, json).await,
         NodeAction::Children(args) => children(client, args, json).await,
+        NodeAction::Query(args) => query(client, args, json).await,
+        NodeAction::Export(args) => export(client, args, json).await,
+        NodeAction::BatchGet(args) => batch_get(client, args, json).await,
+        NodeAction::BatchUpdate(args) => batch_update(client, args, json).await,
     }
 }
 
@@ -166,4 +238,152 @@ async fn children(
         .into_inner();
 
     output::print_node_list(&response, json)
+}
+
+async fn query(client: &mut NodeServiceClient<Channel>, args: QueryArgs, json: bool) -> Result<()> {
+    let response = client
+        .query_nodes_simple(QueryNodesSimpleRequest {
+            id: args.id,
+            mentioned_by: args.mentioned_by,
+            content_contains: args.content_contains,
+            title_contains: args.title_contains,
+            node_type: args.node_type,
+            limit: args.limit,
+            offset: args.offset,
+        })
+        .await
+        .context("QueryNodesSimple RPC failed")?
+        .into_inner();
+
+    output::print_node_list(&response, json)
+}
+
+async fn export(
+    client: &mut NodeServiceClient<Channel>,
+    args: ExportArgs,
+    json: bool,
+) -> Result<()> {
+    let response = client
+        .export_markdown(ExportMarkdownRequest {
+            node_id: args.id,
+            include_children: Some(args.children),
+            max_depth: args.max_depth,
+            include_node_ids: Some(args.node_ids),
+        })
+        .await
+        .context("ExportMarkdown RPC failed")?
+        .into_inner();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "markdown": response.markdown,
+                "node_count": response.node_count,
+            }))?
+        );
+    } else {
+        print!("{}", response.markdown);
+    }
+    Ok(())
+}
+
+async fn batch_get(
+    client: &mut NodeServiceClient<Channel>,
+    args: BatchGetArgs,
+    json: bool,
+) -> Result<()> {
+    let response = client
+        .get_nodes_batch(GetNodesBatchRequest { node_ids: args.ids })
+        .await
+        .context("GetNodesBatch RPC failed")?
+        .into_inner();
+
+    if json {
+        let nodes: Vec<_> = response.nodes.iter().map(output::node_to_json).collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "count": response.count,
+                "nodes": nodes,
+                "not_found": response.not_found,
+            }))?
+        );
+    } else {
+        println!(
+            "{} found, {} not found:",
+            response.count,
+            response.not_found.len()
+        );
+        for node in &response.nodes {
+            println!();
+            crate::output::print_node(node, false)?;
+        }
+        if !response.not_found.is_empty() {
+            println!("\nNot found:");
+            for id in &response.not_found {
+                println!("  {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn batch_update(
+    client: &mut NodeServiceClient<Channel>,
+    args: BatchUpdateArgs,
+    json: bool,
+) -> Result<()> {
+    use nodespace_daemon::nodespace::BatchUpdateItem;
+
+    let raw: serde_json::Value = serde_json::from_str(&args.updates)
+        .context("--updates must be a JSON array of update objects")?;
+    let arr = raw.as_array().context("--updates must be a JSON array")?;
+
+    let mut updates: Vec<BatchUpdateItem> = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        let node_id = item["node_id"]
+            .as_str()
+            .with_context(|| format!("updates[{i}] missing string field 'node_id'"))?
+            .to_string();
+        updates.push(BatchUpdateItem {
+            node_id,
+            version: item["version"].as_i64(),
+            content: item["content"].as_str().map(str::to_string),
+            node_type: item["node_type"].as_str().map(str::to_string),
+            properties: item
+                .get("properties")
+                .filter(|v| !v.is_null())
+                .map(|v| v.to_string()),
+        });
+    }
+
+    let response = client
+        .update_nodes_batch(UpdateNodesBatchRequest { updates })
+        .await
+        .context("UpdateNodesBatch RPC failed")?
+        .into_inner();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "count": response.count,
+                "updated": response.updated,
+                "failed": response.failed.iter().map(|f| json!({
+                    "node_id": f.node_id,
+                    "error": f.error,
+                })).collect::<Vec<_>>(),
+            }))?
+        );
+    } else {
+        println!("{} node(s) updated", response.count);
+        if !response.failed.is_empty() {
+            println!("{} failed:", response.failed.len());
+            for f in &response.failed {
+                println!("  {}: {}", f.node_id, f.error);
+            }
+        }
+    }
+    Ok(())
 }
