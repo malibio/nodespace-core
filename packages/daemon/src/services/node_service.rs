@@ -21,8 +21,8 @@ use nodespace_core::ops::{
     OpsError,
 };
 use nodespace_core::services::{
-    CollectionService, CreateNodeParams, InsertPosition, InsertPositionOwned, NodeEmbeddingService,
-    NodeService as CoreNodeService, NodeServiceError,
+    CollectionService, CreateNodeParams, InsertPosition, InsertPositionOwned, NodeAccessor,
+    NodeEmbeddingService, NodeService as CoreNodeService, NodeServiceError,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::ReceiverStream;
@@ -30,20 +30,22 @@ use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
     node_event::Event as NodeEventKind, node_service_server::NodeService as GrpcNodeService,
-    AddNodeToCollectionByPathRequest, AddNodeToCollectionRequest, ChatRequest, ChatResponse,
-    CollectionIdResponse, CollectionIdsResponse, CollectionInfo, CollectionListResponse,
-    CollectionMembersRequest, CreateCollectionRequest, CreateMentionRequest, CreateNodeRequest,
-    DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse, Empty,
+    AddNodeToCollectionByPathRequest, AddNodeToCollectionRequest, BatchUpdateFailure, ChatRequest,
+    ChatResponse, CollectionIdResponse, CollectionIdsResponse, CollectionInfo,
+    CollectionListResponse, CollectionMembersRequest, CreateCollectionRequest,
+    CreateMentionRequest, CreateNodeRequest, DeleteCollectionRequest, DeleteMentionRequest,
+    DeleteNodeRequest, DeleteNodeResponse, Empty, ExportMarkdownRequest, ExportMarkdownResponse,
     FindCollectionByPathRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRequest,
-    GetRootsRequest, GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
-    MentionResponse, MentionTargetRequest, MoveNodeRequest, NodeCollectionsRequest, NodeData,
-    NodeDeleted, NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse,
-    NodeResponse, NodeTreeResponse, OptionalNodeResponse, OptionalStringClear,
-    OptionalTimestampClear, QueryNodesSimpleRequest, RelationshipDeletedPayload,
-    RelationshipPayload, RemoveNodeFromCollectionRequest, RenameCollectionRequest,
-    ReorderNodeRequest, ReorderNodeResponse, SearchRequest, UpdateNodeRequest,
-    UpdateTaskNodeRequest, UpsertNodeWithParentRequest, WatchRequest,
+    GetNodesBatchRequest, GetNodesBatchResponse, GetRootsRequest, GetSchemaDefinitionRequest,
+    MentionAutocompleteRequest, MentionIdsResponse, MentionResponse, MentionTargetRequest,
+    MoveNodeRequest, NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse,
+    NodeReference, NodeReferenceListResponse, NodeResponse, NodeTreeResponse, OptionalNodeResponse,
+    OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
+    RelationshipDeletedPayload, RelationshipPayload, RemoveNodeFromCollectionRequest,
+    RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SearchRequest,
+    UpdateNodeRequest, UpdateNodesBatchRequest, UpdateNodesBatchResponse, UpdateTaskNodeRequest,
+    UpsertNodeWithParentRequest, WatchRequest,
 };
 
 /// gRPC adapter that owns shared handles to the core services.
@@ -697,6 +699,187 @@ impl GrpcNodeService for NodeServiceImpl {
             parent_id: String::new(),
             collection_id: String::new(),
             node_data: Some(node_to_proto(node, None, None)),
+        }))
+    }
+
+    // -- Markdown export -----------------------------------------------------
+
+    async fn export_markdown(
+        &self,
+        request: Request<ExportMarkdownRequest>,
+    ) -> Result<Response<ExportMarkdownResponse>, Status> {
+        let req = request.into_inner();
+
+        use serde_json::json;
+        let params = json!({
+            "node_id": req.node_id,
+            "include_children": req.include_children.unwrap_or(true),
+            "max_depth": if req.max_depth == 0 { 20u32 } else { req.max_depth },
+            "include_node_ids": req.include_node_ids.unwrap_or(true),
+        });
+
+        let result =
+            nodespace_core::markdown::handle_get_markdown_from_node_id(&self.node_service, params)
+                .await
+                .map_err(|e| match e {
+                    nodespace_core::markdown::MarkdownError::NotFound(m) => Status::not_found(m),
+                    nodespace_core::markdown::MarkdownError::InvalidParams(m) => {
+                        Status::invalid_argument(m)
+                    }
+                    other => Status::internal(format!("ExportMarkdown failed: {other}")),
+                })?;
+
+        let markdown = result["markdown"]
+            .as_str()
+            .ok_or_else(|| Status::internal("ExportMarkdown: missing 'markdown' in response"))?
+            .to_string();
+        let node_count = result["node_count"]
+            .as_u64()
+            .ok_or_else(|| Status::internal("ExportMarkdown: missing 'node_count' in response"))?
+            as u32;
+
+        Ok(Response::new(ExportMarkdownResponse {
+            markdown,
+            node_count,
+        }))
+    }
+
+    // -- Batch operations ----------------------------------------------------
+
+    async fn get_nodes_batch(
+        &self,
+        request: Request<GetNodesBatchRequest>,
+    ) -> Result<Response<GetNodesBatchResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.node_ids.is_empty() {
+            return Err(Status::invalid_argument("node_ids cannot be empty"));
+        }
+        if req.node_ids.len() > 100 {
+            return Err(Status::invalid_argument(format!(
+                "Batch size exceeds maximum of 100 (got {})",
+                req.node_ids.len()
+            )));
+        }
+
+        let id_refs: Vec<&str> = req.node_ids.iter().map(String::as_str).collect();
+        let fetched = self
+            .node_service
+            .get_nodes(&id_refs)
+            .await
+            .map_err(|e| Status::internal(format!("get_nodes_batch failed: {e}")))?;
+
+        let fetched_ids: std::collections::HashSet<String> =
+            fetched.iter().map(|n| n.id.clone()).collect();
+        let not_found: Vec<String> = req
+            .node_ids
+            .iter()
+            .filter(|id| !fetched_ids.contains(*id))
+            .cloned()
+            .collect();
+
+        let nodes: Vec<NodeData> = fetched
+            .into_iter()
+            .map(|n| node_to_proto(n, None, None))
+            .collect();
+        let count = nodes.len() as i32;
+
+        Ok(Response::new(GetNodesBatchResponse {
+            nodes,
+            not_found,
+            count,
+        }))
+    }
+
+    async fn update_nodes_batch(
+        &self,
+        request: Request<UpdateNodesBatchRequest>,
+    ) -> Result<Response<UpdateNodesBatchResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.updates.is_empty() {
+            return Err(Status::invalid_argument("updates cannot be empty"));
+        }
+        if req.updates.len() > 100 {
+            return Err(Status::invalid_argument(format!(
+                "Batch size exceeds maximum of 100 (got {})",
+                req.updates.len()
+            )));
+        }
+
+        let mut updated = Vec::new();
+        let mut failed = Vec::new();
+
+        for item in req.updates {
+            let version = match item.version {
+                Some(v) => v,
+                None => {
+                    tracing::warn!(
+                        node_id = %item.node_id,
+                        "OCC bypassed: version not provided for batch update (race condition possible)"
+                    );
+                    match self.node_service.get_node(&item.node_id).await {
+                        Ok(Some(node)) => node.version,
+                        Ok(None) => {
+                            failed.push(BatchUpdateFailure {
+                                node_id: item.node_id.clone(),
+                                error: format!("Node '{}' not found", item.node_id),
+                            });
+                            continue;
+                        }
+                        Err(e) => {
+                            failed.push(BatchUpdateFailure {
+                                node_id: item.node_id.clone(),
+                                error: e.to_string(),
+                            });
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            let props = match item.properties {
+                Some(ref s) => match parse_properties(s) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        failed.push(BatchUpdateFailure {
+                            node_id: item.node_id.clone(),
+                            error: format!("invalid properties JSON: {e}"),
+                        });
+                        continue;
+                    }
+                },
+                None => None,
+            };
+
+            let node_update = NodeUpdate {
+                content: item.content,
+                node_type: item.node_type,
+                properties: props,
+                title: None,
+                lifecycle_status: None,
+            };
+
+            match self
+                .node_service
+                .update_node(&item.node_id, version, node_update)
+                .await
+            {
+                Ok(_) => updated.push(item.node_id),
+                Err(e) => {
+                    failed.push(BatchUpdateFailure {
+                        node_id: item.node_id,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+
+        let count = updated.len() as i32;
+        Ok(Response::new(UpdateNodesBatchResponse {
+            updated,
+            failed,
+            count,
         }))
     }
 

@@ -1,6 +1,8 @@
 pub mod diagnostics;
 pub mod import;
+pub mod mention;
 pub mod node;
+pub mod schema;
 pub mod search;
 pub mod session;
 pub mod uninstall;
