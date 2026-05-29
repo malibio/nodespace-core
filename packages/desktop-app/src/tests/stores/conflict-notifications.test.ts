@@ -83,9 +83,22 @@ describe('conflictNotifications', () => {
       conflictType: 'concurrent-edit'
     });
 
-    // Should not throw
     conflictNotifications.dismiss('nonexistent-id');
 
     expect(conflictNotifications.notifications).toHaveLength(1);
+  });
+
+  it('caps notifications at 10 and drops the oldest on overflow', () => {
+    for (let i = 0; i < 10; i++) {
+      conflictNotifications.add({ nodeId: `node-${i}`, message: 'msg', conflictType: 'concurrent-edit' });
+    }
+    expect(conflictNotifications.notifications).toHaveLength(10);
+    expect(conflictNotifications.notifications[0].nodeId).toBe('node-0');
+
+    conflictNotifications.add({ nodeId: 'node-overflow', message: 'msg', conflictType: 'concurrent-edit' });
+
+    expect(conflictNotifications.notifications).toHaveLength(10);
+    expect(conflictNotifications.notifications[0].nodeId).toBe('node-1');
+    expect(conflictNotifications.notifications[9].nodeId).toBe('node-overflow');
   });
 });

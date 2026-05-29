@@ -25,6 +25,13 @@
   }
 
   $effect(() => {
+    const activeIds = new Set(conflictNotifications.notifications.map((n) => n.id));
+    for (const [id, t] of timers) {
+      if (!activeIds.has(id)) {
+        clearTimeout(t);
+        timers.delete(id);
+      }
+    }
     for (const n of conflictNotifications.notifications) {
       scheduleAutoDismiss(n.id);
     }
@@ -44,7 +51,7 @@
   <div class="conflict-toast-container" aria-live="polite" aria-label="Conflict notifications">
     {#each conflictNotifications.notifications as notification (notification.id)}
       <div class="conflict-toast" role="status">
-        <span class="conflict-toast-icon" aria-hidden="true">⚠</span>
+        <span class="conflict-toast-icon" aria-hidden="true">⚠️</span>
         <span class="conflict-toast-message">{notification.message}</span>
         <button
           class="conflict-toast-dismiss"
@@ -93,6 +100,12 @@
     to {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .conflict-toast {
+      animation: none;
     }
   }
 

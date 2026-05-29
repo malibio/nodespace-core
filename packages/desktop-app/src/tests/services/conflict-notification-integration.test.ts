@@ -128,8 +128,7 @@ describe('SharedNodeStore → conflictNotifications', () => {
 
     const metricsAfter = store.getMetrics();
 
-    if (conflictNotifications.notifications.length > 0) {
-      expect(metricsAfter.conflictCount).toBeGreaterThan(metricsBefore.conflictCount);
-    }
+    expect(conflictNotifications.notifications.length).toBeGreaterThanOrEqual(1);
+    expect(metricsAfter.conflictCount).toBeGreaterThan(metricsBefore.conflictCount);
   });
 });
