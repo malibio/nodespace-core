@@ -37,7 +37,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Operate on individual nodes (get, create, update, delete, children).
+    /// Operate on individual nodes (get, create, update, delete, children, query, export, batch-get, batch-update).
     Node {
         #[command(subcommand)]
         action: commands::node::NodeAction,
@@ -50,6 +50,16 @@ pub enum Command {
     Import {
         #[command(subcommand)]
         action: commands::import::ImportAction,
+    },
+    /// Manage mention relationships between nodes.
+    Mention {
+        #[command(subcommand)]
+        action: commands::mention::MentionAction,
+    },
+    /// Inspect node type schema definitions.
+    Schema {
+        #[command(subcommand)]
+        action: commands::schema::SchemaAction,
     },
     /// Manage PTY agent sessions (launch, attach, list, kill).
     Session {
@@ -161,6 +171,14 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Import { action } => {
             let mut client = connect_import(&sock).await?;
             commands::import::run(&mut client, action, json).await
+        }
+        Command::Mention { action } => {
+            let mut client = connect(&sock).await?;
+            commands::mention::run(&mut client, action, json).await
+        }
+        Command::Schema { action } => {
+            let mut client = connect(&sock).await?;
+            commands::schema::run(&mut client, action, json).await
         }
         Command::Session { action } => {
             let mut client = connect_session(&sock).await?;

@@ -41,6 +41,13 @@ service NodeService {
   // Roots
   rpc GetRoots(GetRootsRequest) returns (NodeListResponse);
 
+  // Markdown export
+  rpc ExportMarkdown(ExportMarkdownRequest) returns (ExportMarkdownResponse);
+
+  // Batch operations (OCC-aware)
+  rpc GetNodesBatch(GetNodesBatchRequest) returns (GetNodesBatchResponse);
+  rpc UpdateNodesBatch(UpdateNodesBatchRequest) returns (UpdateNodesBatchResponse);
+
   // Schemas (read-only)
   rpc GetAllSchemas(GetAllSchemasRequest) returns (NodeListResponse);
   rpc GetSchemaDefinition(GetSchemaDefinitionRequest) returns (NodeResponse);
@@ -579,6 +586,72 @@ message RenameCollectionRequest {
 message DeleteCollectionRequest {
   string collection_id = 1;
   int64 version = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ExportMarkdown
+// ---------------------------------------------------------------------------
+
+message ExportMarkdownRequest {
+  string node_id = 1;
+  // Whether to include children recursively (default: true when unset).
+  // Use optional so callers can distinguish "use default" from "false".
+  optional bool include_children = 2;
+  // Maximum recursion depth; 0 = use server default (20).
+  uint32 max_depth = 3;
+  // When true, embed HTML comments with node IDs and versions in the output.
+  // Default true when unset — useful for AI agents that need OCC tokens.
+  optional bool include_node_ids = 4;
+}
+
+message ExportMarkdownResponse {
+  // The rendered markdown string.
+  string markdown = 1;
+  // Number of nodes included in the export.
+  uint32 node_count = 2;
+}
+
+// ---------------------------------------------------------------------------
+// GetNodesBatch / UpdateNodesBatch
+// ---------------------------------------------------------------------------
+
+message GetNodesBatchRequest {
+  repeated string node_ids = 1;
+}
+
+message GetNodesBatchResponse {
+  repeated NodeData nodes = 1;
+  // IDs that were not found (missing or deleted).
+  repeated string not_found = 2;
+  int32 count = 3;
+}
+
+// A single update within a batch request.
+message BatchUpdateItem {
+  string node_id = 1;
+  // version unset = auto-fetch (bypasses OCC; see UpdateNodeRequest.version).
+  optional int64 version = 2;
+  optional string content = 3;
+  optional string node_type = 4;
+  // JSON-encoded properties patch; unset = no change.
+  optional string properties = 5;
+}
+
+message BatchUpdateFailure {
+  string node_id = 1;
+  string error = 2;
+}
+
+message UpdateNodesBatchRequest {
+  repeated BatchUpdateItem updates = 1;
+}
+
+message UpdateNodesBatchResponse {
+  // IDs that were successfully updated.
+  repeated string updated = 1;
+  repeated BatchUpdateFailure failed = 2;
+  int32 count = 3;
 }
 
 // ---------------------------------------------------------------------------

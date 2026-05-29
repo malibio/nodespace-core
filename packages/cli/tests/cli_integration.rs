@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use nodespace_cli::{commands, connect};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
-use nodespace_daemon::nodespace::GetNodeRequest;
+use nodespace_daemon::nodespace::{CreateNodeRequest, GetNodeRequest};
 use nodespace_daemon::{NodeServiceImpl, NodeServiceServer};
 use tempfile::TempDir;
 use tokio::net::UnixListener;
@@ -333,4 +333,274 @@ async fn connect_refused_returns_friendly_error() {
         msg.contains("Is the daemon running?"),
         "expected remediation hint, got: {msg}"
     );
+}
+
+#[tokio::test]
+async fn node_query_by_type() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock).await.expect("connect");
+    let mut raw = connect(&sock).await.expect("raw connect");
+
+    raw.create_node(CreateNodeRequest {
+        node_type: "task".into(),
+        content: "do the thing".into(),
+        parent_id: String::new(),
+        properties: String::new(),
+        collection: String::new(),
+        lifecycle_status: String::new(),
+        id: String::new(),
+        insert_after_node_id: String::new(),
+    })
+    .await
+    .expect("seed task");
+
+    raw.create_node(CreateNodeRequest {
+        node_type: "text".into(),
+        content: "some text".into(),
+        parent_id: String::new(),
+        properties: String::new(),
+        collection: String::new(),
+        lifecycle_status: String::new(),
+        id: String::new(),
+        insert_after_node_id: String::new(),
+    })
+    .await
+    .expect("seed text");
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Query(commands::node::QueryArgs {
+            id: None,
+            mentioned_by: None,
+            content_contains: None,
+            title_contains: None,
+            node_type: Some("task".into()),
+            limit: 0,
+            offset: 0,
+        }),
+        true,
+    )
+    .await
+    .expect("query by type");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn node_export_markdown() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock).await.expect("connect");
+    let mut raw = connect(&sock).await.expect("raw connect");
+
+    let root = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "# Root Document".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
+        })
+        .await
+        .expect("seed root")
+        .into_inner();
+
+    raw.create_node(CreateNodeRequest {
+        node_type: "text".into(),
+        content: "Child paragraph".into(),
+        parent_id: root.node_id.clone(),
+        properties: String::new(),
+        collection: String::new(),
+        lifecycle_status: String::new(),
+        id: String::new(),
+        insert_after_node_id: String::new(),
+    })
+    .await
+    .expect("seed child");
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Export(commands::node::ExportArgs {
+            id: root.node_id.clone(),
+            children: true,
+            max_depth: 0,
+            node_ids: false,
+        }),
+        true,
+    )
+    .await
+    .expect("export markdown");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn node_batch_get_and_update() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock).await.expect("connect");
+    let mut raw = connect(&sock).await.expect("raw connect");
+
+    let a = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "node-a".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
+        })
+        .await
+        .expect("seed a")
+        .into_inner()
+        .node_id;
+
+    let b = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "node-b".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
+        })
+        .await
+        .expect("seed b")
+        .into_inner()
+        .node_id;
+
+    // batch-get: both found, one missing
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::BatchGet(commands::node::BatchGetArgs {
+            ids: vec![a.clone(), b.clone(), "does-not-exist".into()],
+        }),
+        true,
+    )
+    .await
+    .expect("batch-get");
+
+    // batch-update (auto-version)
+    let updates_json = serde_json::json!([
+        {"node_id": a, "content": "node-a updated"},
+        {"node_id": b, "content": "node-b updated"},
+    ])
+    .to_string();
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::BatchUpdate(commands::node::BatchUpdateArgs {
+            updates: updates_json,
+        }),
+        true,
+    )
+    .await
+    .expect("batch-update");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn mention_create_query_delete() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock).await.expect("connect");
+    let mut raw = connect(&sock).await.expect("raw connect");
+
+    let source = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "source node".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
+        })
+        .await
+        .expect("seed source")
+        .into_inner()
+        .node_id;
+
+    let target = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "target node".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            insert_after_node_id: String::new(),
+        })
+        .await
+        .expect("seed target")
+        .into_inner()
+        .node_id;
+
+    commands::mention::run(
+        &mut client,
+        commands::mention::MentionAction::Create(commands::mention::CreateMentionArgs {
+            from: source.clone(),
+            to: target.clone(),
+        }),
+        true,
+    )
+    .await
+    .expect("create mention");
+
+    commands::mention::run(
+        &mut client,
+        commands::mention::MentionAction::Outgoing(commands::mention::MentionQueryArgs {
+            id: source.clone(),
+        }),
+        true,
+    )
+    .await
+    .expect("outgoing mentions");
+
+    commands::mention::run(
+        &mut client,
+        commands::mention::MentionAction::Incoming(commands::mention::MentionQueryArgs {
+            id: target.clone(),
+        }),
+        true,
+    )
+    .await
+    .expect("incoming mentions");
+
+    commands::mention::run(
+        &mut client,
+        commands::mention::MentionAction::Delete(commands::mention::DeleteMentionArgs {
+            from: source.clone(),
+            to: target.clone(),
+        }),
+        true,
+    )
+    .await
+    .expect("delete mention");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn schema_list_and_get() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock).await.expect("connect");
+
+    // The test daemon has no custom schemas; list should return an empty result without error.
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::List(commands::schema::SchemaListArgs {}),
+        true,
+    )
+    .await
+    .expect("schema list");
+
+    let _ = shutdown.send(());
 }
