@@ -23,7 +23,7 @@ function detectAgents(): AgentName[] {
  */
 export function isNodespaceBinaryOnPath(): boolean {
   try {
-    execFileSync('nodespace', ['--version'], { stdio: 'ignore' });
+    execFileSync('nodespace', ['--version'], { stdio: 'ignore', timeout: 3000 });
     return true;
   } catch {
     return false;

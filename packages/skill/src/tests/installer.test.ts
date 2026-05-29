@@ -182,13 +182,15 @@ describe('uninstall', () => {
 });
 
 describe('isNodespaceBinaryOnPath', () => {
-  it('returns true when nodespace --version exits 0', () => {
-    // nodespace is actually built and on PATH in dev — exercise the real binary.
-    // In CI where the binary is absent this test is skipped via the env guard below.
-    // We verify the function's contract via the "returns false" case (always testable).
-    const result = isNodespaceBinaryOnPath();
-    // The function must return a boolean — value depends on whether the binary is installed.
-    expect(typeof result).toBe('boolean');
+  it('returns true when execFileSync exits 0', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({
+      execFileSync: () => Buffer.from('nodespace 0.1.0\n'),
+    }));
+    const { isNodespaceBinaryOnPath: check } = await import('../installer.js');
+    expect(check()).toBe(true);
+    vi.doUnmock('node:child_process');
+    vi.resetModules();
   });
 
   it('returns false when execFileSync throws (binary not found)', async () => {
