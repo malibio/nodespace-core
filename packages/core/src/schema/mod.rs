@@ -1,4 +1,4 @@
-//! Schema MCP Handlers
+//! Schema creation and updates.
 //!
 //! Provides the `create_schema` tool for creating custom schemas with fields and relationships.
 //! Supports both explicit field/relationship definitions and natural language descriptions
@@ -105,7 +105,7 @@ struct InferredField {
 
 /// Create a custom schema with fields and relationships
 ///
-/// # MCP Tool: create_schema
+/// # Tool: create_schema
 ///
 /// Creates a new schema definition with optional fields and relationships.
 /// Fields can be provided explicitly or inferred from a natural language description.
@@ -331,7 +331,7 @@ pub struct SchemaUpdateOutput {
 
 /// Add a relationship definition to an existing schema
 ///
-/// # MCP Tool: add_schema_relationship
+/// # Tool: add_schema_relationship
 ///
 /// Adds a new relationship type to a schema. This creates the edge table DDL
 /// but doesn't create any actual edges - use `create_relationship` for that.
@@ -399,7 +399,7 @@ pub async fn handle_add_schema_relationship(
 
 /// Remove a relationship definition from a schema (soft-delete)
 ///
-/// # MCP Tool: remove_schema_relationship
+/// # Tool: remove_schema_relationship
 ///
 /// Removes a relationship from the schema definition. The edge table and any
 /// existing edges are preserved (soft-delete) - they're just hidden from the
@@ -472,7 +472,7 @@ pub async fn handle_remove_schema_relationship(
 
 /// Update a schema with multiple changes
 ///
-/// # MCP Tool: update_schema
+/// # Tool: update_schema
 ///
 /// Batch update a schema's fields and relationships. Useful when making
 /// multiple changes at once. For single operations, prefer the specific

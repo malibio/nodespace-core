@@ -845,7 +845,7 @@ impl ParserContext {
     }
 }
 
-/// Handle create_nodes_from_markdown MCP request
+/// Create hierarchical nodes from a markdown document.
 pub async fn handle_create_nodes_from_markdown(
     node_service: &Arc<NodeService>,
     params: Value,
@@ -995,7 +995,7 @@ pub async fn handle_create_nodes_from_markdown(
     }
 
     // Phase 2: Prepare and insert children
-    // Default: Fire-and-forget async for fast MCP response
+    // Default: fire-and-forget async so the caller returns quickly
     // sync_import=true: Wait for completion (for tests only)
     tracing::debug!(
         "create_nodes_from_markdown: starting Phase 2 at {}ms",
@@ -1258,7 +1258,7 @@ pub async fn handle_create_nodes_from_markdown(
 /// Template for creating a typed node hierarchy from markdown content.
 ///
 /// The markdown body is parsed through the same `prepare_nodes_from_markdown`
-/// pipeline used by the bulk-import MCP tool.  After parsing, the caller-
+/// pipeline used by the bulk-import path.  After parsing, the caller-
 /// supplied type overrides and property injections are applied so the result
 /// is ready for insertion via `NodeService`.
 ///
@@ -1624,7 +1624,7 @@ async fn create_node(
 
     node_service
         .create_node_with_parent(CreateNodeParams {
-            id: None, // MCP generates IDs server-side
+            id: None, // IDs are generated server-side
             node_type: node_type.to_string(),
             content: content.to_string(),
             parent_id,
