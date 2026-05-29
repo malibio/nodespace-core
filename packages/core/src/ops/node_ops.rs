@@ -149,7 +149,7 @@ pub async fn create_node(
             node_type: input.node_type,
             content: input.content,
             parent_id: input.parent_id,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: input.properties,
         })
         .await

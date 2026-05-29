@@ -12,8 +12,10 @@ use std::time::Duration;
 
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
-    node_event::Event as NodeEventKind, CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest,
-    GetNodeRequest, SearchRequest, UpdateNodeRequest, WatchRequest,
+    create_node_request::Position as CreatePos, node_event::Event as NodeEventKind,
+    reorder_node_request::Position as ReorderPos, CreateNodeRequest, DeleteNodeRequest,
+    GetChildrenRequest, GetNodeRequest, ReorderNodeRequest, SearchRequest, UpdateNodeRequest,
+    WatchRequest,
 };
 use nodespace_daemon::{NodeServiceClient, NodeServiceImpl, NodeServiceServer};
 use tempfile::TempDir;
@@ -94,7 +96,7 @@ async fn create_then_get_round_trip() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -136,7 +138,7 @@ async fn update_increments_version() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -181,7 +183,7 @@ async fn get_children_returns_parent_subtree() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create parent")
@@ -197,7 +199,7 @@ async fn get_children_returns_parent_subtree() {
                 collection: String::new(),
                 lifecycle_status: String::new(),
                 id: String::new(),
-                insert_after_node_id: String::new(),
+                position: None,
             })
             .await
             .expect("create child");
@@ -248,7 +250,7 @@ async fn delete_node_marks_existed() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -346,7 +348,7 @@ async fn watch_nodes_receives_create_update_delete_events() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -435,7 +437,7 @@ async fn watch_nodes_supports_multiple_concurrent_watchers() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -496,7 +498,7 @@ async fn watch_nodes_closes_when_client_drops_stream() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed");
@@ -525,12 +527,125 @@ async fn create_node_rejects_malformed_properties() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect_err("expected invalid_argument");
 
     assert_eq!(err.code(), Code::InvalidArgument);
+
+    let _ = shutdown.send(());
+}
+
+/// Verify that `position: Beginning` places a second node before the first.
+#[tokio::test]
+async fn test_insert_position_beginning_and_after_proto_decoding() {
+    let (mut client, shutdown, _dir) = spawn_test_daemon().await;
+
+    // Create parent
+    let parent_resp = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "Parent".into(),
+            parent_id: String::new(),
+            properties: "{}".into(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            position: None,
+        })
+        .await
+        .expect("create parent")
+        .into_inner();
+    let parent_id = parent_resp.node_id;
+
+    // Child A — appended via default (End)
+    let child_a_resp = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "Child A".into(),
+            parent_id: parent_id.clone(),
+            properties: "{}".into(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            position: Some(CreatePos::End(true)),
+        })
+        .await
+        .expect("create child A")
+        .into_inner();
+    let child_a_id = child_a_resp.node_id;
+
+    // Child B — inserted at Beginning, should become first
+    client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "Child B".into(),
+            parent_id: parent_id.clone(),
+            properties: "{}".into(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            position: Some(CreatePos::Beginning(true)),
+        })
+        .await
+        .expect("create child B");
+
+    let children = client
+        .get_children(GetChildrenRequest {
+            node_id: parent_id.clone(),
+        })
+        .await
+        .expect("get children")
+        .into_inner();
+
+    let nodes = children.nodes;
+    assert_eq!(nodes.len(), 2, "parent should have 2 children");
+    assert_eq!(nodes[0].content, "Child B", "Beginning: Child B should be first");
+    assert_eq!(nodes[1].content, "Child A", "End: Child A should be second");
+
+    // Now reorder Child A to Beginning via ReorderNode
+    client
+        .reorder_node(ReorderNodeRequest {
+            node_id: child_a_id.clone(),
+            version: 1,
+            position: Some(ReorderPos::Beginning(true)),
+        })
+        .await
+        .expect("reorder child A to beginning");
+
+    let children2 = client
+        .get_children(GetChildrenRequest {
+            node_id: parent_id.clone(),
+        })
+        .await
+        .expect("get children after reorder")
+        .into_inner();
+
+    let nodes2 = children2.nodes;
+    assert_eq!(nodes2[0].content, "Child A", "After reorder, Child A should be first");
+    assert_eq!(nodes2[1].content, "Child B", "After reorder, Child B should be second");
+
+    // Reorder Child B to After(Child A) — B should end up second again
+    client
+        .reorder_node(ReorderNodeRequest {
+            node_id: nodes2[1].id.clone(), // Child B
+            version: 1,
+            position: Some(ReorderPos::After(child_a_id.clone())),
+        })
+        .await
+        .expect("reorder child B after child A");
+
+    let children3 = client
+        .get_children(GetChildrenRequest {
+            node_id: parent_id.clone(),
+        })
+        .await
+        .expect("get children after After reorder")
+        .into_inner();
+
+    assert_eq!(children3.nodes[0].content, "Child A");
+    assert_eq!(children3.nodes[1].content, "Child B");
 
     let _ = shutdown.send(());
 }

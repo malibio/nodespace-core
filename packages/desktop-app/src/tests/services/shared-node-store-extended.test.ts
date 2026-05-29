@@ -333,13 +333,13 @@ describe('SharedNodeStore - Extended Coverage', () => {
   // ========================================================================
 
   describe('setNode - Persistence Coverage', () => {
-    it('should handle new viewer node with insertAfterNodeId dependency', async () => {
+    it('should handle new viewer node with insertPosition dependency', async () => {
       const refNode = { ...mockNode, id: 'ref-node' };
       const newNode = {
         ...mockNode,
         id: 'new-node',
-        insertAfterNodeId: 'ref-node'
-      } as Node & { insertAfterNodeId?: string };
+        insertPosition: { type: 'after', siblingId: 'ref-node' }
+      } as Node & { insertPosition?: { type: string; siblingId?: string } };
 
       store.setNode(refNode, viewerSource);
       await new Promise(resolve => setTimeout(resolve, 10));

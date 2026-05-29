@@ -60,7 +60,7 @@ describe('Tauri Commands Service - API Surface', () => {
         properties: { priority: 'high' },
         mentions: ['user-1', 'user-2'],
         parentId: 'parent-1',
-        insertAfterNodeId: 'sibling-1'
+        insertPosition: { type: 'after', siblingId: 'sibling-1' }
       };
 
       const result = await tauriCommands.createNode(input);
@@ -242,7 +242,7 @@ describe('Tauri Commands Service - API Surface', () => {
     });
 
     it('should handle sibling positioning', async () => {
-      const result = await tauriCommands.moveNode('node-1', 1, 'parent-1', 'sibling-2');
+      const result = await tauriCommands.moveNode('node-1', 1, 'parent-1', { type: 'after', siblingId: 'sibling-2' });
       expect(result).toBeDefined();
     });
 

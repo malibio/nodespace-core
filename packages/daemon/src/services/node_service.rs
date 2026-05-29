@@ -21,8 +21,8 @@ use nodespace_core::ops::{
     OpsError,
 };
 use nodespace_core::services::{
-    CollectionService, CreateNodeParams, NodeEmbeddingService, NodeService as CoreNodeService,
-    NodeServiceError,
+    CollectionService, CreateNodeParams, InsertPosition, InsertPositionOwned, NodeEmbeddingService,
+    NodeService as CoreNodeService, NodeServiceError,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::ReceiverStream;
@@ -80,6 +80,14 @@ impl GrpcNodeService for NodeServiceImpl {
         let collection_path = empty_to_none(req.collection);
         let parent_id_opt = empty_to_none(req.parent_id);
 
+        use crate::nodespace::create_node_request::Position as CreatePos;
+        let position = match req.position {
+            Some(CreatePos::Beginning(_)) => InsertPositionOwned::Beginning,
+            Some(CreatePos::End(_)) => InsertPositionOwned::End,
+            Some(CreatePos::After(id)) => InsertPositionOwned::After(id),
+            None => InsertPositionOwned::End,
+        };
+
         let node_id = self
             .node_service
             .create_node_with_parent(CreateNodeParams {
@@ -87,7 +95,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 node_type: req.node_type,
                 content: req.content,
                 parent_id: parent_id_opt.clone(),
-                insert_after_node_id: empty_to_none(req.insert_after_node_id),
+                position,
                 properties,
             })
             .await
@@ -528,16 +536,18 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
 
         let new_parent = empty_to_none(req.new_parent_id);
-        let insert_after = empty_to_none(req.insert_after_node_id);
+
+        use crate::nodespace::move_node_request::Position as MovePos;
+        let position = match req.position {
+            Some(MovePos::Beginning(_)) => InsertPosition::Beginning,
+            Some(MovePos::End(_)) => InsertPosition::End,
+            Some(MovePos::After(ref id)) => InsertPosition::After(id.as_str()),
+            None => InsertPosition::End,
+        };
 
         let node = self
             .node_service
-            .move_node(
-                &req.node_id,
-                req.version,
-                new_parent.as_deref(),
-                insert_after.as_deref(),
-            )
+            .move_node(&req.node_id, req.version, new_parent.as_deref(), position)
             .await
             .map_err(service_error_to_status)?;
 
@@ -556,10 +566,17 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<ReorderNodeRequest>,
     ) -> Result<Response<ReorderNodeResponse>, Status> {
         let req = request.into_inner();
-        let insert_after = empty_to_none(req.insert_after_node_id);
+
+        use crate::nodespace::reorder_node_request::Position as ReorderPos;
+        let position = match req.position {
+            Some(ReorderPos::Beginning(_)) => InsertPosition::Beginning,
+            Some(ReorderPos::End(_)) => InsertPosition::End,
+            Some(ReorderPos::After(ref id)) => InsertPosition::After(id.as_str()),
+            None => InsertPosition::End,
+        };
 
         self.node_service
-            .reorder_node(&req.node_id, req.version, insert_after.as_deref())
+            .reorder_node(&req.node_id, req.version, position)
             .await
             .map_err(service_error_to_status)?;
 
@@ -971,7 +988,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 node_type: "collection".to_string(),
                 content: req.name,
                 parent_id: None,
-                insert_after_node_id: None,
+                position: InsertPositionOwned::End,
                 properties,
             })
             .await
