@@ -1509,11 +1509,12 @@ impl NodeBehavior for AiChatNodeBehavior {
         // Validate provider if present
         if let Some(provider) = node.properties.get("provider") {
             if let Some(provider_str) = provider.as_str() {
+                // ADR-034: AIChat is one node type with four provider modes.
                 match provider_str {
-                    "native" | "anthropic" | "gemini" | "mistral" => {}
+                    "native" | "ollama" | "openai" | "pty" => {}
                     _ => {
                         return Err(NodeValidationError::InvalidProperties(format!(
-                            "Invalid provider '{}': must be one of native, anthropic, gemini, mistral",
+                            "Invalid provider '{}': must be one of native, ollama, openai, pty",
                             provider_str
                         )));
                     }
@@ -3844,13 +3845,13 @@ mod tests {
         let node = Node::new(
             "ai-chat".to_string(),
             "Chat".to_string(),
-            json!({"provider": "openai"}),
+            json!({"provider": "anthropic"}),
         );
         let err = behavior.validate(&node).unwrap_err();
         match err {
             NodeValidationError::InvalidProperties(msg) => {
                 assert!(msg.contains("Invalid provider"));
-                assert!(msg.contains("openai"));
+                assert!(msg.contains("anthropic"));
             }
             _ => panic!("Expected InvalidProperties error"),
         }
@@ -3894,7 +3895,7 @@ mod tests {
     #[test]
     fn test_ai_chat_node_valid_providers() {
         let behavior = AiChatNodeBehavior;
-        for provider in &["native", "anthropic", "gemini", "mistral"] {
+        for provider in &["native", "ollama", "openai", "pty"] {
             let node = Node::new(
                 "ai-chat".to_string(),
                 "Chat".to_string(),

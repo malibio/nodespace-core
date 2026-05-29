@@ -75,7 +75,12 @@
     sharedNodeStore.updateNode(
       nodeId,
       { properties: { ...current?.properties, provider: p } },
-      { type: 'viewer', viewerId: 'ai-chat-viewer' }
+      { type: 'viewer', viewerId: 'ai-chat-viewer' },
+      // Selecting a provider is an intentional configuration action, like a
+      // nodeType conversion. It fires right after the `/ai-chat` conversion, so
+      // without this the update collides with that still-pending change in the
+      // conflict window and gets silently dropped — leaving the picker inert.
+      { skipConflictDetection: true }
     );
   }
   const status = $derived(
