@@ -9,7 +9,6 @@
 //! - `SchemaTableManager` - DDL generation for schema-defined tables
 //! - `MigrationRegistry` - Schema migration infrastructure (for future use)
 //! - `InboundRelationshipCache` - Fast NLP discovery of inbound relationships
-//! - `McpServerService` - MCP server lifecycle management (Issue #715)
 //! - `QueryService` - Query execution with SQL translation (Issue #440)
 //! - `CollectionService` - Collection path parsing and membership management (Issue #756)
 //!
@@ -26,7 +25,6 @@ pub mod collection_service;
 pub mod embedding_processor;
 pub mod embedding_service;
 pub mod error;
-pub mod mcp_server_service;
 pub mod migration_registry;
 pub mod migrations;
 pub mod node_service;
@@ -144,7 +142,6 @@ pub use collection_service::{
 pub use embedding_processor::{EmbeddingProcessor, EmbeddingWaker};
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
-pub use mcp_server_service::{default_mcp_port, McpResponseCallback, McpServerService};
 pub use migration_registry::{MigrationRegistry, MigrationTransform};
 pub use node_service::{CreateNodeParams, NodeService, SubtreeData, DEFAULT_QUERY_LIMIT};
 pub use query_service::{

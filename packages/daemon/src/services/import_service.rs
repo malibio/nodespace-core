@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use nodespace_core::mcp::handlers::markdown::{
+use nodespace_core::markdown::{
     prepare_nodes_from_markdown, transform_links_in_nodes_with_mentions, PreparedNode,
 };
 use nodespace_core::services::{CollectionService, NodeService as CoreNodeService};

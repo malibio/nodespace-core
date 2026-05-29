@@ -33,15 +33,15 @@
 #[cfg(test)]
 mod collection_membership_tests {
     use anyhow::Result;
-    use nodespace_core::db::SurrealStore;
+    use nodespace_core::db::SqliteStore;
     use nodespace_core::models::Node;
     use serde_json::json;
     use tempfile::TempDir;
 
-    async fn create_test_db() -> Result<(SurrealStore, TempDir)> {
+    async fn create_test_db() -> Result<(SqliteStore, TempDir)> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
-        let store = SurrealStore::new(db_path).await?;
+        let store = SqliteStore::new(db_path).await?;
         Ok((store, temp_dir))
     }
 
@@ -293,22 +293,22 @@ mod collection_membership_tests {
 #[cfg(test)]
 mod collection_service_tests {
     use anyhow::Result;
-    use nodespace_core::db::SurrealStore;
+    use nodespace_core::db::SqliteStore;
     use nodespace_core::services::{CollectionService, NodeService};
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    /// Helper to create test database with SurrealStore and NodeService
+    /// Helper to create test database with SqliteStore and NodeService
     /// Issue #813: CollectionService now requires both store and node_service
-    async fn create_test_services() -> Result<(Arc<SurrealStore>, NodeService, TempDir)> {
+    async fn create_test_services() -> Result<(Arc<SqliteStore>, NodeService, TempDir)> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
-        let mut store = Arc::new(SurrealStore::new(db_path).await?);
+        let mut store = Arc::new(SqliteStore::new(db_path).await?);
         let node_service = NodeService::new(&mut store).await?;
         Ok((store, node_service, temp_dir))
     }
 
-    async fn create_text_node(store: &SurrealStore, id: &str, content: &str) -> Result<()> {
+    async fn create_text_node(store: &SqliteStore, id: &str, content: &str) -> Result<()> {
         use nodespace_core::models::Node;
         store
             .create_node(

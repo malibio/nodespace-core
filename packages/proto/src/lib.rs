@@ -1,7 +1,7 @@
 /// Generated gRPC types for the `nodespace` proto package.
 ///
 /// Contains client/server stubs and all request/response message types.
-/// This crate has no heavy dependencies (no RocksDB, no tray-icon, no tokio features).
+/// This crate has no heavy dependencies (no storage engine, no tray-icon, no tokio features).
 pub mod nodespace {
     #![allow(clippy::all)]
     tonic::include_proto!("nodespace");

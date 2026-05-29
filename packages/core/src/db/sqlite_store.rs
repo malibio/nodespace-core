@@ -615,7 +615,7 @@ impl SqliteStore {
                 node.node_type
             ));
         }
-        // DDL statements are SurrealDB-specific (DEFINE TABLE etc.) — ignore for SQLite
+        // Legacy graph-DB DDL statements (DEFINE TABLE etc.) are not applicable to SQLite — ignore.
         self.create_node(node, source, None).await
     }
 
@@ -626,7 +626,7 @@ impl SqliteStore {
         _ddl_statements: Vec<String>,
         source: Option<String>,
     ) -> Result<Node> {
-        // DDL statements are SurrealDB-specific — ignore for SQLite
+        // Legacy graph-DB DDL statements are not applicable to SQLite — ignore.
         self.update_node(id, update, source).await
     }
 

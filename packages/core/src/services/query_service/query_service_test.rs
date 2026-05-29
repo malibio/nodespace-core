@@ -1,12 +1,12 @@
 //! Integration Tests for QueryService
 //!
-//! These tests validate query execution against a real SurrealDB database,
+//! These tests validate query execution against a real SQLite database,
 //! testing SQL generation and result retrieval for all filter types.
 //! All queries use the unified node table with JSON properties.
 
 #[cfg(test)]
 mod tests {
-    use crate::db::SurrealStore;
+    use crate::db::SqliteStore;
     use crate::services::node_service::{CreateNodeParams, NodeService};
     use crate::services::query_service::{
         FilterOperator, FilterType, QueryDefinition, QueryFilter, QueryService, RelationshipType,
@@ -16,12 +16,12 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    /// Helper to create test services with SurrealDB database
+    /// Helper to create test services with SQLite database
     async fn create_test_services() -> (Arc<QueryService>, Arc<NodeService>, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
         let query_service = Arc::new(QueryService::new(store.clone()));
 

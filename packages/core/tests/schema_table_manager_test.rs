@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use nodespace_core::{
-    db::SurrealStore,
+    db::SqliteStore,
     models::schema::{
         EdgeField, RelationshipCardinality, RelationshipDirection, SchemaRelationship,
     },
@@ -20,10 +20,10 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Test helper: Create a test environment
-async fn create_test_env() -> Result<(Arc<SurrealStore>, SchemaTableManager, TempDir)> {
+async fn create_test_env() -> Result<(Arc<SqliteStore>, SchemaTableManager, TempDir)> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("test.db");
-    let store = Arc::new(SurrealStore::new(db_path).await?);
+    let store = Arc::new(SqliteStore::new(db_path).await?);
     let table_manager = SchemaTableManager::new();
 
     Ok((store, table_manager, temp_dir))

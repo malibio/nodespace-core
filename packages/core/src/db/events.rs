@@ -1,6 +1,6 @@
-//! Domain Events for SurrealStore
+//! Domain Events for SqliteStore
 //!
-//! This module defines the domain events emitted by SurrealStore when data changes.
+//! This module defines the domain events emitted by SqliteStore when data changes.
 //! These events follow the observer pattern, allowing other parts of the system
 //! (like the Tauri layer) to subscribe to data changes without coupling to the
 //! database layer implementation.
@@ -12,7 +12,7 @@
 //!
 //! # Event Flow
 //!
-//! 1. SurrealStore performs a data operation (create, update, delete)
+//! 1. SqliteStore performs a data operation (create, update, delete)
 //! 2. Domain event is emitted via broadcast channel
 //! 3. All subscribers receive the event asynchronously
 //! 4. LiveQueryService (Tauri layer) listens to events and forwards to frontend
@@ -48,7 +48,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelationshipEvent {
-    /// Unique relationship ID in SurrealDB format (e.g., "relationship:abc123")
+    /// Unique relationship ID (string convention, e.g., "relationship:abc123")
     pub id: String,
     /// Source node ID (the "in" node in the relationship graph edge)
     pub from_id: String,
@@ -62,7 +62,7 @@ pub struct RelationshipEvent {
 
 impl RelationshipEvent {
     /// Construct an event with `from_id` / `to_id` normalized to the
-    /// full SurrealDB Thing form (`node:<key>`). Required by the
+    /// full prefixed id form (`node:<key>`). Required by the
     /// serialization-contract test below — every consumer that
     /// parses these fields splits on `:` and rejects bare ids.
     /// Callers in `NodeService` often hold bare ids (date-page
@@ -86,7 +86,7 @@ impl RelationshipEvent {
     }
 }
 
-/// Normalize a node id to its full SurrealDB Thing form
+/// Normalize a node id to its full prefixed id form
 /// (`node:<key>`). Pass-through if the input already contains `:`.
 /// `pub(crate)` so the `RelationshipDeleted` inline-field variant
 /// can use the same normalization at its emit sites in
@@ -152,7 +152,7 @@ pub struct EventEnvelope {
     pub metadata: EventMetadata,
 }
 
-/// Domain events emitted by SurrealStore
+/// Domain events emitted by SqliteStore
 ///
 /// These events are emitted whenever data changes in the database.
 /// They represent domain-level changes, not database operations.
@@ -209,7 +209,7 @@ pub enum DomainEvent {
     /// Contains relationship ID and node IDs for handlers that need them
     /// (e.g., hierarchy operations need from_id/to_id to update the structure tree).
     RelationshipDeleted {
-        /// The SurrealDB relationship ID (e.g., "relationship:abc123")
+        /// The relationship ID (string convention, e.g., "relationship:abc123")
         id: String,
         /// Source node ID (the "from" node in the relationship)
         from_id: String,

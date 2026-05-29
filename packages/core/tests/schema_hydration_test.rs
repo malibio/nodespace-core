@@ -1,4 +1,4 @@
-use nodespace_core::db::SurrealStore;
+use nodespace_core::db::SqliteStore;
 use nodespace_core::models::Node;
 use serde_json::json;
 
@@ -8,7 +8,7 @@ async fn test_schema_property_hydration() -> Result<(), Box<dyn std::error::Erro
     let temp_dir = std::env::temp_dir().join(format!("test_schema_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir)?;
     let db_path = temp_dir.join("test.db");
-    let store = SurrealStore::new(db_path).await?;
+    let store = SqliteStore::new(db_path).await?;
 
     println!("✅ Database initialized");
 

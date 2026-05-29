@@ -143,7 +143,7 @@ pub enum ValidationError {
 /// # Sibling Ordering
 ///
 /// Sibling ordering is managed via `has_child` edge `order` field (fractional ordering),
-/// not stored on the node itself. Use `SurrealStore::get_children()` to retrieve
+/// not stored on the node itself. Use `SqliteStore::get_children()` to retrieve
 /// children in order.
 ///
 /// # Pure JSON Schema Pattern

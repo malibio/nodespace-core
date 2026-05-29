@@ -20,7 +20,7 @@
 //! - **Cache refresh**: ~50-200ms (loads all schemas once)
 //! - **Memory overhead**: ~10KB per 100 schemas
 //!
-use crate::db::SurrealStore;
+use crate::db::SqliteStore;
 use crate::models::schema::RelationshipCardinality;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -78,7 +78,7 @@ pub struct InboundRelationshipCache {
     schema_change_flag: Arc<AtomicBool>,
 
     /// Database store for querying schemas
-    store: Arc<SurrealStore>,
+    store: Arc<SqliteStore>,
 
     /// Cache TTL (defaults to 60 seconds)
     cache_ttl: Duration,
@@ -88,7 +88,7 @@ impl InboundRelationshipCache {
     /// Create a new InboundRelationshipCache
     ///
     /// The cache starts empty and will be populated on first access.
-    pub fn new(store: Arc<SurrealStore>) -> Self {
+    pub fn new(store: Arc<SqliteStore>) -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             last_refresh: Arc::new(RwLock::new(None)),
@@ -99,7 +99,7 @@ impl InboundRelationshipCache {
     }
 
     /// Create a cache with custom TTL (primarily for testing)
-    pub fn with_ttl(store: Arc<SurrealStore>, ttl: Duration) -> Self {
+    pub fn with_ttl(store: Arc<SqliteStore>, ttl: Duration) -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             last_refresh: Arc::new(RwLock::new(None)),

@@ -13,7 +13,7 @@
  *
  * These tests use mocked backends to test the frontend coordination logic.
  * For full end-to-end testing with real database timing, see:
- * - `bun run test:integration:full` (with real SurrealDB)
+ * - `bun run test:integration:full` (with real SQLite)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

@@ -6,7 +6,7 @@ import * as protoLoader from '@grpc/proto-loader';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const PROTO_PATH = path.resolve(__dirname, '../../daemon/proto/node_service.proto');
+export const PROTO_PATH = path.resolve(__dirname, '../../proto/proto/node_service.proto');
 
 function resolveAddress(): string {
   const sock = process.env.NODESPACED_SOCKET

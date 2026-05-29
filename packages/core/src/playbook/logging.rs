@@ -284,7 +284,7 @@ mod tests {
 
     mod integration {
         use super::*;
-        use crate::db::SurrealStore;
+        use crate::db::SqliteStore;
         use crate::services::NodeService;
         use std::sync::Arc;
         use tempfile::TempDir;
@@ -292,7 +292,7 @@ mod tests {
         async fn create_test_service() -> (Arc<NodeService>, TempDir) {
             let temp_dir = TempDir::new().unwrap();
             let db_path = temp_dir.path().join("test.db");
-            let mut store: Arc<SurrealStore> = Arc::new(SurrealStore::new(db_path).await.unwrap());
+            let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
             let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
             (node_service, temp_dir)
         }
