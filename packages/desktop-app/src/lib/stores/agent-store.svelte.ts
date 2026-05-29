@@ -6,12 +6,13 @@
  * 2. Local model agents (Ministral 3B/8B) — in-process llama.cpp inference
  *
  * Local model agents use IDs prefixed with "local:" (e.g., "local:ministral-3b-q4km").
- * The chat-store uses this prefix to route messages to the correct backend.
+ * This prefix routes messages to the correct backend.
  */
 
 import { createLogger } from '$lib/utils/logger';
-import type { AcpAgentInfo, ModelInfo } from '$lib/types/agent-types';
+import type { AcpAgentInfo } from '$lib/types/agent-types';
 import * as tauriCommands from '$lib/services/tauri-commands';
+import type { ChatModelEntry } from '$lib/services/tauri-commands';
 
 const log = createLogger('AgentStore');
 
@@ -68,8 +69,8 @@ const MOCK_AGENTS: AcpAgentInfo[] = [
   },
 ];
 
-/** Convert a ModelInfo to an AcpAgentInfo for unified display. */
-function modelToAgent(model: ModelInfo): AcpAgentInfo {
+/** Convert a chat-model catalog entry to an AcpAgentInfo for unified display. */
+function modelToAgent(model: ChatModelEntry): AcpAgentInfo {
   return {
     id: `${LOCAL_AGENT_PREFIX}${model.id}`,
     name: model.name,

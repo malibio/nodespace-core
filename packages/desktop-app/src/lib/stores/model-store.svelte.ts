@@ -8,11 +8,45 @@
  */
 
 import { createLogger } from '$lib/utils/logger';
-import type { ModelInfo, ModelStatus, DownloadEvent } from '$lib/types/agent-types';
+import type { ModelInfo, ModelFamily, ModelStatus, DownloadEvent } from '$lib/types/agent-types';
 import { AGENT_EVENTS } from '$lib/types/agent-types';
 import * as tauriCommands from '$lib/services/tauri-commands';
+import type { ChatModelEntry, ChatModelStatus } from '$lib/services/tauri-commands';
 
 const log = createLogger('ModelStore');
+
+/** Map a catalog entry's status to the richer tagged ModelStatus union. */
+function toModelStatus(s: ChatModelStatus): ModelStatus {
+  switch (s.status) {
+    case 'downloading':
+      return { status: 'downloading', progress_pct: 0, bytes_downloaded: 0, bytes_total: 0 };
+    case 'error':
+      return { status: 'error', message: 'Model error' };
+    default:
+      return { status: s.status };
+  }
+}
+
+/**
+ * Adapt a `chat_model_list` catalog entry to the store's `ModelInfo` shape.
+ * `ChatModelEntry` is the leaner catalog row (built-in GGUF + Ollama merged);
+ * fields it doesn't carry (filename/url/sha256) aren't surfaced for these rows.
+ */
+function chatEntryToModelInfo(entry: ChatModelEntry): ModelInfo {
+  const family: ModelFamily = entry.backend === 'ollama' ? 'ollama' : 'ministral';
+  return {
+    id: entry.id,
+    family,
+    name: entry.name,
+    filename: '',
+    size_bytes: entry.sizeBytes,
+    quantization: entry.quantization,
+    url: '',
+    sha256: '',
+    status: toModelStatus(entry.status),
+    min_memory_gb: entry.minMemoryGb,
+  };
+}
 
 /** Check if running in Tauri desktop environment. */
 function isTauri(): boolean {
@@ -112,10 +146,12 @@ class ModelStore {
     this.isLoading = true;
     try {
       if (isTauri()) {
-        [this.models, this.systemRamGb] = await Promise.all([
+        const [entries, ram] = await Promise.all([
           tauriCommands.chatModelList(),
           tauriCommands.getSystemRamGb(),
         ]);
+        this.models = entries.map(chatEntryToModelInfo);
+        this.systemRamGb = ram;
         // Detect which model is loaded
         const loaded = this.models.find((m) => m.status.status === 'loaded');
         this.loadedModelId = loaded?.id ?? null;

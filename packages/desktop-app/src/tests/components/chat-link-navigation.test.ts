@@ -1,60 +1,39 @@
 /**
- * Unit tests for chat link navigation override logic
+ * Unit tests for link navigation decision logic.
  *
  * Tests the decision logic from app-shell.svelte handleLinkClick:
- * - Standard tabs: Click=in-place, Cmd+Click=new tab, Cmd+Shift+Click=other pane
- * - Chat tabs: Click=new tab (preserve chat), Cmd+Click=other pane
+ * - Click = in-place, Cmd+Click = new tab, Cmd+Shift+Click = other pane
+ *
+ * (The former chat-tab override was removed alongside the ephemeral ChatPanel /
+ *  chatStore in the #1220 follow-up — every conversation is now an ai-chat node,
+ *  so links behave the same in every tab.)
  */
 
 import { describe, it, expect } from 'vitest';
 
-/**
- * Replicates the navigation decision logic from app-shell.svelte
- */
-function computeNavigation(isFromChat: boolean, modifierPressed: boolean, shiftPressed: boolean) {
-  const openInOtherPane = isFromChat ? modifierPressed : (modifierPressed && shiftPressed);
-  const openInNewTab = isFromChat ? !modifierPressed : (modifierPressed && !shiftPressed);
+/** Replicates the navigation decision logic from app-shell.svelte. */
+function computeNavigation(modifierPressed: boolean, shiftPressed: boolean) {
+  const openInOtherPane = modifierPressed && shiftPressed;
+  const openInNewTab = modifierPressed && !shiftPressed;
   return { openInOtherPane, openInNewTab };
 }
 
-describe('Chat Link Navigation Override', () => {
-  describe('standard tab (non-chat)', () => {
-    it('regular click navigates in-place', () => {
-      const result = computeNavigation(false, false, false);
-      expect(result.openInNewTab).toBe(false);
-      expect(result.openInOtherPane).toBe(false);
-    });
-
-    it('Cmd+Click opens in new tab', () => {
-      const result = computeNavigation(false, true, false);
-      expect(result.openInNewTab).toBe(true);
-      expect(result.openInOtherPane).toBe(false);
-    });
-
-    it('Cmd+Shift+Click opens in other pane', () => {
-      const result = computeNavigation(false, true, true);
-      expect(result.openInOtherPane).toBe(true);
-      expect(result.openInNewTab).toBe(false);
-    });
+describe('Link Navigation', () => {
+  it('regular click navigates in-place', () => {
+    const result = computeNavigation(false, false);
+    expect(result.openInNewTab).toBe(false);
+    expect(result.openInOtherPane).toBe(false);
   });
 
-  describe('chat tab', () => {
-    it('regular click opens in new tab (preserves conversation)', () => {
-      const result = computeNavigation(true, false, false);
-      expect(result.openInNewTab).toBe(true);
-      expect(result.openInOtherPane).toBe(false);
-    });
+  it('Cmd+Click opens in new tab', () => {
+    const result = computeNavigation(true, false);
+    expect(result.openInNewTab).toBe(true);
+    expect(result.openInOtherPane).toBe(false);
+  });
 
-    it('Cmd+Click opens in other pane', () => {
-      const result = computeNavigation(true, true, false);
-      expect(result.openInOtherPane).toBe(true);
-      expect(result.openInNewTab).toBe(false);
-    });
-
-    it('Cmd+Shift+Click also opens in other pane', () => {
-      const result = computeNavigation(true, true, true);
-      expect(result.openInOtherPane).toBe(true);
-      expect(result.openInNewTab).toBe(false);
-    });
+  it('Cmd+Shift+Click opens in other pane', () => {
+    const result = computeNavigation(true, true);
+    expect(result.openInOtherPane).toBe(true);
+    expect(result.openInNewTab).toBe(false);
   });
 });
