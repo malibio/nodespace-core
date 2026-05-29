@@ -2,7 +2,8 @@
 //!
 //! A [`PtySession`] owns:
 //!
-//! * a per-session [`tempfile::TempDir`] (the agent's working directory),
+//! * a persistent per-session directory at `~/.nodespace/agent-sessions/<uuid>/`
+//!   (the agent's working directory — survives session end),
 //! * the master end of a PTY pair (`portable-pty`),
 //! * a writer into the PTY's stdin,
 //! * a [`portable_pty::ChildKiller`] handle for the spawned process,
@@ -11,9 +12,9 @@
 //! * a watcher task (which owns the actual `Child`) that broadcasts the
 //!   process exit status through `broadcast::Sender<ExitStatus>`.
 //!
-//! The temp dir is dropped when the session value is dropped, so any cleanup
-//! path — explicit [`PtySession::terminate`] or natural process exit followed
-//! by the manager removing the entry — also removes the working directory.
+//! The session directory is **not** deleted on session end. It persists under
+//! `~/.nodespace/agent-sessions/<session-uuid>/` so artifacts, context files,
+//! and agent output survive across restarts.
 //!
 //! ## Concurrency
 //!
@@ -24,8 +25,10 @@
 //! call waiting on a mutex the wait-loop already holds.
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -111,9 +114,10 @@ pub struct PtySession {
     /// reader task so all chunks land here without extra subscriptions.
     capture: Arc<Mutex<SessionCapture>>,
 
-    // Held only for its Drop side effect — deletes the temp dir on disk when
-    // this session is dropped. Never read directly.
-    _session_dir: tempfile::TempDir,
+    /// Persistent working directory for this session. Lives at
+    /// `~/.nodespace/agent-sessions/<uuid>/` and is never deleted on session
+    /// end — artifacts survive across restarts.
+    pub session_dir: PathBuf,
 }
 
 impl PtySession {
@@ -121,21 +125,29 @@ impl PtySession {
     ///
     /// Steps, in order:
     ///
-    /// 1. Create a temp directory (auto-cleaned on session drop).
+    /// 1. Generate a session UUID and create a persistent directory at
+    ///    `~/.nodespace/agent-sessions/<uuid>/`.
     /// 2. Have `assembler` write the context file (`CLAUDE.md` / `AGENTS.md`)
-    ///    into the temp directory.
+    ///    into the session directory.
     /// 3. Resolve the agent binary on `PATH` via [`which::which`].
-    /// 4. Open a PTY pair and spawn the binary with `cwd` set to the temp dir.
+    /// 4. Open a PTY pair and spawn the binary with `cwd` set to the session dir.
     /// 5. Start the reader and exit-watcher tasks.
     pub async fn launch(
         agent_type: AgentType,
         initial_prompt: Option<String>,
         assembler: &GraphContextAssembler,
     ) -> anyhow::Result<Self> {
-        let session_dir = tempfile::tempdir()?;
+        let session_id = Uuid::new_v4();
+        let sessions_base = dirs::home_dir()
+            .context("HOME not set")?
+            .join(".nodespace")
+            .join("agent-sessions");
+        let session_dir = sessions_base.join(session_id.to_string());
+        std::fs::create_dir_all(&session_dir)
+            .with_context(|| format!("create session dir {}", session_dir.display()))?;
 
         assembler
-            .write_context_file(session_dir.path(), agent_type)
+            .write_context_file(&session_dir, agent_type)
             .await
             .map_err(|e| match e {
                 ContextError::Other(err) => err,
@@ -155,6 +167,7 @@ impl PtySession {
         })?;
 
         Self::spawn_in_pty(
+            session_id,
             agent_type,
             binary_path,
             initial_prompt,
@@ -169,10 +182,11 @@ impl PtySession {
     /// so tests can construct sessions without going through
     /// [`GraphContextAssembler`].
     fn spawn_in_pty(
+        id: Uuid,
         agent_type: AgentType,
         binary_path: std::path::PathBuf,
         initial_prompt: Option<String>,
-        session_dir: tempfile::TempDir,
+        session_dir: PathBuf,
         rows: u16,
         cols: u16,
     ) -> anyhow::Result<Self> {
@@ -185,7 +199,7 @@ impl PtySession {
         })?;
 
         let mut cmd = CommandBuilder::new(binary_path);
-        cmd.cwd(session_dir.path());
+        cmd.cwd(&session_dir);
         if let Some(prompt) = initial_prompt {
             cmd.arg(prompt);
         }
@@ -202,7 +216,6 @@ impl PtySession {
         let (output_tx, _) = broadcast::channel::<OutputChunk>(OUTPUT_CHANNEL_CAPACITY);
         let (exit_tx, _) = watch::channel::<Option<ExitStatus>>(None);
 
-        let id = Uuid::new_v4();
         let started_at = Utc::now();
 
         let master = Arc::new(Mutex::new(pair.master));
@@ -223,7 +236,7 @@ impl PtySession {
             output_tx,
             exit_tx,
             capture,
-            _session_dir: session_dir,
+            session_dir,
         })
     }
 
@@ -286,9 +299,9 @@ impl PtySession {
     ///
     /// Takes `&self` rather than consuming the session, because typical
     /// callers hold the session behind an `Arc` (the manager hands out
-    /// `Arc<PtySession>` from `get()`). Temp-dir cleanup happens when the
-    /// last `Arc` is dropped — usually the manager removing the entry
-    /// after this returns.
+    /// `Arc<PtySession>` from `get()`). The session directory at
+    /// `~/.nodespace/agent-sessions/<uuid>/` is NOT deleted on session end —
+    /// it persists so artifacts survive across daemon restarts.
     ///
     /// Safe to call when the child has already exited: returns immediately
     /// without erroring.
@@ -384,14 +397,22 @@ impl PtySession {
     /// going through [`GraphContextAssembler`]. Lets tests use shell utilities
     /// (`cat`, `sh -c '...'`) instead of depending on a real agent binary.
     ///
+    /// Creates a temporary directory under `std::env::temp_dir()` for the
+    /// session. The directory persists until the OS cleans up the temp dir.
+    ///
     /// Gated by the `testing` feature so it is reachable from integration
     /// tests in sibling crates (e.g. `nodespace-daemon`) without being part
     /// of the production surface.
     pub fn launch_for_test(binary: &str, args: Vec<String>) -> anyhow::Result<Self> {
-        let session_dir = tempfile::tempdir()?;
+        let id = Uuid::new_v4();
+        let session_dir = std::env::temp_dir()
+            .join("nodespace-agent-test-sessions")
+            .join(id.to_string());
+        std::fs::create_dir_all(&session_dir)
+            .with_context(|| format!("create test session dir {}", session_dir.display()))?;
+
         let binary_path = which::which(binary)
             .map_err(|e| anyhow::anyhow!("test binary '{}' not on PATH: {}", binary, e))?;
-        let agent_type = AgentType::ClaudeCode;
 
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
@@ -401,7 +422,7 @@ impl PtySession {
             pixel_height: 0,
         })?;
         let mut cmd = CommandBuilder::new(binary_path);
-        cmd.cwd(session_dir.path());
+        cmd.cwd(&session_dir);
         for a in &args {
             cmd.arg(a);
         }
@@ -415,7 +436,6 @@ impl PtySession {
         let (output_tx, _) = broadcast::channel::<OutputChunk>(OUTPUT_CHANNEL_CAPACITY);
         let (exit_tx, _) = watch::channel::<Option<ExitStatus>>(None);
 
-        let id = Uuid::new_v4();
         let started_at = Utc::now();
 
         let master = Arc::new(Mutex::new(pair.master));
@@ -428,7 +448,7 @@ impl PtySession {
 
         Ok(Self {
             id,
-            agent_type,
+            agent_type: AgentType::ClaudeCode,
             started_at,
             master,
             writer,
@@ -436,13 +456,13 @@ impl PtySession {
             output_tx,
             exit_tx,
             capture,
-            _session_dir: session_dir,
+            session_dir,
         })
     }
 
-    /// Test-only accessor: where this session's temp dir lives.
+    /// Test-only accessor: the session's working directory path.
     pub fn session_dir_path(&self) -> &std::path::Path {
-        self._session_dir.path()
+        self.session_dir.as_path()
     }
 }
 
@@ -590,28 +610,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn natural_exit_keeps_temp_dir_until_session_drops() {
+    async fn session_dir_persists_after_process_exit_and_session_drop() {
         let session = PtySession::launch_for_test("sh", vec!["-c".into(), "echo done".into()])
             .expect("launch echo session");
 
-        let temp_path = session.session_dir_path().to_path_buf();
-        assert!(temp_path.exists(), "temp dir should exist immediately");
+        let dir_path = session.session_dir_path().to_path_buf();
+        assert!(
+            dir_path.exists(),
+            "session dir should exist immediately after launch"
+        );
 
         let mut exit_rx = session.subscribe_exit();
         await_exit(&mut exit_rx, Duration::from_secs(2)).await;
 
-        // Session still in scope: temp dir still exists.
+        // Session dir outlives the process exit.
         assert!(
-            temp_path.exists(),
-            "temp dir should outlive process exit until session drops"
+            dir_path.exists(),
+            "session dir should persist after process exits"
         );
 
         drop(session);
 
-        // After drop the TempDir's destructor removes the directory tree.
+        // Session dir also outlives the session drop — persistent by design.
         assert!(
-            !temp_path.exists(),
-            "temp dir should be removed when session drops"
+            dir_path.exists(),
+            "session dir should persist after session is dropped"
         );
     }
 

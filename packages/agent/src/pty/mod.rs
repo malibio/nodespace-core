@@ -6,14 +6,14 @@
 //!
 //! The session lifecycle is:
 //!
-//! 1. Create a per-session temp directory.
+//! 1. Create a persistent session directory at `~/.nodespace/agent-sessions/<uuid>/`.
 //! 2. Write the context file ([`GraphContextAssembler::write_context_file`])
 //!    so the agent picks up its `CLAUDE.md` / `AGENTS.md` on launch.
-//! 3. Spawn the agent binary inside a freshly opened PTY rooted at the temp dir.
+//! 3. Spawn the agent binary inside a freshly opened PTY rooted at the session dir.
 //! 4. Stream stdout/stderr bytes through a `broadcast::Sender<OutputChunk>`.
 //! 5. Accept stdin via [`PtySession::write_input`] and resize via [`PtySession::resize`].
-//! 6. On [`PtySession::terminate`] (or when the child exits naturally), drop the
-//!    [`tempfile::TempDir`] so the working directory is cleaned up.
+//! 6. On [`PtySession::terminate`] (or when the child exits naturally), the session
+//!    directory is **not** deleted — artifacts survive across restarts.
 
 pub mod capture;
 pub mod detection;
