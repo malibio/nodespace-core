@@ -1,7 +1,8 @@
-//! MCP Markdown Import Handler
+//! Markdown import/export and templating.
 //!
 //! Parses markdown content and creates hierarchical NodeSpace nodes.
 //! Preserves heading hierarchy and list indentation as parent-child relationships.
+//! Consumed as a library by `nodespace-agent` and `nodespace-daemon`.
 //!
 //! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
 //!

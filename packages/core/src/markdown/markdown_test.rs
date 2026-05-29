@@ -1,4 +1,4 @@
-//! Tests for MCP markdown import handler
+//! Tests for markdown import/export and templating
 //!
 //! Tests markdown parsing, node creation, and hierarchy management.
 

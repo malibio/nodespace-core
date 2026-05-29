@@ -17,7 +17,8 @@
 //! - [`behaviors`] - Node type system and trait-based behaviors
 //! - [`services`] - Business services (NodeService, SchemaTableManager, etc.)
 //! - [`db`] - Database layer with SQLite (libsql) integration
-//! - [`mcp`] - MCP stdio server for AI agent integration
+//! - [`markdown`] - Markdown import/export and templating (library)
+//! - [`schema`] - Schema creation and updates (library)
 
 pub mod agent_params;
 pub mod behaviors;

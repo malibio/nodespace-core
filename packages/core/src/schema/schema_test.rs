@@ -1,4 +1,4 @@
-//! Integration tests for MCP schema handlers
+//! Integration tests for schema creation and updates
 //!
 //! Tests exercise handle_create_schema and handle_update_schema end-to-end
 //! against a real NodeService / SqliteStore, covering title_template
