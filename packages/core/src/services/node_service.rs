@@ -4071,16 +4071,15 @@ impl NodeService {
             );
 
             // Wake the embedding processor (fire-and-forget)
-            #[cfg(feature = "nlp")]
             if let Some(ref waker) = self.embedding_waker {
                 tracing::debug!("🔔 Waking embedding processor for root {}", root_id);
                 waker.wake();
+            } else {
+                tracing::warn!(
+                    "⚠️ No embedding waker configured - root {} will not be processed automatically",
+                    root_id
+                );
             }
-            #[cfg(not(feature = "nlp"))]
-            tracing::debug!(
-                "📥 Root {} queued for embedding (nlp feature disabled)",
-                root_id
-            );
         }
     }
 
