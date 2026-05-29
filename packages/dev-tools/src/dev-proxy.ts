@@ -5,9 +5,9 @@
  * and bridges the WatchNodes gRPC stream to browser SSE clients.
  *
  * Required flow:
- *   Playwright/Browser → dev-proxy (Bun/HTTP :3001) → gRPC → nodespaced → RocksDB
+ *   Playwright/Browser → dev-proxy (Bun/HTTP :3001) → gRPC → nodespaced → SQLite
  *
- * No SurrealDB required — only nodespaced must be running.
+ * No external database required — nodespaced embeds SQLite/libsql.
  */
 
 import * as path from 'node:path';
@@ -18,7 +18,7 @@ import * as protoLoader from '@grpc/proto-loader';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PROTO_PATH = path.resolve(__dirname, '../../daemon/proto/node_service.proto');
+const PROTO_PATH = path.resolve(__dirname, '../../proto/proto/node_service.proto');
 const PORT = parseInt(process.env.DEV_PROXY_PORT ?? '3001', 10);
 
 // ============================================================================

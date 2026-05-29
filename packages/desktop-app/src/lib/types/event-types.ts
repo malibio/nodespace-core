@@ -37,7 +37,7 @@ export interface NodeEventData {
  * Hierarchy relationship event data from domain events
  * Represents parent-child relationships in the node tree
  *
- * Backend converts SurrealDB edge format to this type at the
+ * Backend converts the stored edge format to this type at the
  * serialization boundary, isolating database implementation details.
  */
 export interface HierarchyRelationship {
@@ -60,7 +60,7 @@ export interface HierarchyRelationship {
  * Emitted by the store layer for all relationship operations.
  */
 export interface RelationshipEvent {
-  /** Unique relationship ID in SurrealDB format (e.g., "relationship:abc123") */
+  /** Unique relationship ID (e.g., "relationship:abc123") */
   id: string;
   /** Source node ID (the "from" node in the relationship) */
   fromId: string;

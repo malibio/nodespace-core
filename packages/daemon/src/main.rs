@@ -1,11 +1,11 @@
-//! `nodespaced` — background daemon that owns the RocksDB lock and serves
+//! `nodespaced` — background daemon that owns the SQLite database lock and serves
 //! NodeSpace operations over gRPC on a Unix Domain Socket.
 //!
 //! Lifecycle:
 //!   1. Initialize tracing.
 //!   2. Install signal handlers (fail-fast — a daemon that can't observe
 //!      shutdown signals is broken).
-//!   3. Open `SurrealStore` (embedded RocksDB) at the configured path.
+//!   3. Open `SqliteStore` (embedded SQLite/libsql) at the configured path.
 //!   4. Build `NodeService` from `nodespace-core`.
 //!   5. Bring up the system tray on the main thread and spawn the tonic
 //!      `NodeService` handler on a worker tokio runtime.
@@ -18,9 +18,9 @@ use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
 use nodespace_agent::skill_pipeline::seed_skill_nodes;
-use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
+use nodespace_core::markdown::prepare_nodes_from_template;
 use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
-use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
+use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
@@ -227,9 +227,9 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
     }
 
     let mut store = Arc::new(
-        SurrealStore::new(db_path.to_path_buf())
+        SqliteStore::new(db_path.to_path_buf())
             .await
-            .context("Failed to initialize SurrealStore")?,
+            .context("Failed to initialize SqliteStore")?,
     );
 
     let mut node_service = CoreNodeService::new(&mut store)
@@ -306,7 +306,7 @@ async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
 /// Try to initialize NLP engine and embedding services. Non-fatal: returns
 /// `None` when the model is absent or fails to load.
 fn build_embedding_state(
-    store: &Arc<SurrealStore>,
+    store: &Arc<SqliteStore>,
     node_service: &mut CoreNodeService,
 ) -> Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)> {
     let model_path = {

@@ -263,7 +263,7 @@ pub fn build_path_string(segments: &[&str]) -> String {
 // CollectionService - High-level operations that integrate with the store
 // ============================================================================
 
-use crate::db::{DatabaseError, SurrealStore};
+use crate::db::{DatabaseError, SqliteStore};
 use crate::models::Node;
 use serde_json::json;
 use std::sync::Arc;
@@ -312,7 +312,7 @@ impl ResolvedPath {
 /// CollectionService delegates `member_of` operations to NodeService, which
 /// emits RelationshipCreated/RelationshipDeleted events.
 pub struct CollectionService<'a> {
-    store: &'a Arc<SurrealStore>,
+    store: &'a Arc<SqliteStore>,
     node_service: &'a super::NodeService,
 }
 
@@ -323,7 +323,7 @@ impl<'a> CollectionService<'a> {
     ///
     /// * `store` - The database store
     /// * `node_service` - NodeService for relationship operations and event emission
-    pub fn new(store: &'a Arc<SurrealStore>, node_service: &'a super::NodeService) -> Self {
+    pub fn new(store: &'a Arc<SqliteStore>, node_service: &'a super::NodeService) -> Self {
         Self {
             store,
             node_service,

@@ -6,11 +6,9 @@
  * of Tauri's domain event subscription.
  *
  * Architecture:
- *   Browser ←──SSE──→ dev-proxy (port 3001) → SurrealStore (events)
- *                                                    ↑
- *   Surrealist ──────────────(direct DB changes)───→
+ *   Browser ←──SSE──→ dev-proxy (port 3001) → SqliteStore (events)
  *
- * The dev-proxy forwards domain events from SurrealStore as SSE to connected browsers,
+ * The dev-proxy forwards domain events from SqliteStore as SSE to connected browsers,
  * which update the SharedNodeStore and ReactiveStructureTree. This allows browser dev mode
  * to have the same real-time sync as the desktop app.
  *

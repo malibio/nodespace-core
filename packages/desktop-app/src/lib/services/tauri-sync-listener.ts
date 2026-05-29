@@ -35,7 +35,7 @@ import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schem
 const log = createLogger('TauriSync');
 
 /**
- * Strip the `node:` table prefix from a SurrealDB Thing id so it
+ * Strip the `node:` table prefix from a stored record id so it
  * matches the bare-id key shape `reactiveStructureTree` uses
  * elsewhere in the app (the date-page route, the outliner's
  * local-action `addChild` path, and `sharedNodeStore` all key by

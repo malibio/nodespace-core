@@ -5,7 +5,7 @@ impl FractionalOrderCalculator {
     /// Calculate order value for inserting between prev and next
     ///
     /// Includes a tiny random offset to prevent exact order collisions when multiple
-    /// insertions happen concurrently with eventual consistency (e.g., SurrealDB with RocksDB).
+    /// insertions happen concurrently.
     ///
     /// # Examples
     /// ```text
@@ -59,8 +59,8 @@ impl FractionalOrderCalculator {
 
     /// Generate a jitter value for order uniqueness
     ///
-    /// Issue #865: Extracted for use in atomic SurrealDB queries.
-    /// Returns a value in range [0.0, 0.001) that can be passed to SurrealDB
+    /// Issue #865: Extracted for use in atomic SQL queries.
+    /// Returns a value in range [0.0, 0.001) that can be passed to SQL
     /// and added to order values within the query itself.
     ///
     /// Uses the same entropy sources as calculate_order:

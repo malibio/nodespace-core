@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::pty::{PtySession, PtySessionManager};
-use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
+use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     ListSessionsRequest, ResizeRequest, StreamOutputRequest, TerminateSessionRequest,
     WriteInputRequest,
@@ -36,17 +36,17 @@ type Client = AgentSessionServiceClient<tonic::transport::Channel>;
 
 /// Bring up the agent-session gRPC server in-process and return a connected
 /// client plus the shared manager (so tests can seed sessions directly), the
-/// shutdown sender, and the tempdir that backs the SurrealStore. Holding the
+/// shutdown sender, and the tempdir that backs the SqliteStore. Holding the
 /// tempdir in the returned tuple keeps it alive past the test body.
 async fn spawn_test_daemon() -> (Client, Arc<PtySessionManager>, oneshot::Sender<()>, TempDir) {
     let tempdir = TempDir::new().expect("tempdir");
 
     // The assembler holds a NodeService handle even though our tests bypass
-    // LaunchSession. SurrealStore is the only realistic way to produce one.
+    // LaunchSession. SqliteStore is the only realistic way to produce one.
     let mut store = Arc::new(
-        SurrealStore::new(tempdir.path().join("daemon-db"))
+        SqliteStore::new(tempdir.path().join("daemon-db"))
             .await
-            .expect("SurrealStore"),
+            .expect("SqliteStore"),
     );
     let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
 

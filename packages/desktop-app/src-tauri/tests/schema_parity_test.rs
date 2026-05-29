@@ -17,8 +17,8 @@ mod schema_parity_tests {
         // This test verifies that both entry points use the same service type
         // by checking that they compile with the same dependencies.
 
-        // HTTP dev-proxy uses: SchemaService<surrealdb::engine::remote::http::Client>
-        // Tauri commands use: SchemaService<surrealdb::engine::local::Db>
+        // HTTP dev-proxy uses the SchemaService over an HTTP-backed store client.
+        // Tauri commands use the SchemaService over the local embedded SQLite store.
 
         // Both are instances of the same generic SchemaService<C> type,
         // ensuring identical business logic, validation, and protection enforcement.

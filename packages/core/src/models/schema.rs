@@ -236,12 +236,12 @@ pub struct EdgeField {
 
 /// Definition of a relationship between node types
 ///
-/// Relationships create edge tables in SurrealDB. Both directions of a
-/// relationship query the same edge table. Cardinality constraints are
+/// Relationships are stored as rows in the relationships table. Both directions
+/// of a relationship query the same rows. Cardinality constraints are
 /// enforced at the application level during relationship creation.
 ///
-/// ## Edge Table Naming
-/// Edge tables are named: `{source_type}_{relationship_name}_{target_type}`
+/// ## Relationship Naming
+/// Relationships are named: `{source_type}_{relationship_name}_{target_type}`
 /// Example: `invoice_billed_to_customer`
 ///
 /// ## Example

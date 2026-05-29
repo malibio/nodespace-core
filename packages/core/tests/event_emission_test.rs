@@ -2,7 +2,7 @@
 //!
 //! Tests that verify correct event emission for all major operations.
 //! As of Issue #665, events are now emitted at the NodeService layer
-//! (not SurrealStore) to support client filtering.
+//! (not SqliteStore) to support client filtering.
 //! As of Issue #995, events are wrapped in EventEnvelope with metadata.
 //!
 //! These tests verify:
@@ -13,7 +13,7 @@
 #[cfg(test)]
 mod event_emission_tests {
     use anyhow::Result;
-    use nodespace_core::db::{DomainEvent, SurrealStore};
+    use nodespace_core::db::{DomainEvent, SqliteStore};
     use nodespace_core::models::Node;
     use nodespace_core::services::NodeService;
     use serde_json::json;
@@ -27,7 +27,7 @@ mod event_emission_tests {
     async fn create_test_service() -> Result<(NodeService, TempDir)> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
-        let mut store = Arc::new(SurrealStore::new(db_path).await?);
+        let mut store = Arc::new(SqliteStore::new(db_path).await?);
         let service = NodeService::new(&mut store).await?;
         Ok((service, temp_dir))
     }

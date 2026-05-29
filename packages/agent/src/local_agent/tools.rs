@@ -7,9 +7,9 @@
 
 use crate::agent_types::{AgentToolExecutor, ToolDefinition, ToolError, ToolResult};
 use async_trait::async_trait;
-use nodespace_core::mcp::handlers::schema::handle_create_schema;
-use nodespace_core::mcp::params::{SearchNodesParams, SearchSemanticParams};
+use nodespace_core::agent_params::{SearchNodesParams, SearchSemanticParams};
 use nodespace_core::ops::{node_ops, rel_ops, search_ops, OpsError};
+use nodespace_core::schema::handle_create_schema;
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -18,9 +18,9 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 // Agent-specific parameter structs
 //
-// These complement the shared MCP params (re-exported via nodespace_core::mcp::params)
-// for tools whose wire format differs from the MCP handler conventions
-// (e.g., agent uses "title"+"body" while MCP uses "content").
+// These complement the shared search params (nodespace_core::agent_params)
+// for tools whose wire format differs (e.g., agent uses "title"+"body"
+// while the markdown library uses "content").
 // ---------------------------------------------------------------------------
 
 /// Parameters for the agent's create_node tool.
@@ -891,7 +891,7 @@ impl GraphToolExecutor {
 
         if format == "markdown" {
             // Reuse the MCP handler's markdown export (single source of truth)
-            use nodespace_core::mcp::handlers::markdown::handle_get_markdown_from_node_id;
+            use nodespace_core::markdown::handle_get_markdown_from_node_id;
 
             let params = json!({
                 "node_id": id,
@@ -1230,7 +1230,7 @@ impl GraphToolExecutor {
         tool_call_id: &str,
         args: Value,
     ) -> Result<ToolResult, ToolError> {
-        use nodespace_core::mcp::handlers::schema::handle_update_schema;
+        use nodespace_core::schema::handle_update_schema;
         let ns = self.node_service()?;
 
         let result = handle_update_schema(&ns, args).await;
@@ -1356,7 +1356,7 @@ impl GraphToolExecutor {
         let ns = self.node_service()?;
 
         // Delegate to the MCP markdown handler which handles the full import pipeline
-        use nodespace_core::mcp::handlers::markdown::handle_create_nodes_from_markdown;
+        use nodespace_core::markdown::handle_create_nodes_from_markdown;
         let result = handle_create_nodes_from_markdown(&ns, handler_args)
             .await
             .map_err(|e| {

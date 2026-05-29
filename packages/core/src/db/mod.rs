@@ -11,6 +11,4 @@ pub use events::{
 };
 pub use fractional_ordering::FractionalOrderCalculator;
 pub use index_manager::IndexManager;
-pub use sqlite_store::{
-    RelationshipRecord, SqliteStore as SurrealStore, StoreChange, StoreOperation,
-};
+pub use sqlite_store::{RelationshipRecord, SqliteStore, StoreChange, StoreOperation};

@@ -1,7 +1,7 @@
 //! End-to-end integration test for the `nodespace` CLI.
 //!
 //! Spins an in-process `nodespaced` gRPC server up against a tempdir-backed
-//! SurrealDB, then drives the CLI's command handlers (via the library
+//! SQLite database, then drives the CLI's command handlers (via the library
 //! surface) at it. This validates that the CLI's gRPC plumbing — connection,
 //! request construction, response unwrapping, error mapping — works end to
 //! end against the same service stack the real binary uses.
@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nodespace_cli::{commands, connect};
-use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
+use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::GetNodeRequest;
 use nodespace_daemon::{NodeServiceImpl, NodeServiceServer};
 use tempfile::TempDir;
@@ -31,9 +31,9 @@ async fn spawn_test_daemon() -> (PathBuf, oneshot::Sender<()>, TempDir) {
     let sock_path = tempdir.path().join("test-daemon.sock");
 
     let mut store = Arc::new(
-        SurrealStore::new(tempdir.path().join("daemon-db"))
+        SqliteStore::new(tempdir.path().join("daemon-db"))
             .await
-            .expect("failed to open SurrealStore"),
+            .expect("failed to open SqliteStore"),
     );
     let node_service = Arc::new(
         CoreNodeService::new(&mut store)

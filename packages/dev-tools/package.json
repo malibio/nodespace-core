@@ -1,7 +1,7 @@
 {
   "name": "@nodespaceai/dev-tools",
   "version": "0.1.0",
-  "description": "Development tools for NodeSpace (Bun dev-proxy, MCP server)",
+  "description": "Development tools for NodeSpace (Bun dev-proxy)",
   "type": "module",
   "private": true,
   "scripts": {

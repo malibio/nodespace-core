@@ -1069,7 +1069,7 @@ impl GrpcNodeService for NodeServiceImpl {
                     Ok(envelope) => {
                         // Translation is serial: a slow `get_node` lookup will
                         // delay the next `rx.recv()` and increase the risk of
-                        // `Lagged`. Acceptable because lookups are RocksDB
+                        // `Lagged`. Acceptable because lookups are SQLite
                         // point-reads and lag is observable downstream. If a
                         // future workload makes this hot, parallelize by
                         // dispatching translations to a bounded mpsc.

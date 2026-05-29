@@ -1,7 +1,8 @@
-//! MCP Markdown Import Handler
+//! Markdown import/export and templating.
 //!
 //! Parses markdown content and creates hierarchical NodeSpace nodes.
 //! Preserves heading hierarchy and list indentation as parent-child relationships.
+//! Consumed as a library by `nodespace-agent` and `nodespace-daemon`.
 //!
 //! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
 //!
@@ -11,7 +12,7 @@
 //! use serde_json::json;
 //! use std::sync::Arc;
 //! use nodespace_core::services::NodeService;
-//! use nodespace_core::mcp::handlers::markdown::handle_create_nodes_from_markdown;
+//! use nodespace_core::markdown::handle_create_nodes_from_markdown;
 //!
 //! async fn example(node_service: Arc<NodeService>) -> Result<(), Box<dyn std::error::Error>> {
 //!     // With explicit title
@@ -31,7 +32,9 @@
 //! }
 //! ```
 
-use crate::mcp::types::MCPError;
+mod error;
+pub use error::MarkdownError;
+
 use crate::models::{Node, TaskNode, TaskStatus};
 use crate::services::{CollectionService, CreateNodeParams, NodeService, NodeServiceError};
 use serde::{Deserialize, Serialize};
@@ -477,7 +480,7 @@ where
 pub fn prepare_nodes_from_markdown(
     markdown: &str,
     root_id: Option<String>,
-) -> Result<Vec<PreparedNode>, MCPError> {
+) -> Result<Vec<PreparedNode>, MarkdownError> {
     let mut prepared_nodes = Vec::new();
     let mut context = PrepareContext::new(root_id.clone());
 
@@ -842,16 +845,16 @@ impl ParserContext {
     }
 }
 
-/// Handle create_nodes_from_markdown MCP request
+/// Create hierarchical nodes from a markdown document.
 pub async fn handle_create_nodes_from_markdown(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     let start = std::time::Instant::now();
     tracing::debug!("create_nodes_from_markdown: START");
 
     let params: CreateNodesFromMarkdownParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
     tracing::debug!(
         sync_import = params.sync_import,
         collection = ?params.collection,
@@ -862,7 +865,7 @@ pub async fn handle_create_nodes_from_markdown(
 
     // Validate markdown content size
     if params.markdown_content.len() > MAX_MARKDOWN_SIZE {
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Markdown content exceeds maximum size of {} bytes (got {} bytes)",
             MAX_MARKDOWN_SIZE,
             params.markdown_content.len()
@@ -882,7 +885,7 @@ pub async fn handle_create_nodes_from_markdown(
             .find(|line| !line.trim().is_empty())
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                MCPError::invalid_params(
+                MarkdownError::invalid_params(
                     "markdown_content is empty and no title provided".to_string(),
                 )
             })?;
@@ -923,7 +926,7 @@ pub async fn handle_create_nodes_from_markdown(
                 .ensure_date_exists(date_id)
                 .await
                 .map_err(|e| {
-                    MCPError::internal_error(format!("Failed to create date container: {}", e))
+                    MarkdownError::internal_error(format!("Failed to create date container: {}", e))
                 })?;
             root_id = date_id.clone();
         }
@@ -937,13 +940,13 @@ pub async fn handle_create_nodes_from_markdown(
             );
 
             if title_prepared.is_empty() {
-                return Err(MCPError::invalid_params(
+                return Err(MarkdownError::invalid_params(
                     "title could not be parsed into a node".to_string(),
                 ));
             }
 
             if title_prepared.len() != 1 {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "container_title must parse to exactly one node, got {}",
                     title_prepared.len()
                 )));
@@ -951,7 +954,7 @@ pub async fn handle_create_nodes_from_markdown(
 
             let container = &title_prepared[0];
             if !is_valid_container_type(&container.node_type) {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "container_title parsed to '{}' which cannot be a container. Only text, header, or date nodes can be containers.",
                     container.node_type
                 )));
@@ -971,7 +974,10 @@ pub async fn handle_create_nodes_from_markdown(
                 })
                 .await
                 .map_err(|e| {
-                    MCPError::node_creation_failed(format!("Failed to create container: {}", e))
+                    MarkdownError::node_creation_failed(format!(
+                        "Failed to create container: {}",
+                        e
+                    ))
                 })?;
             tracing::debug!(
                 root_id = %container_id,
@@ -989,7 +995,7 @@ pub async fn handle_create_nodes_from_markdown(
     }
 
     // Phase 2: Prepare and insert children
-    // Default: Fire-and-forget async for fast MCP response
+    // Default: fire-and-forget async so the caller returns quickly
     // sync_import=true: Wait for completion (for tests only)
     tracing::debug!(
         "create_nodes_from_markdown: starting Phase 2 at {}ms",
@@ -1007,7 +1013,7 @@ pub async fn handle_create_nodes_from_markdown(
 
         // Validate node count limit
         if prepared_children.len() + all_nodes.len() > MAX_NODES_PER_IMPORT {
-            return Err(MCPError::invalid_params(format!(
+            return Err(MarkdownError::invalid_params(format!(
                 "Import would create {} nodes, exceeding maximum of {}",
                 prepared_children.len() + all_nodes.len(),
                 MAX_NODES_PER_IMPORT
@@ -1043,7 +1049,7 @@ pub async fn handle_create_nodes_from_markdown(
                     .bulk_create_hierarchy(nodes_for_bulk)
                     .await
                     .map_err(|e| {
-                        MCPError::internal_error(format!("Bulk creation failed: {}", e))
+                        MarkdownError::internal_error(format!("Bulk creation failed: {}", e))
                     })?;
 
                 // Track all created nodes (only needed for sync mode)
@@ -1073,15 +1079,18 @@ pub async fn handle_create_nodes_from_markdown(
                             .await
                             .map_err(|e| match e {
                                 NodeServiceError::InvalidCollectionPath(msg) => {
-                                    MCPError::invalid_params(format!(
+                                    MarkdownError::invalid_params(format!(
                                         "Invalid collection path: {}",
                                         msg
                                     ))
                                 }
-                                NodeServiceError::CollectionCycle(msg) => MCPError::invalid_params(
-                                    format!("Collection cycle detected: {}", msg),
-                                ),
-                                _ => MCPError::internal_error(format!(
+                                NodeServiceError::CollectionCycle(msg) => {
+                                    MarkdownError::invalid_params(format!(
+                                        "Collection cycle detected: {}",
+                                        msg
+                                    ))
+                                }
+                                _ => MarkdownError::internal_error(format!(
                                     "Failed to resolve collection: {}",
                                     e
                                 )),
@@ -1182,12 +1191,14 @@ pub async fn handle_create_nodes_from_markdown(
                 .await
                 .map_err(|e| match e {
                     NodeServiceError::InvalidCollectionPath(msg) => {
-                        MCPError::invalid_params(format!("Invalid collection path: {}", msg))
+                        MarkdownError::invalid_params(format!("Invalid collection path: {}", msg))
                     }
                     NodeServiceError::CollectionCycle(msg) => {
-                        MCPError::invalid_params(format!("Collection cycle detected: {}", msg))
+                        MarkdownError::invalid_params(format!("Collection cycle detected: {}", msg))
                     }
-                    _ => MCPError::internal_error(format!("Failed to add to collection: {}", e)),
+                    _ => {
+                        MarkdownError::internal_error(format!("Failed to add to collection: {}", e))
+                    }
                 })?;
             Some(resolved.leaf_id().to_string())
         } else {
@@ -1247,7 +1258,7 @@ pub async fn handle_create_nodes_from_markdown(
 /// Template for creating a typed node hierarchy from markdown content.
 ///
 /// The markdown body is parsed through the same `prepare_nodes_from_markdown`
-/// pipeline used by the bulk-import MCP tool.  After parsing, the caller-
+/// pipeline used by the bulk-import path.  After parsing, the caller-
 /// supplied type overrides and property injections are applied so the result
 /// is ready for insertion via `NodeService`.
 ///
@@ -1321,7 +1332,9 @@ pub struct NodeTemplate {
 /// the markdown hierarchy is preserved.  Property injection merges keys from
 /// the template into the parsed properties, with template values winning on
 /// conflict.
-pub fn prepare_nodes_from_template(tmpl: &NodeTemplate) -> Result<Vec<PreparedNode>, MCPError> {
+pub fn prepare_nodes_from_template(
+    tmpl: &NodeTemplate,
+) -> Result<Vec<PreparedNode>, MarkdownError> {
     let root_id = uuid::Uuid::new_v4().to_string();
 
     // Root content: use explicit `content` field when provided, otherwise fall back to `title`.
@@ -1522,12 +1535,12 @@ fn is_table_delimiter(line: &str) -> bool {
 ///
 /// # Returns
 ///
-/// Returns `Ok(())` on success, or an `MCPError` if node creation fails.
+/// Returns `Ok(())` on success, or an `MarkdownError` if node creation fails.
 async fn parse_markdown(
     markdown: &str,
     node_service: &Arc<NodeService>,
     context: &mut ParserContext,
-) -> Result<(), MCPError> {
+) -> Result<(), MarkdownError> {
     // Phase 1: Parse markdown into PreparedNodes using shared detection logic
     let prepared_nodes = prepare_nodes_from_markdown(markdown, context.root_id.clone())?;
 
@@ -1590,7 +1603,7 @@ async fn create_node(
     _root_node_id: Option<String>, // Deprecated - kept for backward compat but ignored (root auto-derived from parent)
     insert_after_node_id: Option<String>, // Insert after this sibling (None = insert at beginning)
     custom_properties: Option<Value>, // Custom properties from markdown parsing (e.g., task status)
-) -> Result<String, MCPError> {
+) -> Result<String, MarkdownError> {
     // Create node via NodeService (enforces all business rules)
     // Note: container/root is now auto-derived from parent chain by backend
     // Note: sibling ordering uses insert_after_node_id to maintain document order
@@ -1611,7 +1624,7 @@ async fn create_node(
 
     node_service
         .create_node_with_parent(CreateNodeParams {
-            id: None, // MCP generates IDs server-side
+            id: None, // IDs are generated server-side
             node_type: node_type.to_string(),
             content: content.to_string(),
             parent_id,
@@ -1632,7 +1645,7 @@ async fn create_node(
                 content_preview
             };
 
-            MCPError::node_creation_failed(format!(
+            MarkdownError::node_creation_failed(format!(
                 "Failed to create {} node '{}': {}",
                 node_type, content_display, e
             ))
@@ -1694,10 +1707,10 @@ fn default_include_node_ids() -> bool {
 pub async fn handle_get_markdown_from_node_id(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     // Parse parameters
     let params: GetMarkdownParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // Use shared get_subtree_data for efficient bulk fetch (same as frontend uses)
     // This performs exactly 3 database queries regardless of tree depth or node count:
@@ -1707,9 +1720,9 @@ pub async fn handle_get_markdown_from_node_id(
     let (root_node, node_map, adjacency_list) = node_service
         .get_subtree_data(&params.node_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get subtree data: {}", e)))?;
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get subtree data: {}", e)))?;
 
-    let root_node = root_node.ok_or_else(|| MCPError::node_not_found(&params.node_id))?;
+    let root_node = root_node.ok_or_else(|| MarkdownError::node_not_found(&params.node_id))?;
 
     // Build markdown by traversing hierarchy in memory (no database calls)
     let mut markdown = String::new();
@@ -2033,16 +2046,16 @@ pub struct UpdateRootFromMarkdownParams {
 pub async fn handle_update_root_from_markdown(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     // Parse parameters
     let params: UpdateRootFromMarkdownParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     let root_id = params.root_id;
 
     // Validate markdown content size
     if params.markdown.len() > MAX_MARKDOWN_SIZE {
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Markdown content exceeds maximum size of {} bytes (got {} bytes)",
             MAX_MARKDOWN_SIZE,
             params.markdown.len()
@@ -2053,8 +2066,8 @@ pub async fn handle_update_root_from_markdown(
     node_service
         .get_node(&root_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get root node: {}", e)))?
-        .ok_or_else(|| MCPError::node_not_found(&root_id))?;
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get root node: {}", e)))?
+        .ok_or_else(|| MarkdownError::node_not_found(&root_id))?;
 
     // Get all existing descendants using graph traversal
     // This gets ALL nodes in the hierarchy, including nested children
@@ -2062,7 +2075,7 @@ pub async fn handle_update_root_from_markdown(
     let mut existing_children = node_service
         .get_descendants(&root_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get children: {}", e)))?;
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get children: {}", e)))?;
 
     // Note: get_nodes_by_root() already excludes the root itself
     // (root has root_node_id = None, not equal to itself)
@@ -2124,7 +2137,7 @@ pub async fn handle_update_root_from_markdown(
 
     // Validate we didn't exceed max nodes
     if context.nodes.len() > MAX_NODES_PER_IMPORT {
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Import created {} nodes, exceeding maximum of {}",
             context.nodes.len(),
             MAX_NODES_PER_IMPORT

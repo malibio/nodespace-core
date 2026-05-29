@@ -8,7 +8,7 @@
 #[cfg(test)]
 mod skill_updater_tests {
     use anyhow::Result;
-    use nodespace_core::db::SurrealStore;
+    use nodespace_core::db::SqliteStore;
     use nodespace_core::models::Node;
     use nodespace_core::ops::skill_updater::{build_node_creation_description, SkillUpdater};
     use nodespace_core::services::NodeService;
@@ -20,7 +20,7 @@ mod skill_updater_tests {
     async fn create_test_service() -> Result<(Arc<NodeService>, TempDir)> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
-        let mut store = Arc::new(SurrealStore::new(db_path).await?);
+        let mut store = Arc::new(SqliteStore::new(db_path).await?);
         let service = Arc::new(NodeService::new(&mut store).await?);
         Ok((service, temp_dir))
     }
