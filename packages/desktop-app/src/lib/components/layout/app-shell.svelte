@@ -27,6 +27,7 @@
   import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
   import ProSyncPill from '$lib/components/pro-sync-pill.svelte';
   import { proSync } from '$lib/stores/pro-sync.svelte';
+  import ConflictToast from '$lib/components/conflict-toast.svelte';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -579,6 +580,9 @@
 
     <!-- First-launch onboarding wizard (Issue #1180) -->
     <OnboardingWizard open={showOnboarding} onClose={() => (showOnboarding = false)} />
+
+    <!-- Conflict resolution notifications (Issue #642) -->
+    <ConflictToast />
   </NodeServiceContext>
 </ThemeProvider>
 

@@ -47,6 +47,7 @@ import type {
   StoreMetrics,
   UpdateOptions
 } from '$lib/types/update-protocol';
+import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 
 const log = createLogger('SharedNodeStore');
 
@@ -2312,6 +2313,13 @@ export class SharedNodeStore {
     this.versions.set(conflict.nodeId, this.getNextVersion(conflict.nodeId));
 
     log.debug(`Conflict resolved for node: ${conflict.nodeId}, strategy: ${resolution.strategy}`);
+
+    // Surface conflict to UI
+    conflictNotifications.add({
+      nodeId: conflict.nodeId,
+      message: 'Your edit was overwritten by another pane',
+      conflictType: conflict.conflictType
+    });
 
     // Notify subscribers
     this.notifySubscribers(conflict.nodeId, resolution.resolvedNode, conflict.remoteUpdate.source);
