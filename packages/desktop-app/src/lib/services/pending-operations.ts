@@ -16,7 +16,7 @@ const pendingMoveOperations: Map<string, Promise<void>> = new Map();
  *
  * Race condition scenario:
  * 1. User indents B under A (fires moveNodeCommand async)
- * 2. User immediately outdents C (which references B as insertAfterNodeId)
+ * 2. User immediately outdents C (which inserts After B via InsertPosition)
  * 3. If step 1's moveNodeCommand hasn't completed, edge A→B doesn't exist yet
  * 4. Backend fails with "Sibling not found: B" because B isn't in A's has_child edges
  */

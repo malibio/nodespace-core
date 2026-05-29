@@ -416,7 +416,7 @@ pub struct CreateNodeParams {
     /// Optional parent node ID (container/root will be auto-derived from parent chain)
     pub parent_id: Option<String>,
     /// Where to insert the new node among the parent's children.
-    /// Defaults to `InsertPositionOwned::Beginning` when not specified.
+    /// Callers that want append-at-end should use `InsertPositionOwned::End`.
     pub position: crate::services::InsertPositionOwned,
     /// Additional node properties as JSON
     pub properties: Value,
@@ -2038,9 +2038,9 @@ impl NodeService {
     /// - Node validation fails
     /// - ID format is invalid (non-UUID for production nodes)
     ///
-    /// Note: If `insert_after_node_id` references a sibling that no longer exists
-    /// or has moved to a different parent (stale hint from race condition), the
-    /// operation falls back to appending at the end rather than failing.
+    /// Note: If `position` is `InsertPositionOwned::After(sibling_id)` and that
+    /// sibling no longer exists or has moved to a different parent (stale hint from
+    /// a race condition), the operation falls back to `End` rather than failing.
     ///
     /// # Examples
     ///
@@ -4338,7 +4338,7 @@ impl NodeService {
     /// * `node_id` - The node to move
     /// * `expected_version` - The version the caller expects (for OCC)
     /// * `new_parent` - The new parent ID (None to make it a root node)
-    /// * `insert_after_node_id` - Optional sibling to insert after (None = insert at beginning)
+    /// * `position` - Where to insert among the new parent's children
     ///
     /// # Errors
     ///
@@ -4536,6 +4536,11 @@ impl NodeService {
                     let children = self.get_children(pid).await?;
                     Ok(children.last().map(|n| n.id.clone()))
                 } else {
+                    // `End` with no parent (root-level moves) resolves to `None`.
+                    // `SqliteStore::move_node` maps `None` → "before the first sibling"
+                    // (i.e., Beginning). All root-move call sites already use
+                    // `InsertPosition::Beginning` explicitly, so this `None` path is
+                    // a safe no-op in practice but does not semantically mean End.
                     Ok(None)
                 }
             }
@@ -9579,11 +9584,10 @@ mod tests {
         #[serial(sibling_ordering)]
         async fn test_create_parent_edge_reorders_when_explicit_hint_against_existing_edge() {
             // The sync-echo idempotency in `create_parent_edge` is narrowed
-            // to `insert_after_node_id.is_none()`: callers that pass an
-            // explicit `Some(target_sibling)` against an already-present
-            // edge must still see a real reorder. If a future refactor
-            // widens the guard back to "any same-parent edge is a no-op",
-            // this test fails.
+            // to `InsertPosition::End`: callers that pass an explicit
+            // `After(target_sibling)` against an already-present edge must
+            // still see a real reorder. If a future refactor widens the
+            // guard back to "any same-parent edge is a no-op", this test fails.
             let (service, _temp) = create_test_service().await;
 
             let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));

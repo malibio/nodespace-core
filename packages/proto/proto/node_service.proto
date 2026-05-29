@@ -103,7 +103,14 @@ message CreateNodeRequest {
   // the Tauri desktop client so the frontend can track a node locally
   // before persistence completes.
   string id = 7;
-  // Explicit insertion position. Unset (none of the variants present) = End.
+  // Explicit insertion position. Unset (no variant set) = End (append).
+  //
+  // The `beginning` and `end` fields use bool for the variant payload because
+  // proto3 oneof does not support empty-message unit variants inline. The
+  // bool value itself is meaningless — setting `beginning: true` or
+  // `beginning: false` both select the Beginning variant. Callers should
+  // always send `true` for clarity. A future version may migrate to a
+  // dedicated enum field; until then this shape is internal-only.
   oneof position {
     bool beginning = 8;    // insert before all existing children
     bool end = 9;          // insert after all existing children (default when unset)
@@ -365,7 +372,8 @@ message MoveNodeRequest {
   int64 version = 2;
   // new_parent_id empty string = move to root (None on the ops layer).
   string new_parent_id = 3;
-  // Explicit insertion position. Unset = End.
+  // Explicit insertion position. Unset (no variant set) = End.
+  // See CreateNodeRequest.position for encoding notes on the bool variants.
   oneof position {
     bool beginning = 4;
     bool end = 5;
@@ -376,7 +384,8 @@ message MoveNodeRequest {
 message ReorderNodeRequest {
   string node_id = 1;
   int64 version = 2;
-  // Explicit insertion position. Unset = End.
+  // Explicit insertion position. Unset (no variant set) = End.
+  // See CreateNodeRequest.position for encoding notes on the bool variants.
   oneof position {
     bool beginning = 3;
     bool end = 4;
