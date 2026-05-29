@@ -22,7 +22,9 @@ use crate::models::Node;
 use async_trait::async_trait;
 
 pub mod collection_service;
+#[cfg(feature = "nlp")]
 pub mod embedding_processor;
+#[cfg(feature = "nlp")]
 pub mod embedding_service;
 pub mod error;
 pub mod migration_registry;
@@ -139,7 +141,9 @@ pub use collection_service::{
     CollectionPath, CollectionSegment, CollectionService, ResolvedCollection, ResolvedPath,
     COLLECTION_PATH_DELIMITER, MAX_COLLECTION_DEPTH,
 };
+#[cfg(feature = "nlp")]
 pub use embedding_processor::{EmbeddingProcessor, EmbeddingWaker};
+#[cfg(feature = "nlp")]
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
 pub use migration_registry::{MigrationRegistry, MigrationTransform};

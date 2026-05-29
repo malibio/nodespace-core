@@ -7,14 +7,18 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["nlp"]
+nlp = ["dep:nodespace-nlp-engine"]
+
 [dependencies]
 # Database - SQLite via libsql
 libsql = { workspace = true }
 # Vector search extension (statically linked, registered via sqlite3_auto_extension)
 sqlite-vec = { workspace = true }
 
-# NLP Engine for embeddings
-nodespace-nlp-engine = { path = "../nlp-engine" }
+# NLP Engine for embeddings (optional — gate with the `nlp` feature)
+nodespace-nlp-engine = { path = "../nlp-engine", optional = true }
 
 # Async runtime
 tokio = { workspace = true }

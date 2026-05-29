@@ -1,3 +1,4 @@
+#![cfg(feature = "nlp")]
 //! Comprehensive tests for NodeEmbeddingService
 //!
 //! Tests cover:
