@@ -314,6 +314,14 @@
     };
     inMemoryMessages = [...inMemoryMessages, progressMessage];
 
+    // Re-render the placeholder by id (order-independent — it is removed by id too).
+    const renderProgress = (content: string): void => {
+      progressMessage.content = content;
+      inMemoryMessages = inMemoryMessages.map((m) =>
+        m.id === progressMessage.id ? { ...progressMessage } : m
+      );
+    };
+
     interface DownloadProgress {
       bytes_downloaded: number;
       bytes_total: number;
@@ -334,8 +342,7 @@
               ? ` — ~${remainingSec}s remaining`
               : ` — ~${Math.ceil(remainingSec / 60)} min remaining`;
         }
-        progressMessage.content = `Downloading model for first use... ${mbDown}/${mbTotal} MB (${pct}%)${eta}`;
-        inMemoryMessages = [...inMemoryMessages.slice(0, -1), { ...progressMessage }];
+        renderProgress(`Downloading model for first use... ${mbDown}/${mbTotal} MB (${pct}%)${eta}`);
         statusBar.show(`Downloading model... ${mbDown}/${mbTotal} MB${eta}`, pct);
       }
     );
@@ -346,8 +353,7 @@
     const unlistenStatus = await listen<ModelStatusEvent>(AGENT_EVENTS.MODEL_STATUS, (event) => {
       const { status: s } = event.payload;
       if (s === 'loading') {
-        progressMessage.content = 'Loading model... this may take a moment on first use.';
-        inMemoryMessages = [...inMemoryMessages.slice(0, -1), { ...progressMessage }];
+        renderProgress('Loading model... this may take a moment on first use.');
         statusBar.show('Loading model...');
       } else if (s === 'ready') {
         statusBar.success('Model ready');

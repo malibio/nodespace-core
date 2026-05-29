@@ -28,12 +28,15 @@ function toModelStatus(s: ChatModelStatus): ModelStatus {
 }
 
 /**
- * Adapt a `chat_model_list` catalog entry to the store's `ModelInfo` shape.
- * `ChatModelEntry` is the leaner catalog row (built-in GGUF + Ollama merged);
- * fields it doesn't carry (filename/url/sha256) aren't surfaced for these rows.
+ * Adapt a built-in (GGUF) `chat_model_list` catalog entry to the store's
+ * `ModelInfo` shape. Callers must pre-filter to `backend === 'gguf'` (this store
+ * doesn't manage Ollama rows). The lean catalog row carries no filename/url/sha256;
+ * those aren't surfaced for catalog-sourced models.
  */
 function chatEntryToModelInfo(entry: ChatModelEntry): ModelInfo {
-  const family: ModelFamily = entry.backend === 'ollama' ? 'ollama' : 'ministral';
+  // GGUF family isn't carried by the catalog row; infer from the id where known,
+  // defaulting to the predominant built-in family.
+  const family: ModelFamily = entry.id.startsWith('gemma') ? 'gemma4' : 'ministral';
   return {
     id: entry.id,
     family,
@@ -150,7 +153,15 @@ class ModelStore {
           tauriCommands.chatModelList(),
           tauriCommands.getSystemRamGb(),
         ]);
-        this.models = entries.map(chatEntryToModelInfo);
+        // This store manages the *built-in* (GGUF) download/load lifecycle; its
+        // consumers (model-manager, onboarding) download by URL and recommend a
+        // model to fetch. Ollama models are pulled out-of-band (no URL here) and
+        // are surfaced separately by AiChatModelPicker, so exclude them — letting
+        // them in would render dead download buttons and let `recommendedModel`
+        // pick an un-downloadable row.
+        this.models = entries
+          .filter((e) => e.backend === 'gguf')
+          .map(chatEntryToModelInfo);
         this.systemRamGb = ram;
         // Detect which model is loaded
         const loaded = this.models.find((m) => m.status.status === 'loaded');
