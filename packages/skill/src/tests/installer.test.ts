@@ -11,7 +11,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP };
 });
 
-const { install, uninstall } = await import('../installer.js');
+const { install, uninstall, isNodespaceBinaryOnPath } = await import('../installer.js');
 const { AGENTS } = await import('../agents.js');
 
 const SKILL_MD_CONTENT = '# NodeSpace Skill\nTest content';
@@ -178,5 +178,65 @@ describe('uninstall', () => {
     for (const result of results) {
       expect(result.removed.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('isNodespaceBinaryOnPath', () => {
+  it('returns true when execFileSync exits 0', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({
+      execFileSync: () => Buffer.from('nodespace 0.1.0\n'),
+    }));
+    const { isNodespaceBinaryOnPath: check } = await import('../installer.js');
+    expect(check()).toBe(true);
+    vi.doUnmock('node:child_process');
+    vi.resetModules();
+  });
+
+  it('returns false when execFileSync throws (binary not found)', async () => {
+    // Patch child_process on the installer module's live reference by re-importing
+    // after hoisting the mock.  vi.doMock + resetModules lets us control this.
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({
+      execFileSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+    }));
+    const { isNodespaceBinaryOnPath: check } = await import('../installer.js');
+    expect(check()).toBe(false);
+    vi.doUnmock('node:child_process');
+    vi.resetModules();
+  });
+});
+
+describe('install PATH warning', () => {
+  it('writes a warning to stderr when nodespace is not on PATH', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({
+      execFileSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+    }));
+    const { install: freshInstall } = await import('../installer.js');
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    freshInstall([], FAKE_PKG_ROOT);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('nodespace` is not on $PATH'));
+
+    stderrSpy.mockRestore();
+    vi.doUnmock('node:child_process');
+    vi.resetModules();
+  });
+
+  it('does not write a warning when nodespace is on PATH', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({
+      execFileSync: () => Buffer.from('nodespace 0.1.0\n'),
+    }));
+    const { install: freshInstall } = await import('../installer.js');
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    freshInstall([], FAKE_PKG_ROOT);
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    stderrSpy.mockRestore();
+    vi.doUnmock('node:child_process');
+    vi.resetModules();
   });
 });
