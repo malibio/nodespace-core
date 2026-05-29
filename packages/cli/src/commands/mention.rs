@@ -67,8 +67,8 @@ async fn create(
 ) -> Result<()> {
     let response = client
         .create_mention(CreateMentionRequest {
-            mentioning_node_id: args.from.clone(),
-            mentioned_node_id: args.to.clone(),
+            mentioning_node_id: args.from,
+            mentioned_node_id: args.to,
         })
         .await
         .context("CreateMention RPC failed")?
@@ -98,8 +98,8 @@ async fn delete(
 ) -> Result<()> {
     let response = client
         .delete_mention(DeleteMentionRequest {
-            mentioning_node_id: args.from.clone(),
-            mentioned_node_id: args.to.clone(),
+            mentioning_node_id: args.from,
+            mentioned_node_id: args.to,
         })
         .await
         .context("DeleteMention RPC failed")?

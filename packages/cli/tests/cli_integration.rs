@@ -349,7 +349,7 @@ async fn node_query_by_type() {
         collection: String::new(),
         lifecycle_status: String::new(),
         id: String::new(),
-        insert_after_node_id: String::new(),
+        position: None,
     })
     .await
     .expect("seed task");
@@ -362,7 +362,7 @@ async fn node_query_by_type() {
         collection: String::new(),
         lifecycle_status: String::new(),
         id: String::new(),
-        insert_after_node_id: String::new(),
+        position: None,
     })
     .await
     .expect("seed text");
@@ -401,7 +401,7 @@ async fn node_export_markdown() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed root")
@@ -415,7 +415,7 @@ async fn node_export_markdown() {
         collection: String::new(),
         lifecycle_status: String::new(),
         id: String::new(),
-        insert_after_node_id: String::new(),
+        position: None,
     })
     .await
     .expect("seed child");
@@ -451,7 +451,7 @@ async fn node_batch_get_and_update() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed a")
@@ -467,7 +467,7 @@ async fn node_batch_get_and_update() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed b")
@@ -520,7 +520,7 @@ async fn mention_create_query_delete() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed source")
@@ -536,7 +536,7 @@ async fn mention_create_query_delete() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed target")

@@ -190,7 +190,7 @@ message GetChildrenRequest {
 
 message GetRootsRequest {
   // 0 = no limit/offset; all roots are returned.
-  // limit/offset are pushed into SurrealDB (LIMIT/START AT) for efficiency.
+  // limit/offset are pushed into SQLite (LIMIT/OFFSET) for efficiency.
   uint32 limit = 1;
   uint32 offset = 2;
 }

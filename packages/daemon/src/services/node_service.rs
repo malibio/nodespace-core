@@ -21,8 +21,8 @@ use nodespace_core::ops::{
     OpsError,
 };
 use nodespace_core::services::{
-    CollectionService, CreateNodeParams, InsertPosition, InsertPositionOwned, NodeEmbeddingService,
-    NodeService as CoreNodeService, NodeServiceError,
+    CollectionService, CreateNodeParams, InsertPosition, InsertPositionOwned, NodeAccessor,
+    NodeEmbeddingService, NodeService as CoreNodeService, NodeServiceError,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::ReceiverStream;
@@ -729,8 +729,14 @@ impl GrpcNodeService for NodeServiceImpl {
                     other => Status::internal(format!("ExportMarkdown failed: {other}")),
                 })?;
 
-        let markdown = result["markdown"].as_str().unwrap_or("").to_string();
-        let node_count = result["node_count"].as_u64().unwrap_or(0) as u32;
+        let markdown = result["markdown"]
+            .as_str()
+            .ok_or_else(|| Status::internal("ExportMarkdown: missing 'markdown' in response"))?
+            .to_string();
+        let node_count = result["node_count"]
+            .as_u64()
+            .ok_or_else(|| Status::internal("ExportMarkdown: missing 'node_count' in response"))?
+            as u32;
 
         Ok(Response::new(ExportMarkdownResponse {
             markdown,
@@ -756,21 +762,28 @@ impl GrpcNodeService for NodeServiceImpl {
             )));
         }
 
-        let mut nodes = Vec::new();
-        let mut not_found = Vec::new();
+        let id_refs: Vec<&str> = req.node_ids.iter().map(String::as_str).collect();
+        let fetched = self
+            .node_service
+            .get_nodes(&id_refs)
+            .await
+            .map_err(|e| Status::internal(format!("get_nodes_batch failed: {e}")))?;
 
-        for node_id in req.node_ids {
-            match self.node_service.get_node(&node_id).await {
-                Ok(Some(node)) => nodes.push(node_to_proto(node, None, None)),
-                Ok(None) => not_found.push(node_id),
-                Err(e) => {
-                    tracing::warn!("get_nodes_batch: error fetching {}: {}", node_id, e);
-                    not_found.push(node_id);
-                }
-            }
-        }
+        let fetched_ids: std::collections::HashSet<String> =
+            fetched.iter().map(|n| n.id.clone()).collect();
+        let not_found: Vec<String> = req
+            .node_ids
+            .iter()
+            .filter(|id| !fetched_ids.contains(*id))
+            .cloned()
+            .collect();
 
+        let nodes: Vec<NodeData> = fetched
+            .into_iter()
+            .map(|n| node_to_proto(n, None, None))
+            .collect();
         let count = nodes.len() as i32;
+
         Ok(Response::new(GetNodesBatchResponse {
             nodes,
             not_found,
@@ -800,23 +813,29 @@ impl GrpcNodeService for NodeServiceImpl {
         for item in req.updates {
             let version = match item.version {
                 Some(v) => v,
-                None => match self.node_service.get_node(&item.node_id).await {
-                    Ok(Some(node)) => node.version,
-                    Ok(None) => {
-                        failed.push(BatchUpdateFailure {
-                            node_id: item.node_id.clone(),
-                            error: format!("Node '{}' not found", item.node_id),
-                        });
-                        continue;
+                None => {
+                    tracing::warn!(
+                        node_id = %item.node_id,
+                        "OCC bypassed: version not provided for batch update (race condition possible)"
+                    );
+                    match self.node_service.get_node(&item.node_id).await {
+                        Ok(Some(node)) => node.version,
+                        Ok(None) => {
+                            failed.push(BatchUpdateFailure {
+                                node_id: item.node_id.clone(),
+                                error: format!("Node '{}' not found", item.node_id),
+                            });
+                            continue;
+                        }
+                        Err(e) => {
+                            failed.push(BatchUpdateFailure {
+                                node_id: item.node_id.clone(),
+                                error: e.to_string(),
+                            });
+                            continue;
+                        }
                     }
-                    Err(e) => {
-                        failed.push(BatchUpdateFailure {
-                            node_id: item.node_id.clone(),
-                            error: e.to_string(),
-                        });
-                        continue;
-                    }
-                },
+                }
             };
 
             let props = match item.properties {
