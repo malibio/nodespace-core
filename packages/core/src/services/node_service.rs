@@ -717,6 +717,7 @@ pub struct NodeService {
     /// without polling.
     ///
     /// Use `set_embedding_waker()` to configure after processor is initialized.
+    #[cfg(feature = "nlp")]
     embedding_waker: Option<crate::services::EmbeddingWaker>,
 }
 
@@ -729,6 +730,7 @@ impl Clone for NodeService {
             event_tx: self.event_tx.clone(),
             client_id: self.client_id.clone(),
             execution_context: self.execution_context.clone(),
+            #[cfg(feature = "nlp")]
             embedding_waker: self.embedding_waker.clone(),
         }
     }
@@ -844,6 +846,7 @@ impl NodeService {
             event_tx,
             client_id: None,
             execution_context: None,
+            #[cfg(feature = "nlp")]
             embedding_waker: None,
         };
 
@@ -857,6 +860,7 @@ impl NodeService {
     ///
     /// # Arguments
     /// * `waker` - The waker handle from `EmbeddingProcessor::waker()`
+    #[cfg(feature = "nlp")]
     pub fn set_embedding_waker(&mut self, waker: crate::services::EmbeddingWaker) {
         self.embedding_waker = Some(waker);
     }
@@ -2245,6 +2249,7 @@ impl NodeService {
             // Step 7a: Child node created - queue root for embedding regeneration
             // The new child's content should be included in the root's aggregate embedding
             // (Issue #729 - root-aggregate model)
+            #[cfg(feature = "nlp")]
             self.queue_root_for_embedding(&created_id).await;
         } else {
             // Step 7b: Root node created - queue for embedding if embeddable type
@@ -2263,6 +2268,7 @@ impl NodeService {
                         "Queued new root {} for embedding (direct creation)",
                         created_id
                     );
+                    #[cfg(feature = "nlp")]
                     if let Some(ref waker) = self.embedding_waker {
                         waker.wake();
                     }
@@ -3225,6 +3231,7 @@ impl NodeService {
 
         // Queue root for embedding regeneration if content changed (Issue #729 - root-aggregate model)
         // Fire-and-forget: don't block the update response on embedding queue operations
+        #[cfg(feature = "nlp")]
         if content_changed {
             let store = self.store.clone();
             let behaviors = self.behaviors.clone();
@@ -3651,6 +3658,7 @@ impl NodeService {
 
         // 5. Queue root for embedding regeneration (Issue #729 - root-aggregate model)
         // Only queue if the deleted node was NOT the root itself (root deletion removes embedding)
+        #[cfg(feature = "nlp")]
         if let Some(root_id) = root_id_for_embedding {
             if root_id != node_id {
                 // Deleted a child node - root's aggregate embedding needs updating
@@ -3986,6 +3994,7 @@ impl NodeService {
     /// Only root nodes of embeddable types get embedded. When any node in the tree
     /// changes, we find the root and mark its embedding as stale. The background
     /// `EmbeddingProcessor` will regenerate the embedding with updated content.
+    #[cfg(feature = "nlp")]
     pub async fn queue_root_for_embedding(&self, node_id: &str) {
         // Find the root of this node's tree
         let root_id = match self.get_root_id(node_id).await {
@@ -4062,15 +4071,16 @@ impl NodeService {
             );
 
             // Wake the embedding processor (fire-and-forget)
+            #[cfg(feature = "nlp")]
             if let Some(ref waker) = self.embedding_waker {
                 tracing::debug!("🔔 Waking embedding processor for root {}", root_id);
                 waker.wake();
-            } else {
-                tracing::warn!(
-                    "⚠️ No embedding waker configured - root {} will not be processed automatically",
-                    root_id
-                );
             }
+            #[cfg(not(feature = "nlp"))]
+            tracing::debug!(
+                "📥 Root {} queued for embedding (nlp feature disabled)",
+                root_id
+            );
         }
     }
 
@@ -4078,6 +4088,7 @@ impl NodeService {
     ///
     /// This is used when we want to fire-and-forget the embedding queue operation
     /// without blocking the calling thread (e.g., during node updates).
+    #[cfg(feature = "nlp")]
     async fn queue_root_for_embedding_async(
         store: &Arc<SqliteStore>,
         behaviors: &Arc<NodeBehaviorRegistry>,
@@ -5435,6 +5446,7 @@ impl NodeService {
 
         // Queue root for embedding regeneration once (Issue #729, #760)
         // All nodes share the same root, so we only need one queue operation
+        #[cfg(feature = "nlp")]
         if let Some(root_id) = root_id {
             self.queue_root_for_embedding(&root_id).await;
         }
@@ -5542,6 +5554,7 @@ impl NodeService {
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         // Queue root for embedding regeneration once
+        #[cfg(feature = "nlp")]
         if let Some(root_id) = root_id {
             self.queue_root_for_embedding(&root_id).await;
         }
@@ -5655,6 +5668,7 @@ impl NodeService {
                 Ok(count) => {
                     tracing::debug!("Created {} stale embedding markers", count);
                     // Wake the embedding processor once for all new roots
+                    #[cfg(feature = "nlp")]
                     if let Some(ref waker) = self.embedding_waker {
                         tracing::debug!(
                             "🔔 Waking embedding processor for {} bulk-imported roots",

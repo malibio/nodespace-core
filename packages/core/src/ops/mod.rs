@@ -7,7 +7,9 @@
 pub mod context_ops;
 pub mod node_ops;
 pub mod rel_ops;
+#[cfg(feature = "nlp")]
 pub mod search_ops;
+#[cfg(feature = "nlp")]
 pub mod skill_ops;
 pub mod skill_updater;
 
