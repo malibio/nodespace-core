@@ -942,7 +942,7 @@ async fn import_markdown_content(
             node_type: "header".to_string(),
             content: clean_title,
             parent_id: None,
-            insert_after_node_id: None,
+            position: nodespace_core::services::InsertPositionOwned::End,
             properties,
         })
         .await

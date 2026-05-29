@@ -94,7 +94,7 @@ async fn create_then_get_round_trip() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -136,7 +136,7 @@ async fn update_increments_version() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -181,7 +181,7 @@ async fn get_children_returns_parent_subtree() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create parent")
@@ -197,7 +197,7 @@ async fn get_children_returns_parent_subtree() {
                 collection: String::new(),
                 lifecycle_status: String::new(),
                 id: String::new(),
-                insert_after_node_id: String::new(),
+                position: None,
             })
             .await
             .expect("create child");
@@ -248,7 +248,7 @@ async fn delete_node_marks_existed() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -346,7 +346,7 @@ async fn watch_nodes_receives_create_update_delete_events() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -435,7 +435,7 @@ async fn watch_nodes_supports_multiple_concurrent_watchers() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed")
@@ -496,7 +496,7 @@ async fn watch_nodes_closes_when_client_drops_stream() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("create_node failed");
@@ -525,7 +525,7 @@ async fn create_node_rejects_malformed_properties() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect_err("expected invalid_argument");

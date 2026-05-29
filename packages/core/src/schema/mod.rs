@@ -204,7 +204,7 @@ pub async fn handle_create_schema(
         node_type: "schema".to_string(),
         content: params.name.clone(),
         parent_id: None,
-        insert_after_node_id: None,
+        position: crate::services::InsertPositionOwned::End,
         properties,
     };
 

@@ -136,6 +136,47 @@ impl SearchNodeFilters {
     }
 }
 
+/// Explicit insertion position for hierarchy operations.
+///
+/// Replaces the overloaded `insert_after_node_id: Option<&str>` pattern where
+/// `None` silently meant "beginning" for most callers but "end" for sync
+/// callers (who had to compute `last_child_id` themselves). This enum makes
+/// caller intent unambiguous at the type level.
+///
+/// The borrowed variant `InsertPosition<'_>` is used for function parameters.
+/// For owned storage (e.g. `CreateNodeParams`), use `InsertPositionOwned`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InsertPosition<'a> {
+    /// Insert at the beginning of the parent's children list.
+    Beginning,
+    /// Insert at the end of the parent's children list.
+    End,
+    /// Insert directly after the named sibling.
+    ///
+    /// If the sibling is not found in the parent's children, falls back to
+    /// `End` (preserving today's `move_node` fallback semantic for unknown
+    /// siblings).
+    After(&'a str),
+}
+
+/// Owned version of [`InsertPosition`] for storage in structs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InsertPositionOwned {
+    Beginning,
+    End,
+    After(String),
+}
+
+impl InsertPositionOwned {
+    pub fn as_ref(&self) -> InsertPosition<'_> {
+        match self {
+            InsertPositionOwned::Beginning => InsertPosition::Beginning,
+            InsertPositionOwned::End => InsertPosition::End,
+            InsertPositionOwned::After(id) => InsertPosition::After(id.as_str()),
+        }
+    }
+}
+
 pub use collection_service::{
     build_path_string, normalize_collection_name, parse_collection_path, validate_collection_name,
     CollectionPath, CollectionSegment, CollectionService, ResolvedCollection, ResolvedPath,

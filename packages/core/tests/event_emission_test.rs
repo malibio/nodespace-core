@@ -191,7 +191,11 @@ mod event_emission_tests {
         // Create initial parent-child relationship
         service
             .with_client(TEST_CLIENT_ID)
-            .move_node_unchecked(&child.id, Some(&parent1.id), None)
+            .move_node_unchecked(
+                &child.id,
+                Some(&parent1.id),
+                nodespace_core::services::InsertPosition::Beginning,
+            )
             .await?;
 
         // Subscribe to events (AFTER setup)
@@ -200,7 +204,11 @@ mod event_emission_tests {
         // Move child to new parent
         service
             .with_client(TEST_CLIENT_ID)
-            .move_node_unchecked(&child.id, Some(&parent2.id), None)
+            .move_node_unchecked(
+                &child.id,
+                Some(&parent2.id),
+                nodespace_core::services::InsertPosition::Beginning,
+            )
             .await?;
 
         // Receive the emitted event (Issue #811: unified relationship events, Issue #995: EventEnvelope)

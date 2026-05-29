@@ -103,10 +103,12 @@ message CreateNodeRequest {
   // the Tauri desktop client so the frontend can track a node locally
   // before persistence completes.
   string id = 7;
-  // Sibling node ID to insert after; empty = insert at the beginning of
-  // the parent's children. Matches CreateNodeParams.insert_after_node_id
-  // in packages/core.
-  string insert_after_node_id = 8;
+  // Explicit insertion position. Unset (none of the variants present) = End.
+  oneof position {
+    bool beginning = 8;    // insert before all existing children
+    bool end = 9;          // insert after all existing children (default when unset)
+    string after = 10;     // insert after this sibling ID
+  }
 }
 
 message NodeResponse {
@@ -363,15 +365,23 @@ message MoveNodeRequest {
   int64 version = 2;
   // new_parent_id empty string = move to root (None on the ops layer).
   string new_parent_id = 3;
-  // insert_after_node_id empty string = first position (None on the ops layer).
-  string insert_after_node_id = 4;
+  // Explicit insertion position. Unset = End.
+  oneof position {
+    bool beginning = 4;
+    bool end = 5;
+    string after = 6;
+  }
 }
 
 message ReorderNodeRequest {
   string node_id = 1;
   int64 version = 2;
-  // empty string = insert at beginning of siblings
-  string insert_after_node_id = 3;
+  // Explicit insertion position. Unset = End.
+  oneof position {
+    bool beginning = 3;
+    bool end = 4;
+    string after = 5;
+  }
 }
 
 // reorder_node returns () in the ops layer; we return Empty.

@@ -969,7 +969,7 @@ pub async fn handle_create_nodes_from_markdown(
                     node_type: container.node_type.clone(),
                     content: container.content.clone(),
                     parent_id: None, // Root node
-                    insert_after_node_id: None,
+                    position: crate::services::InsertPositionOwned::End,
                     properties: container.properties.clone(),
                 })
                 .await
@@ -1568,7 +1568,10 @@ async fn parse_markdown(
         });
 
         let parent_key = actual_parent_id.clone().unwrap_or_default();
-        let insert_after = last_sibling_per_parent.get(&parent_key).cloned();
+        let position = match last_sibling_per_parent.get(&parent_key) {
+            Some(prev_id) => crate::services::InsertPositionOwned::After(prev_id.clone()),
+            None => crate::services::InsertPositionOwned::End,
+        };
 
         let actual_node_id = create_node(
             node_service,
@@ -1576,7 +1579,7 @@ async fn parse_markdown(
             &node.content,
             actual_parent_id,
             context.root_id.clone(),
-            insert_after,
+            position,
             Some(node.properties.clone()),
         )
         .await?;
@@ -1601,34 +1604,25 @@ async fn create_node(
     content: &str,
     parent_id: Option<String>,
     _root_node_id: Option<String>, // Deprecated - kept for backward compat but ignored (root auto-derived from parent)
-    insert_after_node_id: Option<String>, // Insert after this sibling (None = insert at beginning)
+    position: crate::services::InsertPositionOwned,
     custom_properties: Option<Value>, // Custom properties from markdown parsing (e.g., task status)
 ) -> Result<String, MarkdownError> {
-    // Create node via NodeService (enforces all business rules)
-    // Note: container/root is now auto-derived from parent chain by backend
-    // Note: sibling ordering uses insert_after_node_id to maintain document order
-
-    // Use custom properties if provided, otherwise use defaults based on node type
     let properties = if let Some(props) = custom_properties {
         props
     } else {
         match node_type {
-            "task" => {
-                // Task nodes require status field per schema
-                // Default to "open" (schema default, Issue #670)
-                json!({"status": "open"})
-            }
+            "task" => json!({"status": "open"}),
             _ => json!({}),
         }
     };
 
     node_service
         .create_node_with_parent(CreateNodeParams {
-            id: None, // IDs are generated server-side
+            id: None,
             node_type: node_type.to_string(),
             content: content.to_string(),
             parent_id,
-            insert_after_node_id, // Insert after last sibling to preserve document order
+            position,
             properties,
         })
         .await

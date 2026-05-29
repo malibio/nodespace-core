@@ -597,7 +597,7 @@ describe('Backend Adapter - HttpAdapter (Browser Dev Mode)', () => {
         headers: new Headers({ 'content-length': '0' })
       });
 
-      await adapter.moveNode('node-1', 1, 'new-parent', 'sibling-1');
+      await adapter.moveNode('node-1', 1, 'new-parent', { type: 'after', siblingId: 'sibling-1' });
 
       expect(mockFetch).toHaveBeenCalledWith(
         'http://localhost:3001/api/nodes/node-1/parent',
@@ -606,7 +606,7 @@ describe('Backend Adapter - HttpAdapter (Browser Dev Mode)', () => {
           body: JSON.stringify({
             version: 1,
             parentId: 'new-parent',
-            insertAfterNodeId: 'sibling-1'
+            insertPosition: { type: 'after', siblingId: 'sibling-1' }
           })
         })
       );
@@ -1001,7 +1001,7 @@ describe('Backend Adapter - TauriAdapter (Tauri IPC Mode)', () => {
         properties: { key: 'value' },
         mentions: ['mention-1'],
         parentId: 'parent-1',
-        insertAfterNodeId: 'sibling-1'
+        insertPosition: { type: 'after', siblingId: 'sibling-1' }
       };
 
       const result = await adapter.createNode(input);
@@ -1015,7 +1015,7 @@ describe('Backend Adapter - TauriAdapter (Tauri IPC Mode)', () => {
           properties: { key: 'value' },
           mentions: ['mention-1'],
           parentId: 'parent-1',
-          insertAfterNodeId: 'sibling-1'
+          insertPosition: { type: 'after', siblingId: 'sibling-1' }
         }
       });
     });
@@ -1039,7 +1039,7 @@ describe('Backend Adapter - TauriAdapter (Tauri IPC Mode)', () => {
           properties: {},
           mentions: [],
           parentId: null,
-          insertAfterNodeId: null
+          insertPosition: null
         })
       });
     });
@@ -1223,13 +1223,13 @@ describe('Backend Adapter - TauriAdapter (Tauri IPC Mode)', () => {
 
       mockInvoke.mockResolvedValueOnce(undefined);
 
-      await adapter.moveNode('node-1', 1, 'new-parent', 'sibling-1');
+      await adapter.moveNode('node-1', 1, 'new-parent', { type: 'after', siblingId: 'sibling-1' });
 
       expect(mockInvoke).toHaveBeenCalledWith('move_node', {
         nodeId: 'node-1',
         version: 1,
         newParentId: 'new-parent',
-        insertAfterNodeId: 'sibling-1'
+        insertPosition: { type: 'after', siblingId: 'sibling-1' }
       });
     });
   });

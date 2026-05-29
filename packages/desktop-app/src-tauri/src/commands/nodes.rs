@@ -25,6 +25,56 @@ use tonic::Request;
 
 use crate::services::GrpcClient;
 
+/// Explicit insertion position for new/moved nodes.
+///
+/// Serializes as `{"type":"beginning"}`, `{"type":"end"}`, or
+/// `{"type":"after","siblingId":"<uuid>"}` from the TypeScript side.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum InsertPositionInput {
+    Beginning,
+    End,
+    After { sibling_id: String },
+}
+
+impl InsertPositionInput {
+    /// Encode into the proto oneof field for CreateNodeRequest.
+    pub fn into_create_proto_position(
+        self,
+    ) -> Option<nodespace_proto::nodespace::create_node_request::Position> {
+        use nodespace_proto::nodespace::create_node_request::Position;
+        Some(match self {
+            InsertPositionInput::Beginning => Position::Beginning(true),
+            InsertPositionInput::End => Position::End(true),
+            InsertPositionInput::After { sibling_id } => Position::After(sibling_id),
+        })
+    }
+
+    /// Encode into the proto oneof field for MoveNodeRequest.
+    pub fn into_move_proto_position(
+        self,
+    ) -> Option<nodespace_proto::nodespace::move_node_request::Position> {
+        use nodespace_proto::nodespace::move_node_request::Position;
+        Some(match self {
+            InsertPositionInput::Beginning => Position::Beginning(true),
+            InsertPositionInput::End => Position::End(true),
+            InsertPositionInput::After { sibling_id } => Position::After(sibling_id),
+        })
+    }
+
+    /// Encode into the proto oneof field for ReorderNodeRequest.
+    pub fn into_reorder_proto_position(
+        self,
+    ) -> Option<nodespace_proto::nodespace::reorder_node_request::Position> {
+        use nodespace_proto::nodespace::reorder_node_request::Position;
+        Some(match self {
+            InsertPositionInput::Beginning => Position::Beginning(true),
+            InsertPositionInput::End => Position::End(true),
+            InsertPositionInput::After { sibling_id } => Position::After(sibling_id),
+        })
+    }
+}
+
 /// Input for creating a node - timestamps generated server-side
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,13 +83,10 @@ pub struct CreateNodeInput {
     pub node_type: String,
     pub content: String,
     pub parent_id: Option<String>,
-    // root_id removed - backend auto-derives root from parent chain (Issue #533)
-    /// Sibling node ID to insert after (None = insert at beginning of siblings)
-    /// Used for correct ordering when creating child nodes via Enter key
+    /// Where to insert the new node among siblings. Omit (or null) for End.
     #[serde(default)]
-    pub insert_after_node_id: Option<String>,
+    pub insert_position: Option<InsertPositionInput>,
     pub properties: serde_json::Value,
-    // embedding_vector dropped - not in proto (Issue #1113)
 }
 
 /// Structured error type for Tauri commands
@@ -195,13 +242,16 @@ pub async fn create_node(
     validate_node_type(&node.node_type, &mut c).await?;
 
     let properties_str = node.properties.to_string();
+    let position = node
+        .insert_position
+        .and_then(InsertPositionInput::into_create_proto_position);
     let resp = c
         .create_node(Request::new(CreateNodeRequest {
             id: node.id,
             node_type: node.node_type,
             content: node.content,
             parent_id: node.parent_id.unwrap_or_default(),
-            insert_after_node_id: node.insert_after_node_id.unwrap_or_default(),
+            position,
             properties: properties_str,
             collection: String::new(),
             lifecycle_status: String::new(),
@@ -228,7 +278,7 @@ pub async fn create_root_node(
             node_type: input.node_type,
             content: input.content,
             parent_id: String::new(), // no parent = root
-            insert_after_node_id: String::new(),
+            position: None,           // root nodes have no siblings
             properties: properties_str,
             collection: String::new(),
             lifecycle_status: String::new(),
@@ -370,15 +420,16 @@ pub async fn move_node(
     node_id: String,
     version: i64,
     new_parent_id: Option<String>,
-    insert_after_node_id: Option<String>,
+    insert_position: Option<InsertPositionInput>,
 ) -> Result<Value, CommandError> {
     let mut c = client.client().await;
+    let position = insert_position.and_then(InsertPositionInput::into_move_proto_position);
     let resp = c
         .move_node(Request::new(MoveNodeRequest {
             node_id,
             version,
             new_parent_id: new_parent_id.unwrap_or_default(),
-            insert_after_node_id: insert_after_node_id.unwrap_or_default(),
+            position,
         }))
         .await
         .map_err(status_to_command_error)?;
@@ -393,13 +444,14 @@ pub async fn reorder_node(
     client: State<'_, GrpcClient>,
     node_id: String,
     version: i64,
-    insert_after_node_id: Option<String>,
+    insert_position: Option<InsertPositionInput>,
 ) -> Result<(), CommandError> {
     let mut c = client.client().await;
+    let position = insert_position.and_then(InsertPositionInput::into_reorder_proto_position);
     c.reorder_node(Request::new(ReorderNodeRequest {
         node_id,
         version,
-        insert_after_node_id: insert_after_node_id.unwrap_or_default(),
+        position,
     }))
     .await
     .map_err(status_to_command_error)?;

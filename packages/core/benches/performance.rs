@@ -158,7 +158,7 @@ fn bench_occ_overhead(c: &mut Criterion) {
                         node_type: "text".to_string(),
                         content: "Performance test".to_string(),
                         parent_id: None,
-                        insert_after_node_id: None,
+                        position: nodespace_core::services::InsertPositionOwned::End,
                         properties: json!({}),
                     })
                     .await
@@ -239,7 +239,7 @@ fn bench_batch_get(c: &mut Criterion) {
                                 node_type: "text".to_string(),
                                 content: format!("Node {}", i),
                                 parent_id: None,
-                                insert_after_node_id: None,
+                                position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
                             })
                             .await
@@ -277,7 +277,7 @@ fn bench_batch_get(c: &mut Criterion) {
                                 node_type: "text".to_string(),
                                 content: format!("Node {}", i),
                                 parent_id: None,
-                                insert_after_node_id: None,
+                                position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
                             })
                             .await
@@ -328,7 +328,7 @@ fn bench_batch_update(c: &mut Criterion) {
                             node_type: "text".to_string(),
                             content: "# Benchmark Root".to_string(),
                             parent_id: None,
-                            insert_after_node_id: None,
+                            position: nodespace_core::services::InsertPositionOwned::End,
                             properties: json!({}),
                         })
                         .await
@@ -343,7 +343,7 @@ fn bench_batch_update(c: &mut Criterion) {
                                 node_type: "task".to_string(),
                                 content: format!("- [ ] Task {}", i),
                                 parent_id: Some(root.clone()),
-                                insert_after_node_id: None,
+                                position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
                             })
                             .await
@@ -393,7 +393,7 @@ fn bench_batch_update(c: &mut Criterion) {
                             node_type: "text".to_string(),
                             content: "# Benchmark Root".to_string(),
                             parent_id: None,
-                            insert_after_node_id: None,
+                            position: nodespace_core::services::InsertPositionOwned::End,
                             properties: json!({}),
                         })
                         .await
@@ -408,7 +408,7 @@ fn bench_batch_update(c: &mut Criterion) {
                                 node_type: "task".to_string(),
                                 content: format!("- [ ] Task {}", i),
                                 parent_id: Some(root.clone()),
-                                insert_after_node_id: None,
+                                position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
                             })
                             .await
@@ -485,7 +485,11 @@ fn bench_bm25_search_roots(c: &mut Criterion) {
                     .await
                     .unwrap();
                 node_service
-                    .move_node_unchecked(&child_id, Some(&root_id), None)
+                    .move_node_unchecked(
+                        &child_id,
+                        Some(&root_id),
+                        nodespace_core::services::InsertPosition::Beginning,
+                    )
                     .await
                     .unwrap();
 
@@ -495,7 +499,11 @@ fn bench_bm25_search_roots(c: &mut Criterion) {
                     .await
                     .unwrap();
                 node_service
-                    .move_node_unchecked(&grandchild_id, Some(&child_id), None)
+                    .move_node_unchecked(
+                        &grandchild_id,
+                        Some(&child_id),
+                        nodespace_core::services::InsertPosition::Beginning,
+                    )
                     .await
                     .unwrap();
             }

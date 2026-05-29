@@ -1411,10 +1411,11 @@ export class SharedNodeStore {
         // Otherwise backend fails with "Node 'xyz' does not exist"
         const dependencies: Array<string | (() => Promise<void>)> = [];
 
-        // If this node references another node via insertAfterNodeId, wait for that node first
-        const insertAfterNodeId = (node as Node & { insertAfterNodeId?: string | null }).insertAfterNodeId;
-        if (insertAfterNodeId && !this.persistedNodeIds.has(insertAfterNodeId)) {
-          dependencies.push(insertAfterNodeId);
+        // If this node inserts After a sibling, wait for that sibling to be persisted first
+        const insertPos = (node as Node & { insertPosition?: { type: string; siblingId?: string } | null }).insertPosition;
+        const afterSiblingId = insertPos?.type === 'after' ? insertPos.siblingId : undefined;
+        if (afterSiblingId && !this.persistedNodeIds.has(afterSiblingId)) {
+          dependencies.push(afterSiblingId);
         }
 
         // Issue #479: Always persist the full node including content
@@ -1493,20 +1494,16 @@ export class SharedNodeStore {
                   }
                 }
               } else {
-                const nodeWithInsertHint = currentNode as Node & { insertAfterNodeId?: string | null };
-                if (nodeWithInsertHint.insertAfterNodeId) {
-                  if (
-                    this.shouldClearStaleInsertAfter(
-                      nodeWithInsertHint.insertAfterNodeId,
-                      currentNode.parentId
-                    )
-                  ) {
+                const nodeWithInsertPos = currentNode as Node & { insertPosition?: { type: string; siblingId?: string } | null };
+                if (nodeWithInsertPos.insertPosition?.type === 'after' && nodeWithInsertPos.insertPosition.siblingId) {
+                  const siblingId = nodeWithInsertPos.insertPosition.siblingId;
+                  if (this.shouldClearStaleInsertAfter(siblingId, currentNode.parentId)) {
                     log.debug(
-                      `[CREATE] Clearing stale insertAfterNodeId for ${nodeId.substring(0, 8)}: ` +
-                        `sibling ${nodeWithInsertHint.insertAfterNodeId.substring(0, 8)} reports a ` +
+                      `[CREATE] Clearing stale insertPosition.after for ${nodeId.substring(0, 8)}: ` +
+                        `sibling ${siblingId.substring(0, 8)} reports a ` +
                         `different parent via structureTree (node.parentId=${currentNode.parentId?.substring(0, 8) ?? 'null'})`
                     );
-                    nodeWithInsertHint.insertAfterNodeId = null;
+                    nodeWithInsertPos.insertPosition = { type: 'end' };
                   }
                 }
 

@@ -97,7 +97,7 @@ async fn create_get_update_children_delete_round_trip() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed parent")
@@ -269,7 +269,7 @@ async fn diagnostics_collect_reports_counts_and_recency() {
             collection: String::new(),
             lifecycle_status: String::new(),
             id: String::new(),
-            insert_after_node_id: String::new(),
+            position: None,
         })
         .await
         .expect("seed root")
@@ -287,7 +287,7 @@ async fn diagnostics_collect_reports_counts_and_recency() {
                 collection: String::new(),
                 lifecycle_status: String::new(),
                 id: String::new(),
-                insert_after_node_id: String::new(),
+                position: None,
             })
             .await
             .unwrap_or_else(|e| panic!("seed {label}: {e}"))

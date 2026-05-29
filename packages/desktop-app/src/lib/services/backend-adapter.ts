@@ -32,6 +32,19 @@ const log = createLogger('BackendAdapter');
 // Types
 // ============================================================================
 
+/** Explicit insertion position for new or moved nodes. */
+export type InsertPosition =
+  | { type: 'beginning' }
+  | { type: 'end' }
+  | { type: 'after'; siblingId: string };
+
+/** Factory helpers for building InsertPosition values. */
+export const insertPosition = {
+  beginning: (): InsertPosition => ({ type: 'beginning' }),
+  end: (): InsertPosition => ({ type: 'end' }),
+  after: (siblingId: string): InsertPosition => ({ type: 'after', siblingId }),
+} as const;
+
 export interface CreateNodeInput {
   id: string;
   nodeType: string;
@@ -39,8 +52,8 @@ export interface CreateNodeInput {
   properties?: Record<string, unknown>;
   mentions?: string[];
   parentId?: string | null;
-  /** Sibling node ID to insert after (null = insert at beginning of siblings) */
-  insertAfterNodeId?: string | null;
+  /** Where to insert among siblings. Omit for End (default). */
+  insertPosition?: InsertPosition | null;
 }
 
 export interface UpdateNodeInput {
@@ -94,7 +107,7 @@ export interface BackendAdapter {
   getChildren(parentId: string): Promise<Node[]>;
   getDescendants(rootNodeId: string): Promise<Node[]>;
   getChildrenTree(parentId: string): Promise<NodeWithChildren | null>;
-  moveNode(nodeId: string, version: number, newParentId: string | null, insertAfterNodeId: string | null): Promise<Node>;
+  moveNode(nodeId: string, version: number, newParentId: string | null, insertPosition: InsertPosition | null): Promise<Node>;
 
   // Mentions
   createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void>;
@@ -130,7 +143,7 @@ class TauriAdapter implements BackendAdapter {
       properties: input.properties ?? {},
       mentions: input.mentions ?? [],
       parentId: (input as CreateNodeInput).parentId ?? null,
-      insertAfterNodeId: (input as CreateNodeInput).insertAfterNodeId ?? null
+      insertPosition: (input as CreateNodeInput).insertPosition ?? null
     };
     return withDiagnosticLogging(
       'createNode',
@@ -212,17 +225,16 @@ class TauriAdapter implements BackendAdapter {
     );
   }
 
-  async moveNode(nodeId: string, version: number, newParentId: string | null, insertAfterNodeId: string | null): Promise<Node> {
-    // Tauri 2.x auto-converts snake_case to camelCase
+  async moveNode(nodeId: string, version: number, newParentId: string | null, insertPosition: InsertPosition | null): Promise<Node> {
     return withDiagnosticLogging(
       'moveNode',
       () => invoke<Node>('move_node', {
         nodeId,
         version,
         newParentId,
-        insertAfterNodeId
+        insertPosition
       }),
-      [nodeId, version, newParentId, insertAfterNodeId]
+      [nodeId, version, newParentId, insertPosition]
     );
   }
 
@@ -373,7 +385,7 @@ class HttpAdapter implements BackendAdapter {
       properties: input.properties ?? {},
       mentions: input.mentions ?? [],
       parentId: (input as CreateNodeInput).parentId ?? null,
-      insertAfterNodeId: (input as CreateNodeInput).insertAfterNodeId ?? null,
+      insertPosition: (input as CreateNodeInput).insertPosition ?? null,
       createdAt: now,
       modifiedAt: now,
       version: 1
@@ -452,11 +464,11 @@ class HttpAdapter implements BackendAdapter {
     return result as NodeWithChildren;
   }
 
-  async moveNode(nodeId: string, version: number, newParentId: string | null, insertAfterNodeId: string | null): Promise<Node> {
+  async moveNode(nodeId: string, version: number, newParentId: string | null, insertPosition: InsertPosition | null): Promise<Node> {
     const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/parent`, {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify({ version, parentId: newParentId, insertAfterNodeId })
+      body: JSON.stringify({ version, parentId: newParentId, insertPosition })
     });
     return this.handleResponse<Node>(response);
   }
@@ -577,7 +589,7 @@ class MockAdapter implements BackendAdapter {
   async getDescendants(_rootNodeId: string): Promise<Node[]> {
     return [];
   }
-  async moveNode(_nodeId: string, _version: number, _newParentId: string | null, _insertAfterNodeId: string | null): Promise<Node> {
+  async moveNode(_nodeId: string, _version: number, _newParentId: string | null, _insertPosition: InsertPosition | null): Promise<Node> {
     return {} as Node;
   }
   async createMention(_mentioningNodeId: string, _mentionedNodeId: string): Promise<void> {}

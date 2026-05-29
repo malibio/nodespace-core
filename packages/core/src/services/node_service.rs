@@ -382,7 +382,7 @@ pub type SubtreeData = (
 /// # Examples
 ///
 /// ```no_run
-/// # use nodespace_core::services::CreateNodeParams;
+/// # use nodespace_core::services::{CreateNodeParams, InsertPositionOwned};
 /// # use serde_json::json;
 /// // Auto-generated ID (MCP path)
 /// let params = CreateNodeParams {
@@ -390,7 +390,7 @@ pub type SubtreeData = (
 ///     node_type: "text".to_string(),
 ///     content: "Hello World".to_string(),
 ///     parent_id: Some("parent-123".to_string()),
-///     insert_after_node_id: None,
+///     position: InsertPositionOwned::Beginning,
 ///     properties: json!({}),
 /// };
 ///
@@ -401,7 +401,7 @@ pub type SubtreeData = (
 ///     node_type: "text".to_string(),
 ///     content: "Tracked by frontend".to_string(),
 ///     parent_id: None,
-///     insert_after_node_id: None,
+///     position: InsertPositionOwned::Beginning,
 ///     properties: json!({}),
 /// };
 /// ```
@@ -415,8 +415,9 @@ pub struct CreateNodeParams {
     pub content: String,
     /// Optional parent node ID (container/root will be auto-derived from parent chain)
     pub parent_id: Option<String>,
-    /// Optional sibling to insert after (None = insert at beginning of siblings)
-    pub insert_after_node_id: Option<String>,
+    /// Where to insert the new node among the parent's children.
+    /// Defaults to `InsertPositionOwned::Beginning` when not specified.
+    pub position: crate::services::InsertPositionOwned,
     /// Additional node properties as JSON
     pub properties: Value,
 }
@@ -1030,7 +1031,7 @@ impl NodeService {
                 content: root.content.clone(),
                 properties: root.properties.clone(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
             })
             .await?;
             created_roots += 1;
@@ -2044,7 +2045,7 @@ impl NodeService {
     /// # Examples
     ///
     /// ```no_run
-    /// # use nodespace_core::services::{CreateNodeParams, NodeService};
+    /// # use nodespace_core::services::{CreateNodeParams, InsertPositionOwned, NodeService};
     /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
@@ -2059,7 +2060,7 @@ impl NodeService {
     ///     node_type: "text".to_string(),
     ///     content: "My note".to_string(),
     ///     parent_id: Some("2025-01-15".to_string()),
-    ///     insert_after_node_id: None,
+    ///     position: InsertPositionOwned::Beginning,
     ///     properties: json!({}),
     /// }).await?;
     /// # Ok(())
@@ -2069,7 +2070,7 @@ impl NodeService {
         &self,
         params: CreateNodeParams,
     ) -> Result<String, NodeServiceError> {
-        // Make params mutable so we can clear insert_after_node_id if stale
+        // Make params mutable so we can resolve InsertPositionOwned::End
         let mut params = params;
         let start = std::time::Instant::now();
         tracing::debug!(
@@ -2091,29 +2092,24 @@ impl NodeService {
             }
         }
 
-        // Step 3: Validate sibling (if provided) - treat as best-effort hint
-        // If sibling doesn't exist or has moved to different parent, fall back to append
-        // This prevents data loss from race conditions during rapid indent/outdent operations.
-        //
-        // Retry up to 5 times with 50ms backoff as a defensive guard against transient
-        // lookup failures during rapid empty-node creation (Enter, Enter, Enter), where the
-        // sibling's parent edge may not yet be queryable when the next node's insert fires.
-        if let Some(ref sibling_id) = params.insert_after_node_id.clone() {
+        // Step 3: Validate sibling (if After) - treat as best-effort hint.
+        // If the sibling doesn't exist or has moved to a different parent, fall
+        // back to End so new nodes land at the bottom rather than the top.
+        // Retry up to 5 times with 50ms backoff against transient lookup
+        // failures during rapid empty-node creation (Enter, Enter, Enter).
+        if let crate::services::InsertPositionOwned::After(ref sibling_id) = params.position.clone()
+        {
             use tokio::time::{sleep, Duration};
             let mut sibling_valid = false;
             for _attempt in 0..5 {
                 sibling_valid = match self.get_node(sibling_id).await {
-                    Ok(Some(_)) => {
-                        // Sibling exists, verify it has same parent
-                        match self.get_parent(sibling_id).await {
-                            Ok(sibling_parent) => {
-                                let sibling_parent_id =
-                                    sibling_parent.as_ref().map(|p| p.id.as_str());
-                                sibling_parent_id == params.parent_id.as_deref()
-                            }
-                            Err(_) => false,
+                    Ok(Some(_)) => match self.get_parent(sibling_id).await {
+                        Ok(sibling_parent) => {
+                            let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
+                            sibling_parent_id == params.parent_id.as_deref()
                         }
-                    }
+                        Err(_) => false,
+                    },
                     _ => false,
                 };
                 if sibling_valid {
@@ -2123,20 +2119,12 @@ impl NodeService {
             }
 
             if !sibling_valid {
-                // Hint is stale (sibling moved or deleted). Clear it; the
-                // downstream `create_parent_edge` will pass `None` to
-                // `move_node`, which inserts at the parent's beginning.
-                // (The comment in this block previously promised "fall back
-                // to append" — the underlying implementation never delivered
-                // that, and shifting the receive-side fix to the sync layer
-                // for nodespace-sync#77 leaves `move_node`'s None semantic
-                // intact.)
                 tracing::warn!(
                     sibling_id = %sibling_id,
                     parent_id = ?params.parent_id,
-                    "insert_after_node_id is stale after retries (sibling moved or deleted), falling back to insert at beginning"
+                    "position sibling is stale after retries (moved or deleted), falling back to End"
                 );
-                params.insert_after_node_id = None;
+                params.position = crate::services::InsertPositionOwned::End;
             }
         }
 
@@ -2237,14 +2225,8 @@ impl NodeService {
 
         // Step 6: Create parent relationship if parent specified
         if let Some(parent_id) = params.parent_id {
-            // Pass insert_after_node_id directly without translation
-            // None means "insert at beginning" (store.move_node semantics)
-            self.create_parent_edge(
-                &created_id,
-                &parent_id,
-                params.insert_after_node_id.as_deref(),
-            )
-            .await?;
+            self.create_parent_edge(&created_id, &parent_id, params.position.as_ref())
+                .await?;
 
             // Step 7a: Child node created - queue root for embedding regeneration
             // The new child's content should be included in the root's aggregate embedding
@@ -4264,7 +4246,7 @@ impl NodeService {
     /// # Examples
     ///
     /// ```no_run
-    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::services::{NodeService, InsertPosition};
     /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
@@ -4272,11 +4254,11 @@ impl NodeService {
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
-    /// // Move node under new parent
-    /// service.move_node_unchecked("node-id", Some("new-parent-id"), None).await?;
+    /// // Move node under new parent, appending at end
+    /// service.move_node_unchecked("node-id", Some("new-parent-id"), InsertPosition::End).await?;
     ///
     /// // Make node a root
-    /// service.move_node_unchecked("node-id", None, None).await?;
+    /// service.move_node_unchecked("node-id", None, InsertPosition::End).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -4284,7 +4266,7 @@ impl NodeService {
         &self,
         node_id: &str,
         new_parent: Option<&str>,
-        insert_after_node_id: Option<&str>,
+        position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
         // Verify node exists
         let node = self
@@ -4320,10 +4302,12 @@ impl NodeService {
             }
         }
 
+        let insert_after = self.resolve_insert_position(position, new_parent).await?;
+
         // Hierarchy is now managed via relationships - use store's move_node
         let actual_order = self
             .store
-            .move_node(node_id, new_parent, insert_after_node_id)
+            .move_node(node_id, new_parent, insert_after.as_deref())
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -4368,7 +4352,7 @@ impl NodeService {
     /// # Examples
     ///
     /// ```no_run
-    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::services::{NodeService, InsertPosition};
     /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
@@ -4376,8 +4360,8 @@ impl NodeService {
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
-    /// // Move node under new parent with version check
-    /// service.move_node("node-id", 5, Some("new-parent-id"), None).await?;
+    /// // Move node under new parent, appending at end
+    /// service.move_node("node-id", 5, Some("new-parent-id"), InsertPosition::End).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -4386,7 +4370,7 @@ impl NodeService {
         node_id: &str,
         expected_version: i64,
         new_parent: Option<&str>,
-        insert_after_node_id: Option<&str>,
+        position: crate::services::InsertPosition<'_>,
     ) -> Result<Node, NodeServiceError> {
         // Get current node and verify version
         let node = self
@@ -4427,10 +4411,12 @@ impl NodeService {
             }
         }
 
+        let insert_after = self.resolve_insert_position(position, new_parent).await?;
+
         // Perform the move
         let actual_order = self
             .store
-            .move_node(node_id, new_parent, insert_after_node_id)
+            .move_node(node_id, new_parent, insert_after.as_deref())
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -4476,7 +4462,7 @@ impl NodeService {
     /// # Examples
     ///
     /// ```no_run
-    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::services::{NodeService, InsertPosition};
     /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
@@ -4484,8 +4470,8 @@ impl NodeService {
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
-    /// // Reorder with version check
-    /// service.reorder_node("node-id", 5, Some("sibling-id")).await?;
+    /// // Reorder after a sibling
+    /// service.reorder_node("node-id", 5, InsertPosition::After("sibling-id")).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -4493,7 +4479,7 @@ impl NodeService {
         &self,
         node_id: &str,
         expected_version: i64,
-        insert_after: Option<&str>,
+        position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
         // Get current node and verify version
         let node = self
@@ -4519,7 +4505,7 @@ impl NodeService {
         }
 
         // Use graph-native reordering
-        self.reorder_child(node_id, insert_after).await?;
+        self.reorder_child(node_id, position).await?;
 
         // Bump the node's version to support OCC
         // Even though we're only modifying edge ordering, we bump the node version
@@ -4532,6 +4518,30 @@ impl NodeService {
         Ok(())
     }
 
+    /// Resolve an `InsertPosition` to a concrete `Option<String>` for the store layer.
+    ///
+    /// - `Beginning` → `None` (store interprets `None` as "before the first child")
+    /// - `End`       → `Some(last_child_id)` (or `None` if the parent has no children yet)
+    /// - `After(id)` → `Some(id.to_string())`
+    async fn resolve_insert_position(
+        &self,
+        position: crate::services::InsertPosition<'_>,
+        parent_id: Option<&str>,
+    ) -> Result<Option<String>, NodeServiceError> {
+        match position {
+            crate::services::InsertPosition::Beginning => Ok(None),
+            crate::services::InsertPosition::After(id) => Ok(Some(id.to_string())),
+            crate::services::InsertPosition::End => {
+                if let Some(pid) = parent_id {
+                    let children = self.get_children(pid).await?;
+                    Ok(children.last().map(|n| n.id.clone()))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
     /// Create parent-child edge atomically with sibling positioning
     ///
     /// Used during node creation to establish parent relationship while preserving
@@ -4541,79 +4551,51 @@ impl NodeService {
     ///
     /// * `child_id` - ID of the child node (must already exist)
     /// * `parent_id` - ID of the parent node
-    /// * `insert_after_node_id` - Optional sibling to insert after (None = insert at beginning)
+    /// * `position` - Where to insert among the parent's children
     pub async fn create_parent_edge(
         &self,
         child_id: &str,
         parent_id: &str,
-        insert_after_node_id: Option<&str>,
+        position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
         use tokio::time::{sleep, Duration};
         let start = std::time::Instant::now();
         tracing::debug!(
             child_id = %child_id,
             parent_id = %parent_id,
-            insert_after = ?insert_after_node_id,
+            position = ?position,
             "create_parent_edge: START"
         );
 
         // Idempotency guard for nodespace-sync#77 (alice-side echo) — if
-        // `child_id` is already a child of `parent_id` AND no explicit
-        // `insert_after_node_id` was provided, treat this call as a no-op.
-        // The sync pull-side `apply_remote` re-invokes
-        // `create_parent_edge(child, parent, None)` for every `has_child` edge
-        // it replays from the cloud LIVE-SELECT, including edges JUST created
-        // by the local push side. Before this guard, the redundant call ran
-        // through `move_node` and re-positioned the child — dragging the row
-        // off its just-computed local order.
-        //
-        // The `insert_after_node_id.is_none()` clause narrows the guard so a
-        // caller that DOES pass an explicit hint still triggers a real
-        // reorder. Callers wanting to actually reposition an existing child
-        // should pass `Some(target_sibling)` here OR use `reorder_child`.
-        //
-        // `get_parent` is propagated via `?` — a transient DB error aborts
-        // the whole `create_parent_edge` call. The retry budget for the
-        // happy path (`move_node` loop below) is intentionally larger than
-        // for this one-off parent lookup; if `get_parent` flakes, fail fast
-        // and let the caller decide whether to retry. The 10×100ms retry
-        // budget on `move_node` is for the *sibling-not-found* case, which
-        // is a different consistency window.
-        if insert_after_node_id.is_none() {
+        // `child_id` is already a child of `parent_id` AND the position is
+        // End (no explicit reorder hint), treat this call as a no-op.
+        // `Beginning` and `After(_)` still trigger a real reorder.
+        if matches!(position, crate::services::InsertPosition::End) {
             if let Some(existing_parent) = self.get_parent(child_id).await? {
                 if existing_parent.id == parent_id {
                     tracing::debug!(
                         child_id = %child_id,
                         parent_id = %parent_id,
-                        "create_parent_edge: edge already exists with no reorder hint, treating as no-op"
+                        "create_parent_edge: edge already exists with End position, treating as no-op"
                     );
                     return Ok(());
                 }
             }
         }
 
-        // `insert_after_node_id` is passed straight through to `move_node`,
-        // which interprets `None` as "insert at beginning of children". That
-        // semantic is what the frontend's Enter-at-position-0 path
-        // (`shouldCreateNodeAbove`) relies on — the new empty line is meant
-        // to land ABOVE the cursor's line.
-        //
-        // The companion receive-side fix for nodespace-sync#77 lives in the
-        // sync repo (`apply_remote` in `nodespace-sync/src/pull/...`): when
-        // the cloud LIVE-SELECT echo carries no `properties.order` and the
-        // pull-side is creating a brand-new local edge, it computes the
-        // parent's current last-child id and passes that as the explicit
-        // hint here, rather than relying on a backend-side translation that
-        // would conflate "no hint" with "append at end" for all callers.
-        // See nodespace-sync PR D' (referenced from PR #1214's description).
+        // Resolve InsertPosition::End to the actual last sibling id so the
+        // store's move_node gets a concrete Option<&str>.
+        let resolved = self
+            .resolve_insert_position(position, Some(parent_id))
+            .await?;
+        let insert_after_id: Option<&str> = resolved.as_deref();
 
-        // Use store's move_node which creates the has_child relationship atomically
+        // Use store's move_node which creates the has_child relationship atomically.
         // Retry if sibling not found (eventual consistency).
         // Note: create_parent_edge uses 10×100ms (up to 1s) because it is called during
         // outdent operations where the sibling to insert after may have a freshly created
-        // parent edge that hasn't propagated yet. This is a larger retry budget than the
-        // sibling-validation loop in create_node_with_parent (5×50ms) because outdent
-        // races involve two independent write paths that both need time to settle.
+        // parent edge that hasn't propagated yet.
         let mut last_error = None;
         let mut attempt_count = 0;
         let mut actual_order: f64 = 0.0;
@@ -4621,7 +4603,7 @@ impl NodeService {
             attempt_count += 1;
             match self
                 .store
-                .move_node(child_id, Some(parent_id), insert_after_node_id)
+                .move_node(child_id, Some(parent_id), insert_after_id)
                 .await
             {
                 Ok(order) => {
@@ -4637,7 +4619,6 @@ impl NodeService {
                 Err(e) => {
                     let err_str = e.to_string();
                     if err_str.contains("Sibling not found") {
-                        // Sibling not visible yet - wait and retry
                         tracing::debug!(
                             "create_parent_edge: sibling not found, retry {} at {}ms",
                             attempt_count,
@@ -4647,7 +4628,6 @@ impl NodeService {
                         sleep(Duration::from_millis(100)).await;
                         continue;
                     }
-                    // Other error - fail immediately
                     return Err(NodeServiceError::query_failed(err_str));
                 }
             }
@@ -4656,10 +4636,8 @@ impl NodeService {
             return Err(NodeServiceError::query_failed(err));
         }
 
-        // Defensive guard: the edge may end up with an incorrect order if not all siblings
-        // were visible during the move_node query. We verify and retry with reorder if the
-        // position is wrong.
-        if let Some(after_id) = insert_after_node_id {
+        // Defensive guard: verify position and retry with reorder if wrong.
+        if let Some(after_id) = insert_after_id {
             tracing::debug!(
                 "create_parent_edge: starting position verification at {}ms",
                 start.elapsed().as_millis()
@@ -4668,7 +4646,6 @@ impl NodeService {
             let mut position_verified = false;
             'outer: for _attempt in 0..20 {
                 verify_attempt += 1;
-                // Wait for write propagation
                 sleep(Duration::from_millis(50)).await;
 
                 let children = self.get_children(parent_id).await?;
@@ -4677,7 +4654,6 @@ impl NodeService {
 
                 match (child_pos, after_pos) {
                     (Some(c_pos), Some(a_pos)) if c_pos == a_pos + 1 => {
-                        // Child is correctly positioned right after the insert_after sibling
                         tracing::debug!(
                             "create_parent_edge: position verified on attempt {} at {}ms",
                             verify_attempt,
@@ -4687,7 +4663,6 @@ impl NodeService {
                         break 'outer;
                     }
                     (Some(_), Some(_)) => {
-                        // Child exists but is in wrong position - reorder it and verify
                         tracing::debug!(
                             "create_parent_edge: wrong position, reordering at {}ms",
                             start.elapsed().as_millis()
@@ -4699,7 +4674,6 @@ impl NodeService {
                             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
                         actual_order = reorder_result;
 
-                        // Wait and verify reorder took effect
                         for _verify in 0..10 {
                             sleep(Duration::from_millis(50)).await;
                             let verify_children = self.get_children(parent_id).await?;
@@ -4709,14 +4683,12 @@ impl NodeService {
                             if let (Some(c), Some(a)) = (v_child_pos, v_after_pos) {
                                 if c == a + 1 {
                                     position_verified = true;
-                                    break 'outer; // Successfully reordered
+                                    break 'outer;
                                 }
                             }
                         }
-                        // Reorder didn't stick, outer loop will retry
                     }
                     _ => {
-                        // One or both nodes not visible yet - will retry
                         tracing::debug!(
                             "create_parent_edge: nodes not visible, retry {} at {}ms",
                             verify_attempt,
@@ -4725,9 +4697,6 @@ impl NodeService {
                     }
                 }
             }
-            // If verification exhausted without confirming position, the emitted actual_order
-            // may still be 0.0 (unconfirmed initial value), which would sort the child to the
-            // front of the parent on the frontend. Log a warning so this is observable.
             if !position_verified {
                 tracing::warn!(
                     child_id = %child_id,
@@ -4775,12 +4744,12 @@ impl NodeService {
     /// # Arguments
     ///
     /// * `node_id` - The node to reorder
-    /// * `insert_after` - The sibling to position after (None = first position)
+    /// * `position` - Where to place the node among its siblings
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// # use nodespace_core::services::NodeService;
+    /// # use nodespace_core::services::{NodeService, InsertPosition};
     /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
@@ -4789,17 +4758,17 @@ impl NodeService {
     /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Position node after sibling
-    /// service.reorder_child("node-id", Some("sibling-id")).await?;
+    /// service.reorder_child("node-id", InsertPosition::After("sibling-id")).await?;
     ///
     /// // Move to first position
-    /// service.reorder_child("node-id", None).await?;
+    /// service.reorder_child("node-id", InsertPosition::Beginning).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn reorder_child(
         &self,
         node_id: &str,
-        insert_after: Option<&str>,
+        position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
         // Verify node exists
         let _node = self
@@ -4807,8 +4776,8 @@ impl NodeService {
             .await?
             .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
 
-        // Verify sibling exists if provided
-        if let Some(sibling_id) = insert_after {
+        // Verify sibling exists for After variant
+        if let crate::services::InsertPosition::After(sibling_id) = position {
             let sibling_exists = self.node_exists(sibling_id).await?;
             if !sibling_exists {
                 return Err(NodeServiceError::hierarchy_violation(format!(
@@ -4818,15 +4787,18 @@ impl NodeService {
             }
         }
 
-        // Child ordering is handled via has_child relationship order field.
         // Get current parent to move within the same parent
         let parent = self.get_parent(node_id).await?;
         let parent_id = parent.map(|p| p.id);
 
-        // Use move_node to handle edge ordering (insert_after semantics)
+        let insert_after = self
+            .resolve_insert_position(position, parent_id.as_deref())
+            .await?;
+
+        // Use move_node to handle edge ordering
         let actual_order = self
             .store
-            .move_node(node_id, parent_id.as_deref(), insert_after)
+            .move_node(node_id, parent_id.as_deref(), insert_after.as_deref())
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -7475,7 +7447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reorder_siblings() {
-        // `move_node_unchecked(child, parent, None)` preserves the original
+        // `move_node_unchecked(child, parent, crate::services::InsertPosition::Beginning)` preserves the original
         // "insert at beginning" semantic, so the children land in reverse
         // creation order (child2 added second → first). Then `reorder_child`
         // with `None` moves child1 to the beginning, producing the order
@@ -7491,14 +7463,22 @@ mod tests {
         let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
         let child1_id = service.create_node(child1).await.unwrap();
         service
-            .move_node_unchecked(&child1_id, Some(&parent_id), None)
+            .move_node_unchecked(
+                &child1_id,
+                Some(&parent_id),
+                crate::services::InsertPosition::Beginning,
+            )
             .await
             .unwrap();
 
         let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
         let child2_id = service.create_node(child2).await.unwrap();
         service
-            .move_node_unchecked(&child2_id, Some(&parent_id), None)
+            .move_node_unchecked(
+                &child2_id,
+                Some(&parent_id),
+                crate::services::InsertPosition::Beginning,
+            )
             .await
             .unwrap();
 
@@ -7510,7 +7490,10 @@ mod tests {
         );
         assert_eq!(children_before[1].id, child1_id, "Child1 should be second");
 
-        service.reorder_child(&child1_id, None).await.unwrap();
+        service
+            .reorder_child(&child1_id, crate::services::InsertPosition::Beginning)
+            .await
+            .unwrap();
 
         let children_after = service.get_children(&parent_id).await.unwrap();
         assert_eq!(children_after.len(), 2);
@@ -8141,7 +8124,11 @@ mod tests {
 
             // Make child a child of root (establish hierarchy)
             service
-                .move_node_unchecked(&child_id, Some(&root_id), None)
+                .move_node_unchecked(
+                    &child_id,
+                    Some(&root_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
 
@@ -8197,11 +8184,19 @@ mod tests {
 
             // Establish hierarchy: both children belong to root
             service
-                .move_node_unchecked(&child1_id, Some(&root_id), None)
+                .move_node_unchecked(
+                    &child1_id,
+                    Some(&root_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
             service
-                .move_node_unchecked(&child2_id, Some(&root_id), None)
+                .move_node_unchecked(
+                    &child2_id,
+                    Some(&root_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
 
@@ -8255,7 +8250,11 @@ mod tests {
 
             // Make task a child of root
             service
-                .move_node_unchecked(&task_id, Some(&root_id), None)
+                .move_node_unchecked(
+                    &task_id,
+                    Some(&root_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
 
@@ -8413,15 +8412,27 @@ mod tests {
 
             // Establish hierarchy: children belong to their containers
             service
-                .move_node_unchecked(&child1_id, Some(&container1_id), None)
+                .move_node_unchecked(
+                    &child1_id,
+                    Some(&container1_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
             service
-                .move_node_unchecked(&child2_id, Some(&container2_id), None)
+                .move_node_unchecked(
+                    &child2_id,
+                    Some(&container2_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
             service
-                .move_node_unchecked(&task_id, Some(&container3_id), None)
+                .move_node_unchecked(
+                    &task_id,
+                    Some(&container3_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
 
@@ -8684,7 +8695,11 @@ mod tests {
 
             // Establish parent-child relationship (make child an actual child of root)
             service
-                .move_node_unchecked(&child_id, Some(&root_id), None)
+                .move_node_unchecked(
+                    &child_id,
+                    Some(&root_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
 
@@ -9038,7 +9053,7 @@ mod tests {
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
-                .create_parent_edge(&child1_id, &parent_id, None) // First child - insert at beginning
+                .create_parent_edge(&child1_id, &parent_id, crate::services::InsertPosition::End) // First child - insert at beginning
                 .await
                 .unwrap();
 
@@ -9047,7 +9062,11 @@ mod tests {
             let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
             let child2_id = service.create_node(child2).await.unwrap();
             service
-                .create_parent_edge(&child2_id, &parent_id, Some(&child1_id)) // Insert after Child 1
+                .create_parent_edge(
+                    &child2_id,
+                    &parent_id,
+                    crate::services::InsertPosition::After(&child1_id),
+                ) // Insert after Child 1
                 .await
                 .unwrap();
 
@@ -9080,14 +9099,18 @@ mod tests {
             let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
             let child_id = service.create_node(child).await.unwrap();
             service
-                .create_parent_edge(&child_id, &root_id, None)
+                .create_parent_edge(&child_id, &root_id, crate::services::InsertPosition::End)
                 .await
                 .unwrap();
 
             let grandchild = Node::new("text".to_string(), "Grandchild".to_string(), json!({}));
             let grandchild_id = service.create_node(grandchild).await.unwrap();
             service
-                .create_parent_edge(&grandchild_id, &child_id, None)
+                .create_parent_edge(
+                    &grandchild_id,
+                    &child_id,
+                    crate::services::InsertPosition::End,
+                )
                 .await
                 .unwrap();
 
@@ -9123,7 +9146,11 @@ mod tests {
             let child_a = Node::new("text".to_string(), "A".to_string(), json!({}));
             let child_a_id = service.create_node(child_a).await.unwrap();
             service
-                .create_parent_edge(&child_a_id, &parent_id, None) // First child - insert at beginning
+                .create_parent_edge(
+                    &child_a_id,
+                    &parent_id,
+                    crate::services::InsertPosition::End,
+                ) // First child - insert at beginning
                 .await
                 .unwrap();
 
@@ -9135,7 +9162,11 @@ mod tests {
             let child_b = Node::new("text".to_string(), "B".to_string(), json!({}));
             let child_b_id = service.create_node(child_b).await.unwrap();
             service
-                .create_parent_edge(&child_b_id, &parent_id, Some(&child_a_id)) // Insert after A
+                .create_parent_edge(
+                    &child_b_id,
+                    &parent_id,
+                    crate::services::InsertPosition::After(&child_a_id),
+                ) // Insert after A
                 .await
                 .unwrap();
 
@@ -9147,7 +9178,11 @@ mod tests {
             let child_c = Node::new("text".to_string(), "C".to_string(), json!({}));
             let child_c_id = service.create_node(child_c).await.unwrap();
             service
-                .create_parent_edge(&child_c_id, &parent_id, Some(&child_b_id)) // Insert after B
+                .create_parent_edge(
+                    &child_c_id,
+                    &parent_id,
+                    crate::services::InsertPosition::After(&child_b_id),
+                ) // Insert after B
                 .await
                 .unwrap();
 
@@ -9205,7 +9240,11 @@ mod tests {
 
             // Try to move the date node - should fail (date nodes are containers)
             let result = service
-                .move_node_unchecked("2025-01-03", Some("2025-01-04"), None)
+                .move_node_unchecked(
+                    "2025-01-03",
+                    Some("2025-01-04"),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await;
 
             assert!(result.is_err());
@@ -9230,28 +9269,32 @@ mod tests {
             let node_a = Node::new("text".to_string(), "A".to_string(), json!({}));
             let node_a_id = service.create_node(node_a).await.unwrap();
             service
-                .create_parent_edge(&node_a_id, &root_id, None)
+                .create_parent_edge(&node_a_id, &root_id, crate::services::InsertPosition::End)
                 .await
                 .unwrap();
 
             let node_b = Node::new("text".to_string(), "B".to_string(), json!({}));
             let node_b_id = service.create_node(node_b).await.unwrap();
             service
-                .create_parent_edge(&node_b_id, &node_a_id, None)
+                .create_parent_edge(&node_b_id, &node_a_id, crate::services::InsertPosition::End)
                 .await
                 .unwrap();
 
             let node_c = Node::new("text".to_string(), "C".to_string(), json!({}));
             let node_c_id = service.create_node(node_c).await.unwrap();
             service
-                .create_parent_edge(&node_c_id, &node_b_id, None)
+                .create_parent_edge(&node_c_id, &node_b_id, crate::services::InsertPosition::End)
                 .await
                 .unwrap();
 
             // Try to move A under C - this would create: C -> A -> B -> C (circular!)
             // A is not a root (it's under Root), so the root check passes, then circular check fires
             let result = service
-                .move_node_unchecked(&node_a_id, Some(&node_c_id), None)
+                .move_node_unchecked(
+                    &node_a_id,
+                    Some(&node_c_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await;
 
             assert!(result.is_err());
@@ -9278,13 +9321,17 @@ mod tests {
             let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
             let child_id = service.create_node(child).await.unwrap();
             service
-                .create_parent_edge(&child_id, &parent1_id, None)
+                .create_parent_edge(&child_id, &parent1_id, crate::services::InsertPosition::End)
                 .await
                 .unwrap();
 
             // Move child from parent1 to parent2 - should succeed
             let result = service
-                .move_node_unchecked(&child_id, Some(&parent2_id), None)
+                .move_node_unchecked(
+                    &child_id,
+                    Some(&parent2_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await;
             assert!(result.is_ok());
 
@@ -9316,7 +9363,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "My note".to_string(),
                 parent_id: Some("2025-01-15".to_string()),
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
             };
 
@@ -9342,7 +9389,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Root note".to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
             };
 
@@ -9367,7 +9414,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test".to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
             };
 
@@ -9385,7 +9432,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Test node".to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
             };
 
@@ -9410,7 +9457,11 @@ mod tests {
             let sibling = Node::new("text".to_string(), "Sibling".to_string(), json!({}));
             let sibling_id = service.create_node(sibling).await.unwrap();
             service
-                .create_parent_edge(&sibling_id, &parent1_id, None)
+                .create_parent_edge(
+                    &sibling_id,
+                    &parent1_id,
+                    crate::services::InsertPosition::End,
+                )
                 .await
                 .unwrap();
 
@@ -9422,7 +9473,7 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "New node".to_string(),
                 parent_id: Some(parent2_id.clone()),
-                insert_after_node_id: Some(sibling_id),
+                position: crate::services::InsertPositionOwned::After(sibling_id),
                 properties: json!({}),
             };
 
@@ -9443,17 +9494,11 @@ mod tests {
             );
         }
 
-        /// Test that None for `insert_after_node_id` inserts at the beginning
-        /// of the parent's children. This is the canonical "insert at start"
-        /// path used by the outliner's Enter-at-position-0 UX (frontend's
-        /// `shouldCreateNodeAbove` branch). The companion fix for
-        /// nodespace-sync#77's receive-side ordering lives in the sync
-        /// layer's `apply_remote`, which now passes an explicit
-        /// `last_child_id` hint when replaying a has_child relationship —
-        /// keeping this semantic intact for the legitimate-prepend callers.
+        /// Test that `InsertPositionOwned::End` appends at the end (default semantic).
+        /// `InsertPositionOwned::Beginning` prepends.
         #[tokio::test]
         #[serial(sibling_ordering)]
-        async fn test_insert_at_beginning_by_default() {
+        async fn test_insert_at_end_by_default() {
             let (service, _temp) = create_test_service().await;
 
             let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
@@ -9464,20 +9509,60 @@ mod tests {
                 node_type: "text".to_string(),
                 content: "Child 1".to_string(),
                 parent_id: Some(parent_id.clone()),
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
             };
             service.create_node_with_parent(params1).await.unwrap();
 
             sleep(Duration::from_millis(50)).await;
 
-            // No hint provided — should prepend, so Child 2 ends up first.
+            // End = append, so Child 2 ends up last.
             let params2 = CreateNodeParams {
                 id: Some("test-child-2".to_string()),
                 node_type: "text".to_string(),
                 content: "Child 2".to_string(),
                 parent_id: Some(parent_id.clone()),
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params2).await.unwrap();
+
+            sleep(Duration::from_millis(50)).await;
+
+            let children = service.get_children(&parent_id).await.unwrap();
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].content, "Child 1");
+            assert_eq!(children[1].content, "Child 2");
+        }
+
+        /// Test that `InsertPositionOwned::Beginning` prepends (outliner Enter-above UX).
+        #[tokio::test]
+        #[serial(sibling_ordering)]
+        async fn test_insert_at_beginning() {
+            let (service, _temp) = create_test_service().await;
+
+            let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+            let parent_id = service.create_node(parent).await.unwrap();
+
+            let params1 = CreateNodeParams {
+                id: Some("test-child-1".to_string()),
+                node_type: "text".to_string(),
+                content: "Child 1".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params1).await.unwrap();
+
+            sleep(Duration::from_millis(50)).await;
+
+            // Beginning = prepend, so Child 2 ends up first.
+            let params2 = CreateNodeParams {
+                id: Some("test-child-2".to_string()),
+                node_type: "text".to_string(),
+                content: "Child 2".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::Beginning,
                 properties: json!({}),
             };
             service.create_node_with_parent(params2).await.unwrap();
@@ -9510,14 +9595,18 @@ mod tests {
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
-                .create_parent_edge(&child1_id, &parent_id, None)
+                .create_parent_edge(&child1_id, &parent_id, crate::services::InsertPosition::End)
                 .await
                 .unwrap();
 
             let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
             let child2_id = service.create_node(child2).await.unwrap();
             service
-                .create_parent_edge(&child2_id, &parent_id, Some(&child1_id))
+                .create_parent_edge(
+                    &child2_id,
+                    &parent_id,
+                    crate::services::InsertPosition::After(&child1_id),
+                )
                 .await
                 .unwrap();
 
@@ -9532,7 +9621,11 @@ mod tests {
             // pointing AFTER child2 — the edge already exists, but the
             // explicit hint must take effect (real reorder).
             service
-                .create_parent_edge(&child1_id, &parent_id, Some(&child2_id))
+                .create_parent_edge(
+                    &child1_id,
+                    &parent_id,
+                    crate::services::InsertPosition::After(&child2_id),
+                )
                 .await
                 .unwrap();
 
@@ -11456,7 +11549,7 @@ mod tests {
                 node_type: "collection".to_string(),
                 content: "Root Collection".to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
                 id: None,
             };
@@ -11645,7 +11738,7 @@ mod tests {
                 node_type: "widget".to_string(),
                 content: "My Widget".to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
                 id: None,
             };
@@ -11728,11 +11821,19 @@ mod tests {
             service.create_node(child1).await.unwrap();
             service.create_node(child2).await.unwrap();
             service
-                .move_node_unchecked(&child1_id, Some(&parent_id), None)
+                .move_node_unchecked(
+                    &child1_id,
+                    Some(&parent_id),
+                    crate::services::InsertPosition::Beginning,
+                )
                 .await
                 .unwrap();
             service
-                .move_node_unchecked(&child2_id, Some(&parent_id), Some(&child1_id))
+                .move_node_unchecked(
+                    &child2_id,
+                    Some(&parent_id),
+                    crate::services::InsertPosition::After(&child1_id),
+                )
                 .await
                 .unwrap();
 

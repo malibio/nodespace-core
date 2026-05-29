@@ -46,4 +46,6 @@ pub use models::{
     TaskNode, TaskNodeUpdate, TaskStatus, ValidationError,
 };
 pub use playbook::PlaybookEngine;
-pub use services::{CreateNodeParams, NodeService, NodeServiceError};
+pub use services::{
+    CreateNodeParams, InsertPosition, InsertPositionOwned, NodeService, NodeServiceError,
+};
