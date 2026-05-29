@@ -2095,34 +2095,26 @@ impl NodeService {
         // Step 3: Validate sibling (if After) - treat as best-effort hint.
         // If the sibling doesn't exist or has moved to a different parent, fall
         // back to End so new nodes land at the bottom rather than the top.
-        // Retry up to 5 times with 50ms backoff against transient lookup
-        // failures during rapid empty-node creation (Enter, Enter, Enter).
+        // SQLite is synchronous/ACID: a node written by a prior awaited call is
+        // immediately visible; a single check is sufficient.
         if let crate::services::InsertPositionOwned::After(ref sibling_id) = params.position.clone()
         {
-            use tokio::time::{sleep, Duration};
-            let mut sibling_valid = false;
-            for _attempt in 0..5 {
-                sibling_valid = match self.get_node(sibling_id).await {
-                    Ok(Some(_)) => match self.get_parent(sibling_id).await {
-                        Ok(sibling_parent) => {
-                            let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
-                            sibling_parent_id == params.parent_id.as_deref()
-                        }
-                        Err(_) => false,
-                    },
-                    _ => false,
-                };
-                if sibling_valid {
-                    break;
-                }
-                sleep(Duration::from_millis(50)).await;
-            }
+            let sibling_valid = match self.get_node(sibling_id).await {
+                Ok(Some(_)) => match self.get_parent(sibling_id).await {
+                    Ok(sibling_parent) => {
+                        let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
+                        sibling_parent_id == params.parent_id.as_deref()
+                    }
+                    Err(_) => false,
+                },
+                _ => false,
+            };
 
             if !sibling_valid {
                 tracing::warn!(
                     sibling_id = %sibling_id,
                     parent_id = ?params.parent_id,
-                    "position sibling is stale after retries (moved or deleted), falling back to End"
+                    "position sibling is stale (moved or deleted), falling back to End"
                 );
                 params.position = crate::services::InsertPositionOwned::End;
             }
@@ -4563,8 +4555,6 @@ impl NodeService {
         parent_id: &str,
         position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
-        use tokio::time::{sleep, Duration};
-        let start = std::time::Instant::now();
         tracing::debug!(
             child_id = %child_id,
             parent_id = %parent_id,
@@ -4596,135 +4586,15 @@ impl NodeService {
             .await?;
         let insert_after_id: Option<&str> = resolved.as_deref();
 
-        // Use store's move_node which creates the has_child relationship atomically.
-        // Retry if sibling not found (eventual consistency).
-        // Note: create_parent_edge uses 10×100ms (up to 1s) because it is called during
-        // outdent operations where the sibling to insert after may have a freshly created
-        // parent edge that hasn't propagated yet.
-        let mut last_error = None;
-        let mut attempt_count = 0;
-        let mut actual_order: f64 = 0.0;
-        for _attempt in 0..10 {
-            attempt_count += 1;
-            match self
-                .store
-                .move_node(child_id, Some(parent_id), insert_after_id)
-                .await
-            {
-                Ok(order) => {
-                    actual_order = order;
-                    tracing::debug!(
-                        "create_parent_edge: move_node succeeded on attempt {} at {}ms",
-                        attempt_count,
-                        start.elapsed().as_millis()
-                    );
-                    last_error = None;
-                    break;
-                }
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if err_str.contains("Sibling not found") {
-                        tracing::debug!(
-                            "create_parent_edge: sibling not found, retry {} at {}ms",
-                            attempt_count,
-                            start.elapsed().as_millis()
-                        );
-                        last_error = Some(err_str);
-                        sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-                    return Err(NodeServiceError::query_failed(err_str));
-                }
-            }
-        }
-        if let Some(err) = last_error {
-            return Err(NodeServiceError::query_failed(err));
-        }
-
-        // Defensive guard: verify position and retry with reorder if wrong.
-        if let Some(after_id) = insert_after_id {
-            tracing::debug!(
-                "create_parent_edge: starting position verification at {}ms",
-                start.elapsed().as_millis()
-            );
-            let mut verify_attempt = 0;
-            let mut position_verified = false;
-            'outer: for _attempt in 0..20 {
-                verify_attempt += 1;
-                sleep(Duration::from_millis(50)).await;
-
-                let children = self.get_children(parent_id).await?;
-                let child_pos = children.iter().position(|c| c.id == child_id);
-                let after_pos = children.iter().position(|c| c.id == after_id);
-
-                match (child_pos, after_pos) {
-                    (Some(c_pos), Some(a_pos)) if c_pos == a_pos + 1 => {
-                        tracing::debug!(
-                            "create_parent_edge: position verified on attempt {} at {}ms",
-                            verify_attempt,
-                            start.elapsed().as_millis()
-                        );
-                        position_verified = true;
-                        break 'outer;
-                    }
-                    (Some(_), Some(_)) => {
-                        tracing::debug!(
-                            "create_parent_edge: wrong position, reordering at {}ms",
-                            start.elapsed().as_millis()
-                        );
-                        let reorder_result = self
-                            .store
-                            .move_node(child_id, Some(parent_id), Some(after_id))
-                            .await
-                            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-                        actual_order = reorder_result;
-
-                        for _verify in 0..10 {
-                            sleep(Duration::from_millis(50)).await;
-                            let verify_children = self.get_children(parent_id).await?;
-                            let v_child_pos = verify_children.iter().position(|c| c.id == child_id);
-                            let v_after_pos = verify_children.iter().position(|c| c.id == after_id);
-
-                            if let (Some(c), Some(a)) = (v_child_pos, v_after_pos) {
-                                if c == a + 1 {
-                                    position_verified = true;
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        tracing::debug!(
-                            "create_parent_edge: nodes not visible, retry {} at {}ms",
-                            verify_attempt,
-                            start.elapsed().as_millis()
-                        );
-                    }
-                }
-            }
-            if !position_verified {
-                tracing::warn!(
-                    child_id = %child_id,
-                    parent_id = %parent_id,
-                    after_id = %after_id,
-                    actual_order = %actual_order,
-                    "create_parent_edge: position verification exhausted after {} attempts — \
-                     emitting event with unconfirmed order",
-                    verify_attempt
-                );
-            }
-        } else {
-            tracing::debug!(
-                "create_parent_edge: no insert_after, skipping verification at {}ms",
-                start.elapsed().as_millis()
-            );
-        }
+        // SQLite is synchronous/ACID: move_node commits before returning; the result
+        // is immediately visible on the next read. Trust the single call result.
+        let actual_order = self
+            .store
+            .move_node(child_id, Some(parent_id), insert_after_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         // Emit RelationshipCreated event (Issue #811: unified relationship events)
-        tracing::debug!(
-            "create_parent_edge: emitting event at {}ms",
-            start.elapsed().as_millis()
-        );
         self.emit_event(DomainEvent::RelationshipCreated {
             relationship: crate::db::events::RelationshipEvent::new(
                 format!("relationship:{}:{}", parent_id, child_id),
@@ -4735,10 +4605,7 @@ impl NodeService {
             ),
         });
 
-        tracing::debug!(
-            "create_parent_edge: COMPLETE at {}ms",
-            start.elapsed().as_millis()
-        );
+        tracing::debug!("create_parent_edge: COMPLETE");
         Ok(())
     }
 
@@ -8912,8 +8779,6 @@ mod tests {
     mod adjacency_list_tests {
         use super::*;
         use serial_test::serial;
-        use std::time::Duration;
-        use tokio::time::sleep;
 
         // Tests for the adjacency list strategy (recursive graph traversal)
         // Uses a recursive SQL query over the relationships table
@@ -8926,61 +8791,6 @@ mod tests {
         //
         // The "sibling_ordering" key is shared with integration_tests in nodes_test.rs
         // to ensure all ordering-sensitive tests run serially across modules.
-
-        /// Helper function to wait for children tree to have expected order with retries.
-        /// This guards against transient ordering visibility during concurrent test execution.
-        async fn wait_for_children_tree_order(
-            service: &NodeService,
-            parent_id: &str,
-            expected_contents: &[&str],
-            max_retries: usize,
-        ) -> Result<serde_json::Value, String> {
-            for attempt in 0..max_retries {
-                let tree = service
-                    .get_children_tree(parent_id)
-                    .await
-                    .map_err(|e| format!("Failed to get children tree: {:?}", e))?;
-
-                let children = tree["children"]
-                    .as_array()
-                    .ok_or("Expected children array")?;
-
-                if children.len() == expected_contents.len() {
-                    let actual_contents: Vec<&str> = children
-                        .iter()
-                        .filter_map(|c| c["content"].as_str())
-                        .collect();
-
-                    if actual_contents == expected_contents {
-                        return Ok(tree);
-                    }
-                }
-
-                if attempt < max_retries - 1 {
-                    sleep(Duration::from_millis(100)).await;
-                }
-            }
-
-            // Final attempt - return whatever we have for assertion failure message
-            let tree = service
-                .get_children_tree(parent_id)
-                .await
-                .map_err(|e| format!("Failed to get children tree: {:?}", e))?;
-
-            let children = tree["children"]
-                .as_array()
-                .ok_or("Expected children array")?;
-
-            Err(format!(
-                "Children tree order did not stabilize after {} retries. Expected {:?}, got {:?}",
-                max_retries,
-                expected_contents,
-                children
-                    .iter()
-                    .filter_map(|c| c["content"].as_str())
-                    .collect::<Vec<_>>()
-            ))
-        }
 
         /// Test get_children_tree with a leaf node (no children)
         #[tokio::test]
@@ -9053,16 +8863,12 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Create two children and add to parent using create_parent_edge
-            // NOTE: Small delays between insertions keep sibling order calculations
-            // deterministic under concurrent test execution.
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
                 .create_parent_edge(&child1_id, &parent_id, crate::services::InsertPosition::End) // First child - insert at beginning
                 .await
                 .unwrap();
-
-            sleep(Duration::from_millis(50)).await;
 
             let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
             let child2_id = service.create_node(child2).await.unwrap();
@@ -9075,13 +8881,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            sleep(Duration::from_millis(50)).await;
-
-            // Get tree - should have parent with 2 children (with retry for eventual consistency)
-            let tree =
-                wait_for_children_tree_order(&service, &parent_id, &["Child 1", "Child 2"], 10)
-                    .await
-                    .expect("Children should stabilize in order Child 1, Child 2");
+            // Get tree - SQLite writes are immediately visible; assert directly
+            let tree = service.get_children_tree(&parent_id).await.unwrap();
 
             assert_eq!(tree["id"], parent_id);
             let children = tree["children"].as_array().unwrap();
@@ -9146,8 +8947,6 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Add children in order A, B, C - they should maintain this order
-            // IMPORTANT: Verify state after each insertion before proceeding.
-            // This eliminates flakiness from concurrent test execution.
             let child_a = Node::new("text".to_string(), "A".to_string(), json!({}));
             let child_a_id = service.create_node(child_a).await.unwrap();
             service
@@ -9155,14 +8954,9 @@ mod tests {
                     &child_a_id,
                     &parent_id,
                     crate::services::InsertPosition::End,
-                ) // First child - insert at beginning
+                )
                 .await
                 .unwrap();
-
-            // Verify A is visible before inserting B
-            wait_for_children_tree_order(&service, &parent_id, &["A"], 10)
-                .await
-                .expect("A should be visible as first child");
 
             let child_b = Node::new("text".to_string(), "B".to_string(), json!({}));
             let child_b_id = service.create_node(child_b).await.unwrap();
@@ -9175,11 +8969,6 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Verify [A, B] order before inserting C
-            wait_for_children_tree_order(&service, &parent_id, &["A", "B"], 10)
-                .await
-                .expect("Children should be [A, B] before inserting C");
-
             let child_c = Node::new("text".to_string(), "C".to_string(), json!({}));
             let child_c_id = service.create_node(child_c).await.unwrap();
             service
@@ -9191,10 +8980,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Get tree - children should be in order A, B, C (with retry for eventual consistency)
-            let tree = wait_for_children_tree_order(&service, &parent_id, &["A", "B", "C"], 10)
-                .await
-                .expect("Children should stabilize in order A, B, C");
+            // SQLite writes are immediately visible; assert directly
+            let tree = service.get_children_tree(&parent_id).await.unwrap();
 
             let children = tree["children"].as_array().unwrap();
             assert_eq!(children.len(), 3);
@@ -9351,8 +9138,6 @@ mod tests {
     mod create_node_with_parent_tests {
         use super::*;
         use serial_test::serial;
-        use std::time::Duration;
-        use tokio::time::sleep;
 
         // NOTE: Tests that verify sibling ordering are marked #[serial(sibling_ordering)]
         // to prevent race conditions under concurrent test execution.
@@ -9499,6 +9284,135 @@ mod tests {
             );
         }
 
+        /// Deterministic ordering proof: InsertPosition::After(sibling) places the new node
+        /// immediately after the target sibling on the first read, with zero retries.
+        /// This proves Site 3's position-verification guard was unnecessary under SQLite.
+        #[tokio::test]
+        #[serial(sibling_ordering)]
+        async fn test_insert_after_ordering_is_deterministic_without_retries() {
+            let (service, _temp) = create_test_service().await;
+
+            let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+            let parent_id = service.create_node(parent).await.unwrap();
+
+            // Insert at End (first child)
+            let params_a = CreateNodeParams {
+                id: Some("test-ord-a".to_string()),
+                node_type: "text".to_string(),
+                content: "A".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params_a).await.unwrap();
+
+            // Insert after A → [A, B]
+            let params_b = CreateNodeParams {
+                id: Some("test-ord-b".to_string()),
+                node_type: "text".to_string(),
+                content: "B".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::After("test-ord-a".to_string()),
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params_b).await.unwrap();
+
+            // Insert after A → [A, C, B]
+            let params_c = CreateNodeParams {
+                id: Some("test-ord-c".to_string()),
+                node_type: "text".to_string(),
+                content: "C".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::After("test-ord-a".to_string()),
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params_c).await.unwrap();
+
+            // Insert after C → [A, C, D, B]
+            let params_d = CreateNodeParams {
+                id: Some("test-ord-d".to_string()),
+                node_type: "text".to_string(),
+                content: "D".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::After("test-ord-c".to_string()),
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params_d).await.unwrap();
+
+            // Insert at Beginning → [E, A, C, D, B]
+            let params_e = CreateNodeParams {
+                id: Some("test-ord-e".to_string()),
+                node_type: "text".to_string(),
+                content: "E".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::Beginning,
+                properties: json!({}),
+            };
+            service.create_node_with_parent(params_e).await.unwrap();
+
+            // Assert exact order on first read — no retries, no sleep.
+            let children = service.get_children(&parent_id).await.unwrap();
+            let contents: Vec<&str> = children.iter().map(|c| c.content.as_str()).collect();
+            assert_eq!(
+                contents,
+                vec!["E", "A", "C", "D", "B"],
+                "Insertion order must be deterministic on first read under SQLite"
+            );
+        }
+
+        /// Stale-sibling fallback: when the position sibling has been deleted,
+        /// the new node lands at End on the first attempt (no retry needed).
+        #[tokio::test]
+        #[serial(sibling_ordering)]
+        async fn test_stale_sibling_falls_back_to_end() {
+            let (service, _temp) = create_test_service().await;
+
+            let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+            let parent_id = service.create_node(parent).await.unwrap();
+
+            // Create and attach a sibling, then delete it so it becomes stale
+            let sibling = Node::new("text".to_string(), "Sibling".to_string(), json!({}));
+            let sibling_id = service.create_node(sibling).await.unwrap();
+            service
+                .create_parent_edge(
+                    &sibling_id,
+                    &parent_id,
+                    crate::services::InsertPosition::End,
+                )
+                .await
+                .unwrap();
+            let sibling_version = service
+                .get_node(&sibling_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .version;
+            service
+                .delete_node(&sibling_id, sibling_version)
+                .await
+                .unwrap();
+
+            // Create a node with position After the deleted sibling — should fall back to End
+            let params = CreateNodeParams {
+                id: Some("test-stale-fallback".to_string()),
+                node_type: "text".to_string(),
+                content: "Fallback".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::After(sibling_id),
+                properties: json!({}),
+            };
+            let result = service.create_node_with_parent(params).await;
+            assert!(
+                result.is_ok(),
+                "Should succeed with End fallback when sibling is deleted: {:?}",
+                result
+            );
+
+            let children = service.get_children(&parent_id).await.unwrap();
+            assert_eq!(children.len(), 1, "Only the new node should remain");
+            assert_eq!(children[0].content, "Fallback");
+        }
+
         /// Test that `InsertPositionOwned::End` appends at the end (default semantic).
         /// `InsertPositionOwned::Beginning` prepends.
         #[tokio::test]
@@ -9519,8 +9433,6 @@ mod tests {
             };
             service.create_node_with_parent(params1).await.unwrap();
 
-            sleep(Duration::from_millis(50)).await;
-
             // End = append, so Child 2 ends up last.
             let params2 = CreateNodeParams {
                 id: Some("test-child-2".to_string()),
@@ -9531,8 +9443,6 @@ mod tests {
                 properties: json!({}),
             };
             service.create_node_with_parent(params2).await.unwrap();
-
-            sleep(Duration::from_millis(50)).await;
 
             let children = service.get_children(&parent_id).await.unwrap();
             assert_eq!(children.len(), 2);
@@ -9559,8 +9469,6 @@ mod tests {
             };
             service.create_node_with_parent(params1).await.unwrap();
 
-            sleep(Duration::from_millis(50)).await;
-
             // Beginning = prepend, so Child 2 ends up first.
             let params2 = CreateNodeParams {
                 id: Some("test-child-2".to_string()),
@@ -9571,8 +9479,6 @@ mod tests {
                 properties: json!({}),
             };
             service.create_node_with_parent(params2).await.unwrap();
-
-            sleep(Duration::from_millis(50)).await;
 
             let children = service.get_children(&parent_id).await.unwrap();
             assert_eq!(children.len(), 2);
@@ -9614,8 +9520,6 @@ mod tests {
                 .await
                 .unwrap();
 
-            sleep(Duration::from_millis(50)).await;
-
             let before = service.get_children(&parent_id).await.unwrap();
             assert_eq!(before.len(), 2);
             assert_eq!(before[0].content, "Child 1");
@@ -9632,8 +9536,6 @@ mod tests {
                 )
                 .await
                 .unwrap();
-
-            sleep(Duration::from_millis(50)).await;
 
             let after = service.get_children(&parent_id).await.unwrap();
             assert_eq!(after.len(), 2);
