@@ -29,8 +29,7 @@ import type {
   AcpAgentInfo,
   AgentSession,
   AgentTurnResult,
-  LocalAgentStatus,
-  ModelInfo
+  LocalAgentStatus
 } from '$lib/types/agent-types';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -292,12 +291,33 @@ export async function localAgentGetSessions(): Promise<AgentSession[]> {
 // Chat Model Management Commands (Issue #1008)
 // ============================================================================
 
+/** Lifecycle status of a catalog model (tagged union from the daemon). */
+export interface ChatModelStatus {
+  status: 'not_downloaded' | 'downloading' | 'verifying' | 'ready' | 'loaded' | 'error';
+  [key: string]: unknown;
+}
+
 /**
- * List all models in the local catalog.
+ * A model entry from `chat_model_list`. Built-in (GGUF) and Ollama models are
+ * merged into one list, distinguished by `backend`. Shape matches the daemon's
+ * `chat_model_list` command output (camelCase).
  */
-export async function chatModelList(): Promise<ModelInfo[]> {
+export interface ChatModelEntry {
+  id: string;
+  name: string;
+  backend: 'gguf' | 'ollama';
+  status: ChatModelStatus;
+  sizeBytes: number;
+  quantization: string;
+  minMemoryGb: number;
+}
+
+/**
+ * List all models in the local catalog (built-in GGUF + Ollama when running).
+ */
+export async function chatModelList(): Promise<ChatModelEntry[]> {
   if (!isTauri()) return [];
-  return invoke<ModelInfo[]>('chat_model_list');
+  return invoke<ChatModelEntry[]>('chat_model_list');
 }
 
 /**
@@ -352,6 +372,16 @@ export async function chatModelUnload(): Promise<void> {
 export function getSystemRamGb(): Promise<number> {
   if (!isTauri()) return Promise.resolve(0);
   return invoke<number>('get_system_ram_gb');
+}
+
+/**
+ * Whether a local Ollama server is reachable (pings its API with a short
+ * timeout). Used to gray out the Ollama provider mode when unavailable.
+ * Returns false outside Tauri.
+ */
+export function ollamaAvailable(): Promise<boolean> {
+  if (!isTauri()) return Promise.resolve(false);
+  return invoke<boolean>('ollama_available');
 }
 
 /**

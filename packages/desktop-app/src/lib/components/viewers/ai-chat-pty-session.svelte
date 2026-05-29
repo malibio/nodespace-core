@@ -1,14 +1,13 @@
 <!--
-  AiChatPtyView - Provider mode 2d (pty) sub-view of the ai-chat node viewer.
+  ai-chat-pty-session — provider mode 2d (pty) sub-view, composed by
+  AiChatNodeViewer. Not a Node/Viewer component (it's an internal helper, named
+  like ChatMessage/ChatInput), so it carries no *Node/*Viewer/*View suffix.
 
   Per ADR-034, a PTY agent session IS an ai-chat node (provider: pty). This
-  component is the node's *viewer* for that mode: when no session is running it
-  shows an inline agent picker + Launch button; once launched it hosts the
-  embedded xterm terminal (the "iframe"). The conversation node already exists —
-  capture backfills it at session end via the node_id passed to launch.
-
-  This replaces the standalone agent-launch-panel / sessions-panel cluster from
-  the old ADR-032 standalone model.
+  helper renders that mode: a launch config (harness picker + Launch) when no
+  session is running, the embedded xterm terminal (via pty-terminal.svelte) while
+  it runs, and a read-only summary once it ends. The node already exists; capture
+  backfills it at session end via the node_id passed to launch.
 -->
 
 <script lang="ts">
@@ -26,7 +25,7 @@
   } from '$lib/services/tauri-commands';
   import { createLogger } from '$lib/utils/logger';
 
-  const log = createLogger('AiChatPtyView');
+  const log = createLogger('AiChatPtySession');
 
   let { nodeId }: { nodeId: string } = $props();
 
@@ -101,9 +100,9 @@
   );
 
   // Listen for the live session's exit so the view flips to the ended state
-  // immediately (finding from review: a re-attached dead session would
-  // otherwise render a blank terminal). The $effect cleanup runs on both
-  // activeSessionId change and component unmount, so the listener never leaks.
+  // immediately (a re-attached dead session would otherwise render a blank
+  // terminal). The $effect cleanup runs on both activeSessionId change and
+  // component unmount, so the listener never leaks.
   $effect(() => {
     const id = activeSessionId;
     if (!id) return;
@@ -166,7 +165,7 @@
       }
       availability = map;
     } catch (e) {
-      log.warn('Failed to load pty view settings', e);
+      log.warn('Failed to load pty session settings', e);
     } finally {
       availabilityLoading = false;
     }
@@ -225,7 +224,10 @@
             status: 'active',
           },
         },
-        { type: 'viewer', viewerId: 'ai-chat-pty-view' }
+        { type: 'viewer', viewerId: 'ai-chat-pty-session' },
+        // Intentional configuration write following provider selection; skip
+        // conflict detection so it isn't dropped as a concurrent edit.
+        { skipConflictDetection: true }
       );
     } catch (e) {
       log.error('Failed to launch session', e);
