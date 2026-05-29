@@ -299,9 +299,9 @@ impl PtySession {
     ///
     /// Takes `&self` rather than consuming the session, because typical
     /// callers hold the session behind an `Arc` (the manager hands out
-    /// `Arc<PtySession>` from `get()`). Temp-dir cleanup happens when the
-    /// last `Arc` is dropped — usually the manager removing the entry
-    /// after this returns.
+    /// `Arc<PtySession>` from `get()`). The session directory at
+    /// `~/.nodespace/agent-sessions/<uuid>/` is NOT deleted on session end —
+    /// it persists so artifacts survive across daemon restarts.
     ///
     /// Safe to call when the child has already exited: returns immediately
     /// without erroring.

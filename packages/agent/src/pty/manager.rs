@@ -71,10 +71,12 @@ impl PtySessionManager {
             sessions.insert(id, session);
         }
 
-        // Auto-cleanup: when the child process exits, drop the session out
-        // of the map so the temp dir gets cleaned up. `watch` latches the
-        // final value, so this works whether the child exits before or
-        // after the receiver was constructed.
+        // Auto-cleanup: when the child process exits, remove the session entry
+        // from the map. The session directory at
+        // `~/.nodespace/agent-sessions/<uuid>/` is NOT deleted — it persists
+        // on disk so artifacts survive restarts. `watch` latches the final
+        // value, so this works whether the child exits before or after the
+        // receiver was constructed.
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
             // Fast path: exit already happened before insert returned.
@@ -102,10 +104,9 @@ impl PtySessionManager {
     /// Terminate and remove a session. Returns `Ok(false)` if the session
     /// was not in the map (already cleaned up by the natural-exit watcher).
     ///
-    /// The temp dir is dropped when the last `Arc<PtySession>` is dropped;
-    /// since this method takes ownership out of the map, that usually happens
-    /// at the end of this call (assuming no other caller is holding an
-    /// `Arc` from a prior `get()`).
+    /// Removing the session from the map drops the `Arc<PtySession>` when no
+    /// other caller holds a reference. The session directory on disk is NOT
+    /// deleted — it persists at `~/.nodespace/agent-sessions/<uuid>/`.
     pub async fn terminate(&self, id: &Uuid) -> anyhow::Result<bool> {
         let session = {
             let mut sessions = self.sessions.lock().await;
