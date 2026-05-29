@@ -38,7 +38,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task 1".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let task2 = CreateNodeParams {
@@ -46,7 +46,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task 2".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "done"}}),
         };
         let text1 = CreateNodeParams {
@@ -54,7 +54,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Text node".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
 
@@ -89,7 +89,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task 1".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let task2 = CreateNodeParams {
@@ -97,7 +97,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task 2".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "done"}}),
         };
         let task3 = CreateNodeParams {
@@ -105,7 +105,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task 3".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
 
@@ -154,7 +154,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: format!("Task {}", i + 1),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": status}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -206,7 +206,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -259,7 +259,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -300,7 +300,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Parent".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
         let parent_id = node_service.create_node_with_parent(parent).await.unwrap();
@@ -311,7 +311,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Child 1".to_string(),
             parent_id: Some(parent_id.clone()),
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
         let child2 = CreateNodeParams {
@@ -319,7 +319,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Child 2".to_string(),
             parent_id: Some(parent_id.clone()),
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
 
@@ -364,7 +364,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -401,7 +401,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: format!("Task {}", i),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -438,7 +438,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({
                     "task": {
                         "status": status,
@@ -497,7 +497,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task node".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let text = CreateNodeParams {
@@ -505,7 +505,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Text node".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
 
@@ -568,7 +568,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Exact Match".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let task2 = CreateNodeParams {
@@ -576,7 +576,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Different".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
 
@@ -615,7 +615,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -649,7 +649,7 @@ mod tests {
             node_type: "custom_type".to_string(),
             content: "Custom node".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"custom_field": "value"}),
         };
         node_service
@@ -682,7 +682,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Parent".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
         let parent_id = node_service.create_node_with_parent(parent).await.unwrap();
@@ -692,7 +692,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Child".to_string(),
             parent_id: Some(parent_id.clone()),
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
         let child_id = node_service.create_node_with_parent(child).await.unwrap();
@@ -732,7 +732,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task content".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let text = CreateNodeParams {
@@ -740,7 +740,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Text content".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
 
@@ -777,7 +777,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Important meeting".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let text = CreateNodeParams {
@@ -785,7 +785,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Random text".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
 
@@ -824,7 +824,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -976,7 +976,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -1009,7 +1009,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Task".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let text = CreateNodeParams {
@@ -1017,7 +1017,7 @@ mod tests {
             node_type: "text".to_string(),
             content: "Text".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
         };
 
@@ -1054,7 +1054,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "With status".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
 
@@ -1094,7 +1094,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "EXACT Match".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         node_service.create_node_with_parent(task).await.unwrap();
@@ -1133,7 +1133,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Open task".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
         };
         let task2 = CreateNodeParams {
@@ -1141,7 +1141,7 @@ mod tests {
             node_type: "task".to_string(),
             content: "Done task".to_string(),
             parent_id: None,
-            insert_after_node_id: None,
+            position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "done"}}),
         };
 
@@ -1231,7 +1231,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": status}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -1267,7 +1267,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();
@@ -1306,7 +1306,7 @@ mod tests {
                 node_type: "task".to_string(),
                 content: content.to_string(),
                 parent_id: None,
-                insert_after_node_id: None,
+                position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": status}}),
             };
             node_service.create_node_with_parent(task).await.unwrap();

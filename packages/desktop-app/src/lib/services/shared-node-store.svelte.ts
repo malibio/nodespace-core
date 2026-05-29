@@ -37,6 +37,7 @@ import { stripMarkdown } from './markdown-utils';
 import type { Node } from '$lib/types';
 import type { NodeReference } from '$lib/types/node';
 import type { TaskNode } from '$lib/types/task-node';
+import type { InsertPosition } from '$lib/services/backend-adapter';
 import type {
   NodeUpdate,
   UpdateSource,
@@ -559,7 +560,7 @@ export class SharedNodeStore {
 
   /**
    * Decide whether the persistence path should clear a CREATE's
-   * `insertAfterNodeId` hint as "stale" before talking to the backend.
+   * `InsertPosition.After` hint as "stale" before talking to the backend.
    *
    * **Trust hierarchy**: `structureTree` is the authoritative source for
    * `has_child` parent-child relationships (it's the in-memory mirror of
@@ -1406,15 +1407,16 @@ export class SharedNodeStore {
         // Issue #479: No placeholder checks - all real nodes should be persisted
 
         // Delegate to PersistenceCoordinator
-        // CRITICAL FIX: Track insertAfterNodeId as dependency to prevent race conditions
-        // When creating a node with insertAfterNodeId, the referenced node MUST exist in DB first
+        // CRITICAL FIX: Track InsertPosition.After sibling as dependency to prevent race conditions
+        // When creating a node with After(siblingId), the referenced sibling MUST exist in DB first
         // Otherwise backend fails with "Node 'xyz' does not exist"
         const dependencies: Array<string | (() => Promise<void>)> = [];
 
-        // If this node references another node via insertAfterNodeId, wait for that node first
-        const insertAfterNodeId = (node as Node & { insertAfterNodeId?: string | null }).insertAfterNodeId;
-        if (insertAfterNodeId && !this.persistedNodeIds.has(insertAfterNodeId)) {
-          dependencies.push(insertAfterNodeId);
+        // If this node inserts After a sibling, wait for that sibling to be persisted first
+        const insertPos = (node as Node & { insertPosition?: InsertPosition | null }).insertPosition;
+        const afterSiblingId = insertPos?.type === 'after' ? insertPos.siblingId : undefined;
+        if (afterSiblingId && !this.persistedNodeIds.has(afterSiblingId)) {
+          dependencies.push(afterSiblingId);
         }
 
         // Issue #479: Always persist the full node including content
@@ -1493,20 +1495,16 @@ export class SharedNodeStore {
                   }
                 }
               } else {
-                const nodeWithInsertHint = currentNode as Node & { insertAfterNodeId?: string | null };
-                if (nodeWithInsertHint.insertAfterNodeId) {
-                  if (
-                    this.shouldClearStaleInsertAfter(
-                      nodeWithInsertHint.insertAfterNodeId,
-                      currentNode.parentId
-                    )
-                  ) {
+                const nodeWithInsertPos = currentNode as Node & { insertPosition?: InsertPosition | null };
+                if (nodeWithInsertPos.insertPosition?.type === 'after' && nodeWithInsertPos.insertPosition.siblingId) {
+                  const siblingId = nodeWithInsertPos.insertPosition.siblingId;
+                  if (this.shouldClearStaleInsertAfter(siblingId, currentNode.parentId)) {
                     log.debug(
-                      `[CREATE] Clearing stale insertAfterNodeId for ${nodeId.substring(0, 8)}: ` +
-                        `sibling ${nodeWithInsertHint.insertAfterNodeId.substring(0, 8)} reports a ` +
+                      `[CREATE] Clearing stale insertPosition.after for ${nodeId.substring(0, 8)}: ` +
+                        `sibling ${siblingId.substring(0, 8)} reports a ` +
                         `different parent via structureTree (node.parentId=${currentNode.parentId?.substring(0, 8) ?? 'null'})`
                     );
-                    nodeWithInsertHint.insertAfterNodeId = null;
+                    nodeWithInsertPos.insertPosition = { type: 'end' };
                   }
                 }
 

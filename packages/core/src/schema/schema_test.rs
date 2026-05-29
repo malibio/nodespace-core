@@ -459,7 +459,7 @@ async fn test_rename_field_migrates_node_data() {
         node_type: schema_id.clone(),
         content: "test node".to_string(),
         parent_id: None,
-        insert_after_node_id: None,
+        position: crate::services::InsertPositionOwned::End,
         properties: serde_json::json!({
             &schema_id: { "old_field": "my_value" }
         }),

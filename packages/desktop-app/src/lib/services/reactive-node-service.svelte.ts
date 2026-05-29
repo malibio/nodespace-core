@@ -35,6 +35,7 @@ const log = createLogger('ReactiveNodeService');
 // Schema defaults extraction removed in Issue #690 simplification
 // TODO: Re-add schema defaults if needed via backendAdapter.getSchema() + SchemaNodeHelpers
 import { moveNode as moveNodeCommand } from './tauri-commands';
+import type { InsertPosition } from '$lib/services/backend-adapter';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
 /**
@@ -288,21 +289,24 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const shouldFocusNewNode = focusNewNode !== undefined ? focusNewNode : !insertAtBeginning;
     const isPlaceholder = initialContent.trim() === '' || /^#{1,6}\s*$/.test(initialContent.trim());
 
-    // Calculate insertAfterNodeId for backend ordering (Issue #657)
-    // - If insertAtBeginning: null (insert at start of siblings)
-    // - Otherwise: afterNodeId (insert after the reference node)
-    const insertAfterNodeId = insertAtBeginning ? null : afterNodeId;
+    // Calculate insertPosition for backend ordering (Issue #657, #1216)
+    // - insertAtBeginning: Beginning (insert before all siblings)
+    // - afterNodeId defined: After(afterNodeId)
+    // - otherwise: End
+    const insertPosition: InsertPosition = insertAtBeginning
+      ? { type: 'beginning' }
+      : afterNodeId
+        ? { type: 'after', siblingId: afterNodeId }
+        : { type: 'end' };
 
     // Create Node with unified type system
-    // NOTE: beforeSiblingId removed - backend uses fractional ordering on edges
-    // insertAfterNodeId is a creation hint passed to backend for correct sibling ordering
-    const newNode: Node & { insertAfterNodeId?: string | null } = {
+    const newNode: Node & { insertPosition?: InsertPosition | null } = {
       id: nodeId,
       nodeType: nodeType,
       content: initialContent,
       createdAt: new Date().toISOString(),
       parentId: newParentId,
-      insertAfterNodeId: insertAfterNodeId,
+      insertPosition,
       modifiedAt: new Date().toISOString(),
       version: 1,
       properties: {},
@@ -936,8 +940,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const nodeWithNewParent = {
           ...updatedNode,
           parentId: targetParentId,
-          insertAfterNodeId: null  // Clear - old sibling reference is invalid for new parent
-        } as typeof updatedNode & { insertAfterNodeId?: string | null };
+          insertPosition: { type: 'end' } as InsertPosition // clear stale sibling ref — append to new parent
+        } as typeof updatedNode & { insertPosition?: InsertPosition | null };
         // Re-set the node to trigger a new CREATE with correct parentId
         // The previous pending CREATE will be cancelled by the new one
         sharedNodeStore.setNode(nodeWithNewParent, viewerSource);
@@ -1073,8 +1077,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           const nodeWithNewParent = {
             ...updatedNode,
             parentId: newParentId,
-            insertAfterNodeId: null  // Clear - old sibling reference is invalid for new parent
-          } as typeof updatedNode & { insertAfterNodeId?: string | null };
+            insertPosition: { type: 'end' } as InsertPosition // clear stale sibling ref — append to new parent
+          } as typeof updatedNode & { insertPosition?: InsertPosition | null };
           // Re-set the node to trigger a new CREATE with correct parentId
           // The previous pending CREATE will be cancelled by the new one
           sharedNodeStore.setNode(nodeWithNewParent, { type: 'database', reason: 'outdent-node' });
@@ -1114,7 +1118,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           // The CREATE operation reads current node state at execution time, so we need to
           // directly clear this on the node object in the store.
           // Since sharedNodeStore.getNode returns a reference to the actual object, we can mutate it.
-          (currentNode as typeof currentNode & { insertAfterNodeId?: string | null }).insertAfterNodeId = null;
+          (currentNode as typeof currentNode & { insertPosition?: InsertPosition | null }).insertPosition = { type: 'end' } as InsertPosition;
         }
 
         // Update structure tree for browser mode (same as non-executing case)
@@ -1208,7 +1212,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // Now safe to move the node and its siblings (with OCC)
         // When outdenting, insert after the old parent (so it appears right below it)
         // Backend returns updated node with new version
-        const updatedNode = await moveNodeCommand(nodeId, freshNode.version, newParentId, oldParentId);
+        const outdentPosition: InsertPosition = oldParentId
+          ? { type: 'after', siblingId: oldParentId }
+          : { type: 'end' };
+        const updatedNode = await moveNodeCommand(nodeId, freshNode.version, newParentId, outdentPosition);
 
         // Sync local version from backend response
         sharedNodeStore.updateNode(
@@ -1304,9 +1311,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       const childDepth = _uiState[child.id]?.depth ?? 0;
 
       // Walk up from merged-into node to find a node at the child's depth
-      // That node becomes the insertAfterNodeId
-      // The parent of that node becomes the new parent for the child
-      let insertAfterNodeId: string | null = null;
+      // That node becomes the insertion anchor; its parent becomes the new parent for the child
+      let insertAfterSiblingId: string | null = null;
       let newParentForChild: string | null = null;
       let currentNode: string | null = previousNodeId;
 
@@ -1314,24 +1320,17 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const currentDepth = _uiState[currentNode]?.depth ?? 0;
 
         if (currentDepth === childDepth) {
-          // Found a node at the same depth as the child
-          // Child will be inserted after this node
-          insertAfterNodeId = currentNode;
-
-          // New parent is this node's parent
+          insertAfterSiblingId = currentNode;
           const parents = sharedNodeStore.getParentsForNode(currentNode);
           newParentForChild = parents.length > 0 ? parents[0].id : null;
           break;
         }
 
         if (currentDepth < childDepth) {
-          // We've gone past the target depth
-          // This happens when child should be at root or there's no match
           newParentForChild = currentNode;
           break;
         }
 
-        // Move up to parent
         const parents = sharedNodeStore.getParentsForNode(currentNode);
         currentNode = parents.length > 0 ? parents[0].id : null;
       }
@@ -1341,11 +1340,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         ? (_uiState[newParentForChild]?.depth ?? 0) + 1
         : 0;
 
+      const insertPosition: InsertPosition = insertAfterSiblingId
+        ? { type: 'after', siblingId: insertAfterSiblingId }
+        : { type: 'end' };
+
       // Use moveNodeCommand to properly update the has_child edge in the backend (with OCC)
-      // Insert after the node at the same depth to maintain visual order
-      // Don't await - let PersistenceCoordinator handle sequencing via deletionDependencies
       const childVersion = child.version;
-      moveNodeCommand(child.id, childVersion, newParentForChild, insertAfterNodeId)
+      moveNodeCommand(child.id, childVersion, newParentForChild, insertPosition)
         .then((updatedChild) => {
           // Sync child's local version from backend response
           sharedNodeStore.updateNode(

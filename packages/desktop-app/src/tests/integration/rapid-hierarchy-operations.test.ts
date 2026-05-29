@@ -444,7 +444,7 @@ describe('Stress Test - High Volume Operations', () => {
     // (tests that the mock infrastructure handles high volume)
     for (let i = 0; i < 100; i++) {
       // Mock is already set to resolve immediately
-      mockMoveNode(`node-${i % 10}`, 1, `root`, `node-${(i + 1) % 10}`);
+      mockMoveNode(`node-${i % 10}`, 1, `root`, { type: 'after', siblingId: `node-${(i + 1) % 10}` });
     }
 
     // Verify mock was called correct number of times
