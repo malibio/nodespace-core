@@ -3,7 +3,7 @@ import { getClient, type NodeServiceClient } from './client.js';
 import { type NodeResult, type SearchResult, ToolError } from './types.js';
 
 // Wire-format mirrors of the proto messages in
-// packages/daemon/proto/node_service.proto. The proto is the source of
+// packages/proto/proto/node_service.proto. The proto is the source of
 // truth; these interfaces only exist to give the response handlers a typed
 // shape after JS-style camelCase conversion by @grpc/proto-loader.
 interface ProtoNodeData {

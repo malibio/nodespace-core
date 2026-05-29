@@ -44,7 +44,7 @@ pub struct Embedding {
     /// Unique identifier for this embedding record
     pub id: String,
 
-    /// Reference to the root node (SurrealDB record link format: "node:uuid")
+    /// Reference to the root node (string ID convention: "node:uuid")
     pub node: String,
 
     /// The embedding vector (array of floats)

@@ -36,7 +36,7 @@ pub enum DatabaseError {
     #[error("Failed to create parent directory for database: {0}")]
     DirectoryCreationFailed(#[from] std::io::Error),
 
-    /// SurrealDB operation error
+    /// Database operation error
     #[error("Database operation failed: {0}")]
     OperationError(String),
 

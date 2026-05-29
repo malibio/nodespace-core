@@ -5,7 +5,7 @@
 //! with intelligent type inference.
 
 use crate::behaviors::SchemaNodeBehavior;
-use crate::mcp::types::MCPError;
+use crate::markdown::MarkdownError;
 use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
 use crate::models::{Node, NodeUpdate, SchemaNode};
 use crate::services::{CreateNodeParams, NodeService};
@@ -130,12 +130,14 @@ struct InferredField {
 pub async fn handle_create_schema(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     let params: CreateSchemaParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     if params.name.trim().is_empty() {
-        return Err(MCPError::invalid_params("name cannot be empty".to_string()));
+        return Err(MarkdownError::invalid_params(
+            "name cannot be empty".to_string(),
+        ));
     }
 
     // Determine fields: explicit fields take precedence, otherwise parse description
@@ -144,7 +146,7 @@ pub async fn handle_create_schema(
         (explicit_fields, Vec::new())
     } else if let Some(ref description) = params.description {
         if description.trim().is_empty() {
-            return Err(MCPError::invalid_params(
+            return Err(MarkdownError::invalid_params(
                 "Either 'fields' or non-empty 'description' must be provided".to_string(),
             ));
         }
@@ -171,7 +173,7 @@ pub async fn handle_create_schema(
     // Check if schema already exists — return a clear error so the agent knows
     // to use create_node instead of retrying create_schema.
     if matches!(node_service.get_schema_node(&schema_id).await, Ok(Some(_))) {
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Schema '{}' already exists. Use create_node with node_type='{}' to create instances.",
             params.name, schema_id
         )));
@@ -211,7 +213,7 @@ pub async fn handle_create_schema(
         .create_node_with_parent(schema_node_params)
         .await
         .map_err(|e| {
-            MCPError::internal_error(format!(
+            MarkdownError::internal_error(format!(
                 "Failed to create schema node for '{}': {}",
                 schema_id, e
             ))
@@ -232,7 +234,7 @@ pub async fn handle_create_schema(
     };
 
     serde_json::to_value(&output)
-        .map_err(|e| MCPError::internal_error(format!("Failed to serialize output: {}", e)))
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to serialize output: {}", e)))
 }
 
 // ============================================================================
@@ -340,17 +342,17 @@ pub struct SchemaUpdateOutput {
 pub async fn handle_add_schema_relationship(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     let params: AddSchemaRelationshipParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // Get existing schema
     let schema = node_service
         .get_schema_node(&params.schema_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
         .ok_or_else(|| {
-            MCPError::invalid_params(format!("Schema '{}' not found", params.schema_id))
+            MarkdownError::invalid_params(format!("Schema '{}' not found", params.schema_id))
         })?;
 
     // Check if relationship already exists
@@ -359,7 +361,7 @@ pub async fn handle_add_schema_relationship(
         .iter()
         .any(|r| r.name == params.relationship.name)
     {
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Relationship '{}' already exists in schema '{}'",
             params.relationship.name, params.schema_id
         )));
@@ -386,7 +388,7 @@ pub async fn handle_add_schema_relationship(
     node_service
         .update_node_unchecked(&params.schema_id, update)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to update schema: {}", e)))?;
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
 
     Ok(serde_json::json!({
         "success": true,
@@ -409,17 +411,17 @@ pub async fn handle_add_schema_relationship(
 pub async fn handle_remove_schema_relationship(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     let params: RemoveSchemaRelationshipParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // Get existing schema
     let schema = node_service
         .get_schema_node(&params.schema_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
         .ok_or_else(|| {
-            MCPError::invalid_params(format!("Schema '{}' not found", params.schema_id))
+            MarkdownError::invalid_params(format!("Schema '{}' not found", params.schema_id))
         })?;
 
     // Check if relationship exists
@@ -428,7 +430,7 @@ pub async fn handle_remove_schema_relationship(
         .iter()
         .any(|r| r.name == params.relationship_name)
     {
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Relationship '{}' not found in schema '{}'",
             params.relationship_name, params.schema_id
         )));
@@ -458,7 +460,7 @@ pub async fn handle_remove_schema_relationship(
     node_service
         .update_node_unchecked(&params.schema_id, update)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to update schema: {}", e)))?;
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
 
     Ok(serde_json::json!({
         "success": true,
@@ -486,9 +488,9 @@ pub async fn handle_remove_schema_relationship(
 pub async fn handle_update_schema(
     node_service: &Arc<NodeService>,
     params: Value,
-) -> Result<Value, MCPError> {
+) -> Result<Value, MarkdownError> {
     let params: UpdateSchemaParams = serde_json::from_value(params)
-        .map_err(|e| MCPError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
     // --- Phase 0: Verify schema exists, validate renames, run playbook impact check ---
     // Schema existence is verified upfront so rename/playbook validation errors are reported
@@ -496,9 +498,9 @@ pub async fn handle_update_schema(
     node_service
         .get_schema_node(&params.schema_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
         .ok_or_else(|| {
-            MCPError::invalid_params(format!("Schema '{}' not found", params.schema_id))
+            MarkdownError::invalid_params(format!("Schema '{}' not found", params.schema_id))
         })?;
 
     // Validate renames before executing any mutations (including the playbook guard below)
@@ -507,24 +509,24 @@ pub async fn handle_update_schema(
         let mut seen_destinations = std::collections::HashSet::new();
         for rename in renames {
             if rename.from.trim().is_empty() || rename.to.trim().is_empty() {
-                return Err(MCPError::invalid_params(
+                return Err(MarkdownError::invalid_params(
                     "rename_fields entries must have non-empty 'from' and 'to'".to_string(),
                 ));
             }
             if rename.from == rename.to {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "rename_fields: 'from' and 'to' are the same: '{}'",
                     rename.from
                 )));
             }
             if !seen_sources.insert(&rename.from) {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "rename_fields: duplicate source field name '{}'",
                     rename.from
                 )));
             }
             if !seen_destinations.insert(&rename.to) {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "rename_fields: duplicate destination field name '{}'",
                     rename.to
                 )));
@@ -537,11 +539,11 @@ pub async fn handle_update_schema(
     let affected =
         crate::playbook::validation::check_schema_change_impact(&params.schema_id, node_service)
             .await
-            .map_err(|e| MCPError::internal_error(format!("Impact analysis failed: {}", e)))?;
+            .map_err(|e| MarkdownError::internal_error(format!("Impact analysis failed: {}", e)))?;
 
     if !affected.is_empty() && !params.force {
         let names: Vec<String> = affected.iter().map(|a| a.to_string()).collect();
-        return Err(MCPError::invalid_params(format!(
+        return Err(MarkdownError::invalid_params(format!(
             "Schema change would affect {} active playbook(s): {}. Use force=true to proceed.",
             affected.len(),
             names.join("; ")
@@ -566,7 +568,9 @@ pub async fn handle_update_schema(
             node_service
                 .rename_schema_field(&params.schema_id, &rename.from, &rename.to)
                 .await
-                .map_err(|e| MCPError::invalid_params(format!("Field rename failed: {}", e)))?;
+                .map_err(|e| {
+                    MarkdownError::invalid_params(format!("Field rename failed: {}", e))
+                })?;
             fields_renamed += 1;
         }
     }
@@ -575,9 +579,9 @@ pub async fn handle_update_schema(
     let schema = node_service
         .get_schema_node(&params.schema_id)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to get schema: {}", e)))?
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
         .ok_or_else(|| {
-            MCPError::invalid_params(format!(
+            MarkdownError::invalid_params(format!(
                 "Schema '{}' not found after renames",
                 params.schema_id
             ))
@@ -598,7 +602,7 @@ pub async fn handle_update_schema(
         // Check for duplicates before adding
         for field in add_fields {
             if fields.iter().any(|f| f.name == field.name) {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "Field '{}' already exists in schema '{}'",
                     field.name, params.schema_id
                 )));
@@ -623,7 +627,7 @@ pub async fn handle_update_schema(
         // Check for duplicates before adding
         for rel in add_rels {
             if relationships.iter().any(|r| r.name == rel.name) {
-                return Err(MCPError::invalid_params(format!(
+                return Err(MarkdownError::invalid_params(format!(
                     "Relationship '{}' already exists in schema '{}'",
                     rel.name, params.schema_id
                 )));
@@ -667,11 +671,11 @@ pub async fn handle_update_schema(
         properties.clone(),
     );
     let updated_schema = SchemaNode::from_node(temp_node).map_err(|e| {
-        MCPError::invalid_params(format!("Failed to build schema for validation: {}", e))
+        MarkdownError::invalid_params(format!("Failed to build schema for validation: {}", e))
     })?;
     SchemaNodeBehavior
         .validate_schema_node(&updated_schema)
-        .map_err(|e| MCPError::invalid_params(format!("Schema validation failed: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("Schema validation failed: {}", e)))?;
 
     let update = NodeUpdate {
         properties: Some(properties),
@@ -681,7 +685,7 @@ pub async fn handle_update_schema(
     node_service
         .update_node_unchecked(&params.schema_id, update)
         .await
-        .map_err(|e| MCPError::internal_error(format!("Failed to update schema: {}", e)))?;
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
 
     let output = SchemaUpdateOutput {
         schema_id: params.schema_id,
@@ -715,7 +719,7 @@ pub async fn handle_update_schema(
     };
 
     serde_json::to_value(&output)
-        .map_err(|e| MCPError::internal_error(format!("Failed to serialize output: {}", e)))
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to serialize output: {}", e)))
 }
 
 /// Parse natural language description and extract fields

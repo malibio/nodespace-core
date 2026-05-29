@@ -1,18 +1,18 @@
-//! Dynamic Index Management for SurrealDB
+//! Dynamic Index Management (temporarily disabled)
 //!
 //! **STATUS: Deferred to future performance optimization**
 //!
 //! Dynamic indexing deferred to future performance optimization work.
-//! Will be re-implemented with SurrealDB-native index management when needed.
+//! Will be re-implemented with SQLite index management when needed.
 //!
 //! **Future Work (separate performance optimization issue):**
-//! - Use SurrealDB's DEFINE INDEX syntax
+//! - Use SQLite `CREATE INDEX` statements
 //! - Implement query-driven index creation
-//! - Adapt to SurrealDB's indexing capabilities
+//! - Adapt to SQLite's indexing capabilities
 
 use crate::db::error::DatabaseError;
 
-/// Index manager for SurrealDB (temporarily disabled)
+/// Index manager (temporarily disabled)
 pub struct IndexManager {}
 
 impl IndexManager {
@@ -30,7 +30,7 @@ impl IndexManager {
         _node_type: &str,
         _property_name: &str,
     ) -> Result<(), DatabaseError> {
-        // No-op: SurrealDB handles indexing differently
+        // No-op: dynamic SQLite index management deferred
         Ok(())
     }
 }

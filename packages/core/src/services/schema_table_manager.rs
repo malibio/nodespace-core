@@ -10,7 +10,7 @@
 //! ## Responsibilities
 //!
 //! - Generating DDL statements for relationship edge tables
-//! - Mapping edge field types to proper SurrealDB types
+//! - Mapping edge field types to proper SQL types
 //! - Generating index definitions for efficient graph traversal
 //!
 //! ## Example Usage
@@ -56,7 +56,7 @@ impl SchemaTableManager {
     /// Generate DDL statements for relationship edge tables
     ///
     /// Creates edge tables for each relationship defined in the schema.
-    /// Edge tables use SurrealDB's `TYPE RELATION` for graph queries.
+    /// Edge tables back relationship rows for graph queries.
     ///
     /// # Arguments
     ///
@@ -194,7 +194,7 @@ impl SchemaTableManager {
             )));
         }
 
-        // Map edge field type to SurrealDB type
+        // Map edge field type to SQL type
         let db_type = self.map_edge_field_type(field)?;
 
         // Define field
@@ -214,7 +214,7 @@ impl SchemaTableManager {
         Ok(statements)
     }
 
-    /// Map edge field type to SurrealDB type
+    /// Map edge field type to SQL type
     ///
     /// Edge fields support a simpler set of types than schema fields:
     /// - string, number, boolean, date, record

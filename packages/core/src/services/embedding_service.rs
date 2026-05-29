@@ -23,7 +23,7 @@
 //! - Background processor re-embeds stale entries
 
 use crate::behaviors::{CustomNodeBehavior, NodeBehavior, NodeBehaviorRegistry};
-use crate::db::SurrealStore;
+use crate::db::SqliteStore;
 use crate::models::{EmbeddingConfig, EmbeddingSearchResult, NewEmbedding, Node};
 use crate::services::error::NodeServiceError;
 use crate::services::{NodeAccessor, SearchNodeFilters, SearchScope};
@@ -46,9 +46,9 @@ pub const MAX_PARENT_CHAIN_DEPTH: usize = 100;
 /// Applied as an additive bonus: `composite_score + TITLE_BOOST` when a match is found.
 /// Start at 0.1; tune against benchmark if needed.
 ///
-/// Note: This constant lives here rather than in `surreal_store.rs` because the boost is
-/// applied in Rust post-FETCH (after `search_embeddings` returns nodes with titles attached).
-/// SurrealDB SQL cannot reference Rust constants, and the title field is only available once
+/// Note: This constant lives here rather than in `sqlite_store.rs` because the boost is
+/// applied in Rust post-fetch (after `search_embeddings` returns nodes with titles attached).
+/// SQL cannot reference Rust constants, and the title field is only available once
 /// the node is fetched — so the boost must be Rust-side, not SQL-side.
 pub const TITLE_BOOST: f64 = 0.1;
 
@@ -64,8 +64,8 @@ pub const TITLE_BOOST: f64 = 0.1;
 pub struct NodeEmbeddingService {
     /// NLP engine for generating embeddings
     nlp_engine: Arc<EmbeddingService>,
-    /// SurrealDB store for persisting embeddings and search queries
-    store: Arc<SurrealStore>,
+    /// SQLite store for persisting embeddings and search queries
+    store: Arc<SqliteStore>,
     /// Read-only node accessor (backed by NodeService) for behavior-driven content extraction
     node_accessor: Arc<dyn NodeAccessor>,
     /// Behavior registry for looking up node type behaviors
@@ -79,12 +79,12 @@ impl NodeEmbeddingService {
     ///
     /// # Arguments
     /// * `nlp_engine` - The NLP engine for generating embeddings
-    /// * `store` - The SurrealDB store for persisting embeddings
+    /// * `store` - The SQLite store for persisting embeddings
     /// * `node_accessor` - Read-only accessor (typically NodeService) for fetching nodes
     /// * `behaviors` - Behavior registry for node type lookup
     pub fn new(
         nlp_engine: Arc<EmbeddingService>,
-        store: Arc<SurrealStore>,
+        store: Arc<SqliteStore>,
         node_accessor: Arc<dyn NodeAccessor>,
         behaviors: Arc<NodeBehaviorRegistry>,
     ) -> Self {
@@ -101,7 +101,7 @@ impl NodeEmbeddingService {
     /// Create with custom configuration
     pub fn with_config(
         nlp_engine: Arc<EmbeddingService>,
-        store: Arc<SurrealStore>,
+        store: Arc<SqliteStore>,
         node_accessor: Arc<dyn NodeAccessor>,
         behaviors: Arc<NodeBehaviorRegistry>,
         config: EmbeddingConfig,
@@ -124,8 +124,8 @@ impl NodeEmbeddingService {
         &self.nlp_engine
     }
 
-    /// Get reference to the SurrealDB store
-    pub fn store(&self) -> &Arc<SurrealStore> {
+    /// Get reference to the SQLite store
+    pub fn store(&self) -> &Arc<SqliteStore> {
         &self.store
     }
 
@@ -859,7 +859,7 @@ impl NodeEmbeddingService {
     /// both similarity and breadth of matching chunks).
     ///
     /// PERFORMANCE: Node data is now fetched inline with the search query using
-    /// SurrealDB's FETCH clause, eliminating N+1 query overhead.
+    /// a SQL join, eliminating N+1 query overhead.
     ///
     /// Accepts an optional [`SearchNodeFilters`] to restrict results by node type
     /// and/or property values (Issue #1059). When filters are active, the fetch
@@ -1268,7 +1268,7 @@ mod tests {
         let behaviors = Arc::new(NodeBehaviorRegistry::new());
 
         // We cannot construct a full NodeEmbeddingService without a real NLP engine
-        // and SurrealStore, so we test the behavior dispatch logic directly by
+        // and SqliteStore, so we test the behavior dispatch logic directly by
         // calling behavior.get_embeddable_content() through the registry,
         // which is exactly what extract_content_for_embedding delegates to.
 

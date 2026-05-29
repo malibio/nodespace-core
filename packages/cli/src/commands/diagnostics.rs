@@ -62,7 +62,7 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
     let database_path = db_path.to_string_lossy().to_string();
     let database_exists = db_path.exists();
     let database_size_bytes = if database_exists {
-        Some(directory_size(db_path, &mut errors))
+        Some(database_size(db_path, &mut errors))
     } else {
         None
     };
@@ -152,17 +152,48 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
     }
 }
 
-/// Recursive directory size. Symlinks are intentionally not followed —
-/// `DirEntry::file_type` uses `lstat`, so a symlinked directory inside the
-/// RocksDB tree cannot trigger an infinite descent. This also means
-/// symlinked entries don't contribute to the total, which is fine because
-/// RocksDB stores no symlinks; do not "fix" this back to `fs::metadata()`
-/// (which follows symlinks) without reintroducing loop protection.
+/// On-disk size of the database at `path`.
+///
+/// libsql/SQLite stores the database as a single file (plus optional `-wal`
+/// and `-shm` sidecars), so the common case is a file: size it and its
+/// sidecars. A directory is also handled (recursively summed) so the helper
+/// stays correct if the path ever points at a containing directory.
 ///
 /// IO errors are accumulated into `errors` so a permissions issue surfaces
 /// in the report rather than silently producing a zero byte count — that
 /// failure mode is precisely what an operator running `nodespace
 /// diagnostics` is usually trying to debug.
+fn database_size(path: &Path, errors: &mut Vec<String>) -> u64 {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => directory_size(path, errors),
+        Ok(meta) if meta.is_file() => {
+            let mut total = meta.len();
+            // Include the WAL/SHM sidecars libsql may write alongside the file.
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                for suffix in ["-wal", "-shm"] {
+                    let sidecar = path.with_file_name(format!("{name}{suffix}"));
+                    if let Ok(sidecar_meta) = fs::symlink_metadata(&sidecar) {
+                        if sidecar_meta.is_file() {
+                            total += sidecar_meta.len();
+                        }
+                    }
+                }
+            }
+            total
+        }
+        Ok(_) => 0, // symlink or other special type at the top level: skip
+        Err(e) => {
+            errors.push(format!("stat {} failed: {e}", path.display()));
+            0
+        }
+    }
+}
+
+/// Recursive directory size. Symlinks are intentionally not followed —
+/// `DirEntry::file_type` uses `lstat`, so a symlinked directory inside the
+/// database directory cannot trigger an infinite descent. This also means
+/// symlinked entries don't contribute to the total; do not "fix" this back to
+/// `fs::metadata()` (which follows symlinks) without reintroducing loop protection.
 fn directory_size(path: &Path, errors: &mut Vec<String>) -> u64 {
     let mut total = 0u64;
     let entries = match fs::read_dir(path) {

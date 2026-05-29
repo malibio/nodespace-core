@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! - **SurrealDB**: Embedded database with built-in versioning and RBAC support
+//! - **SQLite (libsql)**: Embedded database with sqlite-vec for vector search
 //! - **SCHEMALESS Storage**: Flexible property storage for dynamic node types
 //! - **Node Type System**: Trait-based behaviors for validation and processing
 //! - **Future Features**: Version history and collaborative sync with permissions
@@ -16,15 +16,18 @@
 //! - [`models`] - Data structures (Node, Task, Person, etc.)
 //! - [`behaviors`] - Node type system and trait-based behaviors
 //! - [`services`] - Business services (NodeService, SchemaTableManager, etc.)
-//! - [`db`] - Database layer with SurrealDB integration
+//! - [`db`] - Database layer with SQLite (libsql) integration
 //! - [`mcp`] - MCP stdio server for AI agent integration
 
+pub mod agent_params;
 pub mod behaviors;
 pub mod db;
-pub mod mcp;
+pub mod markdown;
 pub mod models;
+pub mod node_batch;
 pub mod ops;
 pub mod playbook;
+pub mod schema;
 pub mod services;
 pub mod utils;
 
@@ -35,7 +38,7 @@ pub use behaviors::{
 };
 pub use db::{
     DatabaseError, DomainEvent, EventEnvelope, EventMetadata, PlaybookExecutionContext,
-    PropertyChange, RelationshipEvent, RelationshipRecord, SurrealStore,
+    PropertyChange, RelationshipEvent, RelationshipRecord, SqliteStore,
 };
 pub use models::{
     FilterOperator, Node, NodeFilter, NodeQuery, NodeUpdate, OrderBy, PropertyFilter, SchemaNode,

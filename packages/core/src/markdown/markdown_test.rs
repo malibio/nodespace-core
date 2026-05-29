@@ -4,10 +4,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::db::SurrealStore;
-    use crate::mcp::handlers::markdown::{
-        handle_create_nodes_from_markdown, handle_update_root_from_markdown,
-    };
+    use crate::db::SqliteStore;
+    use crate::markdown::{handle_create_nodes_from_markdown, handle_update_root_from_markdown};
     use crate::services::NodeService;
     use serde_json::json;
     use std::sync::Arc;
@@ -17,7 +15,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
         (node_service, temp_dir)
     }
@@ -930,7 +928,7 @@ Text paragraph
     // Markdown Export Tests (get_markdown_from_node_id)
     // ============================================================================
 
-    use crate::mcp::handlers::markdown::handle_get_markdown_from_node_id;
+    use crate::markdown::handle_get_markdown_from_node_id;
 
     #[tokio::test]
     async fn test_get_markdown_simple() {
@@ -1338,7 +1336,7 @@ Text under section 1
         assert_eq!(bullet_node.content, "Regular bullet");
 
         // Graph Architecture Note: Parent-child relationships are now managed via graph edges
-        // in the SurrealDB schema, not via parent_id fields. Both bullet nodes are children
+        // in the relationships table, not via parent_id fields. Both bullet nodes are children
         // of the text paragraph, represented by edges in the graph.
     }
 
@@ -1601,7 +1599,7 @@ Regular text after code."#;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.message.contains("not found"));
+        assert!(error.message().contains("not found"));
     }
 
     #[tokio::test]
@@ -1617,7 +1615,7 @@ Regular text after code."#;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.message.contains("root_id") || error.message.contains("container_id"));
+        assert!(error.message().contains("root_id") || error.message().contains("container_id"));
     }
 
     #[tokio::test]
@@ -1681,7 +1679,7 @@ Regular text after code."#;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.message.contains("exceeds maximum size"));
+        assert!(error.message().contains("exceeds maximum size"));
     }
 
     /// Helper to generate markdown with N nodes for testing
@@ -2220,9 +2218,7 @@ Some content"#;
 /// during bulk import operations.
 #[cfg(test)]
 mod link_transformation_tests {
-    use crate::mcp::handlers::markdown::{
-        build_file_to_uuid_map, transform_links_in_nodes, PreparedNode,
-    };
+    use crate::markdown::{build_file_to_uuid_map, transform_links_in_nodes, PreparedNode};
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -2489,7 +2485,7 @@ mod link_transformation_tests {
 /// when inter-file links are transformed to nodespace:// format.
 #[cfg(test)]
 mod mention_collection_tests {
-    use crate::mcp::handlers::markdown::{transform_links_in_nodes_with_mentions, PreparedNode};
+    use crate::markdown::{transform_links_in_nodes_with_mentions, PreparedNode};
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -2759,7 +2755,7 @@ mod mention_collection_tests {
 
 #[cfg(test)]
 mod slugify_heading_tests {
-    use crate::mcp::handlers::markdown::slugify_heading;
+    use crate::markdown::slugify_heading;
 
     #[test]
     fn test_basic_heading() {
@@ -2810,8 +2806,8 @@ mod slugify_heading_tests {
 
 #[cfg(test)]
 mod table_and_hr_tests {
-    use crate::db::SurrealStore;
-    use crate::mcp::handlers::markdown::handle_create_nodes_from_markdown;
+    use crate::db::SqliteStore;
+    use crate::markdown::handle_create_nodes_from_markdown;
     use crate::services::NodeService;
     use serde_json::json;
     use std::sync::Arc;
@@ -2821,7 +2817,7 @@ mod table_and_hr_tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
         (node_service, temp_dir)
     }
@@ -3024,7 +3020,7 @@ Some text here.
 
 #[cfg(test)]
 mod template_tests {
-    use crate::mcp::handlers::markdown::{prepare_nodes_from_template, NodeTemplate};
+    use crate::markdown::{prepare_nodes_from_template, NodeTemplate};
 
     fn skill_template(name: &str, guidance: &str) -> NodeTemplate {
         NodeTemplate {

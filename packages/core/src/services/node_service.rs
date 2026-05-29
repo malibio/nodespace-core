@@ -26,7 +26,7 @@
 
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
-use crate::db::{StoreChange, StoreOperation, SurrealStore};
+use crate::db::{SqliteStore, StoreChange, StoreOperation};
 use crate::models::schema::SchemaRelationship;
 use crate::models::{FilterOperator, Node, NodeFilter, NodeUpdate, PropertyFilter};
 use crate::services::error::NodeServiceError;
@@ -660,7 +660,7 @@ pub fn extract_mentions(content: &str) -> Vec<String> {
 ///
 /// ```no_run
 /// use nodespace_core::services::NodeService;
-/// use nodespace_core::db::SurrealStore;
+/// use nodespace_core::db::SqliteStore;
 /// use nodespace_core::models::Node;
 /// use std::path::PathBuf;
 /// use std::sync::Arc;
@@ -668,7 +668,7 @@ pub fn extract_mentions(content: &str) -> Vec<String> {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let mut db = Arc::new(SurrealStore::new(PathBuf::from("./data/test.db")).await?);
+///     let mut db = Arc::new(SqliteStore::new(PathBuf::from("./data/test.db")).await?);
 ///     let service = NodeService::new(&mut db).await?;
 ///
 ///     let node = Node::new(
@@ -683,8 +683,8 @@ pub fn extract_mentions(content: &str) -> Vec<String> {
 /// }
 /// ```
 pub struct NodeService {
-    /// SurrealDB store for all persistence operations
-    pub(crate) store: Arc<SurrealStore>,
+    /// SQLite store for all persistence operations
+    pub(crate) store: Arc<SqliteStore>,
 
     /// Behavior registry for validation
     behaviors: Arc<NodeBehaviorRegistry>,
@@ -737,22 +737,22 @@ impl Clone for NodeService {
 impl NodeService {
     /// Create a new NodeService
     ///
-    /// Initializes the service with SurrealStore and creates a default
+    /// Initializes the service with SqliteStore and creates a default
     /// NodeBehaviorRegistry with Text, Task, and Date behaviors.
     ///
     /// # Arguments
     ///
-    /// * `store` - Mutable reference to Arc<SurrealStore> (allows cache updates during seeding)
+    /// * `store` - Mutable reference to Arc<SqliteStore> (allows cache updates during seeding)
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// let mut store = Arc::new(SqliteStore::new("./data/nodespace.db".into()).await?);
     /// let service = NodeService::new(&mut store).await?;
     /// # Ok(())
     /// # }
@@ -760,10 +760,10 @@ impl NodeService {
     ///
     /// # Cache Population (Issue #704)
     ///
-    /// Takes `&mut Arc<SurrealStore>` to enable cache updates during schema seeding:
+    /// Takes `&mut Arc<SqliteStore>` to enable cache updates during schema seeding:
     /// - On first launch: Seeds schemas and updates caches incrementally via `Arc::get_mut()`
-    /// - On subsequent launches: Caches already populated by `SurrealStore::new()`
-    pub async fn new(store: &mut Arc<SurrealStore>) -> Result<Self, NodeServiceError> {
+    /// - On subsequent launches: Caches already populated by `SqliteStore::new()`
+    pub async fn new(store: &mut Arc<SqliteStore>) -> Result<Self, NodeServiceError> {
         // Create empty migration registry (no migrations registered yet - pre-deployment)
         // Infrastructure exists for future schema evolution post-deployment
         let migration_registry = MigrationRegistry::new();
@@ -826,7 +826,7 @@ impl NodeService {
             // Get mutable reference to store to set notifier
             let store_mut = Arc::get_mut(store).ok_or_else(|| {
                 NodeServiceError::InitializationError(
-                    "Cannot set notifier: SurrealStore Arc has multiple references".to_string(),
+                    "Cannot set notifier: SqliteStore Arc has multiple references".to_string(),
                 )
             })?;
             store_mut.set_notifier(notifier);
@@ -871,19 +871,19 @@ impl NodeService {
     /// # Architecture Note (Issue #704)
     ///
     /// Schema seeding belongs in the domain layer (NodeService), not the data layer
-    /// (SurrealStore). This ensures:
+    /// (SqliteStore). This ensures:
     /// - Clean separation of concerns (data access vs domain logic)
     /// - Works identically for embedded and HTTP modes
     /// - Single source of truth for schema seeding
     ///
     /// # Cache Population Strategy (Issue #704)
     ///
-    /// Takes `&mut Arc<SurrealStore>` to enable incremental cache updates:
+    /// Takes `&mut Arc<SqliteStore>` to enable incremental cache updates:
     /// - After creating each schema, calls `add_to_schema_cache()` via `Arc::get_mut()`
     /// - This avoids re-querying the database since we have schema data in memory
-    /// - On subsequent launches, caches are already populated by `SurrealStore::new()`
+    /// - On subsequent launches, caches are already populated by `SqliteStore::new()`
     async fn seed_core_schemas_if_needed(
-        store: &mut Arc<SurrealStore>,
+        store: &mut Arc<SqliteStore>,
     ) -> Result<(), NodeServiceError> {
         use crate::models::core_schemas::get_core_schemas;
 
@@ -972,7 +972,7 @@ impl NodeService {
     /// Seed node hierarchies from pre-expanded template node lists (Issue #1056).
     ///
     /// Each element of `template_groups` is a flat `Vec<PreparedNode>` produced
-    /// by [`crate::mcp::handlers::markdown::prepare_nodes_from_template`].
+    /// by [`crate::markdown::prepare_nodes_from_template`].
     /// The first element of each group is the root node; subsequent elements are
     /// its children.
     ///
@@ -980,7 +980,7 @@ impl NodeService {
     /// database, the entire type is skipped.
     pub async fn seed_nodes_from_templates(
         &self,
-        template_groups: Vec<Vec<crate::mcp::handlers::markdown::PreparedNode>>,
+        template_groups: Vec<Vec<crate::markdown::PreparedNode>>,
     ) -> Result<(), NodeServiceError> {
         if template_groups.is_empty() {
             return Ok(());
@@ -1071,10 +1071,10 @@ impl NodeService {
         Ok(())
     }
 
-    /// Get access to the underlying SurrealStore
+    /// Get access to the underlying SqliteStore
     ///
     /// Useful for advanced operations that need direct database access
-    pub fn store(&self) -> &Arc<SurrealStore> {
+    pub fn store(&self) -> &Arc<SqliteStore> {
         &self.store
     }
 
@@ -1128,11 +1128,11 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut store = Arc::new(SurrealStore::new("./data/nodespace.db".into()).await?);
+    /// # let mut store = Arc::new(SqliteStore::new("./data/nodespace.db".into()).await?);
     /// let service = NodeService::new(&mut store).await?;
     ///
     /// // Create a scoped service for a specific client
@@ -1205,7 +1205,7 @@ impl NodeService {
 
         // In-memory filter: NodeQuery doesn't support lifecycle_status yet.
         // Acceptable for desktop (low playbook counts). If scaling becomes
-        // a concern, add lifecycle_status to NodeQuery/SurrealStore query.
+        // a concern, add lifecycle_status to NodeQuery/SqliteStore query.
         let filtered: Vec<Node> = if let Some(status) = lifecycle_status {
             nodes
                 .into_iter()
@@ -1246,14 +1246,14 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use nodespace_core::models::Node;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let node = Node::new(
     ///     "text".to_string(),
@@ -1773,7 +1773,7 @@ impl NodeService {
             .migration_registry
             .apply_migrations(node, target_version)?;
 
-        // Persist migrated node to database using SurrealStore
+        // Persist migrated node to database using SqliteStore
         let update = NodeUpdate {
             properties: Some(migrated_node.properties.clone()),
             ..Default::default()
@@ -1824,7 +1824,7 @@ impl NodeService {
             .migration_registry
             .apply_migrations(node, target_version)?;
 
-        // Persist migrated node to database using SurrealStore
+        // Persist migrated node to database using SqliteStore
         let update = NodeUpdate {
             properties: Some(migrated_node.properties.clone()),
             ..Default::default()
@@ -2041,13 +2041,13 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::{CreateNodeParams, NodeService};
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Create a child node under a date container
     /// let id = service.create_node_with_parent(CreateNodeParams {
@@ -2091,9 +2091,9 @@ impl NodeService {
         // If sibling doesn't exist or has moved to different parent, fall back to append
         // This prevents data loss from race conditions during rapid indent/outdent operations.
         //
-        // Retry up to 5 times with 50ms backoff to handle SurrealDB eventual consistency:
-        // rapid empty-node creation (Enter, Enter, Enter) can cause the sibling's parent edge
-        // to not yet be visible when the next node's CREATE fires immediately after.
+        // Retry up to 5 times with 50ms backoff as a defensive guard against transient
+        // lookup failures during rapid empty-node creation (Enter, Enter, Enter), where the
+        // sibling's parent edge may not yet be queryable when the next node's insert fires.
         if let Some(ref sibling_id) = params.insert_after_node_id.clone() {
             use tokio::time::{sleep, Duration};
             let mut sibling_valid = false;
@@ -2343,12 +2343,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Create mention: "daily-note" mentions "project-planning"
     /// service.create_mention("daily-note-id", "project-planning-id").await?;
@@ -2430,12 +2430,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// service.delete_mention("daily-note-id", "project-planning-id").await?;
     /// # Ok(())
@@ -2483,12 +2483,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(node) = service.get_node("node-id-123").await? {
     ///     println!("Found: {}", node.content);
@@ -2497,7 +2497,7 @@ impl NodeService {
     /// # }
     /// ```
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>, NodeServiceError> {
-        // Delegate to SurrealStore
+        // Delegate to SqliteStore
         if let Some(mut node) = self.store.get_node(id).await.map_err(|e| {
             NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
                 context: format!("Database operation failed: {}", e),
@@ -2555,12 +2555,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(task) = service.get_task_node("my-task-id").await? {
     ///     // Direct field access - no JSON parsing
@@ -2610,12 +2610,12 @@ impl NodeService {
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
     /// # use nodespace_core::models::{TaskNodeUpdate, TaskStatus};
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Update task status
     /// let update = TaskNodeUpdate::new().with_status(TaskStatus::InProgress);
@@ -2650,9 +2650,9 @@ impl NodeService {
                     || root_cause.contains("VersionMismatch")
                     || root_cause.contains("failed transaction")
                 {
-                    // SurrealDB transaction THROW causes "failed transaction" error
-                    // Our only THROW is for version mismatch, so treat failed transactions as OCC errors
-                    // Note: This is a simplification - ideally SurrealDB would preserve the THROW message
+                    // A failed transaction surfaces as a "failed transaction" error.
+                    // Our only abort is for version mismatch, so treat failed transactions as OCC errors.
+                    // Note: This is a simplification - ideally the abort message would be preserved.
                     NodeServiceError::VersionConflict {
                         node_id: id.to_string(),
                         expected_version,
@@ -2664,7 +2664,7 @@ impl NodeService {
                     || root_cause.contains("not found")
                     || root_cause.contains("$current")
                 {
-                    // SurrealDB returns various error formats for missing records
+                    // The store returns various error formats for missing records
                     // "Record not found" - explicit record error
                     // "$current[0].version" - when the LET query returns empty and IF fails
                     NodeServiceError::node_not_found(id)
@@ -2694,12 +2694,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(schema) = service.get_schema_node("task").await? {
     ///     // Direct field access - no JSON parsing
@@ -2724,7 +2724,7 @@ impl NodeService {
     ///
     /// Steps performed in order:
     ///   1. Validate the schema exists, the source field exists, and the destination does not.
-    ///   2. Migrate all node instances via `SurrealStore::rename_schema_field`.
+    ///   2. Migrate all node instances via `SqliteStore::rename_schema_field`.
     ///   3. Update the schema definition (rename the field entry in `fields`).
     ///
     /// Steps 2 and 3 are executed sequentially but are not atomic. If step 3 fails after
@@ -2913,13 +2913,13 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use nodespace_core::models::NodeUpdate;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let update = NodeUpdate::new()
     ///     .with_content("Updated content".to_string());
@@ -3284,13 +3284,13 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use nodespace_core::models::NodeUpdate;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let update = NodeUpdate::new().with_content("Updated content".to_string());
     /// let updated = service.update_node("node-id", 5, update).await?;
@@ -3460,12 +3460,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// service.delete_node_unchecked("node-id-123").await?;
     /// # Ok(())
@@ -3475,7 +3475,7 @@ impl NodeService {
         &self,
         id: &str,
     ) -> Result<crate::models::DeleteResult, NodeServiceError> {
-        // Delegate to SurrealStore
+        // Delegate to SqliteStore
         let result = self
             .store
             .delete_node(id, self.client_id.clone())
@@ -3517,12 +3517,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let rows = service.delete_with_version_check("node-123", 5).await?;
     ///
@@ -3580,12 +3580,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let result = service.delete_node("node-id", 5).await?;
     /// println!("Node existed: {}", result.existed);
@@ -3679,12 +3679,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let children = service.get_children("parent-id").await?;
     /// println!("Found {} children", children.len());
@@ -3692,7 +3692,7 @@ impl NodeService {
     /// # }
     /// ```
     pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Node>, NodeServiceError> {
-        // Use edge-based query from SurrealStore (graph-native architecture)
+        // Use edge-based query from SqliteStore (graph-native architecture)
         // Children are already sorted by fractional order on edges
         self.store
             .get_children(parent_id)
@@ -3807,7 +3807,7 @@ impl NodeService {
     ///
     /// This is the core data-fetching method used by both `get_children_tree` (JSON output)
     /// and MCP markdown export. It performs a **single database query** regardless of tree
-    /// depth or node count using SurrealDB's `{..+collect}` recursive syntax.
+    /// depth or node count using a recursive SQL query.
     ///
     /// Returns data structures optimized for in-memory traversal:
     /// - Node map for O(1) node lookup by ID
@@ -3896,7 +3896,7 @@ impl NodeService {
     /// `Some(parent_node)` if the node has a parent, `None` if it's a root node
     pub async fn get_parent(&self, node_id: &str) -> Result<Option<Node>, NodeServiceError> {
         // Query for nodes that have has_child relationship pointing to this node
-        // This is done via SurrealDB graph traversal: <-has_child
+        // This is done by querying the relationships table for has_child edges into this node
         let parent = self
             .store
             .get_parent(node_id)
@@ -4079,7 +4079,7 @@ impl NodeService {
     /// This is used when we want to fire-and-forget the embedding queue operation
     /// without blocking the calling thread (e.g., during node updates).
     async fn queue_root_for_embedding_async(
-        store: &Arc<SurrealStore>,
+        store: &Arc<SqliteStore>,
         behaviors: &Arc<NodeBehaviorRegistry>,
         node_id: &str,
         embedding_waker: Option<&crate::services::EmbeddingWaker>,
@@ -4209,11 +4209,11 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Fetch all nodes for a date page
     /// let nodes = service.get_nodes_by_root_id("2025-10-05").await?;
@@ -4253,12 +4253,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Move node under new parent
     /// service.move_node_unchecked("node-id", Some("new-parent-id"), None).await?;
@@ -4357,12 +4357,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Move node under new parent with version check
     /// service.move_node("node-id", 5, Some("new-parent-id"), None).await?;
@@ -4465,12 +4465,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Reorder with version check
     /// service.reorder_node("node-id", 5, Some("sibling-id")).await?;
@@ -4644,9 +4644,9 @@ impl NodeService {
             return Err(NodeServiceError::query_failed(err));
         }
 
-        // Due to SurrealDB eventual consistency, the edge may be created with incorrect order
-        // if not all siblings were visible during the move_node query. We verify and retry
-        // with reorder if the position is wrong.
+        // Defensive guard: the edge may end up with an incorrect order if not all siblings
+        // were visible during the move_node query. We verify and retry with reorder if the
+        // position is wrong.
         if let Some(after_id) = insert_after_node_id {
             tracing::debug!(
                 "create_parent_edge: starting position verification at {}ms",
@@ -4723,7 +4723,7 @@ impl NodeService {
                     after_id = %after_id,
                     actual_order = %actual_order,
                     "create_parent_edge: position verification exhausted after {} attempts — \
-                     emitting event with unconfirmed order (SurrealDB eventual consistency)",
+                     emitting event with unconfirmed order",
                     verify_attempt
                 );
             }
@@ -4769,12 +4769,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Position node after sibling
     /// service.reorder_child("node-id", Some("sibling-id")).await?;
@@ -4910,13 +4910,13 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use nodespace_core::models::NodeFilter;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let filter = NodeFilter::new()
     ///     .with_node_type("task".to_string())
@@ -5127,12 +5127,12 @@ impl NodeService {
     /// ```no_run
     /// # use nodespace_core::models::NodeQuery;
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Query by ID
     /// let query = NodeQuery::by_id("node-123".to_string());
@@ -5173,7 +5173,7 @@ impl NodeService {
         query: crate::models::NodeQuery,
     ) -> Result<Vec<Node>, NodeServiceError> {
         // Direct delegation to store.query_nodes for simple queries
-        // Complex filtering handled by SurrealDB query engine
+        // Complex filtering handled by the SQLite query engine
         tracing::debug!("query_nodes_simple: Delegating to store.query_nodes");
 
         // Priority 1: Query by ID (exact match)
@@ -5269,14 +5269,14 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use nodespace_core::models::Node;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let nodes = vec![
     ///     Node::new("text".to_string(), "Note 1".to_string(), json!({})),
@@ -5689,13 +5689,13 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use nodespace_core::models::NodeUpdate;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let updates = vec![
     ///     ("node-1".to_string(), NodeUpdate::new().with_content("Updated 1".to_string())),
@@ -5800,12 +5800,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let ids = vec!["node-1".to_string(), "node-2".to_string()];
     /// service.bulk_delete(ids).await?;
@@ -5817,8 +5817,8 @@ impl NodeService {
             return Ok(());
         }
 
-        // Delete nodes one by one using SurrealStore
-        // SurrealDB handles atomicity within each delete operation
+        // Delete nodes one by one using SqliteStore
+        // SQLite handles atomicity within each delete operation
         for id in &ids {
             self.store
                 .delete_node(id, self.client_id.clone())
@@ -6016,12 +6016,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// service.add_mention("node-123", "node-456").await?;
     /// # Ok(())
@@ -6099,12 +6099,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// service.remove_mention("node-123", "node-456").await?;
     /// # Ok(())
@@ -6153,12 +6153,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let mentions = service.get_mentions("node-123").await?;
     /// # Ok(())
@@ -6185,12 +6185,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let backlinks = service.get_mentioned_by("node-456").await?;
     /// # Ok(())
@@ -6221,12 +6221,12 @@ impl NodeService {
     /// # Example
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // If nodes A and B (both children of Container X) mention target node,
     /// // returns [NodeReference { id: "container-x-id", title: "...", nodeType: "text" }]
@@ -6283,13 +6283,13 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # use serde_json::json;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Create relationship with edge field data
     /// service.create_relationship(
@@ -6523,12 +6523,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// service.delete_relationship("task-123", "assigned_to", "person-456").await?;
     /// # Ok(())
@@ -6600,12 +6600,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Get all people assigned to this task
     /// let assigned = service.get_related_nodes("task-123", "assigned_to", "out").await?;
@@ -6649,12 +6649,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // Get all schemas to understand the data model
     /// let schemas = service.get_all_schemas().await?;
@@ -6692,12 +6692,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// if let Some(schema) = service.get_schema_with_relationships("invoice").await? {
     ///     for rel in &schema.relationships {
@@ -6734,12 +6734,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// // What relationships point TO customer?
     /// let inbound = service.get_inbound_relationships("customer").await?;
@@ -6786,12 +6786,12 @@ impl NodeService {
     ///
     /// ```no_run
     /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SurrealStore;
+    /// # use nodespace_core::db::SqliteStore;
     /// # use std::path::PathBuf;
     /// # use std::sync::Arc;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SurrealStore::new(PathBuf::from("./test.db")).await?);
+    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
     /// # let service = NodeService::new(&mut db).await?;
     /// let graph = service.get_relationship_graph().await?;
     /// for (source, rel_name, target) in graph {
@@ -6985,7 +6985,7 @@ impl NodeAccessor for NodeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::SurrealStore;
+    use crate::db::SqliteStore;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -6993,7 +6993,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let service = NodeService::new(&mut store).await.unwrap();
         (service, temp_dir)
     }
@@ -8881,19 +8881,19 @@ mod tests {
         use tokio::time::sleep;
 
         // Tests for the adjacency list strategy (recursive graph traversal)
-        // Uses SurrealDB's .{..}(->edge->target) syntax for recursive queries
+        // Uses a recursive SQL query over the relationships table
         //
         // NOTE: All tests in this module are marked #[serial(sibling_ordering)] because they use
         // create_parent_edge with insert_after positioning, which can exhibit race
-        // conditions when SurrealDB hasn't made previous writes visible before the
-        // next operation queries for sibling positions. This is a SurrealDB timing
-        // issue under concurrent test execution, not a functional bug in production.
+        // conditions under concurrent test execution when an operation queries for
+        // sibling positions before a prior write has been committed. This is a test
+        // concurrency concern, not a functional bug in production.
         //
         // The "sibling_ordering" key is shared with integration_tests in nodes_test.rs
         // to ensure all ordering-sensitive tests run serially across modules.
 
         /// Helper function to wait for children tree to have expected order with retries.
-        /// This handles SurrealDB's eventual consistency for sibling ordering.
+        /// This guards against transient ordering visibility during concurrent test execution.
         async fn wait_for_children_tree_order(
             service: &NodeService,
             parent_id: &str,
@@ -9018,8 +9018,8 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Create two children and add to parent using create_parent_edge
-            // NOTE: Small delays between insertions ensure SurrealDB write visibility
-            // for sibling order calculations.
+            // NOTE: Small delays between insertions keep sibling order calculations
+            // deterministic under concurrent test execution.
             let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
             let child1_id = service.create_node(child1).await.unwrap();
             service
@@ -9103,9 +9103,8 @@ mod tests {
             let parent_id = service.create_node(parent).await.unwrap();
 
             // Add children in order A, B, C - they should maintain this order
-            // IMPORTANT: Verify state after each insertion to ensure SurrealDB
-            // has made the write visible before proceeding. This eliminates flakiness
-            // from eventual consistency.
+            // IMPORTANT: Verify state after each insertion before proceeding.
+            // This eliminates flakiness from concurrent test execution.
             let child_a = Node::new("text".to_string(), "A".to_string(), json!({}));
             let child_a_id = service.create_node(child_a).await.unwrap();
             service
@@ -9289,7 +9288,7 @@ mod tests {
         use tokio::time::sleep;
 
         // NOTE: Tests that verify sibling ordering are marked #[serial(sibling_ordering)]
-        // to prevent race conditions with SurrealDB write visibility.
+        // to prevent race conditions under concurrent test execution.
 
         /// Test that date containers are auto-created when referenced as parent
         #[tokio::test]
@@ -9540,7 +9539,7 @@ mod tests {
 
             let temp_dir = TempDir::new()?;
             let db_path = temp_dir.path().join("test.db");
-            let mut store = Arc::new(SurrealStore::new(db_path).await?);
+            let mut store = Arc::new(SqliteStore::new(db_path).await?);
 
             // Create NodeService - should seed schemas automatically
             let _service = NodeService::new(&mut store).await?;
@@ -9581,7 +9580,7 @@ mod tests {
         /// Test that schema seeding is idempotent (calling NodeService::new twice doesn't duplicate schemas)
         ///
         /// This verifies the core idempotency logic by calling NodeService::new twice on the
-        /// same store instance. This avoids the RocksDB lock release timing issues that occur
+        /// same store instance. This avoids the database lock release timing issues that occur
         /// when trying to reopen a database file.
         #[tokio::test]
         async fn test_node_service_idempotent_seeding() -> Result<(), Box<dyn std::error::Error>> {
@@ -9589,7 +9588,7 @@ mod tests {
 
             let temp_dir = TempDir::new()?;
             let db_path = temp_dir.path().join("test.db");
-            let mut store = Arc::new(SurrealStore::new(db_path).await?);
+            let mut store = Arc::new(SqliteStore::new(db_path).await?);
 
             // First initialization - seeds schemas
             {
@@ -10556,8 +10555,8 @@ mod tests {
                 .await;
 
             assert!(result.is_err());
-            // Note: When updating a non-existent node, SurrealDB's transaction fails because
-            // the version check (SELECT version FROM node:id) returns empty, causing the IF to fail.
+            // Note: When updating a non-existent node, the transaction fails because
+            // the version check (SELECT version FROM node WHERE id = ?) returns empty, causing the guard to fail.
             // This manifests as a "failed transaction" error which we classify as VersionConflict.
             // This is acceptable behavior - the caller will retry, discover the node doesn't exist,
             // and handle accordingly.
@@ -11118,16 +11117,16 @@ mod tests {
         }
 
         /// Issue #839: create_relationship should auto-calculate order for member_of
-        /// Issue #865: Relaxed assertions for RocksDB eventual consistency
+        /// Issue #865: Relaxed assertions for concurrent insertion ordering
         ///
         /// Key guarantees verified:
         /// - All members have order values assigned
         /// - Orders are positive and unique (jitter ensures this)
         /// - Orders can be used for sorting
         ///
-        /// Note: We cannot guarantee insertion order preservation due to
-        /// RocksDB's eventual consistency - sequential inserts may not see
-        /// previous writes consistently.
+        /// Note: We do not assert strict insertion order preservation here -
+        /// jitter-based ordering only guarantees uniqueness and positivity,
+        /// not exact sequence.
         #[tokio::test]
         async fn test_create_relationship_member_of_auto_order() {
             let (service, _temp) = create_test_service().await;

@@ -11,8 +11,8 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use nodespace_core::db::events::DomainEvent;
-use nodespace_core::db::SurrealStore;
-use nodespace_core::mcp::handlers::markdown::handle_create_nodes_from_markdown;
+use nodespace_core::db::SqliteStore;
+use nodespace_core::markdown::handle_create_nodes_from_markdown;
 use nodespace_core::playbook::cel;
 use nodespace_core::playbook::graph_resolver::GraphResolver;
 use nodespace_core::playbook::lifecycle::{trigger_keys_for_event, PlaybookLifecycleManager};
@@ -26,11 +26,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-async fn setup_test_service() -> (Arc<SurrealStore>, Arc<NodeService>, TempDir) {
+async fn setup_test_service() -> (Arc<SqliteStore>, Arc<NodeService>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("bench.db");
 
-    let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+    let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
     let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
     (store, node_service, temp_dir)
 }
@@ -214,7 +214,7 @@ fn bench_occ_overhead(c: &mut Criterion) {
 /// Note: In-memory operations show modest speedup (1.0-1.5x).
 /// Real-world speedup over MCP/IPC is much higher (2-10x) due to network overhead.
 fn bench_batch_get(c: &mut Criterion) {
-    use nodespace_core::mcp::handlers::nodes::handle_get_nodes_batch;
+    use nodespace_core::node_batch::get_nodes_batch;
 
     let rt = Runtime::new().unwrap();
 
@@ -288,7 +288,7 @@ fn bench_batch_get(c: &mut Criterion) {
                     let params = json!({ "node_ids": node_ids });
 
                     let start = std::time::Instant::now();
-                    black_box(handle_get_nodes_batch(&node_service, params).await.unwrap());
+                    black_box(get_nodes_batch(&node_service, params).await.unwrap());
                     total += start.elapsed();
                 }
 
@@ -305,7 +305,7 @@ fn bench_batch_get(c: &mut Criterion) {
 /// Compares performance of update_nodes_batch (single call for 50 nodes)
 /// vs 50 individual update_node calls.
 fn bench_batch_update(c: &mut Criterion) {
-    use nodespace_core::mcp::handlers::nodes::handle_update_nodes_batch;
+    use nodespace_core::node_batch::update_nodes_batch;
 
     let rt = Runtime::new().unwrap();
 
@@ -429,11 +429,7 @@ fn bench_batch_update(c: &mut Criterion) {
                     let params = json!({ "updates": updates });
 
                     let start = std::time::Instant::now();
-                    black_box(
-                        handle_update_nodes_batch(&node_service, params)
-                            .await
-                            .unwrap(),
-                    );
+                    black_box(update_nodes_batch(&node_service, params).await.unwrap());
                     total += start.elapsed();
                 }
 
@@ -461,7 +457,7 @@ fn bench_bm25_search_roots(c: &mut Criterion) {
         let (store_arc, _temp_dir) = rt.block_on(async {
             let temp_dir = TempDir::new().unwrap();
             let db_path = temp_dir.path().join("bench.db");
-            let mut store_arc = Arc::new(SurrealStore::new(db_path).await.unwrap());
+            let mut store_arc = Arc::new(SqliteStore::new(db_path).await.unwrap());
             let node_service = Arc::new(NodeService::new(&mut store_arc).await.unwrap());
 
             // Build corpus: root → child → grandchild trees
@@ -659,13 +655,13 @@ fn bench_graph_resolver(c: &mut Criterion) {
     // type_0 -> type_1 -> type_2 -> type_3 -> type_4
     //
     // SAFETY: _temp_dir must outlive all benchmark iterations — it holds the
-    // on-disk DB files that `svc` (via SurrealStore) references. Dropping it
+    // on-disk DB files that `svc` (via SqliteStore) references. Dropping it
     // early would delete the database out from under the NodeService. The
     // binding is kept alive until `group.finish()` returns at function end.
     let (svc, _temp_dir, root_node, schema_names) = rt.block_on(async {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("bench_resolver.db");
-        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
 
         let depth = 5;
@@ -869,7 +865,7 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
     let (svc, _temp_dir, root_node) = rt.block_on(async {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("bench_cel.db");
-        let mut store = Arc::new(SurrealStore::new(db_path).await.unwrap());
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
 
         let schemas = create_schema_chain(&svc, 3).await;

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
+use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     ImportMarkdownFilesRequest, ImportMarkdownRequest, ImportOptions,
 };
@@ -32,9 +32,9 @@ async fn spawn_import_daemon() -> (
     let tempdir = TempDir::new().expect("failed to create tempdir");
 
     let mut store = Arc::new(
-        SurrealStore::new(tempdir.path().join("daemon-db"))
+        SqliteStore::new(tempdir.path().join("daemon-db"))
             .await
-            .expect("failed to open SurrealStore"),
+            .expect("failed to open SqliteStore"),
     );
     let node_service = Arc::new(
         CoreNodeService::new(&mut store)

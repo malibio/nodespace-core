@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use nodespace_core::{
-    db::SurrealStore,
+    db::SqliteStore,
     models::{EmbeddingConfig, Node},
     services::{embedding_service::NodeEmbeddingService, NodeService},
 };
@@ -31,17 +31,13 @@ fn create_test_nlp_engine() -> Arc<EmbeddingService> {
 
 /// Test helper: Create a unified test environment with shared database
 ///
-/// Returns (NodeEmbeddingService, NodeService, Arc<SurrealStore>, TempDir)
+/// Returns (NodeEmbeddingService, NodeService, Arc<SqliteStore>, TempDir)
 /// Both services share the same database instance for proper test isolation.
-async fn create_unified_test_env() -> Result<(
-    NodeEmbeddingService,
-    NodeService,
-    Arc<SurrealStore>,
-    TempDir,
-)> {
+async fn create_unified_test_env(
+) -> Result<(NodeEmbeddingService, NodeService, Arc<SqliteStore>, TempDir)> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("test.db");
-    let mut store = Arc::new(SurrealStore::new(db_path).await?);
+    let mut store = Arc::new(SqliteStore::new(db_path).await?);
 
     // Create NodeService first (it may set up schema)
     let node_service = NodeService::new(&mut store).await?;
@@ -60,15 +56,10 @@ async fn create_unified_test_env() -> Result<(
 /// Test helper: Create a unified test environment with custom embedding config
 async fn create_unified_test_env_with_config(
     config: EmbeddingConfig,
-) -> Result<(
-    NodeEmbeddingService,
-    NodeService,
-    Arc<SurrealStore>,
-    TempDir,
-)> {
+) -> Result<(NodeEmbeddingService, NodeService, Arc<SqliteStore>, TempDir)> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("test.db");
-    let mut store = Arc::new(SurrealStore::new(db_path).await?);
+    let mut store = Arc::new(SqliteStore::new(db_path).await?);
 
     // Create NodeService first (it may set up schema)
     let node_service = NodeService::new(&mut store).await?;

@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use nodespace_core::mcp::handlers::markdown::NodeTemplate;
+use nodespace_core::markdown::NodeTemplate;
 use nodespace_core::models::Node;
 use nodespace_core::services::NodeService;
 
@@ -254,7 +254,7 @@ impl PromptAssembler {
     /// All prompt content lives in these graph nodes — there is no hardcoded
     /// base prompt.  Users can customise any seed by editing the graph node.
     ///
-    /// Use [`nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template`]
+    /// Use [`nodespace_core::markdown::prepare_nodes_from_template`]
     /// to expand into a [`PreparedNode`] for insertion via `NodeService`.
     pub fn seed_prompt_nodes() -> Vec<NodeTemplate> {
         vec![
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn seed_prompt_template_produces_prompt_node() {
-        use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
+        use nodespace_core::markdown::prepare_nodes_from_template;
         let seeds = PromptAssembler::seed_prompt_nodes();
         for seed in &seeds {
             let nodes = prepare_nodes_from_template(seed)

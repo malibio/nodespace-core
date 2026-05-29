@@ -3806,21 +3806,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodespace-dev-tools"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs 5.0.1",
- "nodespace-core",
- "nodespace-nlp-engine",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "nodespace-nlp-engine"
 version = "0.1.0"
 dependencies = [

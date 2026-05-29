@@ -1,6 +1,6 @@
 //! End-to-end gRPC integration test for the `nodespaced` daemon.
 //!
-//! Spins the tonic server up in-process against a tempdir-backed SurrealDB,
+//! Spins the tonic server up in-process against a tempdir-backed SQLite database,
 //! drives a `NodeServiceClient` against it, and verifies a CreateNode →
 //! GetNode round trip plus a few error-mapping paths. This validates the
 //! single acceptance criterion in #1112:
@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nodespace_core::{NodeService as CoreNodeService, SurrealStore};
+use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     node_event::Event as NodeEventKind, CreateNodeRequest, DeleteNodeRequest, GetChildrenRequest,
     GetNodeRequest, SearchRequest, UpdateNodeRequest, WatchRequest,
@@ -34,9 +34,9 @@ async fn spawn_test_daemon() -> (
     let tempdir = TempDir::new().expect("failed to create tempdir");
 
     let mut store = Arc::new(
-        SurrealStore::new(tempdir.path().join("daemon-db"))
+        SqliteStore::new(tempdir.path().join("daemon-db"))
             .await
-            .expect("failed to open SurrealStore"),
+            .expect("failed to open SqliteStore"),
     );
     let node_service = Arc::new(
         CoreNodeService::new(&mut store)

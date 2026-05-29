@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use nodespace_core::{
-    db::SurrealStore,
+    db::SqliteStore,
     services::{relationship_cache::InboundRelationshipCache, NodeService},
 };
 use std::sync::Arc;
@@ -18,10 +18,10 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 /// Test helper: Create a test environment
-async fn create_test_env() -> Result<(Arc<SurrealStore>, NodeService, TempDir)> {
+async fn create_test_env() -> Result<(Arc<SqliteStore>, NodeService, TempDir)> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("test.db");
-    let mut store = Arc::new(SurrealStore::new(db_path).await?);
+    let mut store = Arc::new(SqliteStore::new(db_path).await?);
     let node_service = NodeService::new(&mut store).await?;
 
     Ok((store, node_service, temp_dir))
@@ -357,7 +357,7 @@ fn test_inbound_relationship_json_round_trip() {
 /// and returned for any target type lookup.
 ///
 /// Note: This test verifies the cache logic using a schema node created via the NodeService
-/// (which uses `upsert_schema` internally). The integration with SurrealDB's native
+/// (which uses `upsert_schema` internally). The integration with SQLite's native
 /// deserialization is validated by the fact that `get_all_schemas` must successfully
 /// deserialize all stored schemas.
 #[tokio::test]

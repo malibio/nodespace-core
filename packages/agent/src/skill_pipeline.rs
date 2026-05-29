@@ -3,7 +3,7 @@
 //! Provides the default skill nodes seeded on first run. Each [`NodeTemplate`]
 //! produces one skill root node plus any guidance prompt children defined in
 //! its markdown body. Use
-//! [`nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template`]
+//! [`nodespace_core::markdown::prepare_nodes_from_template`]
 //! to expand a template into a flat list of `PreparedNode`s before inserting
 //! them via `NodeService::bulk_create_hierarchy`.
 //!
@@ -14,7 +14,7 @@
 //! agent loop no longer needs a pipeline object — only the seeded skill
 //! nodes themselves remain.
 
-use nodespace_core::mcp::handlers::markdown::NodeTemplate;
+use nodespace_core::markdown::NodeTemplate;
 
 /// Default skill node templates seeded on first run.
 ///
@@ -228,7 +228,7 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
 
 #[cfg(test)]
 mod tests {
-    use nodespace_core::mcp::handlers::markdown::prepare_nodes_from_template;
+    use nodespace_core::markdown::prepare_nodes_from_template;
 
     use super::*;
 

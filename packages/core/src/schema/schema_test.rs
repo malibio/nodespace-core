@@ -1,11 +1,11 @@
 //! Integration tests for MCP schema handlers
 //!
 //! Tests exercise handle_create_schema and handle_update_schema end-to-end
-//! against a real NodeService / SurrealStore, covering title_template
+//! against a real NodeService / SqliteStore, covering title_template
 //! validation including the field-removal-while-template-exists edge case.
 
 use super::*;
-use crate::db::SurrealStore;
+use crate::db::SqliteStore;
 use crate::services::NodeService;
 use serde_json::json;
 use std::sync::Arc;
@@ -14,11 +14,11 @@ use tempfile::TempDir;
 async fn create_test_service() -> (Arc<NodeService>, TempDir) {
     let temp_dir = TempDir::new().expect("tempdir creation failed");
     let db_path = temp_dir.path().join("test.db");
-    // NodeService::new takes &mut Arc<SurrealStore> to allow internal Arc replacement during init
+    // NodeService::new takes &mut Arc<SqliteStore> to allow internal Arc replacement during init
     let mut store = Arc::new(
-        SurrealStore::new(db_path)
+        SqliteStore::new(db_path)
             .await
-            .expect("SurrealStore init failed"),
+            .expect("SqliteStore init failed"),
     );
     let node_service = Arc::new(
         NodeService::new(&mut store)

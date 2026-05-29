@@ -1,7 +1,7 @@
 //! Query Service - Query Execution with SQL Translation
 //!
 //! This module provides query execution functionality for QueryNode, translating
-//! structured query definitions to SurrealQL and executing against the unified
+//! structured query definitions to SQL and executing against the unified
 //! node table with JSON properties.
 //!
 //! # Architecture
@@ -21,11 +21,11 @@
 //!
 //! ```rust,no_run
 //! use nodespace_core::services::{QueryService, QueryDefinition};
-//! use nodespace_core::db::SurrealStore;
+//! use nodespace_core::db::SqliteStore;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let store = Arc::new(SurrealStore::new("./data/db".into()).await?);
+//! let store = Arc::new(SqliteStore::new("./data/db".into()).await?);
 //! let query_service = QueryService::new(store);
 //!
 //! let query = QueryDefinition {
@@ -40,7 +40,7 @@
 //! # }
 //! ```
 
-use crate::db::SurrealStore;
+use crate::db::SqliteStore;
 use crate::models::Node;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -145,18 +145,18 @@ pub struct SortConfig {
 
 /// Service for executing queries against the database
 pub struct QueryService {
-    store: Arc<SurrealStore>,
+    store: Arc<SqliteStore>,
 }
 
 impl QueryService {
     /// Create a new QueryService
-    pub fn new(store: Arc<SurrealStore>) -> Self {
+    pub fn new(store: Arc<SqliteStore>) -> Self {
         Self { store }
     }
 
     /// Execute a query and return matching nodes
     ///
-    /// Translates the QueryDefinition to SurrealQL and executes against the database.
+    /// Translates the QueryDefinition to SQL and executes against the database.
     ///
     /// # Errors
     ///
@@ -168,7 +168,7 @@ impl QueryService {
         let sql = self.build_query(query)?;
 
         // Execute query to get basic node data (without FETCH to avoid Thing deserialization)
-        // Use SurrealStore's internal query_nodes for proper handling
+        // Use SqliteStore's internal query_nodes for proper handling
         // For now we'll use a simple direct query and manually fetch properties
 
         // Get node IDs that match the query
@@ -270,7 +270,7 @@ impl QueryService {
             .context("Failed to execute ID query")
     }
 
-    /// Translate QueryDefinition to SurrealQL
+    /// Translate QueryDefinition to SQL
     ///
     /// Builds queries against the unified node table with JSON properties.
     /// All node types use the same query pattern with properties stored inline.
