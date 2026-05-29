@@ -83,13 +83,19 @@ export const navigationItems = writable<NavigationItem[]>([
   },
   // Note: "Collections" is rendered inline in NavigationSidebar
   // using bits-ui Collapsible - inserted after Daily Journal
-  {
-    id: 'ai-chat',
-    label: 'AI Chat',
-    icon: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z', // message-square icon
-    active: false,
-    type: 'link'
-  },
+  //
+  // "AI Chat" nav item is temporarily removed. The old item opened a single
+  // ephemeral chat tab backed by the now-deleted chatStore singleton (pre-ADR-034).
+  // Every conversation is now an `ai-chat` node, so this item will be reintroduced
+  // as an expandable list of recent ai-chat nodes (like Collections / Schema Types)
+  // in a follow-up issue. Until then it is omitted rather than left inert.
+  // {
+  //   id: 'ai-chat',
+  //   label: 'AI Chat',
+  //   icon: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z', // message-square icon
+  //   active: false,
+  //   type: 'link'
+  // },
   {
     id: 'search',
     label: 'Search',

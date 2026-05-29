@@ -8,11 +8,48 @@
  */
 
 import { createLogger } from '$lib/utils/logger';
-import type { ModelInfo, ModelStatus, DownloadEvent } from '$lib/types/agent-types';
+import type { ModelInfo, ModelFamily, ModelStatus, DownloadEvent } from '$lib/types/agent-types';
 import { AGENT_EVENTS } from '$lib/types/agent-types';
 import * as tauriCommands from '$lib/services/tauri-commands';
+import type { ChatModelEntry, ChatModelStatus } from '$lib/services/tauri-commands';
 
 const log = createLogger('ModelStore');
+
+/** Map a catalog entry's status to the richer tagged ModelStatus union. */
+function toModelStatus(s: ChatModelStatus): ModelStatus {
+  switch (s.status) {
+    case 'downloading':
+      return { status: 'downloading', progress_pct: 0, bytes_downloaded: 0, bytes_total: 0 };
+    case 'error':
+      return { status: 'error', message: 'Model error' };
+    default:
+      return { status: s.status };
+  }
+}
+
+/**
+ * Adapt a built-in (GGUF) `chat_model_list` catalog entry to the store's
+ * `ModelInfo` shape. Callers must pre-filter to `backend === 'gguf'` (this store
+ * doesn't manage Ollama rows). The lean catalog row carries no filename/url/sha256;
+ * those aren't surfaced for catalog-sourced models.
+ */
+function chatEntryToModelInfo(entry: ChatModelEntry): ModelInfo {
+  // GGUF family isn't carried by the catalog row; infer from the id where known,
+  // defaulting to the predominant built-in family.
+  const family: ModelFamily = entry.id.startsWith('gemma') ? 'gemma4' : 'ministral';
+  return {
+    id: entry.id,
+    family,
+    name: entry.name,
+    filename: '',
+    size_bytes: entry.sizeBytes,
+    quantization: entry.quantization,
+    url: '',
+    sha256: '',
+    status: toModelStatus(entry.status),
+    min_memory_gb: entry.minMemoryGb,
+  };
+}
 
 /** Check if running in Tauri desktop environment. */
 function isTauri(): boolean {
@@ -112,10 +149,20 @@ class ModelStore {
     this.isLoading = true;
     try {
       if (isTauri()) {
-        [this.models, this.systemRamGb] = await Promise.all([
+        const [entries, ram] = await Promise.all([
           tauriCommands.chatModelList(),
           tauriCommands.getSystemRamGb(),
         ]);
+        // This store manages the *built-in* (GGUF) download/load lifecycle; its
+        // consumers (model-manager, onboarding) download by URL and recommend a
+        // model to fetch. Ollama models are pulled out-of-band (no URL here) and
+        // are surfaced separately by AiChatModelPicker, so exclude them — letting
+        // them in would render dead download buttons and let `recommendedModel`
+        // pick an un-downloadable row.
+        this.models = entries
+          .filter((e) => e.backend === 'gguf')
+          .map(chatEntryToModelInfo);
+        this.systemRamGb = ram;
         // Detect which model is loaded
         const loaded = this.models.find((m) => m.status.status === 'loaded');
         this.loadedModelId = loaded?.id ?? null;

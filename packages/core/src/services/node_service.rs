@@ -6906,19 +6906,31 @@ pub struct CompletenessResult {
 /// Recursively build a tree structure from flat node data
 ///
 /// Converts flat node map and adjacency list into nested JSON tree.
-/// Uses `node_to_typed_value` for typed serialization, which converts
-/// task nodes to `TaskNode` (with proper camelCase properties) and
-/// schema nodes to `SchemaNode`. This ensures consistent API output
-/// matching the naming conventions.
+///
+/// Properties are serialized **raw** (the namespaced storage shape), matching
+/// every other node-returning endpoint (`get_node`, `get_children`, `get_roots`,
+/// `query`, `search`) which serialize via `node_to_proto`. The frontend store
+/// normalizes namespaced properties on its side, so the tree must return the
+/// same shape. (Previously this used `node_to_typed_value`, which runs
+/// `flatten_properties_for_api` and dropped properties whose stored shape didn't
+/// match the flatten heuristic — e.g. an `ai-chat` node's `provider` came back
+/// as `{}`, leaving the viewer's provider picker permanently unconfigured.)
 fn build_node_tree_recursive(
     node: &Node,
     node_map: &HashMap<String, Node>,
     adjacency_list: &HashMap<String, Vec<String>>,
 ) -> serde_json::Value {
-    // Use typed serialization for task/schema nodes (camelCase properties)
-    // Falls back to raw Node serialization for other types
-    let mut json = crate::models::node_to_typed_value(node.clone())
+    // Raw node serialization (namespaced properties preserved), plus the
+    // nodespace:// URI clients use for rich rendering — mirroring the
+    // single-node read path's contract.
+    let mut json = serde_json::to_value(node.clone())
         .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert(
+            "uri".to_string(),
+            serde_json::Value::String(format!("nodespace://{}", node.id)),
+        );
+    }
 
     // Build children array (always present, even if empty for consistency)
     let children: Vec<serde_json::Value> = if let Some(children_ids) = adjacency_list.get(&node.id)
@@ -8951,6 +8963,48 @@ mod tests {
             assert_eq!(tree["id"], leaf_id);
             assert_eq!(tree["content"], "Leaf node");
             assert!(tree["children"].as_array().unwrap().is_empty());
+        }
+
+        /// Regression: get_children_tree must return a node's properties, not an
+        /// empty object. Previously it serialized via `flatten_properties_for_api`,
+        /// which dropped properties whose stored shape didn't match the flatten
+        /// heuristic (e.g. an `ai-chat` node's `provider`), leaving the viewer's
+        /// provider picker permanently unconfigured.
+        #[tokio::test]
+        #[serial(sibling_ordering)]
+        async fn test_get_children_tree_preserves_properties() {
+            let (service, _temp) = create_test_service().await;
+
+            // ai-chat node with a provider set (a core property the UI reads).
+            let node = Node::new("ai-chat".to_string(), String::new(), json!({}));
+            let node_id = service.create_node(node).await.unwrap();
+            let fetched = service.get_node(&node_id).await.unwrap().unwrap();
+            service
+                .update_node(
+                    &node_id,
+                    fetched.version,
+                    NodeUpdate::new().with_properties(json!({ "provider": "pty" })),
+                )
+                .await
+                .unwrap();
+
+            let tree = service.get_children_tree(&node_id).await.unwrap();
+
+            // The single-node read and the tree read must agree on properties.
+            let props = &tree["properties"];
+            assert!(
+                props.is_object() && !props.as_object().unwrap().is_empty(),
+                "children-tree dropped node properties: {props:?}"
+            );
+            // provider must be reachable (raw stores it under the ai-chat namespace).
+            let provider = props
+                .get("provider")
+                .or_else(|| props.get("ai-chat").and_then(|n| n.get("provider")));
+            assert_eq!(
+                provider.and_then(|v| v.as_str()),
+                Some("pty"),
+                "provider not present in children-tree properties: {props:?}"
+            );
         }
 
         /// Test get_children_tree with single-level children

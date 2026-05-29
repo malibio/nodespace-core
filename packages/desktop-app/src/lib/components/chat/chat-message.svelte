@@ -1,6 +1,6 @@
 <script lang="ts">
   /* global navigator */
-  import type { DisplayMessage } from '$lib/stores/chat-store.svelte';
+  import type { DisplayMessage } from './types';
   import ChatMarkdown from './chat-markdown.svelte';
 
   let { message }: { message: DisplayMessage } = $props();

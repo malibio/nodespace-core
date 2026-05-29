@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { DisplayMessage } from '$lib/stores/chat-store.svelte';
+import type { DisplayMessage } from '$lib/components/chat/types';
 import type { ToolExecutionRecord } from '$lib/types/agent-types';
 
 // Mock the logger
