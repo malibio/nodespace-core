@@ -2254,6 +2254,8 @@ impl NodeService {
         } else {
             // Step 7b: Root node created - queue for embedding if embeddable type
             // (Issue #729 - root-aggregate model)
+            // Stale markers are written unconditionally (even without the `nlp` feature) so
+            // that a build re-enabled with NLP picks up existing roots without a manual resync.
             if self.is_embeddable_type(&node_type) {
                 if let Err(e) = self.store.create_stale_embedding_marker(&created_id).await {
                     // Log warning but don't fail the creation - embedding will be regenerated later

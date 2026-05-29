@@ -3,8 +3,8 @@
 //! This module contains the core business logic services:
 //!
 //! - `NodeService` - CRUD operations and hierarchy management
-//! - `NodeEmbeddingService` - Embedding generation and semantic search
-//! - `EmbeddingProcessor` - Background task for processing stale root embeddings
+//! - `NodeEmbeddingService` - Embedding generation and semantic search (`nlp` feature)
+//! - `EmbeddingProcessor` - Background task for processing stale root embeddings (`nlp` feature)
 //! - `NodeAccessor` - Read-only trait for behavior-driven node access (Issue #1018)
 //! - `SchemaTableManager` - DDL generation for schema-defined tables
 //! - `MigrationRegistry` - Schema migration infrastructure (for future use)
