@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, copyFileSync, rmSync, readdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { AGENTS } from './agents.js';
 import type { AgentName, InstallResult, UninstallResult } from './types.js';
 
@@ -14,7 +15,30 @@ function detectAgents(): AgentName[] {
     .map(agent => agent.name);
 }
 
+/**
+ * Check whether `nodespace` resolves on $PATH by running `nodespace --version`.
+ * Returns true if the binary is found and exits 0, false otherwise.
+ * Safe to call without a running daemon — `--version` is handled by clap
+ * before any socket connection is attempted.
+ */
+export function isNodespaceBinaryOnPath(): boolean {
+  try {
+    execFileSync('nodespace', ['--version'], { stdio: 'ignore', timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT): InstallResult[] {
+  if (!isNodespaceBinaryOnPath()) {
+    process.stderr.write(
+      'WARNING: `nodespace` is not on $PATH. The skill will be installed, but the CLI\n' +
+      'must be installed and on $PATH before agents can use NodeSpace.\n' +
+      'Install it via the NodeSpace DMG or `cargo install nodespace-cli`.\n',
+    );
+  }
+
   const detected = targetAgents ?? detectAgents();
   const results: InstallResult[] = [];
 

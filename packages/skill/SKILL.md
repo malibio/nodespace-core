@@ -2,6 +2,25 @@
 
 NodeSpace is a local-first knowledge graph that stores notes, tasks, and structured data on your machine. Use it to persist information across sessions, build personal knowledge bases, and retrieve context from previous work.
 
+## Preflight Check
+
+**Before starting any multi-step NodeSpace operation**, run these two commands to confirm the tooling is present and healthy:
+
+```bash
+nodespace --version
+nodespace diagnostics
+```
+
+Run this preflight once per session or task, not before every individual command.
+
+### Failure recovery
+
+| Symptom | Cause | Recovery |
+|---------|-------|----------|
+| `command not found: nodespace` | CLI not installed or not on `$PATH` | Tell the user: NodeSpace CLI is not installed. They need to install it (e.g. via the NodeSpace DMG or `cargo install nodespace-cli`). Do not proceed. |
+| `Could not connect to nodespaced` | Daemon not running | Surface the CLI's own message to the user: start the daemon with `nodespaced`. Do not retry automatically — wait for confirmation. |
+| `diagnostics` shows entries in `errors` | Database issues | Report the specific error messages to the user before continuing. |
+
 ## When to Use NodeSpace
 
 - **Store notes or findings**: Save research, decisions, or summaries you'll want later
@@ -13,7 +32,7 @@ NodeSpace is a local-first knowledge graph that stores notes, tasks, and structu
 
 NodeSpace daemon must be running. The `nodespace` CLI communicates with `nodespaced` over a Unix socket. If the daemon is not running, CLI commands will fail with a connection error.
 
-Start the daemon: `nodespace daemon start` (or it starts automatically on login if installed via DMG).
+Start the daemon: `nodespaced` (or it starts automatically on login if installed via DMG).
 
 ## CLI Reference
 
@@ -123,7 +142,9 @@ nodespace node create --type note --content "Decision: use REST not GraphQL" --p
 ### Build a knowledge graph session
 
 ```bash
-# At session start: search for relevant context
+# At session start: preflight check, then search for relevant context
+nodespace --version
+nodespace diagnostics
 nodespace node search --query "previous work on this codebase"
 
 # During session: save discoveries
