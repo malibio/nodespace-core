@@ -224,10 +224,7 @@
             status: 'active',
           },
         },
-        { type: 'viewer', viewerId: 'ai-chat-pty-session' },
-        // Intentional configuration write following provider selection; skip
-        // conflict detection so it isn't dropped as a concurrent edit.
-        { skipConflictDetection: true }
+        { type: 'viewer', viewerId: 'ai-chat-pty-session' }
       );
     } catch (e) {
       log.error('Failed to launch session', e);

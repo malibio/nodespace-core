@@ -1,11 +1,9 @@
 /**
  * SharedNodeStore - Singleton Reactive Store for Multi-Viewer Support
  *
- * Phase 1-2 Implementation:
  * - Single source of truth for all node data (Svelte 5 $state)
  * - Observer pattern for viewer subscriptions
  * - Real-time synchronization across multiple viewers
- * - Conflict detection and resolution (Last-Write-Wins)
  * - Optimistic updates with rollback
  * - Performance tracking and metrics
  *
@@ -14,12 +12,6 @@
  * - Multiple ReactiveNodeService instances read from same store
  * - Per-viewer UI state (expand/collapse, focus) stored separately
  * - Database writes coordinated through existing queueDatabaseWrite()
- *
- * Future Phases:
- * - Phase 3: MCP server integration
- * - Phase 4-5: Tab/Pane management and coordination
- * - Phase 6: Memory optimization and lazy loading
- * - Phase 7: Advanced conflict resolution (OT/CRDT)
  */
 
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
@@ -41,14 +33,12 @@ import type { InsertPosition } from '$lib/services/backend-adapter';
 import type {
   NodeUpdate,
   UpdateSource,
-  Conflict,
-  ConflictResolver,
   NodeChangeCallback,
   Unsubscribe,
   StoreMetrics,
   UpdateOptions
 } from '$lib/types/update-protocol';
-import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
+import { conflictNotifications, type ConflictNotification } from '$lib/stores/conflict-notifications.svelte';
 
 const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'version-mismatch': 'Your edit conflicted with a remote change',
@@ -411,32 +401,6 @@ class OperationCancelledError extends Error {
 }
 
 // ============================================================================
-// Simple Conflict Resolver (Last-Write-Wins)
-// ============================================================================
-
-function createDefaultResolver(): ConflictResolver {
-  return {
-    resolve(conflict: Conflict, existingNode: Node) {
-      // Last-write-wins: use the remote update
-      const resolvedNode = {
-        ...existingNode,
-        ...conflict.remoteUpdate.changes,
-        modifiedAt: new Date().toISOString()
-      };
-      return {
-        nodeId: conflict.nodeId,
-        resolvedNode,
-        strategy: 'last-write-wins' as const,
-        discardedUpdate: conflict.localUpdate
-      };
-    },
-    getStrategyName() {
-      return 'Last Write Wins';
-    }
-  };
-}
-
-// ============================================================================
 // Database Write Coordination (Phase 2.4)
 // ============================================================================
 // NOTE: Database write coordination is now handled by PersistenceCoordinator
@@ -508,9 +472,6 @@ export class SharedNodeStore {
 
   // Batch ID counter for unique batch identification
   private batchIdCounter = 0;
-
-  // Conflict resolution
-  private conflictResolver: ConflictResolver = createDefaultResolver();
 
   // Pending operations (optimistic updates)
   private pendingUpdates = new Map<string, NodeUpdate[]>();
@@ -930,15 +891,6 @@ export class SharedNodeStore {
         version: this.getNextVersion(nodeId),
         previousVersion: this.versions.get(nodeId)
       };
-
-      // Conflict detection (unless skipped)
-      if (!options.skipConflictDetection) {
-        const conflict = this.detectConflict(nodeId, update);
-        if (conflict) {
-          this.handleConflict(conflict);
-          return;
-        }
-      }
 
       // Apply update optimistically
       const updatedNode: Node = {
@@ -2230,43 +2182,6 @@ export class SharedNodeStore {
     return PersistenceCoordinator.getInstance().getMetrics().pendingOperations;
   }
 
-  /**
-   * DEPRECATED: Ensure entire ancestor chain is persisted before persisting a child node
-   *
-   * This method is now a no-op. Parent/child relationships are managed via graph edges
-   * in the backend, not via frontend foreign key tracking.
-   *
-   * @param _nodeId - Starting node ID to walk ancestors from (unused)
-   */
-  private async ensureAncestorChainPersisted(_nodeId: string): Promise<void> {
-    // No-op: Backend handles parent/child relationships via graph edges
-    return Promise.resolve();
-  }
-
-  /**
-   * Validate node references before update
-   *
-   * @param nodeId - Node to validate
-   * @returns Validation result with any errors
-   *
-   * @deprecated Structural changes (beforeSiblingId) are now handled via backend moveNode().
-   * This method is kept for backward compatibility but only validates node existence.
-   */
-  async validateNodeReferences(
-    nodeId: string
-  ): Promise<{
-    errors: string[];
-  }> {
-    const errors: string[] = [];
-
-    // Validate node still exists
-    if (!this.hasNode(nodeId)) {
-      errors.push(`Node ${nodeId} not found (may have been deleted)`);
-    }
-
-    return { errors };
-  }
-
   // ========================================================================
   // Phase 3: External Update Handling (MCP-Ready)
   // ========================================================================
@@ -2317,84 +2232,6 @@ export class SharedNodeStore {
       // External updates from database should skip persistence to avoid loops
       skipPersistence: sourceType === 'database'
     });
-  }
-
-  // ========================================================================
-  // Conflict Detection and Resolution
-  // ========================================================================
-
-  /**
-   * Detect if an update conflicts with pending updates
-   */
-  private detectConflict(nodeId: string, incomingUpdate: NodeUpdate): Conflict | null {
-    const pending = this.pendingUpdates.get(nodeId);
-    if (!pending || pending.length === 0) {
-      return null;
-    }
-
-    // Detect version mismatch: incoming external update conflicts with a pending local write
-    if (
-      incomingUpdate.previousVersion !== undefined &&
-      this.versions.get(nodeId) !== incomingUpdate.previousVersion
-    ) {
-      const lastPending = pending[pending.length - 1];
-      return {
-        nodeId,
-        localUpdate: lastPending,
-        remoteUpdate: incomingUpdate,
-        conflictType: 'version-mismatch',
-        detectedAt: Date.now()
-      };
-    }
-
-    return null;
-  }
-
-  /**
-   * Handle detected conflict
-   */
-  private handleConflict(conflict: Conflict): void {
-    this.metrics.conflictCount++;
-
-    // Get existing node for type-safe resolution
-    const existingNode = this.nodes.get(conflict.nodeId);
-    if (!existingNode) {
-      log.warn(`Cannot resolve conflict for non-existent node: ${conflict.nodeId}`);
-      return;
-    }
-
-    // Resolve using configured strategy
-    const resolution = this.conflictResolver.resolve(conflict, existingNode);
-
-    // Apply resolved state
-    this.nodes.set(conflict.nodeId, resolution.resolvedNode);
-    this.versions.set(conflict.nodeId, this.getNextVersion(conflict.nodeId));
-
-    log.debug(`Conflict resolved for node: ${conflict.nodeId}, strategy: ${resolution.strategy}`);
-
-    // Surface conflict to UI
-    conflictNotifications.add({
-      nodeId: conflict.nodeId,
-      message: CONFLICT_MESSAGE[conflict.conflictType],
-      conflictType: conflict.conflictType
-    });
-
-    // Notify subscribers
-    this.notifySubscribers(conflict.nodeId, resolution.resolvedNode, conflict.remoteUpdate.source);
-  }
-
-  /**
-   * Set conflict resolver strategy
-   */
-  setConflictResolver(resolver: ConflictResolver): void {
-    this.conflictResolver = resolver;
-  }
-
-  /**
-   * Get current conflict resolver
-   */
-  getConflictResolver(): ConflictResolver {
-    return this.conflictResolver;
   }
 
   // ========================================================================
@@ -3234,7 +3071,7 @@ export class SharedNodeStore {
    * Take a snapshot of all nodes for optimistic rollback
    *
    * Creates a deep copy of the current node state that can be restored
-   * if a backend operation fails. Used by OptimisticOperationManager.
+   * if a backend operation fails.
    *
    * @returns Deep copy of all nodes as a Map
    */
@@ -3251,7 +3088,6 @@ export class SharedNodeStore {
    * Restore all nodes from a snapshot (rollback on error)
    *
    * Replaces the current node state with the snapshot state.
-   * Used by OptimisticOperationManager when backend operations fail.
    *
    * @param snapshotMap - Previously captured snapshot to restore
    */

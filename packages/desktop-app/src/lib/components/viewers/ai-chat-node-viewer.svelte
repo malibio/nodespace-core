@@ -120,12 +120,7 @@
     sharedNodeStore.updateNode(
       nodeId,
       { properties: nextProps },
-      { type: 'viewer', viewerId: 'ai-chat-viewer' },
-      // Selecting a provider is an intentional configuration action, like a
-      // nodeType conversion. It can fire right after the `/ai-chat` conversion,
-      // so without this the update collides with that still-pending change in
-      // the conflict window and gets silently dropped — leaving the picker inert.
-      { skipConflictDetection: true }
+      { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
     // A model from a previous mode is no longer valid; force a fresh session.
     teardownSession();
