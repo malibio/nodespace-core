@@ -1344,6 +1344,93 @@ impl SqliteStore {
         Ok(new_order)
     }
 
+    /// Re-parent an ordered set of existing children to `new_parent_id` in a
+    /// single transaction. Validates each child's version inside the transaction
+    /// using `SELECT changes()` after a version-gated DELETE — any mismatch causes
+    /// the full transaction to roll back (all-or-nothing OCC).
+    ///
+    /// Returns the assigned fractional order for each child, preserving input
+    /// array order as sibling order under the new parent.
+    pub async fn move_children_to_parent(
+        &self,
+        new_parent_id: &str,
+        children: &[(&str, i64)],
+    ) -> Result<Vec<f64>> {
+        if children.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now().to_rfc3339();
+
+        // Compute sequential fractional orders iteratively so each step uses the
+        // previously assigned order as its `prev`, producing a properly spaced
+        // sequence (e.g. [1.0, 2.0, 3.0]) rather than arbitrary constants.
+        let mut orders: Vec<f64> = Vec::with_capacity(children.len());
+        for _ in 0..children.len() {
+            let prev = orders.last().copied();
+            orders.push(FractionalOrderCalculator::calculate_order(prev, None));
+        }
+
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin move_children_to_parent transaction")?;
+
+        for ((child_id, expected_version), &order) in children.iter().zip(orders.iter()) {
+            let child_id = child_id.to_string();
+
+            // Delete the old has_child edge only if the node's version matches.
+            // If no rows are affected the version has been bumped by a concurrent
+            // writer — detect that with SELECT changes() and abort the transaction.
+            tx.execute(
+                "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child' AND EXISTS (SELECT 1 FROM node WHERE id = ?1 AND version = ?2)",
+                libsql::params![child_id.clone(), *expected_version],
+            )
+            .await
+            .context("Failed to delete old has_child edge")?;
+
+            // Verify the DELETE actually removed a row (i.e. the version matched).
+            let mut changes_rows = tx
+                .query("SELECT changes()", libsql::params![])
+                .await
+                .context("Failed to query changes()")?;
+            if let Some(row) = changes_rows.next().await? {
+                let affected: i64 = row.get(0)?;
+                if affected == 0 {
+                    return Err(anyhow::anyhow!(
+                        "VERSION_CONFLICT: node '{}' version mismatch (expected {})",
+                        child_id,
+                        expected_version
+                    ));
+                }
+            }
+
+            // Insert new has_child edge under new_parent_id.
+            let rel_id = uuid::Uuid::new_v4().to_string();
+            let rel_props = serde_json::json!({"order": order}).to_string();
+            tx.execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                libsql::params![
+                    rel_id,
+                    new_parent_id.to_string(),
+                    child_id,
+                    rel_props,
+                    now.clone(),
+                    now.clone()
+                ],
+            )
+            .await
+            .context("Failed to insert new has_child edge")?;
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit move_children_to_parent")?;
+
+        Ok(orders)
+    }
+
     pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
         let mut rows = self.db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
@@ -3523,6 +3610,119 @@ mod tests {
             results.iter().all(|r| r.node_id != node.id),
             "stale marker must never appear in KNN results"
         );
+        Ok(())
+    }
+
+    // C3c: store-layer atomicity — exercises the in-transaction version check
+    // that the service-level pre-validation cannot catch (concurrent version bump).
+    #[tokio::test]
+    async fn test_move_children_to_parent_store_rejects_stale_version() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+
+        // Create children and wire parent edges via move_node (store layer).
+        let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+        let child1_id = child1.id.clone();
+        let child1_version = child1.version;
+        store.create_node(child1, None, None).await?;
+        store.move_node(&child1_id, Some(&parent_id), None).await?;
+
+        let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
+        let child2_id = child2.id.clone();
+        // Use a stale version (0) — this bypasses service-level pre-validation,
+        // so only the in-transaction SELECT changes() check catches the mismatch.
+        let stale_version: i64 = 0;
+        store.create_node(child2, None, None).await?;
+        store.move_node(&child2_id, Some(&parent_id), None).await?;
+
+        let result = store
+            .move_children_to_parent(
+                &new_parent_id,
+                &[
+                    (child1_id.as_str(), child1_version),
+                    (child2_id.as_str(), stale_version),
+                ],
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "stale version should cause store-level failure"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("VERSION_CONFLICT"),
+            "error should contain VERSION_CONFLICT, got: {}",
+            err_msg
+        );
+
+        // ALL-OR-NOTHING: child1 must NOT have moved (transaction was rolled back).
+        let parent_of_child1 = store.get_parent_id(&child1_id).await?;
+        assert_eq!(
+            parent_of_child1.as_deref(),
+            Some(parent_id.as_str()),
+            "child1 should still be under original parent after rollback"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_move_children_to_parent_store_success_and_order() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+
+        let mut child_ids = Vec::new();
+        let mut child_versions = Vec::new();
+        for i in 0..3 {
+            let child = Node::new("text".to_string(), format!("Child {}", i), json!({}));
+            let cid = child.id.clone();
+            let ver = child.version;
+            store.create_node(child, None, None).await?;
+            store.move_node(&cid, Some(&parent_id), None).await?;
+            child_ids.push(cid);
+            child_versions.push(ver);
+        }
+
+        let pairs: Vec<(&str, i64)> = child_ids
+            .iter()
+            .zip(child_versions.iter())
+            .map(|(id, &ver)| (id.as_str(), ver))
+            .collect();
+
+        let orders = store
+            .move_children_to_parent(&new_parent_id, &pairs)
+            .await?;
+
+        assert_eq!(orders.len(), 3);
+        // Orders must be strictly increasing (sibling order preserved).
+        assert!(orders[0] < orders[1] && orders[1] < orders[2]);
+
+        // All children now live under new_parent.
+        let new_children = store.get_children(&new_parent_id).await?;
+        let new_ids: Vec<&str> = new_children.iter().map(|n| n.id.as_str()).collect();
+        for id in &child_ids {
+            assert!(
+                new_ids.contains(&id.as_str()),
+                "child {} should be under new_parent",
+                id
+            );
+        }
+
         Ok(())
     }
 }

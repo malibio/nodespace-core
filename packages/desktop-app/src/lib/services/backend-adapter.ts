@@ -108,6 +108,7 @@ export interface BackendAdapter {
   getDescendants(rootNodeId: string): Promise<Node[]>;
   getChildrenTree(parentId: string): Promise<NodeWithChildren | null>;
   moveNode(nodeId: string, version: number, newParentId: string | null, insertPosition: InsertPosition | null): Promise<Node>;
+  moveChildrenToParent(newParentId: string, children: Array<{ id: string; version: number }>): Promise<Node[]>;
 
   // Mentions
   createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void>;
@@ -235,6 +236,17 @@ class TauriAdapter implements BackendAdapter {
         insertPosition
       }),
       [nodeId, version, newParentId, insertPosition]
+    );
+  }
+
+  async moveChildrenToParent(newParentId: string, children: Array<{ id: string; version: number }>): Promise<Node[]> {
+    return withDiagnosticLogging(
+      'moveChildrenToParent',
+      () => invoke<Node[]>('move_children_to_parent', {
+        newParentId,
+        children: children.map(c => ({ nodeId: c.id, version: c.version }))
+      }),
+      [newParentId, children.length]
     );
   }
 
@@ -473,6 +485,15 @@ class HttpAdapter implements BackendAdapter {
     return this.handleResponse<Node>(response);
   }
 
+  async moveChildrenToParent(newParentId: string, children: Array<{ id: string; version: number }>): Promise<Node[]> {
+    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(newParentId)}/move-children`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ children: children.map(c => ({ nodeId: c.id, version: c.version })) })
+    });
+    return this.handleResponse<Node[]>(response);
+  }
+
   async createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
     const response = await fetch(`${this.baseUrl}/api/mentions`, {
       method: 'POST',
@@ -591,6 +612,9 @@ class MockAdapter implements BackendAdapter {
   }
   async moveNode(_nodeId: string, _version: number, _newParentId: string | null, _insertPosition: InsertPosition | null): Promise<Node> {
     return {} as Node;
+  }
+  async moveChildrenToParent(_newParentId: string, children: Array<{ id: string; version: number }>): Promise<Node[]> {
+    return children.map(() => ({} as Node));
   }
   async createMention(_mentioningNodeId: string, _mentionedNodeId: string): Promise<void> {}
   async deleteMention(_mentioningNodeId: string, _mentionedNodeId: string): Promise<void> {}

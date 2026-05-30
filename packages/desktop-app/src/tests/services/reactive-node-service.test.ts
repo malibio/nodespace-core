@@ -28,6 +28,7 @@ import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte
 vi.mock('$lib/services/backend-adapter', () => ({
   backendAdapter: {
     moveNode: vi.fn().mockResolvedValue(undefined),
+    moveChildrenToParent: vi.fn().mockResolvedValue([]),
     getNode: vi.fn().mockResolvedValue(null),
     createNode: vi.fn().mockResolvedValue('mock-id'),
     updateNode: vi.fn().mockResolvedValue(null),
@@ -1686,10 +1687,10 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
     expect(events.nodeCreated).toHaveBeenCalled();
   });
 
-  it('emits child-transfer-failure notification when background moveNode rejects', async () => {
+  it('emits child-transfer-failure notification when background moveChildrenToParent rejects', async () => {
     const { backendAdapter } = await import('$lib/services/backend-adapter');
     const { SharedNodeStore: SS } = await import('$lib/services/shared-node-store.svelte');
-    const moveNodeMock = vi.mocked(backendAdapter.moveNode);
+    const moveChildrenMock = vi.mocked(backendAdapter.moveChildrenToParent);
 
     conflictNotifications.dismissAll();
 
@@ -1707,19 +1708,19 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
     );
 
     // Capture call count before triggering the background transfer
-    const callsBefore = moveNodeMock.mock.calls.length;
-    moveNodeMock.mockRejectedValueOnce(new Error('Network error'));
+    const callsBefore = moveChildrenMock.mock.calls.length;
+    moveChildrenMock.mockRejectedValueOnce(new Error('Network error'));
 
     // Triggers background child transfer (children.length > 0 && isExpanded && !insertAtBeginning)
     service.createNode(parentId, 'New node');
 
-    // Verify moveNode was called — confirms the background transfer path was entered
+    // Verify moveChildrenToParent was called exactly once — single atomic RPC, not per-child
     // (waitForNodeSaves has a 500ms debounce before the persistence operation fires)
     await vi.waitFor(() => {
-      expect(moveNodeMock.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(moveChildrenMock.mock.calls.length).toBe(callsBefore + 1);
     }, { timeout: 3000 });
 
-    // After moveNode rejects, the catch block should emit the notification
+    // After moveChildrenToParent rejects, the catch block should emit the #656 notification
     await vi.waitFor(() => {
       expect(conflictNotifications.notifications.length).toBeGreaterThan(0);
     }, { timeout: 1000 });

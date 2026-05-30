@@ -379,6 +379,7 @@ pub fn run() {
             commands::nodes::get_node,
             commands::nodes::update_node,
             commands::nodes::move_node,
+            commands::nodes::move_children_to_parent,
             commands::nodes::reorder_node,
             commands::nodes::delete_node,
             commands::nodes::get_children,
