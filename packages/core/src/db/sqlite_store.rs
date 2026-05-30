@@ -2567,25 +2567,56 @@ impl SqliteStore {
         member_id: &str,
         collection_id: &str,
     ) -> Result<Option<String>> {
-        let mut rows = self.db.query(
-            "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of' LIMIT 1",
-            libsql::params![member_id.to_string(), collection_id.to_string()],
-        ).await.context("Failed to check existing membership")?;
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin add_to_collection transaction")?;
+
+        let mut rows = tx
+            .query(
+                "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of' LIMIT 1",
+                libsql::params![member_id.to_string(), collection_id.to_string()],
+            )
+            .await
+            .context("Failed to check existing membership")?;
 
         if rows.next().await?.is_some() {
             return Ok(None);
         }
 
-        let new_order = self.get_next_member_order(collection_id).await?;
+        let mut order_rows = tx
+            .query(
+                "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE out_node = ?1 AND relationship_type = 'member_of' ORDER BY json_extract(properties, '$.order') DESC LIMIT 1",
+                libsql::params![collection_id.to_string()],
+            )
+            .await
+            .context("Failed to get last member order")?;
+
+        let last_order = if let Some(row) = order_rows.next().await? {
+            row.get::<Option<f64>>(0)?.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let new_order = FractionalOrderCalculator::calculate_order(
+            if last_order > 0.0 { Some(last_order) } else { None },
+            None,
+        );
 
         let rel_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let props = serde_json::json!({"order": new_order}).to_string();
 
-        self.db.execute(
+        tx.execute(
             "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'member_of', ?4, 1, ?5, ?6)",
             libsql::params![rel_id.clone(), member_id.to_string(), collection_id.to_string(), props, now.clone(), now],
-        ).await.context("Failed to add to collection")?;
+        )
+        .await
+        .context("Failed to add to collection")?;
+
+        tx.commit()
+            .await
+            .context("Failed to commit add_to_collection")?;
 
         Ok(Some(rel_id))
     }
