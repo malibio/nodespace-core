@@ -70,6 +70,13 @@ impl From<NodeServiceError> for OpsError {
             NodeServiceError::HierarchyViolation(msg) => {
                 OpsError::ValidationFailed(format!("Hierarchy violation: {}", msg))
             }
+            NodeServiceError::NotAContainer {
+                parent_id,
+                node_type,
+            } => OpsError::ValidationFailed(format!(
+                "Node '{}' (type '{}') cannot have children",
+                parent_id, node_type
+            )),
             NodeServiceError::PlaybookValidationFailed { errors } => {
                 OpsError::InvalidParams(errors)
             }

@@ -283,11 +283,26 @@ impl NodeService {
             self.ensure_date_exists(parent_id).await?;
         }
 
-        // Step 2: Validate parent exists (if provided)
+        // Step 2: Validate parent exists and is a container (if provided)
         if let Some(ref parent_id) = params.parent_id {
-            let parent_exists = self.node_exists(parent_id).await?;
-            if !parent_exists {
-                return Err(NodeServiceError::invalid_parent(parent_id));
+            let parent_node = self
+                .get_node(parent_id)
+                .await?
+                .ok_or_else(|| NodeServiceError::invalid_parent(parent_id.as_str()))?;
+
+            let parent_behavior = self
+                .behaviors
+                .get(&parent_node.node_type)
+                .unwrap_or_else(|| {
+                    std::sync::Arc::new(crate::behaviors::CustomNodeBehavior::new(
+                        &parent_node.node_type,
+                    ))
+                });
+            if !parent_behavior.can_have_children() {
+                return Err(NodeServiceError::not_a_container(
+                    parent_id.as_str(),
+                    &parent_node.node_type,
+                ));
             }
         }
 

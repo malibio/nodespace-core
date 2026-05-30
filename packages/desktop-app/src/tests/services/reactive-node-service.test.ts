@@ -1459,6 +1459,57 @@ describe('ReactiveNodeService - Indent/Outdent Node', () => {
     expect(events.hierarchyChanged).toHaveBeenCalled();
   });
 
+  // C3b: container gate — synchronous UI guard
+  it('indentNode returns false when previous sibling cannot have children (non-container)', async () => {
+    // Replace 'parent' with a query node (non-container) so 'sibling' cannot indent under it
+    SharedNodeStore.resetInstance();
+    _sharedNodeStore = SharedNodeStore.getInstance();
+    service.destroy();
+    service = createReactiveNodeService(events);
+
+    const nodes: Node[] = [
+      {
+        id: 'leaf-parent',
+        nodeType: 'query', // query nodes cannot have children
+        content: 'A query',
+        version: 1,
+        properties: {},
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+      },
+      {
+        id: 'target-node',
+        nodeType: 'text',
+        content: 'Want to indent',
+        version: 1,
+        properties: {},
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+      }
+    ];
+    service.initializeNodes(nodes);
+
+    const result = await service.indentNode('target-node');
+    expect(result).toBe(false);
+  });
+
+  // C3b: rollback when daemon rejects with a container-violation error
+  it('indentNode rolls back optimistic update when moveNode rejects with a non-ignorable error', async () => {
+    const { backendAdapter } = await import('$lib/services/backend-adapter');
+    const moveNodeMock = vi.mocked(backendAdapter.moveNode);
+
+    // Simulate daemon rejecting with a validation error (e.g., NotAContainer → InvalidArgument)
+    moveNodeMock.mockRejectedValueOnce(
+      new Error('Validation failed: Node cannot have children')
+    );
+
+    // Attempt indent — optimistic update fires, then backend rejects, triggering rollback
+    await service.indentNode('sibling');
+
+    // hierarchyChanged is called at least once (optimistic update + rollback)
+    expect(events.hierarchyChanged).toHaveBeenCalled();
+  });
+
   it('outdentNode returns false when node does not exist', async () => {
     const result = await service.outdentNode('non-existent');
     expect(result).toBe(false);

@@ -1604,9 +1604,25 @@ impl NodeService {
 
         // Verify new parent exists if provided
         if let Some(parent_id) = new_parent {
-            let parent_exists = self.node_exists(parent_id).await?;
-            if !parent_exists {
-                return Err(NodeServiceError::invalid_parent(parent_id));
+            let parent_node = self
+                .get_node(parent_id)
+                .await?
+                .ok_or_else(|| NodeServiceError::invalid_parent(parent_id))?;
+
+            // Enforce container rule: reject moves into non-container node types
+            let parent_behavior = self
+                .behaviors
+                .get(&parent_node.node_type)
+                .unwrap_or_else(|| {
+                    std::sync::Arc::new(crate::behaviors::CustomNodeBehavior::new(
+                        &parent_node.node_type,
+                    ))
+                });
+            if !parent_behavior.can_have_children() {
+                return Err(NodeServiceError::not_a_container(
+                    parent_id,
+                    &parent_node.node_type,
+                ));
             }
 
             // Check for circular reference - parent_id cannot be a descendant of node_id
@@ -2641,6 +2657,107 @@ mod tests {
         assert!(is_valid_node_id("2025-10-24"));
         assert!(!is_valid_node_id("2025-13-24")); // Invalid month
         assert!(!is_valid_node_id("25-10-24")); // Wrong year format
+    }
+
+    // C3b: container rule enforcement tests
+    #[tokio::test]
+    async fn test_move_node_rejects_non_container_parent() {
+        let (service, _temp) = create_test_service().await;
+
+        // query nodes cannot have children
+        let leaf = Node::new("query".to_string(), "my query".to_string(), json!({}));
+        let leaf_id = service.create_node(leaf).await.unwrap();
+
+        let child = Node::new("text".to_string(), "child".to_string(), json!({}));
+        let child_id = service.create_node(child).await.unwrap();
+        let child_node = service.get_node(&child_id).await.unwrap().unwrap();
+
+        let result = service
+            .move_node(
+                &child_id,
+                child_node.version,
+                Some(&leaf_id),
+                crate::services::InsertPosition::End,
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(NodeServiceError::NotAContainer { .. })),
+            "move_node should reject a non-container parent; got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_move_node_accepts_container_parent() {
+        let (service, _temp) = create_test_service().await;
+
+        let container = Node::new("text".to_string(), "container".to_string(), json!({}));
+        let container_id = service.create_node(container).await.unwrap();
+
+        let child = Node::new("text".to_string(), "child".to_string(), json!({}));
+        let child_id = service.create_node(child).await.unwrap();
+        let child_node = service.get_node(&child_id).await.unwrap().unwrap();
+
+        let result = service
+            .move_node(
+                &child_id,
+                child_node.version,
+                Some(&container_id),
+                crate::services::InsertPosition::End,
+            )
+            .await;
+
+        assert!(result.is_ok(), "move_node should accept a container parent");
+    }
+
+    #[tokio::test]
+    async fn test_create_node_with_parent_rejects_non_container() {
+        let (service, _temp) = create_test_service().await;
+
+        let leaf = Node::new("query".to_string(), "leaf query".to_string(), json!({}));
+        let leaf_id = service.create_node(leaf).await.unwrap();
+
+        let result = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "child".to_string(),
+                parent_id: Some(leaf_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await;
+
+        assert!(
+            matches!(result, Err(NodeServiceError::NotAContainer { .. })),
+            "create_node_with_parent should reject a non-container parent; got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_node_with_parent_accepts_container() {
+        let (service, _temp) = create_test_service().await;
+
+        let container = Node::new("text".to_string(), "container".to_string(), json!({}));
+        let container_id = service.create_node(container).await.unwrap();
+
+        let result = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "child".to_string(),
+                parent_id: Some(container_id),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "create_node_with_parent should accept a container parent"
+        );
     }
 
     mod node_accessor_tests {

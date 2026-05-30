@@ -557,4 +557,37 @@ describe('Core Plugins Integration', () => {
       }
     });
   });
+
+  // C3b parity test: frontend canHaveChildren flags must match Rust can_have_children()
+  // This locks the single-source contract so the two copies cannot silently diverge.
+  // Ground truth is packages/core/src/behaviors/mod.rs — update both if a type changes.
+  describe('Container rule parity (C3b)', () => {
+    const RUST_CAN_HAVE_CHILDREN: Record<string, boolean> = {
+      // Containers (Rust returns true)
+      text: true,
+      header: true,
+      task: true,
+      checkbox: true, // no Rust behavior → CustomNodeBehavior default = true
+      date: true,
+      'quote-block': true,
+      collection: true,
+
+      // Leaf nodes (Rust returns false)
+      'code-block': false,
+      'ordered-list': false,
+      'horizontal-line': false,
+      table: false,
+      query: false,
+      'ai-chat': false,
+    };
+
+    it('every registered core plugin canHaveChildren matches Rust can_have_children()', () => {
+      registerCorePlugins(registry);
+
+      for (const [nodeType, rustValue] of Object.entries(RUST_CAN_HAVE_CHILDREN)) {
+        const frontendValue = registry.canHaveChildren(nodeType);
+        expect(frontendValue, `canHaveChildren parity failed for '${nodeType}': frontend=${frontendValue} rust=${rustValue}`).toBe(rustValue);
+      }
+    });
+  });
 });
