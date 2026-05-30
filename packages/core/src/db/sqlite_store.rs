@@ -3612,4 +3612,117 @@ mod tests {
         );
         Ok(())
     }
+
+    // C3c: store-layer atomicity — exercises the in-transaction version check
+    // that the service-level pre-validation cannot catch (concurrent version bump).
+    #[tokio::test]
+    async fn test_move_children_to_parent_store_rejects_stale_version() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+
+        // Create children and wire parent edges via move_node (store layer).
+        let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+        let child1_id = child1.id.clone();
+        let child1_version = child1.version;
+        store.create_node(child1, None, None).await?;
+        store.move_node(&child1_id, Some(&parent_id), None).await?;
+
+        let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
+        let child2_id = child2.id.clone();
+        // Use a stale version (0) — this bypasses service-level pre-validation,
+        // so only the in-transaction SELECT changes() check catches the mismatch.
+        let stale_version: i64 = 0;
+        store.create_node(child2, None, None).await?;
+        store.move_node(&child2_id, Some(&parent_id), None).await?;
+
+        let result = store
+            .move_children_to_parent(
+                &new_parent_id,
+                &[
+                    (child1_id.as_str(), child1_version),
+                    (child2_id.as_str(), stale_version),
+                ],
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "stale version should cause store-level failure"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("VERSION_CONFLICT"),
+            "error should contain VERSION_CONFLICT, got: {}",
+            err_msg
+        );
+
+        // ALL-OR-NOTHING: child1 must NOT have moved (transaction was rolled back).
+        let parent_of_child1 = store.get_parent_id(&child1_id).await?;
+        assert_eq!(
+            parent_of_child1.as_deref(),
+            Some(parent_id.as_str()),
+            "child1 should still be under original parent after rollback"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_move_children_to_parent_store_success_and_order() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+
+        let mut child_ids = Vec::new();
+        let mut child_versions = Vec::new();
+        for i in 0..3 {
+            let child = Node::new("text".to_string(), format!("Child {}", i), json!({}));
+            let cid = child.id.clone();
+            let ver = child.version;
+            store.create_node(child, None, None).await?;
+            store.move_node(&cid, Some(&parent_id), None).await?;
+            child_ids.push(cid);
+            child_versions.push(ver);
+        }
+
+        let pairs: Vec<(&str, i64)> = child_ids
+            .iter()
+            .zip(child_versions.iter())
+            .map(|(id, &ver)| (id.as_str(), ver))
+            .collect();
+
+        let orders = store
+            .move_children_to_parent(&new_parent_id, &pairs)
+            .await?;
+
+        assert_eq!(orders.len(), 3);
+        // Orders must be strictly increasing (sibling order preserved).
+        assert!(orders[0] < orders[1] && orders[1] < orders[2]);
+
+        // All children now live under new_parent.
+        let new_children = store.get_children(&new_parent_id).await?;
+        let new_ids: Vec<&str> = new_children.iter().map(|n| n.id.as_str()).collect();
+        for id in &child_ids {
+            assert!(
+                new_ids.contains(&id.as_str()),
+                "child {} should be under new_parent",
+                id
+            );
+        }
+
+        Ok(())
+    }
 }

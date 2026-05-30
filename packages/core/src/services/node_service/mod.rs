@@ -1805,6 +1805,16 @@ impl NodeService {
                 )));
             }
 
+            // Root nodes have no has_child edge — the in-transaction DELETE would
+            // return 0 changes and be misidentified as a version conflict. Reject
+            // root nodes explicitly so callers get a clear InvalidParent error.
+            if self.is_root_node(node_id).await? {
+                return Err(NodeServiceError::hierarchy_violation(format!(
+                    "Root node '{}' cannot be batch-moved (no parent edge to replace)",
+                    node_id
+                )));
+            }
+
             // Cycle guard: the new parent must not be a descendant of any moved child.
             if self.is_descendant(node_id, new_parent_id).await? {
                 return Err(NodeServiceError::circular_reference(format!(
@@ -1827,11 +1837,15 @@ impl NodeService {
             .move_children_to_parent(new_parent_id, &children_with_versions)
             .await
             .map_err(|e| {
-                // Re-map in-transaction VERSION_CONFLICT errors to NodeServiceError
-                if e.to_string().contains("VERSION_CONFLICT") {
-                    NodeServiceError::version_conflict("batch-child", 0, 0)
+                let msg = e.to_string();
+                // Re-map in-transaction VERSION_CONFLICT errors. The store embeds the
+                // node ID in the error string: "VERSION_CONFLICT: node '<id>' ...".
+                // Parse it out so the caller gets an actionable conflict message.
+                if let Some(rest) = msg.strip_prefix("VERSION_CONFLICT: node '") {
+                    let node_id = rest.split('\'').next().unwrap_or("unknown");
+                    NodeServiceError::version_conflict(node_id, 0, 0)
                 } else {
-                    NodeServiceError::query_failed(e.to_string())
+                    NodeServiceError::query_failed(msg)
                 }
             })?;
 
