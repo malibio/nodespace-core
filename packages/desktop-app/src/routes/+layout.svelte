@@ -4,6 +4,7 @@
   import '$lib/styles/noderef.css';
   import AppShell from '$lib/components/layout/app-shell.svelte';
   import DiagnosticPanel from '$lib/design/components/diagnostic-panel.svelte';
+  import DeleteConfirmationModal from '$lib/components/delete-confirmation-modal.svelte';
   import { initializeSchemaPluginSystem } from '$lib/plugins/schema-plugin-loader';
   import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
@@ -102,6 +103,9 @@
 
 <!-- Diagnostic Panel - Press Ctrl+Shift+D to toggle -->
 <DiagnosticPanel />
+
+<!-- Delete confirmation modal - mounted globally so services can trigger it -->
+<DeleteConfirmationModal />
 
 <style>
   .initialization-error {

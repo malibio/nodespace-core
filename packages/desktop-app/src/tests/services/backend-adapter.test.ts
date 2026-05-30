@@ -98,8 +98,8 @@ describe('Backend Adapter - MockAdapter (Test Environment)', () => {
       const result = await adapter.deleteNode('delete-me', 1);
 
       expect(result).toEqual({
-        deletedId: 'delete-me',
-        deletedChildCount: 0
+        existed: true,
+        deletedCount: 0
       });
     });
   });
@@ -448,8 +448,8 @@ describe('Backend Adapter - HttpAdapter (Browser Dev Mode)', () => {
       const adapter = getBackendAdapter();
 
       const mockResult: DeleteResult = {
-        deletedId: 'node-1',
-        deletedChildCount: 3
+        existed: true,
+        deletedCount: 3
       };
 
       mockFetch.mockResolvedValueOnce({
@@ -1126,8 +1126,8 @@ describe('Backend Adapter - TauriAdapter (Tauri IPC Mode)', () => {
       const adapter = getBackendAdapter();
 
       const mockResult: DeleteResult = {
-        deletedId: 'node-1',
-        deletedChildCount: 5
+        existed: true,
+        deletedCount: 5
       };
 
       mockInvoke.mockResolvedValueOnce(mockResult);

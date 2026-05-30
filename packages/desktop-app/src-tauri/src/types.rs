@@ -106,6 +106,7 @@ pub struct NodeUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteResult {
     pub existed: bool,
+    pub deleted_count: u64,
 }
 
 // ---------------------------------------------------------------------------

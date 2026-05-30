@@ -28,6 +28,7 @@ import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { waitForPendingMoveOperations, trackMoveOperation } from './pending-operations';
+import { confirmNodeDeletion } from './delete-confirmation.svelte';
 
 const log = createLogger('ReactiveNodeService');
 // Schema defaults extraction removed in Issue #690 simplification
@@ -1251,33 +1252,33 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
 
   /**
-   * Deletes a node from storage.
+   * Deletes a node and its entire subtree (cascade).
    *
-   * **IMPORTANT**: This function does NOT handle child promotion. Children will remain
-   * orphaned with their parentId pointing to the deleted node. Use this only when:
-   * 1. The node has no children, OR
-   * 2. You have already handled child promotion explicitly
+   * Shows a confirmation dialog when the node has descendants. If confirmed (or the node
+   * has no descendants), the deletion is dispatched to the backend atomically. Descendant
+   * cleanup happens automatically via `NodeDeleted` domain events arriving through the
+   * sync listener — no manual tree pruning is needed here.
    *
-   * **For user-facing deletion**: Use `combineNodes()` instead, which properly handles
-   * child promotion using depth-aware logic to maintain outline structure.
-   *
-   * **Use cases for direct deleteNode()**:
-   * - Backend operations where child handling is managed separately
-   * - Cleanup operations where orphaned children are intentional
+   * **For Backspace/empty-node deletion** use `combineNodes()`, which promotes children
+   * first and does not cascade.
    *
    * @param nodeId - The ID of the node to delete
    */
-  function deleteNode(nodeId: string): void {
+  async function deleteNode(nodeId: string): Promise<void> {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return;
 
-    // NOTE: Parent determination no longer needed - cache management removed (Issue #557)
+    // Fetch descendant count to determine whether confirmation is needed.
+    const descendants = await backendAdapter.getDescendants(nodeId);
+    const descendantCount = descendants.length;
+
+    const confirmed = await confirmNodeDeletion(descendantCount);
+    if (!confirmed) {
+      log.debug(`Delete cancelled by user for node ${nodeId} (${descendantCount} descendants)`);
+      return;
+    }
+
     cleanupDebouncedOperations(nodeId);
-
-    // NOTE: Sibling chain management removed - backend handles ordering via fractional ordering
-
-    // CRITICAL: Update children cache to remove this node from its parent
-    // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via domain events
 
     sharedNodeStore.deleteNode(nodeId, viewerSource);
     delete _uiState[nodeId];
@@ -1287,8 +1288,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     if (rootIndex >= 0) {
       _rootNodeIds = _rootNodeIds.filter((id) => id !== nodeId);
     }
-
-    // NOTE: Sorted children cache removed - backend provides pre-sorted children
 
     events.nodeDeleted(nodeId);
     events.hierarchyChanged();

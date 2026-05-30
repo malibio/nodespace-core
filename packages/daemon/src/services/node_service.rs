@@ -201,6 +201,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 return Ok(Response::new(DeleteNodeResponse {
                     node_id: id,
                     existed: false,
+                    deleted_count: 0,
                 }));
             }
             Err(e) => return Err(ops_error_to_status(e)),
@@ -209,6 +210,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(DeleteNodeResponse {
             node_id: output.node_id,
             existed: output.existed,
+            deleted_count: output.deleted_count,
         }))
     }
 

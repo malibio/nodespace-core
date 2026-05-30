@@ -56,8 +56,7 @@ async fn write_setup_state(state: &SetupState) -> Result<()> {
             .await
             .context("Failed to create ~/.nodespace dir")?;
     }
-    let json =
-        serde_json::to_string_pretty(state).context("Failed to serialize setup state")?;
+    let json = serde_json::to_string_pretty(state).context("Failed to serialize setup state")?;
     tokio::fs::write(&path, json)
         .await
         .context("Failed to write ~/.nodespace/setup.json")
@@ -121,7 +120,9 @@ pub async fn install_skill(force: bool) -> SkillSetupResult {
         },
         Ok(Ok(agents)) => {
             // Persist the setup flag so we don't re-run on the next launch.
-            let state = SetupState { skill_installed: true };
+            let state = SetupState {
+                skill_installed: true,
+            };
             if let Err(e) = write_setup_state(&state).await {
                 tracing::warn!("Failed to persist setup state: {:#}", e);
             }
@@ -153,7 +154,11 @@ fn run_skill_installer() -> Result<Vec<String>, String> {
     }
 
     if !output.status.success() {
-        let detail = if stderr.is_empty() { stdout.to_string() } else { stderr.to_string() };
+        let detail = if stderr.is_empty() {
+            stdout.to_string()
+        } else {
+            stderr.to_string()
+        };
         return Err(format!(
             "Skill installer exited with status {}: {}",
             output.status,
@@ -170,7 +175,11 @@ fn run_skill_installer() -> Result<Vec<String>, String> {
         .filter_map(|line| {
             let line = line.trim_start_matches(['✓', ' ', '\t']);
             let agent = line.split(':').next()?.trim();
-            if !agent.is_empty() { Some(agent.to_string()) } else { None }
+            if !agent.is_empty() {
+                Some(agent.to_string())
+            } else {
+                None
+            }
         })
         .collect();
 
