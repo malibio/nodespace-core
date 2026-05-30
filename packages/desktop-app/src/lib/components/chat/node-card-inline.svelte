@@ -9,7 +9,7 @@
 <script lang="ts">
   import { createLogger } from '$lib/utils/logger';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { getNode } from '$lib/services/tauri-commands';
+  import { backendAdapter } from '$lib/services/backend-adapter';
   import { TaskNodeHelpers, isTaskNode } from '$lib/types/task-node';
 
   const log = createLogger('NodeCardInline');
@@ -34,7 +34,7 @@
   $effect(() => {
     if (!node && !fetchAttempted) {
       fetchAttempted = true;
-      getNode(nodeId).then((fetched) => {
+      backendAdapter.getNode(nodeId).then((fetched) => {
         if (fetched) {
           sharedNodeStore.setNode(fetched, { type: 'database', reason: 'node-card-fetch' }, true);
         }

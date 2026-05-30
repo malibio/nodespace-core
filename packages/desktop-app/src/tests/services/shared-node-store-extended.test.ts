@@ -10,7 +10,7 @@ import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import type { Node } from '../../lib/types';
 import type { TaskNode } from '../../lib/types/task-node';
 import type { UpdateSource } from '../../lib/types/update-protocol';
-import * as tauriCommands from '../../lib/services/tauri-commands';
+import { backendAdapter } from '../../lib/services/backend-adapter';
 
 // Access SimplePersistenceCoordinator via module internals
 // It's not exported but we can test it via the public API
@@ -157,7 +157,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
 
     beforeEach(() => {
       // Mock updateTaskNode Tauri command
-      vi.spyOn(tauriCommands, 'updateTaskNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockResolvedValue({
         ...taskNode,
         version: 2
       } as import('$lib/types').TaskNode);
@@ -254,7 +254,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
     });
 
     it('should handle updateTaskNode backend errors', async () => {
-      vi.spyOn(tauriCommands, 'updateTaskNode').mockRejectedValue(new Error('Backend error'));
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValue(new Error('Backend error'));
 
       store.setNode(taskNode, viewerSource, true);
       store.updateTaskNode('task-1', { status: 'done' }, viewerSource);
@@ -358,11 +358,11 @@ describe('SharedNodeStore - Extended Coverage', () => {
     });
 
     it('should handle update-then-create race condition', async () => {
-      vi.spyOn(tauriCommands, 'updateNode').mockRejectedValue(
+      vi.spyOn(backendAdapter, 'updateNode').mockRejectedValue(
         new Error('NodeNotFound: Node does not exist')
       );
-      vi.spyOn(tauriCommands, 'createNode').mockResolvedValue(mockNode.id);
-      vi.spyOn(tauriCommands, 'getNode').mockResolvedValue({ ...mockNode, version: 1 });
+      vi.spyOn(backendAdapter, 'createNode').mockResolvedValue(mockNode.id);
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue({ ...mockNode, version: 1 });
 
       // Simulate node marked as persisted but not in DB
       store.setNode(mockNode, databaseSource);
@@ -374,8 +374,8 @@ describe('SharedNodeStore - Extended Coverage', () => {
     });
 
     it('should handle setNode with success', async () => {
-      vi.spyOn(tauriCommands, 'createNode').mockResolvedValue(mockNode.id);
-      vi.spyOn(tauriCommands, 'getNode').mockResolvedValue({ ...mockNode, version: 1 });
+      vi.spyOn(backendAdapter, 'createNode').mockResolvedValue(mockNode.id);
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue({ ...mockNode, version: 1 });
 
       store.setNode(mockNode, viewerSource);
 
@@ -386,7 +386,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
     });
 
     it('should handle setNode update with success', async () => {
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         version: 2
       });
@@ -408,11 +408,11 @@ describe('SharedNodeStore - Extended Coverage', () => {
   describe('updateNode - Error Handling', () => {
     it('should handle createNode failure in updateNode', async () => {
       // Mock both paths to succeed to avoid unhandled rejections in test
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         version: 2
       });
-      vi.spyOn(tauriCommands, 'getNode').mockResolvedValue({ ...mockNode, version: 2 });
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue({ ...mockNode, version: 2 });
 
       store.setNode(mockNode, databaseSource); // Mark as persisted
       store.updateNode(mockNode.id, { content: 'Updated' }, viewerSource);
@@ -425,7 +425,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
     });
 
     it('should handle plugin updater path', async () => {
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         version: 2
       });
@@ -479,7 +479,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
     it('should handle race condition with fallback to UPDATE', async () => {
       // Simulate race: first call fails with UNIQUE, second call (UPDATE) succeeds
       let createCalled = false;
-      vi.spyOn(tauriCommands, 'createNode').mockImplementation(async () => {
+      vi.spyOn(backendAdapter, 'createNode').mockImplementation(async () => {
         if (!createCalled) {
           createCalled = true;
           throw new Error('UNIQUE constraint failed');
@@ -487,7 +487,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
         return 'race-node';
       });
 
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         id: 'race-node',
         version: 2,
@@ -509,7 +509,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
     it('should handle "already exists" error in batch CREATE', async () => {
       // Simulate: CREATE fails, UPDATE succeeds
       let createCalled = false;
-      vi.spyOn(tauriCommands, 'createNode').mockImplementation(async () => {
+      vi.spyOn(backendAdapter, 'createNode').mockImplementation(async () => {
         if (!createCalled) {
           createCalled = true;
           throw new Error('Node already exists');
@@ -517,7 +517,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
         return 'exists-node';
       });
 
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         id: 'exists-node',
         version: 2,
@@ -538,8 +538,8 @@ describe('SharedNodeStore - Extended Coverage', () => {
 
     it('should handle batch CREATE with proper error recovery', async () => {
       // Mock successful creation to avoid unhandled rejections
-      vi.spyOn(tauriCommands, 'createNode').mockResolvedValue('error-node');
-      vi.spyOn(tauriCommands, 'getNode').mockResolvedValue({ ...mockNode, version: 1 });
+      vi.spyOn(backendAdapter, 'createNode').mockResolvedValue('error-node');
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue({ ...mockNode, version: 1 });
 
       const node = { ...mockNode, id: 'error-node', nodeType: 'quote-block', content: '> Test' };
       store.setNode(node, viewerSource, true);
@@ -586,7 +586,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
   describe('resyncNodeFromServer - Idempotency', () => {
     it('should prevent concurrent resync operations on same node', async () => {
       let callCount = 0;
-      vi.spyOn(tauriCommands, 'getNode').mockImplementation(async () => {
+      vi.spyOn(backendAdapter, 'getNode').mockImplementation(async () => {
         callCount++;
         await new Promise(resolve => setTimeout(resolve, 50));
         return { ...mockNode, version: 5 };
@@ -631,7 +631,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
 
   describe('Error Edge Cases', () => {
     it('should handle persistence successfully', async () => {
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         version: 2,
         content: 'Updated'
@@ -648,7 +648,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
     });
 
     it('should handle persistence with success path', async () => {
-      vi.spyOn(tauriCommands, 'updateNode').mockResolvedValue({
+      vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
         ...mockNode,
         version: 2
       });

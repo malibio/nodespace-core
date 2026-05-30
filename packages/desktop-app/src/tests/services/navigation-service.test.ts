@@ -65,7 +65,6 @@ describe('NavigationService - resolveNodeTarget', () => {
   });
 
   it('fetches node from backend when not in store', async () => {
-    // Mock the tauri-commands module
     const mockGetNode = vi.fn().mockResolvedValue({
       id: 'backend-node',
       nodeType: 'text',
@@ -76,8 +75,8 @@ describe('NavigationService - resolveNodeTarget', () => {
       modifiedAt: Date.now().toString()
     });
 
-    vi.doMock('$lib/services/tauri-commands', () => ({
-      getNode: mockGetNode
+    vi.doMock('$lib/services/backend-adapter', () => ({
+      backendAdapter: { getNode: mockGetNode }
     }));
 
     const target = await navService.resolveNodeTarget('backend-node');
@@ -93,35 +92,35 @@ describe('NavigationService - resolveNodeTarget', () => {
     expect(nodeInStore).toBeDefined();
     expect(nodeInStore?.content).toBe('Backend Content');
 
-    vi.doUnmock('$lib/services/tauri-commands');
+    vi.doUnmock('$lib/services/backend-adapter');
   });
 
   it('returns null when node not found in backend', async () => {
     const mockGetNode = vi.fn().mockResolvedValue(null);
 
-    vi.doMock('$lib/services/tauri-commands', () => ({
-      getNode: mockGetNode
+    vi.doMock('$lib/services/backend-adapter', () => ({
+      backendAdapter: { getNode: mockGetNode }
     }));
 
     const target = await navService.resolveNodeTarget('non-existent');
 
     expect(target).toBeNull();
 
-    vi.doUnmock('$lib/services/tauri-commands');
+    vi.doUnmock('$lib/services/backend-adapter');
   });
 
   it('returns null when backend fetch fails', async () => {
     const mockGetNode = vi.fn().mockRejectedValue(new Error('Backend error'));
 
-    vi.doMock('$lib/services/tauri-commands', () => ({
-      getNode: mockGetNode
+    vi.doMock('$lib/services/backend-adapter', () => ({
+      backendAdapter: { getNode: mockGetNode }
     }));
 
     const target = await navService.resolveNodeTarget('error-node');
 
     expect(target).toBeNull();
 
-    vi.doUnmock('$lib/services/tauri-commands');
+    vi.doUnmock('$lib/services/backend-adapter');
   });
 
   it('handles date nodes correctly', async () => {
