@@ -711,7 +711,6 @@ describe('SharedNodeStore - Extended Coverage', () => {
       id: 'source-node-1',
       nodeType: 'text',
       content: 'Source node without mentions',
-      parentId: null, // Root node (container)
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
       version: 1,
@@ -865,7 +864,6 @@ describe('SharedNodeStore - Extended Coverage', () => {
         id: 'child-node-1',
         nodeType: 'text',
         content: 'Child content',
-        parentId: sourceNode.id,
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
         version: 1,
@@ -890,7 +888,6 @@ describe('SharedNodeStore - Extended Coverage', () => {
         id: 'task-node-1',
         nodeType: 'task',
         content: 'A task',
-        parentId: sourceNode.id, // Even with a parent, task is its own container
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
         version: 1,
