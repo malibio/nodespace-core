@@ -189,8 +189,7 @@ describe('Phase 3: MCP Integration (Simulated)', () => {
 
       // Simulate local edit (not persisted yet)
       store.updateNode(mockNode.id, { content: 'Local edit in progress' }, viewerSource, {
-        skipPersistence: true,
-        skipConflictDetection: true
+        skipPersistence: true
       });
 
       // Verify first update applied
@@ -201,7 +200,7 @@ describe('Phase 3: MCP Integration (Simulated)', () => {
         mockNode.id,
         { content: 'AI agent concurrent edit' },
         { type: 'mcp-server' },
-        { skipPersistence: true, skipConflictDetection: true }
+        { skipPersistence: true }
       );
 
       // The MCP update should win (applied last)
@@ -332,7 +331,7 @@ describe('Phase 3: MCP Integration (Simulated)', () => {
           mockNode.id,
           { content },
           { type: 'mcp-server' },
-          { skipPersistence: true, skipConflictDetection: true }
+          { skipPersistence: true }
         );
       }
 

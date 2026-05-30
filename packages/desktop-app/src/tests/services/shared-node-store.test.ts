@@ -312,62 +312,6 @@ describe('SharedNodeStore', () => {
   });
 
   // ========================================================================
-  // Conflict Detection
-  // ========================================================================
-
-  describe('Conflict Detection', () => {
-    it('should detect version mismatch conflicts', () => {
-      store.setNode(mockNode, viewerSource);
-
-      // First update succeeds
-      store.updateNode(mockNode.id, { content: 'Update 1' }, viewerSource, {
-        skipConflictDetection: false
-      });
-
-      const currentVersion = store.getVersion(mockNode.id);
-
-      // Simulate concurrent edit with old version
-      const oldVersionUpdate: NodeUpdate = {
-        nodeId: mockNode.id,
-        changes: { content: 'Concurrent update' },
-        source: { type: 'viewer', viewerId: 'viewer-2' },
-        timestamp: Date.now(),
-        version: currentVersion + 1,
-        previousVersion: currentVersion - 1 // Old version!
-      };
-
-      // This should trigger conflict detection
-      // (Note: updateNode handles this internally, but we're testing the detection logic)
-      const callback = vi.fn();
-      store.subscribe(mockNode.id, callback);
-
-      store.updateNode(mockNode.id, oldVersionUpdate.changes, oldVersionUpdate.source);
-
-      // Should still update but conflict should be detected
-      expect(callback).toHaveBeenCalled();
-    });
-  });
-
-  // ========================================================================
-  // Conflict Resolution
-  // ========================================================================
-
-  describe('Conflict Resolution', () => {
-    it('should use Last-Write-Wins by default', () => {
-      const resolver = store.getConflictResolver();
-      expect(resolver).toBeDefined();
-    });
-
-    it('should allow setting custom conflict resolver', () => {
-      const originalResolver = store.getConflictResolver();
-      // Set back the same resolver (test the setter works)
-      store.setConflictResolver(originalResolver);
-
-      expect(store.getConflictResolver()).toBe(originalResolver);
-    });
-  });
-
-  // ========================================================================
   // Performance Metrics
   // ========================================================================
 
@@ -378,12 +322,8 @@ describe('SharedNodeStore', () => {
       const metrics1 = store.getMetrics();
       expect(metrics1.updateCount).toBe(0);
 
-      store.updateNode(mockNode.id, { content: 'Update 1' }, viewerSource, {
-        skipConflictDetection: true
-      });
-      store.updateNode(mockNode.id, { content: 'Update 2' }, viewerSource, {
-        skipConflictDetection: true
-      });
+      store.updateNode(mockNode.id, { content: 'Update 1' }, viewerSource);
+      store.updateNode(mockNode.id, { content: 'Update 2' }, viewerSource);
 
       const metrics2 = store.getMetrics();
       expect(metrics2.updateCount).toBe(2);
@@ -581,9 +521,6 @@ describe('SharedNodeStore', () => {
 
     // Note: waitForNodeSaves tests removed (PersistenceCoordinator deleted in #558)
 
-    // NOTE: validateNodeReferences() and updateStructuralChangesValidated()
-    // were removed as part of the beforeSiblingId removal (Issue #575).
-    // Node ordering is now handled by the backend via fractional IDs and moveNode.
   });
 
   // ========================================================================
@@ -1553,12 +1490,6 @@ describe('SharedNodeStore', () => {
       expect(node?.content).toBe('Immediate batch');
     });
 
-    it('should allow setting a custom conflict resolver', () => {
-      const resolver = store.getConflictResolver();
-      expect(resolver).toBeDefined();
-      expect(() => store.setConflictResolver(resolver)).not.toThrow();
-    });
-
     it('should handle getNodesForParent with null parent', () => {
       // When structureTree is not initialized, should return empty array
       const rootNodes = store.getNodesForParent(null);
@@ -1582,18 +1513,6 @@ describe('SharedNodeStore', () => {
       expect(count).toBeGreaterThanOrEqual(0);
     });
 
-    it('should validate node references', async () => {
-      store.setNode(mockNode, viewerSource);
-
-      const result = await store.validateNodeReferences(mockNode.id);
-      expect(result.errors).toHaveLength(0);
-    });
-
-    it('should validate non-existent node references', async () => {
-      const result = await store.validateNodeReferences('non-existent');
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0]).toContain('not found');
-    });
   });
 
   // ========================================================================
@@ -1926,15 +1845,6 @@ describe('SharedNodeStore', () => {
       });
     });
 
-    describe('Conflict Settings', () => {
-      it('should get and set conflict resolver', () => {
-        const resolver = store.getConflictResolver();
-        expect(resolver).toBeDefined();
-        store.setConflictResolver(resolver);
-        expect(store.getConflictResolver()).toBe(resolver);
-      });
-    });
-
     describe('Hierarchy Queries', () => {
       it('should get nodes for parent', () => {
         // Empty result for non-existent parent
@@ -1981,20 +1891,6 @@ describe('SharedNodeStore', () => {
 
         // Should not throw, just warn
         store.updateTaskNode(mockNode.id, { status: 'completed' }, viewerSource);
-      });
-    });
-
-    describe('Validate Node References', () => {
-      it('should validate existing node', async () => {
-        store.setNode(mockNode, viewerSource);
-
-        const result = await store.validateNodeReferences(mockNode.id);
-        expect(result.errors).toEqual([]);
-      });
-
-      it('should return error for non-existent node', async () => {
-        const result = await store.validateNodeReferences('non-existent');
-        expect(result.errors.length).toBeGreaterThan(0);
       });
     });
 
@@ -2193,7 +2089,7 @@ describe('SharedNodeStore', () => {
           testNode.id,
           { content: 'First update' },
           viewerSource,
-          { skipConflictDetection: false, skipPersistence: true }
+          { skipPersistence: true }
         );
 
         const currentVersion = store.getVersion(testNode.id);
@@ -2204,7 +2100,7 @@ describe('SharedNodeStore', () => {
           testNode.id,
           { content: 'Second update' },
           { type: 'viewer', viewerId: 'viewer-2' },
-          { skipConflictDetection: false, skipPersistence: true }
+          { skipPersistence: true }
         );
 
         expect(store.getNode(testNode.id)?.content).toBe('Second update');
@@ -2220,7 +2116,7 @@ describe('SharedNodeStore', () => {
           testNode.id,
           { content: '> ' },
           viewerSource,
-          { skipConflictDetection: false, skipPersistence: true }
+          { skipPersistence: true }
         );
 
         // NodeType conversion with content — must not conflict
@@ -2228,7 +2124,7 @@ describe('SharedNodeStore', () => {
           testNode.id,
           { content: '> Quote text', nodeType: 'quote-block' },
           viewerSource,
-          { skipConflictDetection: false, skipPersistence: true }
+          { skipPersistence: true }
         );
 
         expect(store.getNode(testNode.id)?.nodeType).toBe('quote-block');

@@ -89,7 +89,6 @@ export class NavigationService {
 
         // Add to store for future use
         // Use type 'database' and skipPersistence since already in backend (or virtual)
-        // Date nodes are handled specially by ensureAncestorChainPersisted (skips them)
         sharedNodeStore.setNode(
           node,
           { type: 'database', reason: 'fetched-for-link-click' },

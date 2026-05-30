@@ -134,8 +134,7 @@
     sharedNodeStore.updateNode(
       nodeId,
       { properties: { ...current?.properties, provider, model: modelId, status: 'active' } },
-      { type: 'viewer', viewerId: 'ai-chat-model-picker' },
-      { skipConflictDetection: true }
+      { type: 'viewer', viewerId: 'ai-chat-model-picker' }
     );
   }
 
