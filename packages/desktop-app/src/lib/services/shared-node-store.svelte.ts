@@ -1168,7 +1168,16 @@ export class SharedNodeStore {
                       log.warn(
                         `Node ${nodeId} not found in database, creating instead of updating (error: ${updateError.message})`
                       );
-                      await tauriCommands.createNode(currentNode);
+                      const updateFallbackInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                        id: currentNode.id,
+                        nodeType: currentNode.nodeType,
+                        content: currentNode.content,
+                        properties: currentNode.properties,
+                        mentions: currentNode.mentions,
+                        parentId: this.getParentId(nodeId),
+                        insertPosition: null
+                      };
+                      await tauriCommands.createNode(updateFallbackInput);
                       this.persistedNodeIds.add(nodeId); // Now it's persisted
                     } else {
                       // Re-throw other errors
@@ -1183,7 +1192,16 @@ export class SharedNodeStore {
                     log.warn(`Node ${nodeId} no longer exists in store, skipping create persistence`);
                     return;
                   }
-                  await tauriCommands.createNode(currentNode);
+                  const updatePathCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                    id: currentNode.id,
+                    nodeType: currentNode.nodeType,
+                    content: currentNode.content,
+                    properties: currentNode.properties,
+                    mentions: currentNode.mentions,
+                    parentId: this.getParentId(nodeId),
+                    insertPosition: null
+                  };
+                  await tauriCommands.createNode(updatePathCreateInput);
                   this.persistedNodeIds.add(nodeId); // Track as persisted
 
                   // CRITICAL: Fetch the created node to get its version from backend
@@ -3126,7 +3144,16 @@ export class SharedNodeStore {
           } else {
             // Try CREATE, but handle race condition where old path persisted first
             try {
-              await tauriCommands.createNode(finalNode);
+              const batchCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                id: finalNode.id,
+                nodeType: finalNode.nodeType,
+                content: finalNode.content,
+                properties: finalNode.properties,
+                mentions: finalNode.mentions,
+                parentId: this.getParentId(nodeId),
+                insertPosition: null
+              };
+              await tauriCommands.createNode(batchCreateInput);
               this.persistedNodeIds.add(nodeId);
 
               // CRITICAL: Fetch the created node to get its version from backend

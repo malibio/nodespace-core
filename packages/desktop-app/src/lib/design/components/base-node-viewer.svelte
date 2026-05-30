@@ -524,11 +524,13 @@
    */
   function promotePlaceholderToNode(
     placeholder: Node,
-    _parentNodeId: string,
+    parentNodeId: string,
     overrides: { content?: string; nodeType?: string }
   ): Node {
-    // parentId is derived from structureTree at CREATE time (see shared-node-store persistence path)
-    // Caller must call reactiveStructureTree.addChild before setNode fires persistence
+    // parentId is derived from structureTree at CREATE time (persistence path calls getParentId).
+    // IMPORTANT: Caller MUST call reactiveStructureTree.addChild({ parentId: parentNodeId, ... })
+    // BEFORE the setNode persistence debounce fires so getParentId returns the correct parent.
+    log.debug(`[promotePlaceholder] promoting ${placeholder.id.substring(0, 8)} under parent ${parentNodeId.substring(0, 8)}`);
     return {
       id: placeholder.id,
       nodeType: overrides.nodeType ?? placeholder.nodeType,
