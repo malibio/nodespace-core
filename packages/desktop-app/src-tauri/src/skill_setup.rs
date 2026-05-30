@@ -49,6 +49,13 @@ pub async fn read_setup_state() -> Result<SetupState> {
     serde_json::from_str(&raw).context("Failed to parse ~/.nodespace/setup.json")
 }
 
+pub async fn reset_skill_state() -> Result<()> {
+    write_setup_state(&SetupState {
+        skill_installed: false,
+    })
+    .await
+}
+
 async fn write_setup_state(state: &SetupState) -> Result<()> {
     let path = setup_path()?;
     if let Some(parent) = path.parent() {
