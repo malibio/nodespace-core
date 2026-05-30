@@ -2576,9 +2576,7 @@ impl SqliteStore {
             return Ok(None);
         }
 
-        let jitter = FractionalOrderCalculator::generate_jitter();
-        let base_order = self.get_next_member_order(collection_id).await?;
-        let new_order = base_order + jitter;
+        let new_order = self.get_next_member_order(collection_id).await?;
 
         let rel_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
