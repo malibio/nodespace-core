@@ -796,9 +796,11 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
   });
 
   describe('Relationship Deduplication', () => {
-    it('should skip relationshipCreated when relationship already exists (optimistic creation)', () => {
-      // When frontend creates a node optimistically, it adds the relationship
-      // The SSE event should detect this and skip re-adding
+    it('should preserve existing order when cloud echo arrives with no order field (optimistic creation)', () => {
+      // When frontend creates a node optimistically, it adds the relationship.
+      // A cloud LIVE-SELECT echo re-emits the edge without an order field
+      // (cloud_writer.rs does not push order to cloud). The helper must preserve
+      // the existing optimistic order rather than appending at the tail.
       const nodeData = createTestNode('child1', 'Optimistic node');
       sharedNodeStore.setNode(nodeData, { type: 'database', reason: 'sse-sync' });
 
@@ -811,17 +813,17 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       expect(children[0].nodeId).toBe('child1');
       expect(children[0].order).toBe(100);
 
-      // Now SSE event arrives (would use Date.now() as order)
+      // Cloud echo arrives WITHOUT an order field (simulating cloud_writer.rs behavior)
       testableService.handleEvent({
         type: 'relationshipCreated',
         id: 'relationship:parent1:child1',
         fromId: 'parent1',
         toId: 'child1',
         relationshipType: 'has_child',
-        properties: { order: Date.now() }
+        properties: {} // no order field — cloud echo
       });
 
-      // Relationship should still exist with ORIGINAL order (not overwritten)
+      // Relationship should still exist with ORIGINAL order (preserved via applyHasChildCreated fallback)
       const childrenAfter = structureTree.getChildrenWithOrder('parent1');
       expect(childrenAfter).toHaveLength(1);
       expect(childrenAfter[0].nodeId).toBe('child1');

@@ -822,6 +822,14 @@ export class SharedNodeStore {
   }
 
   /**
+   * Get parent ID for a node, delegating to structureTree as the single source of truth.
+   */
+  getParentId(nodeId: string): string | null {
+    if (!structureTree) return null;
+    return structureTree.getParent(nodeId);
+  }
+
+  /**
    * Check if a node exists
    */
   hasNode(nodeId: string): boolean {
@@ -2048,6 +2056,15 @@ export class SharedNodeStore {
       // relationship:created event fired before the backend persisted the correct order).
       if (allRelationships.length > 0) {
         structureTree.batchAddRelationships(allRelationships);
+      }
+
+      // Run invariant check after hydration completes (skipped in test environment
+      // because the structureTree singleton accumulates state across tests and
+      // produces false-positive orphan violations).
+      if (!isTestEnvironment()) {
+        const nodeIdSet = new Set(this.nodes.keys());
+        const virtualIds = new Set(['__root__']);
+        structureTree.assertInvariants(nodeIdSet, virtualIds);
       }
 
       return allNodes;

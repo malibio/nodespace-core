@@ -694,6 +694,30 @@ describe('ReactiveStructureTree', () => {
     });
   });
 
+  describe('assertInvariants', () => {
+    it('passes with valid tree', () => {
+      structureTree.addChild({ parentId: '__root__', childId: 'a', order: 1 });
+      structureTree.addChild({ parentId: '__root__', childId: 'b', order: 2 });
+      const nodeIds = new Set(['a', 'b']);
+      const virtualIds = new Set(['__root__']);
+      expect(() => structureTree.assertInvariants(nodeIds, virtualIds)).not.toThrow();
+    });
+
+    it('I1: throws in dev for orphan childId not in nodeIds', () => {
+      structureTree.addChild({ parentId: '__root__', childId: 'orphan', order: 1 });
+      const nodeIds = new Set<string>(); // orphan not present
+      const virtualIds = new Set(['__root__']);
+      expect(() => structureTree.assertInvariants(nodeIds, virtualIds)).toThrow(/I1/);
+    });
+
+    it('I3: throws in dev for unsorted order', () => {
+      // Directly set unsorted state bypassing addChild
+      structureTree.children.set('p', [{ nodeId: 'c1', order: 5 }, { nodeId: 'c2', order: 2 }]);
+      const nodeIds = new Set(['c1', 'c2', 'p']);
+      expect(() => structureTree.assertInvariants(nodeIds)).toThrow(/I3/);
+    });
+  });
+
   describe('moveInMemoryRelationship', () => {
     it('should move child from old parent to new parent', () => {
       structureTree.children.clear();
