@@ -170,11 +170,11 @@ async fn create(
         .create_node(CreateNodeRequest {
             node_type: args.node_type,
             content: args.content,
-            parent_id: args.parent.unwrap_or_default(),
+            parent_id: args.parent,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None, // CLI create defaults to End
         })
         .await
@@ -194,12 +194,12 @@ async fn update(
         .update_node(UpdateNodeRequest {
             node_id: args.id,
             version: None, // auto-fetch current version on the server
-            node_type: String::new(),
+            node_type: None,
             content: Some(args.content),
             properties: None,
-            add_to_collection: String::new(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
         })
         .await
         .context("UpdateNode RPC failed")?
