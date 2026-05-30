@@ -1714,10 +1714,10 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
     // Triggers background child transfer (children.length > 0 && isExpanded && !insertAtBeginning)
     service.createNode(parentId, 'New node');
 
-    // Verify moveChildrenToParent was called exactly once (single atomic RPC, not per-child)
+    // Verify moveChildrenToParent was called exactly once — single atomic RPC, not per-child
     // (waitForNodeSaves has a 500ms debounce before the persistence operation fires)
     await vi.waitFor(() => {
-      expect(moveChildrenMock.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(moveChildrenMock.mock.calls.length).toBe(callsBefore + 1);
     }, { timeout: 3000 });
 
     // After moveChildrenToParent rejects, the catch block should emit the #656 notification

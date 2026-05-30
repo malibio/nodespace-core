@@ -1780,8 +1780,8 @@ impl NodeService {
             ));
         }
 
-        // OCC pre-validation: fetch all children and check versions.
-        // If any mismatch is found we return immediately — nothing has been written.
+        // Pre-validation: fetch all children, check versions, apply move_node guards.
+        // Version conflicts return immediately before any write touches the DB.
         let mut nodes = Vec::with_capacity(children.len());
         for (node_id, expected_version) in children {
             let node = self
@@ -1805,16 +1805,35 @@ impl NodeService {
                 )));
             }
 
+            // Cycle guard: the new parent must not be a descendant of any moved child.
+            if self.is_descendant(node_id, new_parent_id).await? {
+                return Err(NodeServiceError::circular_reference(format!(
+                    "Cannot move node {} under its descendant {}",
+                    node_id, new_parent_id
+                )));
+            }
+
             nodes.push(node);
         }
 
-        // Delegate the atomic edge-swap to the store.
-        let child_id_refs: Vec<&str> = children.iter().map(|(id, _)| id.as_str()).collect();
+        // Delegate the atomic edge-swap to the store. Version tokens are passed
+        // so the store can re-validate inside the transaction (eliminates TOCTOU).
+        let children_with_versions: Vec<(&str, i64)> = children
+            .iter()
+            .map(|(id, ver)| (id.as_str(), *ver))
+            .collect();
         let orders = self
             .store
-            .move_children_to_parent(new_parent_id, &child_id_refs)
+            .move_children_to_parent(new_parent_id, &children_with_versions)
             .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            .map_err(|e| {
+                // Re-map in-transaction VERSION_CONFLICT errors to NodeServiceError
+                if e.to_string().contains("VERSION_CONFLICT") {
+                    NodeServiceError::version_conflict("batch-child", 0, 0)
+                } else {
+                    NodeServiceError::query_failed(e.to_string())
+                }
+            })?;
 
         // Bump each child's version and emit RelationshipUpdated so hierarchy-sync
         // can reconcile order idempotently (C3a-consistent path).

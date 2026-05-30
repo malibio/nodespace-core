@@ -1345,36 +1345,31 @@ impl SqliteStore {
     }
 
     /// Re-parent an ordered set of existing children to `new_parent_id` in a
-    /// single transaction. Returns the assigned fractional order for each child,
-    /// preserving the input array order as their sibling order under the new parent.
+    /// single transaction. Validates each child's version inside the transaction
+    /// using `SELECT changes()` after a version-gated DELETE — any mismatch causes
+    /// the full transaction to roll back (all-or-nothing OCC).
     ///
-    /// The caller is responsible for OCC validation (version check + version bump)
-    /// before and after this call; this method only mutates `has_child` edges.
+    /// Returns the assigned fractional order for each child, preserving input
+    /// array order as sibling order under the new parent.
     pub async fn move_children_to_parent(
         &self,
         new_parent_id: &str,
-        child_ids: &[&str],
+        children: &[(&str, i64)],
     ) -> Result<Vec<f64>> {
-        if child_ids.is_empty() {
+        if children.is_empty() {
             return Ok(Vec::new());
         }
 
         let now = Utc::now().to_rfc3339();
 
-        // Compute sequential fractional orders for N children starting from the
-        // new parent's last child position. Because the new parent is always the
-        // freshly-created split node it starts empty, so we allocate N evenly-spaced
-        // orders from scratch via FractionalOrderCalculator.
-        let orders: Vec<f64> = (0..child_ids.len())
-            .map(|i| {
-                let prev = if i == 0 {
-                    None
-                } else {
-                    Some((i as f64) * 1000.0)
-                };
-                FractionalOrderCalculator::calculate_order(prev, None)
-            })
-            .collect();
+        // Compute sequential fractional orders iteratively so each step uses the
+        // previously assigned order as its `prev`, producing a properly spaced
+        // sequence (e.g. [1.0, 2.0, 3.0]) rather than arbitrary constants.
+        let mut orders: Vec<f64> = Vec::with_capacity(children.len());
+        for _ in 0..children.len() {
+            let prev = orders.last().copied();
+            orders.push(FractionalOrderCalculator::calculate_order(prev, None));
+        }
 
         let tx = self
             .db
@@ -1382,17 +1377,36 @@ impl SqliteStore {
             .await
             .context("Failed to begin move_children_to_parent transaction")?;
 
-        for (child_id, &order) in child_ids.iter().zip(orders.iter()) {
+        for ((child_id, expected_version), &order) in children.iter().zip(orders.iter()) {
             let child_id = child_id.to_string();
-            // Remove old has_child edge (whatever parent it had)
+
+            // Delete the old has_child edge only if the node's version matches.
+            // If no rows are affected the version has been bumped by a concurrent
+            // writer — detect that with SELECT changes() and abort the transaction.
             tx.execute(
-                "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
-                libsql::params![child_id.clone()],
+                "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child' AND EXISTS (SELECT 1 FROM node WHERE id = ?1 AND version = ?2)",
+                libsql::params![child_id.clone(), *expected_version],
             )
             .await
             .context("Failed to delete old has_child edge")?;
 
-            // Insert new has_child edge under new_parent_id
+            // Verify the DELETE actually removed a row (i.e. the version matched).
+            let mut changes_rows = tx
+                .query("SELECT changes()", libsql::params![])
+                .await
+                .context("Failed to query changes()")?;
+            if let Some(row) = changes_rows.next().await? {
+                let affected: i64 = row.get(0)?;
+                if affected == 0 {
+                    return Err(anyhow::anyhow!(
+                        "VERSION_CONFLICT: node '{}' version mismatch (expected {})",
+                        child_id,
+                        expected_version
+                    ));
+                }
+            }
+
+            // Insert new has_child edge under new_parent_id.
             let rel_id = uuid::Uuid::new_v4().to_string();
             let rel_props = serde_json::json!({"order": order}).to_string();
             tx.execute(
