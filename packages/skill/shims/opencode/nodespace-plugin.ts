@@ -9,6 +9,10 @@
  * in all plugin scripts.
  */
 
+// runCLI and NodespaceCLIError are intentionally inlined (not imported) in each
+// shim. Shims are copied as standalone scripts into agent session temp dirs with
+// no npm context, so module resolution is unavailable at runtime. Any change to
+// runCLI must be replicated across all four shims in packages/skill/shims/.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
