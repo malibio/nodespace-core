@@ -229,16 +229,14 @@ nodespace node create --type text --content "Decision: use REST not GraphQL" --p
 
 ### Attach a finding to today's date node
 
+Date node IDs are the date string itself (`"2026-05-30"`). Pass the date string directly as `--parent` — the daemon auto-creates the date node if it doesn't exist yet.
+
 ```bash
-# Find today's date node (or create it if absent)
-nodespace node query --type date --title-contains "2026-05-30"
-# → returns {"id": "date-node-id", ...}  (or empty array)
+# Attach a finding under today — date node is created automatically if absent
+nodespace node create --type text --content "Discovered: rate limiter uses fixed windows" --parent "2026-05-30"
 
-nodespace node create --type date --content "2026-05-30"
-# → use the returned id as parent for today's findings
-
-# Attach a finding under it
-nodespace node create --type text --content "Discovered: rate limiter uses fixed windows" --parent <date-node-id>
+# To retrieve an existing date node directly
+nodespace node get "2026-05-30"
 ```
 
 ### Export a document for AI context
