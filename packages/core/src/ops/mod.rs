@@ -66,11 +66,24 @@ impl From<NodeServiceError> for OpsError {
             NodeServiceError::HierarchyViolation(msg) => {
                 OpsError::ValidationFailed(format!("Hierarchy violation: {}", msg))
             }
-            NodeServiceError::PlaybookValidationFailed { .. } => {
-                OpsError::InvalidParams(err.to_string())
+            NodeServiceError::PlaybookValidationFailed { errors } => {
+                OpsError::InvalidParams(errors)
             }
             NodeServiceError::CollectionNotFound(name) => OpsError::NotFound { id: name },
-            other => OpsError::Internal(other.to_string()),
+            NodeServiceError::InvalidUpdate(msg) => OpsError::ValidationFailed(msg),
+            NodeServiceError::InvalidCollectionPath(msg) => OpsError::ValidationFailed(msg),
+            NodeServiceError::CollectionCycle(msg) => OpsError::ValidationFailed(msg),
+            NodeServiceError::CollectionDepthExceeded { path, max_depth } => {
+                OpsError::ValidationFailed(format!(
+                    "Collection path exceeds maximum depth of {max_depth} levels: {path}"
+                ))
+            }
+            NodeServiceError::DatabaseError(e) => OpsError::Internal(e.to_string()),
+            NodeServiceError::TransactionFailed { context } => OpsError::Internal(context),
+            NodeServiceError::SerializationError(msg) => OpsError::Internal(msg),
+            NodeServiceError::QueryFailed(msg) => OpsError::Internal(msg),
+            NodeServiceError::BulkOperationFailed { context } => OpsError::Internal(context),
+            NodeServiceError::InitializationError(msg) => OpsError::Internal(msg),
         }
     }
 }

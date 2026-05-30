@@ -981,7 +981,10 @@ async fn move_node_to_root_when_new_parent_id_empty_string() {
         .expect("move_node with empty new_parent_id failed");
 
     let roots = client
-        .get_roots(GetRootsRequest { limit: 100, offset: 0 })
+        .get_roots(GetRootsRequest {
+            limit: 100,
+            offset: 0,
+        })
         .await
         .expect("get_roots failed")
         .into_inner();
