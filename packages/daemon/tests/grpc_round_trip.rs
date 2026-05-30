@@ -91,11 +91,11 @@ async fn create_then_get_round_trip() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "hello from grpc".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -133,11 +133,11 @@ async fn update_increments_version() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "v1".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -148,12 +148,12 @@ async fn update_increments_version() {
         .update_node(UpdateNodeRequest {
             node_id: created.node_id.clone(),
             version: None, // exercise auto-fetch path
-            node_type: String::new(),
+            node_type: None,
             content: Some("v2".into()),
             properties: None,
-            add_to_collection: String::new(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
         })
         .await
         .expect("update_node failed")
@@ -178,11 +178,11 @@ async fn get_children_returns_parent_subtree() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "parent".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -194,11 +194,11 @@ async fn get_children_returns_parent_subtree() {
             .create_node(CreateNodeRequest {
                 node_type: "text".into(),
                 content: label.into(),
-                parent_id: parent.node_id.clone(),
+                parent_id: Some(parent.node_id.clone()),
                 properties: String::new(),
-                collection: String::new(),
-                lifecycle_status: String::new(),
-                id: String::new(),
+                collection: None,
+                lifecycle_status: None,
+                id: None,
                 position: None,
             })
             .await
@@ -245,11 +245,11 @@ async fn delete_node_marks_existed() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "doomed".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -343,11 +343,11 @@ async fn watch_nodes_receives_create_update_delete_events() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "watched node".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -369,12 +369,12 @@ async fn watch_nodes_receives_create_update_delete_events() {
         .update_node(UpdateNodeRequest {
             node_id: node_id.clone(),
             version: None,
-            node_type: String::new(),
+            node_type: None,
             content: Some("watched node v2".into()),
             properties: None,
-            add_to_collection: String::new(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
         })
         .await
         .expect("update_node failed");
@@ -432,11 +432,11 @@ async fn watch_nodes_supports_multiple_concurrent_watchers() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "broadcast me".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -493,11 +493,11 @@ async fn watch_nodes_closes_when_client_drops_stream() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "post-drop".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -522,11 +522,11 @@ async fn create_node_rejects_malformed_properties() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "irrelevant".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: "{not valid json".into(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -547,11 +547,11 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "Parent".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: "{}".into(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -564,11 +564,11 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "Child A".into(),
-            parent_id: parent_id.clone(),
+            parent_id: Some(parent_id.clone()),
             properties: "{}".into(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: Some(CreatePos::End(true)),
         })
         .await
@@ -581,11 +581,11 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "Child B".into(),
-            parent_id: parent_id.clone(),
+            parent_id: Some(parent_id.clone()),
             properties: "{}".into(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: Some(CreatePos::Beginning(true)),
         })
         .await
@@ -680,11 +680,11 @@ async fn create_node_with_collection_and_lifecycle_status() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "parity test node".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: "test-collection".into(),
-            lifecycle_status: "archived".into(),
-            id: String::new(),
+            collection: Some("test-collection".into()),
+            lifecycle_status: Some("archived".into()),
+            id: None,
             position: None,
         })
         .await
@@ -727,11 +727,11 @@ async fn update_node_auto_fetches_version_when_omitted() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "before".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -743,12 +743,12 @@ async fn update_node_auto_fetches_version_when_omitted() {
         .update_node(UpdateNodeRequest {
             node_id: created.node_id.clone(),
             version: None,
-            node_type: String::new(),
+            node_type: None,
             content: Some("after".into()),
             properties: None,
-            add_to_collection: String::new(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
         })
         .await
         .expect("update_node without version failed")
@@ -781,11 +781,11 @@ async fn update_node_add_then_remove_collection_membership() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "membership node".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -798,12 +798,12 @@ async fn update_node_add_then_remove_collection_membership() {
         .update_node(UpdateNodeRequest {
             node_id: node_id.clone(),
             version: None,
-            node_type: String::new(),
+            node_type: None,
             content: None,
             properties: None,
-            add_to_collection: "membership-test".into(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: Some("membership-test".into()),
+            remove_from_collection: None,
+            lifecycle_status: None,
         })
         .await
         .expect("add_to_collection failed");
@@ -825,12 +825,12 @@ async fn update_node_add_then_remove_collection_membership() {
         .update_node(UpdateNodeRequest {
             node_id: node_id.clone(),
             version: None,
-            node_type: String::new(),
+            node_type: None,
             content: None,
             properties: None,
-            add_to_collection: String::new(),
-            remove_from_collection: collection_id.clone(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: Some(collection_id.clone()),
+            lifecycle_status: None,
         })
         .await
         .expect("remove_from_collection failed");
@@ -845,6 +845,150 @@ async fn update_node_add_then_remove_collection_membership() {
     assert!(
         !after_remove.collection_ids.contains(&collection_id),
         "node should not be in collection after remove"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// B5 AC: move_node with new_parent_id unset (None) must move to root.
+/// Verifies the optional field semantics: unset = root, present = reparent.
+#[tokio::test]
+async fn move_node_to_root_when_new_parent_id_unset() {
+    use nodespace_daemon::nodespace::{GetRootsRequest, MoveNodeRequest};
+
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    // Create a parent node and a child.
+    let parent = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "parent".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create parent")
+        .into_inner();
+
+    let child = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "child".into(),
+            parent_id: Some(parent.node_id.clone()),
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create child")
+        .into_inner();
+
+    // Move child to root — new_parent_id = None (unset).
+    client
+        .move_node(MoveNodeRequest {
+            node_id: child.node_id.clone(),
+            version: 1,
+            new_parent_id: None,
+            position: None,
+        })
+        .await
+        .expect("move_node to root failed");
+
+    // Child should now appear in roots.
+    let roots = client
+        .get_roots(GetRootsRequest {
+            limit: 100,
+            offset: 0,
+        })
+        .await
+        .expect("get_roots failed")
+        .into_inner();
+    let root_ids: Vec<&str> = roots.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        root_ids.contains(&child.node_id.as_str()),
+        "child should be a root node after move with new_parent_id=None"
+    );
+
+    // Original parent should have no children.
+    let children_of_parent = client
+        .get_children(GetChildrenRequest {
+            node_id: parent.node_id.clone(),
+        })
+        .await
+        .expect("get_children failed")
+        .into_inner();
+    assert_eq!(
+        children_of_parent.count, 0,
+        "original parent should have no children after move"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// B5 AC: move_node with new_parent_id = Some("") must also move to root.
+/// The daemon normalizes "" → None so legacy callers aren't broken.
+#[tokio::test]
+async fn move_node_to_root_when_new_parent_id_empty_string() {
+    use nodespace_daemon::nodespace::{GetRootsRequest, MoveNodeRequest};
+
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let parent = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "parent2".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create parent")
+        .into_inner();
+
+    let child = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "child2".into(),
+            parent_id: Some(parent.node_id.clone()),
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create child")
+        .into_inner();
+
+    // Move to root via empty string — daemon normalizes "" to None.
+    client
+        .move_node(MoveNodeRequest {
+            node_id: child.node_id.clone(),
+            version: 1,
+            new_parent_id: Some(String::new()),
+            position: None,
+        })
+        .await
+        .expect("move_node with empty new_parent_id failed");
+
+    let roots = client
+        .get_roots(GetRootsRequest { limit: 100, offset: 0 })
+        .await
+        .expect("get_roots failed")
+        .into_inner();
+    let root_ids: Vec<&str> = roots.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        root_ids.contains(&child.node_id.as_str()),
+        "child should be a root node after move with new_parent_id=''"
     );
 
     let _ = shutdown.send(());
