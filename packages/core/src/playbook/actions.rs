@@ -431,7 +431,7 @@ pub async fn execute_actions(
 ) -> ActionResult {
     // Create a scoped NodeService that tags all mutations with the execution context.
     // This ensures events emitted by actions carry playbook_context for cycle detection.
-    let scoped_service = Arc::new(node_service.with_execution_context(execution_context));
+    let scoped_service = Arc::new(node_service.scoped_for_playbook(execution_context));
     let graph_resolver = GraphResolver::new(Arc::clone(node_service));
     let mut ctx = BindingContext::new(trigger_node, event, Some(graph_resolver));
 
