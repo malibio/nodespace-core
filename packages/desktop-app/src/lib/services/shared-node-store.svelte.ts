@@ -53,7 +53,8 @@ import { conflictNotifications, type ConflictNotification } from '$lib/stores/co
 const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'concurrent-edit': 'Your edit was overwritten by another pane',
   'version-mismatch': 'Your edit conflicted with a remote change',
-  'deleted-node': 'The node you edited was deleted by another pane'
+  'deleted-node': 'The node you edited was deleted by another pane',
+  'child-transfer-failure': "Changes couldn't be saved. Please try again."
 };
 
 const log = createLogger('SharedNodeStore');
