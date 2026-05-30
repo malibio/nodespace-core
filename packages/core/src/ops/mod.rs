@@ -22,6 +22,9 @@ pub enum OpsError {
     #[error("Not found: {id}")]
     NotFound { id: String },
 
+    #[error("Already exists: {id}")]
+    AlreadyExists { id: String },
+
     #[error("Version conflict on {node_id}: expected {expected}, got {actual}")]
     VersionConflict {
         node_id: String,

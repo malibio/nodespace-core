@@ -3,108 +3,132 @@
 //! Thin orchestration wrappers over `CollectionService`. Extracted from the daemon
 //! layer so both the gRPC adapter and future callers share the same logic.
 
-use crate::models::Node;
+use crate::models::{Node, NodeUpdate};
 use crate::ops::OpsError;
-use crate::services::{CollectionService, NodeService, NodeServiceError};
+use crate::services::{
+    CollectionService, CreateNodeParams, InsertPositionOwned, NodeService, NodeServiceError,
+};
 use std::sync::Arc;
 
 // ============================================================================
 // Input / Output types
 // ============================================================================
 
+#[derive(Debug)]
 pub struct GetAllCollectionsInput;
 
+#[derive(Debug)]
 pub struct CollectionEntry {
     pub node: Node,
     pub member_count: usize,
     pub parent_collection_ids: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct GetAllCollectionsOutput {
     pub collections: Vec<CollectionEntry>,
 }
 
+#[derive(Debug)]
 pub struct GetCollectionMembersInput {
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct GetCollectionMembersOutput {
     pub members: Vec<Node>,
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct GetCollectionMembersRecursiveInput {
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct GetCollectionMembersRecursiveOutput {
-    /// Member node IDs in traversal order.
-    pub member_ids: Vec<String>,
+    pub members: Vec<Node>,
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct GetNodeCollectionsInput {
     pub node_id: String,
 }
 
+#[derive(Debug)]
 pub struct GetNodeCollectionsOutput {
     pub collection_ids: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct AddNodeToCollectionInput {
     pub node_id: String,
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct AddNodeToCollectionOutput;
 
+#[derive(Debug)]
 pub struct AddNodeToCollectionByPathInput {
     pub node_id: String,
     pub collection_path: String,
 }
 
+#[derive(Debug)]
 pub struct AddNodeToCollectionByPathOutput {
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct RemoveNodeFromCollectionInput {
     pub node_id: String,
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct RemoveNodeFromCollectionOutput;
 
+#[derive(Debug)]
 pub struct FindCollectionByPathInput {
     pub collection_path: String,
 }
 
+#[derive(Debug)]
 pub struct FindCollectionByPathOutput {
     pub collection: Option<Node>,
 }
 
+#[derive(Debug)]
 pub struct GetCollectionByNameInput {
     pub name: String,
 }
 
+#[derive(Debug)]
 pub struct GetCollectionByNameOutput {
     pub collection: Option<Node>,
 }
 
+#[derive(Debug)]
 pub struct CreateCollectionInput {
     pub name: String,
     pub description: String,
 }
 
+#[derive(Debug)]
 pub struct CreateCollectionOutput {
     pub collection_id: String,
 }
 
+#[derive(Debug)]
 pub struct RenameCollectionInput {
     pub collection_id: String,
     pub new_name: String,
     pub version: i64,
 }
 
+#[derive(Debug)]
 pub struct RenameCollectionOutput {
     pub node: Node,
 }
@@ -157,15 +181,27 @@ pub async fn get_collection_members_recursive(
     node_service: &Arc<NodeService>,
     input: GetCollectionMembersRecursiveInput,
 ) -> Result<GetCollectionMembersRecursiveOutput, OpsError> {
-    let collection_service = CollectionService::new(node_service.store(), node_service);
+    let store = node_service.store();
+    let collection_service = CollectionService::new(store, node_service);
     let member_ids = collection_service
         .get_collection_members_recursive(&input.collection_id)
         .await
         .map_err(OpsError::from)?;
 
+    let nodes_map = store
+        .get_nodes_by_ids(&member_ids)
+        .await
+        .map_err(|e| OpsError::Internal(format!("Failed to batch fetch nodes: {}", e)))?;
+
+    // Preserve ordering from member_ids; filter out missing entries.
+    let members: Vec<Node> = member_ids
+        .iter()
+        .filter_map(|id| nodes_map.get(id).cloned())
+        .collect();
+
     Ok(GetCollectionMembersRecursiveOutput {
         collection_id: input.collection_id,
-        member_ids,
+        members,
     })
 }
 
@@ -261,10 +297,9 @@ pub async fn create_collection(
         .map_err(OpsError::from)?
         .is_some()
     {
-        return Err(OpsError::ValidationFailed(format!(
-            "Collection '{}' already exists",
-            input.name
-        )));
+        return Err(OpsError::AlreadyExists {
+            id: input.name.clone(),
+        });
     }
 
     let properties = if input.description.is_empty() {
@@ -274,12 +309,12 @@ pub async fn create_collection(
     };
 
     let collection_id = node_service
-        .create_node_with_parent(crate::services::CreateNodeParams {
+        .create_node_with_parent(CreateNodeParams {
             id: None,
             node_type: "collection".to_string(),
             content: input.name,
             parent_id: None,
-            position: crate::services::InsertPositionOwned::End,
+            position: InsertPositionOwned::End,
             properties,
         })
         .await
@@ -300,14 +335,13 @@ pub async fn rename_collection(
         .map_err(OpsError::from)?
     {
         if existing.id != input.collection_id {
-            return Err(OpsError::ValidationFailed(format!(
-                "Collection '{}' already exists",
-                input.new_name
-            )));
+            return Err(OpsError::AlreadyExists {
+                id: input.new_name.clone(),
+            });
         }
     }
 
-    let update = crate::models::NodeUpdate {
+    let update = NodeUpdate {
         content: Some(input.new_name),
         ..Default::default()
     };
@@ -330,4 +364,112 @@ pub async fn rename_collection(
         })?;
 
     Ok(RenameCollectionOutput { node })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::SqliteStore;
+    use crate::services::NodeService;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    async fn make_service() -> (Arc<NodeService>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+        (svc, tmp)
+    }
+
+    #[tokio::test]
+    async fn create_collection_duplicate_name_returns_already_exists() {
+        let (svc, _tmp) = make_service().await;
+
+        let input = CreateCollectionInput {
+            name: "my-collection".to_string(),
+            description: String::new(),
+        };
+        create_collection(&svc, input).await.unwrap();
+
+        let dup = CreateCollectionInput {
+            name: "my-collection".to_string(),
+            description: String::new(),
+        };
+        let err = create_collection(&svc, dup).await.unwrap_err();
+        assert!(
+            matches!(err, OpsError::AlreadyExists { ref id } if id == "my-collection"),
+            "expected AlreadyExists, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_collection_to_same_name_succeeds() {
+        let (svc, _tmp) = make_service().await;
+
+        let output = create_collection(
+            &svc,
+            CreateCollectionInput {
+                name: "orig".to_string(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let node = svc.get_node(&output.collection_id).await.unwrap().unwrap();
+        let result = rename_collection(
+            &svc,
+            RenameCollectionInput {
+                collection_id: output.collection_id.clone(),
+                new_name: "orig".to_string(),
+                version: node.version,
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "self-rename should succeed");
+    }
+
+    #[tokio::test]
+    async fn rename_collection_to_existing_name_returns_already_exists() {
+        let (svc, _tmp) = make_service().await;
+
+        create_collection(
+            &svc,
+            CreateCollectionInput {
+                name: "alpha".to_string(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let beta = create_collection(
+            &svc,
+            CreateCollectionInput {
+                name: "beta".to_string(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let node = svc.get_node(&beta.collection_id).await.unwrap().unwrap();
+        let err = rename_collection(
+            &svc,
+            RenameCollectionInput {
+                collection_id: beta.collection_id,
+                new_name: "alpha".to_string(),
+                version: node.version,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, OpsError::AlreadyExists { ref id } if id == "alpha"),
+            "expected AlreadyExists, got {:?}",
+            err
+        );
+    }
 }

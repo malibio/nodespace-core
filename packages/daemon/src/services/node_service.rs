@@ -950,17 +950,9 @@ impl GrpcNodeService for NodeServiceImpl {
         .await
         .map_err(ops_error_to_status)?;
 
-        let store = self.node_service.store();
-        let nodes_map = store
-            .get_nodes_by_ids(&output.member_ids)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to batch fetch nodes: {}", e)))?;
-
-        // Preserve ordering from member_ids; filter out missing entries.
         let nodes: Vec<NodeData> = output
-            .member_ids
-            .iter()
-            .filter_map(|id| nodes_map.get(id).cloned())
+            .members
+            .into_iter()
             .map(|n| node_to_proto(n, None, Some(output.collection_id.clone())))
             .collect();
         let count = nodes.len() as i32;
@@ -1114,10 +1106,7 @@ impl GrpcNodeService for NodeServiceImpl {
             },
         )
         .await
-        .map_err(|e| match e {
-            OpsError::ValidationFailed(msg) => Status::already_exists(msg),
-            other => ops_error_to_status(other),
-        })?;
+        .map_err(ops_error_to_status)?;
 
         Ok(Response::new(CollectionIdResponse {
             collection_id: output.collection_id,
@@ -1138,10 +1127,7 @@ impl GrpcNodeService for NodeServiceImpl {
             },
         )
         .await
-        .map_err(|e| match e {
-            OpsError::ValidationFailed(msg) => Status::already_exists(msg),
-            other => ops_error_to_status(other),
-        })?;
+        .map_err(ops_error_to_status)?;
 
         let node = output.node;
         let node_type = node.node_type.clone();
@@ -1375,6 +1361,7 @@ fn relationship_to_proto(
 fn ops_error_to_status(err: OpsError) -> Status {
     match err {
         OpsError::NotFound { id } => Status::not_found(format!("Not found: {}", id)),
+        OpsError::AlreadyExists { id } => Status::already_exists(format!("Already exists: {}", id)),
         OpsError::VersionConflict {
             node_id,
             expected,
