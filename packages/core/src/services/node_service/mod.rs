@@ -2304,6 +2304,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bulk_update_partial_fields_preserves_unspecified() {
+        let (service, _temp) = create_test_service().await;
+
+        let node = Node::new(
+            "text".to_string(),
+            "Original content".to_string(),
+            json!({}),
+        );
+        let id = service.create_node(node).await.unwrap();
+
+        // Update only content — node_type must be preserved
+        service
+            .bulk_update(vec![(
+                id.clone(),
+                NodeUpdate::new().with_content("New content".to_string()),
+            )])
+            .await
+            .unwrap();
+        let after = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(after.content, "New content");
+        assert_eq!(after.node_type, "text");
+
+        // Update only node_type — content must be preserved
+        service
+            .bulk_update(vec![(
+                id.clone(),
+                NodeUpdate::new().with_node_type("task".to_string()),
+            )])
+            .await
+            .unwrap();
+        let after = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(after.content, "New content");
+        assert_eq!(after.node_type, "task");
+    }
+
+    #[tokio::test]
+    async fn test_bulk_update_bad_id_rolls_back() {
+        let (service, _temp) = create_test_service().await;
+
+        let node = Node::new("text".to_string(), "Will not change".to_string(), json!({}));
+        let good_id = service.create_node(node).await.unwrap();
+
+        let result = service
+            .bulk_update(vec![
+                (
+                    good_id.clone(),
+                    NodeUpdate::new().with_content("Changed".to_string()),
+                ),
+                (
+                    "nonexistent-id".to_string(),
+                    NodeUpdate::new().with_content("Also changed".to_string()),
+                ),
+            ])
+            .await;
+
+        assert!(result.is_err(), "bulk_update with bad id must fail");
+        // The good node must be unchanged — transaction rolled back
+        let node = service.get_node(&good_id).await.unwrap().unwrap();
+        assert_eq!(node.content, "Will not change");
+    }
+
+    #[tokio::test]
     async fn test_bulk_delete() {
         let (service, _temp) = create_test_service().await;
 

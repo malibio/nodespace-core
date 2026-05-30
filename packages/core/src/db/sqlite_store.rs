@@ -1608,6 +1608,18 @@ impl SqliteStore {
         Ok(affected)
     }
 
+    /// Atomically update a batch of nodes in a single transaction.
+    ///
+    /// **OCC contract:** This is an intentional last-write-wins fast-path for trusted internal
+    /// callers (e.g. AI skill pipelines, markdown import). It does NOT perform version-checked
+    /// OCC. Callers that need conflict detection should use `update_node` (the single-node path)
+    /// in a loop or use the daemon `update_nodes_batch` RPC which threads per-node versions.
+    ///
+    /// **TOCTOU note:** Unspecified fields (`content`/`node_type = None`) are preserved via
+    /// SQL `COALESCE` — no read-then-write; the read-modify-write is a single atomic SQL
+    /// statement inside the transaction with no pool reads escaping the tx.
+    ///
+    /// Returns an error (and rolls back) if any node id is not found.
     pub async fn bulk_update(&self, updates: Vec<(String, NodeUpdate)>) -> Result<()> {
         if updates.is_empty() {
             return Ok(());
@@ -1630,18 +1642,16 @@ impl SqliteStore {
             .context("Failed to begin bulk update transaction")?;
 
         for (id, update) in &updates {
-            let current = self
-                .get_node(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
-
-            let updated_content = update.content.clone().unwrap_or(current.content);
-            let updated_node_type = update.node_type.clone().unwrap_or(current.node_type);
-
-            tx.execute(
-                "UPDATE node SET content = ?1, node_type = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
-                libsql::params![updated_content, updated_node_type, now.clone(), id.clone()],
+            // COALESCE(?1, content) keeps the existing value when the caller supplies None,
+            // eliminating the pre-read and closing the TOCTOU window entirely.
+            let affected = tx.execute(
+                "UPDATE node SET content = COALESCE(?1, content), node_type = COALESCE(?2, node_type), version = version + 1, modified_at = ?3 WHERE id = ?4",
+                libsql::params![update.content.clone(), update.node_type.clone(), now.clone(), id.clone()],
             ).await.context("Failed to update node in bulk update")?;
+
+            if affected == 0 {
+                return Err(anyhow::anyhow!("Node not found: {}", id));
+            }
         }
 
         tx.commit().await.context("Failed to commit bulk update")?;
@@ -1656,6 +1666,16 @@ impl SqliteStore {
         Ok(created)
     }
 
+    /// Insert a batch of nodes (and optional parent→child relationships) in a single transaction.
+    ///
+    /// **Partial-failure contract:** All inserts occur inside one transaction. Any error
+    /// (duplicate id, constraint violation, serialization failure) triggers an early `?`-return,
+    /// which drops `tx` without calling `commit()` — the entire batch is rolled back atomically.
+    /// Callers never observe a partial write.
+    ///
+    /// **Validation note:** `validate_node_type` is a pure in-memory check against
+    /// `self.valid_node_types`; it does not touch the database and therefore cannot read
+    /// uncommitted state from `tx`.
     pub async fn bulk_create_hierarchy(
         &self,
         nodes: Vec<(
@@ -2599,7 +2619,11 @@ impl SqliteStore {
             0.0
         };
         let new_order = FractionalOrderCalculator::calculate_order(
-            if last_order > 0.0 { Some(last_order) } else { None },
+            if last_order > 0.0 {
+                Some(last_order)
+            } else {
+                None
+            },
             None,
         );
 
