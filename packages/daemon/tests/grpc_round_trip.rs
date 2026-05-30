@@ -13,9 +13,9 @@ use std::time::Duration;
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     create_node_request::Position as CreatePos, node_event::Event as NodeEventKind,
-    reorder_node_request::Position as ReorderPos, CreateNodeRequest, DeleteNodeRequest,
-    GetChildrenRequest, GetNodeRequest, ReorderNodeRequest, SearchRequest, UpdateNodeRequest,
-    WatchRequest,
+    reorder_node_request::Position as ReorderPos, CreateCollectionRequest, CreateNodeRequest,
+    DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, NodeCollectionsRequest,
+    ReorderNodeRequest, SearchRequest, UpdateNodeRequest, WatchRequest,
 };
 use nodespace_daemon::{NodeServiceClient, NodeServiceImpl, NodeServiceServer};
 use tempfile::TempDir;
@@ -655,6 +655,197 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
 
     assert_eq!(children3.nodes[0].content, "Child A");
     assert_eq!(children3.nodes[1].content, "Child B");
+
+    let _ = shutdown.send(());
+}
+
+/// Parity test (AC #1241): create a node with a collection path and a non-default
+/// lifecycle status via the gRPC RPC. Verifies the daemon delegates to node_ops
+/// correctly — the node lands in the resolved collection and has the requested
+/// lifecycle status.
+#[tokio::test]
+async fn create_node_with_collection_and_lifecycle_status() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    // Create the collection node first so the path resolves.
+    let _coll = client
+        .create_collection(CreateCollectionRequest {
+            name: "test-collection".into(),
+            description: String::new(),
+        })
+        .await
+        .expect("create_collection failed");
+
+    let created = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "parity test node".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: "test-collection".into(),
+            lifecycle_status: "archived".into(),
+            id: String::new(),
+            position: None,
+        })
+        .await
+        .expect("create_node failed")
+        .into_inner();
+
+    let data = created.node_data.expect("missing node_data");
+    assert_eq!(
+        data.lifecycle_status, "archived",
+        "lifecycle_status must be set"
+    );
+    assert!(
+        !created.collection_id.is_empty(),
+        "collection_id should be set"
+    );
+
+    // Verify the node is actually a member of the collection via a separate RPC.
+    let memberships = client
+        .get_node_collections(NodeCollectionsRequest {
+            node_id: created.node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections failed")
+        .into_inner();
+    assert!(
+        !memberships.collection_ids.is_empty(),
+        "node should belong to at least one collection"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Parity test (AC #1241): update a node without supplying version — the
+/// daemon delegates to node_ops, which auto-fetches the current version.
+#[tokio::test]
+async fn update_node_auto_fetches_version_when_omitted() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let created = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "before".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            position: None,
+        })
+        .await
+        .expect("create_node failed")
+        .into_inner();
+
+    // Omit version — node_ops auto-fetches it; no VersionConflict expected.
+    let updated = client
+        .update_node(UpdateNodeRequest {
+            node_id: created.node_id.clone(),
+            version: None,
+            node_type: String::new(),
+            content: Some("after".into()),
+            properties: None,
+            add_to_collection: String::new(),
+            remove_from_collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("update_node without version failed")
+        .into_inner();
+
+    let data = updated.node_data.expect("missing node_data");
+    assert_eq!(data.content, "after");
+    assert!(data.version >= 2, "version must be bumped after update");
+
+    let _ = shutdown.send(());
+}
+
+/// Parity test (AC #1241): add then remove a collection membership via
+/// update_node's add_to_collection / remove_from_collection fields.
+#[tokio::test]
+async fn update_node_add_then_remove_collection_membership() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let _coll = client
+        .create_collection(CreateCollectionRequest {
+            name: "membership-test".into(),
+            description: String::new(),
+        })
+        .await
+        .expect("create_collection failed")
+        .into_inner();
+    let collection_id = _coll.collection_id;
+
+    let node = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "membership node".into(),
+            parent_id: String::new(),
+            properties: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            id: String::new(),
+            position: None,
+        })
+        .await
+        .expect("create_node failed")
+        .into_inner();
+    let node_id = node.node_id.clone();
+
+    // Add to collection via update_node.
+    client
+        .update_node(UpdateNodeRequest {
+            node_id: node_id.clone(),
+            version: None,
+            node_type: String::new(),
+            content: None,
+            properties: None,
+            add_to_collection: "membership-test".into(),
+            remove_from_collection: String::new(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("add_to_collection failed");
+
+    let after_add = client
+        .get_node_collections(NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections failed")
+        .into_inner();
+    assert!(
+        after_add.collection_ids.contains(&collection_id),
+        "node should be in collection after add"
+    );
+
+    // Remove from collection via update_node.
+    client
+        .update_node(UpdateNodeRequest {
+            node_id: node_id.clone(),
+            version: None,
+            node_type: String::new(),
+            content: None,
+            properties: None,
+            add_to_collection: String::new(),
+            remove_from_collection: collection_id.clone(),
+            lifecycle_status: String::new(),
+        })
+        .await
+        .expect("remove_from_collection failed");
+
+    let after_remove = client
+        .get_node_collections(NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections failed")
+        .into_inner();
+    assert!(
+        !after_remove.collection_ids.contains(&collection_id),
+        "node should not be in collection after remove"
+    );
 
     let _ = shutdown.send(());
 }
