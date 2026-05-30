@@ -30,8 +30,8 @@ pub async fn run(
         .search_nodes(SearchRequest {
             query: args.query,
             node_types: args.node_types,
-            collection: String::new(),
-            collection_id: String::new(),
+            collection: None,
+            collection_id: None,
             limit: args.limit,
             offset: 0,
             threshold: 0.0,

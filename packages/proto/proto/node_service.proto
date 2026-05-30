@@ -102,14 +102,17 @@ message NodeData {
 message CreateNodeRequest {
   string node_type = 1;
   string content = 2;
-  string parent_id = 3;        // empty string for root nodes
+  // unset = root node (no parent); prost generates Option<String>.
+  optional string parent_id = 3;
   string properties = 4;       // JSON-encoded, may be empty string or "{}"
-  string collection = 5;       // optional collection path, e.g. "hr:policy"
-  string lifecycle_status = 6; // defaults to "active" when empty
-  // Caller-supplied UUID. Empty string = server generates a new ID. Used by
-  // the Tauri desktop client so the frontend can track a node locally
-  // before persistence completes.
-  string id = 7;
+  // unset = no collection; present = collection path, e.g. "hr:policy".
+  optional string collection = 5;
+  // unset = default "active"; present = explicit lifecycle status.
+  optional string lifecycle_status = 6;
+  // unset = server generates a new ID; present = caller-supplied UUID.
+  // Used by the Tauri desktop client so the frontend can track a node
+  // locally before persistence completes.
+  optional string id = 7;
   // Explicit insertion position. Unset (no variant set) = End (append).
   //
   // The `beginning` and `end` fields use bool for the variant payload because
@@ -152,14 +155,18 @@ message UpdateNodeRequest {
   // version unset = auto-fetch current version; matches UpdateNodeInput
   // in the ops layer. prost generates Option<i64>.
   optional int64 version = 2;
-  string node_type = 3;              // empty string = no change (enum-like; empty is not legitimate)
+  // unset = no change; "" is not a legitimate node_type.
+  optional string node_type = 3;
   // content and properties use optional so callers can distinguish
   // "no change" (field absent) from "clear the value" (field present, empty/"{}")
   optional string content = 4;       // unset = no change; "" is a legitimate value (clear content)
   optional string properties = 5;    // unset = no change; "{}" is a legitimate value (clear props)
-  string add_to_collection = 6;      // collection path to add node to
-  string remove_from_collection = 7; // collection_id to remove node from
-  string lifecycle_status = 8;       // empty string = no change (enum-like; empty is not legitimate)
+  // unset = no collection change; present = collection path to add node to.
+  optional string add_to_collection = 6;
+  // unset = no collection change; present = collection_id to remove node from.
+  optional string remove_from_collection = 7;
+  // unset = no change; "" is not a legitimate lifecycle_status.
+  optional string lifecycle_status = 8;
 }
 
 // UpdateNode returns NodeResponse.
@@ -215,8 +222,10 @@ message SearchRequest {
   // Empty list = all types. Matches the repeated-string shape of
   // SearchSemanticInput.node_type ([]string on the ops layer).
   repeated string node_types = 2;
-  string collection = 3;      // optional collection path filter
-  string collection_id = 4;   // optional collection ID filter (alternative to path)
+  // unset = no collection filter; present = collection path filter.
+  optional string collection = 3;
+  // unset = no collection filter; present = collection ID filter (alternative to path).
+  optional string collection_id = 4;
   int32 limit = 5;            // 0 = use server default (20)
   int32 offset = 6;
   float threshold = 7;        // semantic similarity threshold; 0.0 = use default (0.7)
@@ -377,8 +386,8 @@ message UpsertNodeWithParentRequest {
 message MoveNodeRequest {
   string node_id = 1;
   int64 version = 2;
-  // new_parent_id empty string = move to root (None on the ops layer).
-  string new_parent_id = 3;
+  // unset or "" = move to root (None on the ops layer); present = new parent ID.
+  optional string new_parent_id = 3;
   // Explicit insertion position. Unset (no variant set) = End.
   // See CreateNodeRequest.position for encoding notes on the bool variants.
   oneof position {

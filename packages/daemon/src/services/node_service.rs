@@ -80,7 +80,7 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
 
         let properties = parse_properties(&req.properties).map_err(properties_error)?;
-        let parent_id_opt = empty_to_none(req.parent_id);
+        let parent_id_opt = req.parent_id;
 
         use crate::nodespace::create_node_request::Position as CreatePos;
         let position = match req.position {
@@ -91,14 +91,14 @@ impl GrpcNodeService for NodeServiceImpl {
         };
 
         let input = node_ops::CreateNodeInput {
-            id: empty_to_none(req.id),
+            id: req.id,
             node_type: req.node_type,
             content: req.content,
             parent_id: parent_id_opt.clone(),
             position,
             properties,
-            collection: empty_to_none(req.collection),
-            lifecycle_status: empty_to_none(req.lifecycle_status),
+            collection: req.collection,
+            lifecycle_status: req.lifecycle_status,
         };
 
         let output = node_ops::create_node(&self.node_service, input)
@@ -151,12 +151,12 @@ impl GrpcNodeService for NodeServiceImpl {
         let input = node_ops::UpdateNodeInput {
             node_id: req.node_id,
             version: req.version,
-            node_type: empty_to_none(req.node_type),
+            node_type: req.node_type,
             content: req.content,
             properties,
-            add_to_collection: empty_to_none(req.add_to_collection),
-            remove_from_collection: empty_to_none(req.remove_from_collection),
-            lifecycle_status: empty_to_none(req.lifecycle_status),
+            add_to_collection: req.add_to_collection,
+            remove_from_collection: req.remove_from_collection,
+            lifecycle_status: req.lifecycle_status,
         };
 
         let output = node_ops::update_node(&self.node_service, input)
@@ -330,8 +330,8 @@ impl GrpcNodeService for NodeServiceImpl {
             query: req.query,
             threshold,
             limit,
-            collection_id: empty_to_none(req.collection_id.clone()),
-            collection: empty_to_none(req.collection),
+            collection_id: req.collection_id,
+            collection: req.collection,
             exclude_collections: None,
             include_markdown: Some(0),
             include_archived: None,
@@ -477,7 +477,7 @@ impl GrpcNodeService for NodeServiceImpl {
     ) -> Result<Response<NodeResponse>, Status> {
         let req = request.into_inner();
 
-        let new_parent = empty_to_none(req.new_parent_id);
+        let new_parent = req.new_parent_id;
 
         use crate::nodespace::move_node_request::Position as MovePos;
         let position = match req.position {
@@ -1250,14 +1250,6 @@ impl GrpcNodeService for NodeServiceImpl {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn empty_to_none(s: String) -> Option<String> {
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
 fn parse_properties(s: &str) -> Result<serde_json::Value, serde_json::Error> {
     if s.is_empty() {
         return Ok(serde_json::Value::Object(serde_json::Map::new()));
@@ -1510,12 +1502,12 @@ mod tests {
 
         // --- via RPC handler ---
         let rpc_req = Request::new(crate::nodespace::CreateNodeRequest {
-            id: String::new(),
+            id: None,
             node_type: "text".to_string(),
             content: "parity-test".to_string(),
-            parent_id: String::new(),
-            collection: "test-collection".to_string(),
-            lifecycle_status: "archived".to_string(),
+            parent_id: None,
+            collection: Some("test-collection".to_string()),
+            lifecycle_status: Some("archived".to_string()),
             properties: "{}".to_string(),
             position: None,
         });
@@ -1573,12 +1565,12 @@ mod tests {
 
         // Create a node first
         let create_req = Request::new(crate::nodespace::CreateNodeRequest {
-            id: String::new(),
+            id: None,
             node_type: "text".to_string(),
             content: "original".to_string(),
-            parent_id: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
             properties: "{}".to_string(),
             position: None,
         });
@@ -1589,12 +1581,12 @@ mod tests {
         let update_req = Request::new(crate::nodespace::UpdateNodeRequest {
             node_id: node_id.clone(),
             content: Some("updated".to_string()),
-            node_type: String::new(),
+            node_type: None,
             properties: None,
             version: None, // omit version — triggers auto-fetch path
-            add_to_collection: String::new(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
         });
         let updated = svc.update_node(update_req).await.unwrap().into_inner();
         assert_eq!(updated.node_data.unwrap().content, "updated");
@@ -1607,28 +1599,28 @@ mod tests {
 
         // Create a node
         let create_req = Request::new(crate::nodespace::CreateNodeRequest {
-            id: String::new(),
+            id: None,
             node_type: "text".to_string(),
             content: "membership-test".to_string(),
-            parent_id: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
             properties: "{}".to_string(),
             position: None,
         });
         let created = svc.create_node(create_req).await.unwrap().into_inner();
         let node_id = created.node_id;
 
-        // Add to collection via update (include a content change so NodeUpdate is non-empty)
+        // Add to collection via update
         let add_req = Request::new(crate::nodespace::UpdateNodeRequest {
             node_id: node_id.clone(),
-            content: Some("membership-test-v2".to_string()),
-            node_type: String::new(),
+            content: None,
+            node_type: None,
             properties: None,
             version: None,
-            add_to_collection: "membership-coll".to_string(),
-            remove_from_collection: String::new(),
-            lifecycle_status: String::new(),
+            add_to_collection: Some("membership-coll".to_string()),
+            remove_from_collection: None,
+            lifecycle_status: None,
         });
         let added = svc.update_node(add_req).await.unwrap().into_inner();
         let collection_id = added.collection_id.clone();
@@ -1646,16 +1638,16 @@ mod tests {
             "node must be in collection after add"
         );
 
-        // Remove from collection via update (include a content change so NodeUpdate is non-empty)
+        // Remove from collection via update
         let remove_req = Request::new(crate::nodespace::UpdateNodeRequest {
             node_id: node_id.clone(),
-            content: Some("membership-test-v3".to_string()),
-            node_type: String::new(),
+            content: None,
+            node_type: None,
             properties: None,
             version: None,
-            add_to_collection: String::new(),
-            remove_from_collection: collection_id.clone(),
-            lifecycle_status: String::new(),
+            add_to_collection: None,
+            remove_from_collection: Some(collection_id.clone()),
+            lifecycle_status: None,
         });
         svc.update_node(remove_req).await.unwrap();
 

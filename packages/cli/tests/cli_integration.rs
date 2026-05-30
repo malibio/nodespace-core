@@ -92,11 +92,11 @@ async fn create_get_update_children_delete_round_trip() {
         .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
             node_type: "text".into(),
             content: "parent".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -264,11 +264,11 @@ async fn diagnostics_collect_reports_counts_and_recency() {
         .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
             node_type: "text".into(),
             content: "root".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -282,11 +282,11 @@ async fn diagnostics_collect_reports_counts_and_recency() {
             .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
                 node_type: "text".into(),
                 content: label.into(),
-                parent_id: root.node_id.clone(),
+                parent_id: Some(root.node_id.clone()),
                 properties: String::new(),
-                collection: String::new(),
-                lifecycle_status: String::new(),
-                id: String::new(),
+                collection: None,
+                lifecycle_status: None,
+                id: None,
                 position: None,
             })
             .await
@@ -344,11 +344,11 @@ async fn node_query_by_type() {
     raw.create_node(CreateNodeRequest {
         node_type: "task".into(),
         content: "do the thing".into(),
-        parent_id: String::new(),
+        parent_id: None,
         properties: String::new(),
-        collection: String::new(),
-        lifecycle_status: String::new(),
-        id: String::new(),
+        collection: None,
+        lifecycle_status: None,
+        id: None,
         position: None,
     })
     .await
@@ -357,11 +357,11 @@ async fn node_query_by_type() {
     raw.create_node(CreateNodeRequest {
         node_type: "text".into(),
         content: "some text".into(),
-        parent_id: String::new(),
+        parent_id: None,
         properties: String::new(),
-        collection: String::new(),
-        lifecycle_status: String::new(),
-        id: String::new(),
+        collection: None,
+        lifecycle_status: None,
+        id: None,
         position: None,
     })
     .await
@@ -396,11 +396,11 @@ async fn node_export_markdown() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "# Root Document".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -410,11 +410,11 @@ async fn node_export_markdown() {
     raw.create_node(CreateNodeRequest {
         node_type: "text".into(),
         content: "Child paragraph".into(),
-        parent_id: root.node_id.clone(),
+        parent_id: Some(root.node_id.clone()),
         properties: String::new(),
-        collection: String::new(),
-        lifecycle_status: String::new(),
-        id: String::new(),
+        collection: None,
+        lifecycle_status: None,
+        id: None,
         position: None,
     })
     .await
@@ -446,11 +446,11 @@ async fn node_batch_get_and_update() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "node-a".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -462,11 +462,11 @@ async fn node_batch_get_and_update() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "node-b".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -515,11 +515,11 @@ async fn mention_create_query_delete() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "source node".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await
@@ -531,11 +531,11 @@ async fn mention_create_query_delete() {
         .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "target node".into(),
-            parent_id: String::new(),
+            parent_id: None,
             properties: String::new(),
-            collection: String::new(),
-            lifecycle_status: String::new(),
-            id: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
             position: None,
         })
         .await

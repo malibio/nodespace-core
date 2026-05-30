@@ -247,14 +247,18 @@ pub async fn create_node(
         .and_then(InsertPositionInput::into_create_proto_position);
     let resp = c
         .create_node(Request::new(CreateNodeRequest {
-            id: node.id,
+            id: if node.id.is_empty() {
+                None
+            } else {
+                Some(node.id)
+            },
             node_type: node.node_type,
             content: node.content,
-            parent_id: node.parent_id.unwrap_or_default(),
+            parent_id: node.parent_id,
             position,
             properties: properties_str,
-            collection: String::new(),
-            lifecycle_status: String::new(),
+            collection: None,
+            lifecycle_status: None,
         }))
         .await
         .map_err(status_to_command_error)?;
@@ -274,14 +278,14 @@ pub async fn create_root_node(
     let properties_str = input.properties.to_string();
     let resp = c
         .create_node(Request::new(CreateNodeRequest {
-            id: String::new(), // server generates ID for root nodes
+            id: None,
             node_type: input.node_type,
             content: input.content,
-            parent_id: String::new(), // no parent = root
-            position: None,           // root nodes have no siblings
+            parent_id: None,
+            position: None,
             properties: properties_str,
-            collection: String::new(),
-            lifecycle_status: String::new(),
+            collection: None,
+            lifecycle_status: None,
         }))
         .await
         .map_err(status_to_command_error)?;
@@ -367,12 +371,12 @@ pub async fn update_node(
     let req = UpdateNodeRequest {
         node_id: id.clone(),
         version: Some(version),
-        node_type: update.node_type.unwrap_or_default(),
+        node_type: update.node_type,
         content: update.content,
         properties: update.properties.map(|p| p.to_string()),
-        add_to_collection: String::new(),
-        remove_from_collection: String::new(),
-        lifecycle_status: update.lifecycle_status.unwrap_or_default(),
+        add_to_collection: None,
+        remove_from_collection: None,
+        lifecycle_status: update.lifecycle_status,
     };
 
     let resp = c
@@ -428,7 +432,7 @@ pub async fn move_node(
         .move_node(Request::new(MoveNodeRequest {
             node_id,
             version,
-            new_parent_id: new_parent_id.unwrap_or_default(),
+            new_parent_id,
             position,
         }))
         .await
