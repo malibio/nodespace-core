@@ -62,8 +62,7 @@ vi.mock('$lib/stores/reactive-structure-tree.svelte', () => ({
 import {
   createReactiveNodeService,
   type ReactiveNodeService,
-  type NodeManagerEvents,
-  calculateOutdentInsertOrderPure
+  type NodeManagerEvents
 } from '$lib/services/reactive-node-service.svelte';
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { backendAdapter } from '$lib/services/backend-adapter';
@@ -127,108 +126,7 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
     return node;
   }
 
-  describe('calculateOutdentInsertOrderPure - Order Calculation Logic', () => {
-    it('should calculate correct order when old parent is in middle of children', () => {
-      const children = [
-        { nodeId: 'a', order: 1.0 },
-        { nodeId: 'b', order: 2.0 },
-        { nodeId: 'c', order: 3.0 }
-      ];
-      const order = calculateOutdentInsertOrderPure(children, 'b');
-      // Should insert between 'b' (2.0) and 'c' (3.0)
-      expect(order).toBe(2.5);
-    });
-
-    it('should calculate correct order when old parent is last child', () => {
-      const children = [
-        { nodeId: 'a', order: 1.0 },
-        { nodeId: 'b', order: 2.0 }
-      ];
-      const order = calculateOutdentInsertOrderPure(children, 'b');
-      // Should insert after 'b' (2.0), no next sibling
-      expect(order).toBe(3.0);
-    });
-
-    it('should calculate correct order when old parent is first child', () => {
-      const children = [
-        { nodeId: 'a', order: 1.0 },
-        { nodeId: 'b', order: 2.0 }
-      ];
-      const order = calculateOutdentInsertOrderPure(children, 'a');
-      // Should insert between 'a' (1.0) and 'b' (2.0)
-      expect(order).toBe(1.5);
-    });
-
-    it('should handle missing old parent by appending to end', () => {
-      const children = [
-        { nodeId: 'a', order: 1.0 },
-        { nodeId: 'b', order: 2.0 }
-      ];
-      const order = calculateOutdentInsertOrderPure(children, 'missing');
-      // Should append after last: 2.0 + 1.0 = 3.0
-      expect(order).toBe(3.0);
-    });
-
-    it('should handle empty children list', () => {
-      const children: Array<{ nodeId: string; order: number }> = [];
-      const order = calculateOutdentInsertOrderPure(children, 'any');
-      expect(order).toBe(1.0);
-    });
-
-    it('should handle single child (old parent is only child)', () => {
-      const children = [{ nodeId: 'a', order: 5.0 }];
-      const order = calculateOutdentInsertOrderPure(children, 'a');
-      // Insert after 'a' (5.0)
-      expect(order).toBe(6.0);
-    });
-  });
-
   describe('Rapid Sequential Operations', () => {
-    it('should handle 50 rapid order calculations - demonstrates precision limits', () => {
-      // Simulate 50 rapid insertions between the same two siblings
-      // This test demonstrates that fractional ordering WILL eventually hit precision limits
-      // The backend uses rebalancing to handle this - see atomic-move-operations.test.ts
-      let children = [
-        { nodeId: 'first', order: 1.0 },
-        { nodeId: 'last', order: 2.0 }
-      ];
-
-      const insertedOrders: number[] = [];
-
-      for (let i = 0; i < 50; i++) {
-        // Calculate order to insert after first child
-        const order = calculateOutdentInsertOrderPure(children, 'first');
-        insertedOrders.push(order);
-
-        // Add the new node to children list
-        children = [
-          children[0],
-          { nodeId: `inserted-${i}`, order },
-          ...children.slice(1)
-        ];
-
-        // Sort by order to maintain proper sequence
-        children.sort((a, b) => a.order - b.order);
-      }
-
-      // All orders should be between 1.0 and 2.0
-      for (const order of insertedOrders) {
-        expect(order).toBeGreaterThan(1.0);
-        expect(order).toBeLessThan(2.0);
-      }
-
-      // After 50 insertions, we expect precision degradation
-      // This is why the backend has rebalancing logic
-      // The key assertion: the algorithm doesn't crash or produce invalid values
-      expect(insertedOrders.length).toBe(50);
-
-      // Count unique orders - some may collide at floating point limits
-      const uniqueOrders = new Set(insertedOrders);
-      // With 50 insertions, we should still have reasonable uniqueness
-      // (the halving algorithm reaches ~52 bits of precision limit around 50-53 insertions)
-      expect(uniqueOrders.size).toBeGreaterThanOrEqual(45);
-    });
-
     it('should handle alternating indent/outdent pattern', () => {
       // Simulate rapid Tab, Shift+Tab, Tab, Shift+Tab pattern
       // This is the exact pattern that exposed race conditions in PR #861
@@ -392,8 +290,7 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
         expect(node).toBeDefined();
       }
 
-      // Simulate reordering operations - order calculations are correct
-      // (order is stored in edges, tested in calculateOutdentInsertOrderPure tests)
+      // Simulate reordering operations - fractional order is computed daemon-side
       const orderBetween2And3 = (2 + 3) / 2;
       expect(orderBetween2And3).toBe(2.5);
 

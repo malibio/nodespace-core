@@ -38,53 +38,6 @@ import { backendAdapter } from './backend-adapter';
 import type { InsertPosition } from '$lib/services/backend-adapter';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
-/**
- * Pure function to calculate the insert order for an outdented node.
- * The outdented node should appear right after its old parent among the new parent's children.
- *
- * @param children - Array of children with order, sorted by order
- * @param oldParentId - The old parent (the node is moving out from under this parent)
- * @returns The calculated fractional order for insertion
- *
- * @example
- * // Old parent at order 2.0, next sibling at 3.0 -> insert at 2.5
- * calculateOutdentInsertOrderPure([{nodeId: 'old', order: 2.0}, {nodeId: 'next', order: 3.0}], 'old') // 2.5
- *
- * @example
- * // Old parent at order 2.0, no next sibling -> insert at 3.0
- * calculateOutdentInsertOrderPure([{nodeId: 'old', order: 2.0}], 'old') // 3.0
- *
- * @example
- * // Old parent not found, append to end
- * calculateOutdentInsertOrderPure([{nodeId: 'other', order: 5.0}], 'missing') // 6.0
- */
-export function calculateOutdentInsertOrderPure(
-  children: Array<{ nodeId: string; order: number }>,
-  oldParentId: string
-): number {
-  const oldParentIndex = children.findIndex(c => c.nodeId === oldParentId);
-  if (oldParentIndex >= 0) {
-    const oldParentOrder = children[oldParentIndex].order;
-    const nextSibling = children[oldParentIndex + 1];
-    return nextSibling ? (oldParentOrder + nextSibling.order) / 2 : oldParentOrder + 1.0;
-  }
-  // Fallback: append to end
-  return children.length > 0 ? children[children.length - 1].order + 1.0 : 1.0;
-}
-
-/**
- * Calculate the insert order for an outdented node in its new parent's children list.
- * Wrapper that uses the structureTree to get children.
- *
- * @param newParentId - The new parent (grandparent of the node being outdented)
- * @param oldParentId - The old parent (the node is moving out from under this parent)
- * @returns The calculated fractional order for insertion
- */
-function calculateOutdentInsertOrder(newParentId: string, oldParentId: string): number {
-  const newParentChildren = structureTree.getChildrenWithOrder(newParentId);
-  return calculateOutdentInsertOrderPure(newParentChildren, oldParentId);
-}
-
 export interface NodeManagerEvents {
   focusRequested: (nodeId: string, position?: number) => void;
   hierarchyChanged: () => void;
@@ -1030,8 +983,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         // Update structure tree first so persistence path can derive parentId from structureTree
         if (newParentId) {
-          const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
-          structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
+          structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId);
         }
 
         // Re-trigger setNode to cancel the pending CREATE and schedule a new one.
@@ -1057,8 +1009,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         // Update structure tree so in-flight CREATE derives correct parentId
         if (newParentId) {
-          const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
-          structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
+          structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId);
         }
 
         // Clear stale insertPosition on the in-store node (references sibling under OLD parent)
@@ -1078,12 +1029,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Node is already persisted - proceed with MOVE operation
     // structureTree is the single source of truth for hierarchy.
 
-    // CRITICAL FIX: Update ReactiveStructureTree for browser mode
+    // Optimistic placement: move to new parent with relative-after intent.
+    // Authoritative fractional order arrives via relationship:updated event.
     if (newParentId) {
-      // Calculate correct order: insert right after oldParentId among newParentId's children
-      // This matches backend behavior which uses insertAfterNodeId = oldParentId
-      const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
-      structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
+      structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId);
     }
 
     // Transfer siblings below as children (optimistic UI first)

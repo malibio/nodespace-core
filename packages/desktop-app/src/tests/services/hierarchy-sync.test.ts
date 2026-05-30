@@ -25,16 +25,30 @@ describe('hierarchy-sync', () => {
       expect(structureTree.getChildrenWithOrder('p')[0].order).toBe(3);
     });
 
-    it('appends at tail (not Date.now()) when child is new and order missing', () => {
+    it('appends at tail (not Date.now(), no jitter) when child is new and order missing', () => {
       applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c1', order: 10 });
       applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c2', order: undefined });
       const [first, second] = structureTree.getChildrenWithOrder('p');
       expect(first.nodeId).toBe('c1');
       expect(second.nodeId).toBe('c2');
-      // Must NOT be Date.now()-range (>1e12)
+      // Must NOT be Date.now()-range (>1e12) and must be an exact integer (no jitter)
       expect(second.order).toBeLessThan(1e12);
-      // Must be > first sibling's order
       expect(second.order).toBeGreaterThan(10);
+      // Exact value: lastOrder + 1 = 11 (no Math.random() jitter)
+      expect(second.order).toBe(11);
+    });
+
+    it('appends at exact integer — calling twice produces identical order (deterministic, no jitter)', () => {
+      applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c1', order: 5 });
+      applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c2', order: undefined });
+      const order1 = structureTree.getChildrenWithOrder('p').find((c) => c.nodeId === 'c2')!.order;
+
+      structureTree.children.clear();
+      applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c1', order: 5 });
+      applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c2', order: undefined });
+      const order2 = structureTree.getChildrenWithOrder('p').find((c) => c.nodeId === 'c2')!.order;
+
+      expect(order1).toBe(order2);
     });
 
     it('produces identical structureTree state for same event through both paths (anti-drift)', () => {
@@ -49,6 +63,48 @@ describe('hierarchy-sync', () => {
       const browser = structureTree.getChildrenWithOrder('parent');
 
       expect(tauri).toEqual(browser);
+    });
+  });
+
+  describe('optimistic-then-event convergence (C3a)', () => {
+    it('applyHasChildUpdated reconciles optimistic placement to daemon-supplied order', () => {
+      // Simulate the full outdent sequence:
+      // 1. Optimistic: moveInMemoryRelationship places child with append integer order
+      // 2. Daemon emits relationship:updated with authoritative fractional order
+      // 3. applyHasChildUpdated must converge structureTree to daemon order
+
+      // Step 1: initial state — grandparent has [oldParent(2.0), sibling(3.0)]
+      applyHasChildCreated(structureTree, { parentId: 'gp', childId: 'oldParent', order: 2.0 });
+      applyHasChildCreated(structureTree, { parentId: 'gp', childId: 'sibling', order: 3.0 });
+
+      // Step 2: optimistic outdent moves 'child' from oldParent → gp (append, order=1)
+      applyHasChildCreated(structureTree, { parentId: 'oldParent', childId: 'child', order: 1.0 });
+      structureTree.removeChild({ parentId: 'oldParent', childId: 'child', order: 0 });
+      // Appends at integer: children are [oldParent(2), sibling(3)], so child gets order 4
+      applyHasChildCreated(structureTree, { parentId: 'gp', childId: 'child', order: undefined });
+
+      const afterOptimistic = structureTree.getChildrenWithOrder('gp');
+      // Optimistic appended at end
+      expect(afterOptimistic.at(-1)!.nodeId).toBe('child');
+
+      // Step 3: daemon emits relationship:updated with authoritative order 2.5
+      // (child should appear between oldParent and sibling)
+      applyHasChildUpdated(structureTree, { parentId: 'gp', childId: 'child', order: 2.5 });
+
+      const afterReconcile = structureTree.getChildrenWithOrder('gp');
+      // After reconciliation, child is at 2.5 — between oldParent(2.0) and sibling(3.0)
+      const childEntry = afterReconcile.find((c) => c.nodeId === 'child')!;
+      expect(childEntry.order).toBe(2.5);
+      // Correctly sorted
+      const orders = afterReconcile.map((c) => c.order);
+      expect(orders).toEqual([...orders].sort((a, b) => a - b));
+    });
+
+    it('applyHasChildUpdated is idempotent — applying the same daemon order twice is a no-op', () => {
+      applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c', order: 1.5 });
+      applyHasChildUpdated(structureTree, { parentId: 'p', childId: 'c', order: 2.5 });
+      applyHasChildUpdated(structureTree, { parentId: 'p', childId: 'c', order: 2.5 });
+      expect(structureTree.getChildrenWithOrder('p')[0].order).toBe(2.5);
     });
   });
 

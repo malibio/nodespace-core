@@ -16,8 +16,8 @@ export interface HasChildPayload {
  * Order-fallback contract (single authoritative implementation):
  *  - If incoming order is a real number (typeof === 'number'), use it directly (0/negative count).
  *  - Else if child already exists under this parent, preserve existing order.
- *  - Else append at tail: lastSibling.order + 1 + tiny jitter (Math.random() * 0.001).
- * Date.now() is NEVER used as a fallback.
+ *  - Else append at tail: lastSibling.order + 1 (integer increment, no invented values).
+ * Date.now() and Math.random() are NEVER used as fallbacks.
  */
 export function applyHasChildCreated(
   structureTree: ReactiveStructureTree,
@@ -36,8 +36,9 @@ export function applyHasChildCreated(
     if (existing) {
       order = existing.order;
     } else {
+      log.warn('relationship:created missing order for has_child — appending', { parentId, childId });
       const lastOrder = siblings[siblings.length - 1]?.order ?? 0;
-      order = lastOrder + 1 + Math.random() * 0.001;
+      order = lastOrder + 1;
     }
   }
 
