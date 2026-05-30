@@ -59,7 +59,7 @@ export interface NodeUpdate {
   source: UpdateSource;
   timestamp: number;
   version?: number; // For optimistic concurrency control
-  previousVersion?: number; // Previous version for conflict detection
+  previousVersion?: number; // Snapshot of version before update, used for rollback
 }
 
 /**
@@ -80,7 +80,6 @@ export interface StoreMetrics {
   avgUpdateTime: number;
   maxUpdateTime: number;
   subscriptionCount: number;
-  conflictCount: number;
   rollbackCount: number;
 }
 

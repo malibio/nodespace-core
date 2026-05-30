@@ -482,7 +482,6 @@ export class SharedNodeStore {
     avgUpdateTime: 0,
     maxUpdateTime: 0,
     subscriptionCount: 0,
-    conflictCount: 0,
     rollbackCount: 0
   };
 
@@ -2638,7 +2637,6 @@ export class SharedNodeStore {
       avgUpdateTime: 0,
       maxUpdateTime: 0,
       subscriptionCount: this.metrics.subscriptionCount, // Keep subscription count
-      conflictCount: 0,
       rollbackCount: 0
     };
   }
@@ -3187,7 +3185,6 @@ export class SharedNodeStore {
       avgUpdateTime: 0,
       maxUpdateTime: 0,
       subscriptionCount: 0,
-      conflictCount: 0,
       rollbackCount: 0
     };
   }
