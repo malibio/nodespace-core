@@ -22,7 +22,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { ContentProcessor } from './content-processor';
 import { SharedNodeStore } from './shared-node-store.svelte';
-import { getFocusManager } from './focus-manager.svelte';
+import { focusManager } from './focus-manager.svelte';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { createLogger } from '$lib/utils/logger';
 import type { Node, NodeUIState } from '$lib/types';
@@ -104,9 +104,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     type: 'viewer',
     viewerId
   };
-
-  // Focus management - single source of truth
-  const focusManager = getFocusManager();
 
   // Get SharedNodeStore instance dynamically (important for tests that call resetInstance())
   const sharedNodeStore = SharedNodeStore.getInstance();

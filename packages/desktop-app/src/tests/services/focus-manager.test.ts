@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { focusManager, getFocusManager } from '$lib/services/focus-manager.svelte';
+import { focusManager } from '$lib/services/focus-manager.svelte';
 
 describe('FocusManager - Comprehensive Coverage', () => {
   beforeEach(() => {
@@ -149,21 +149,6 @@ describe('FocusManager - Comprehensive Coverage', () => {
       const state = focusManager.getCurrentState();
 
       expect(state.cursorPosition).toBeNull();
-    });
-  });
-
-  describe('getFocusManager (legacy export)', () => {
-    it('should return the same focusManager instance', () => {
-      const manager = getFocusManager();
-      expect(manager).toBe(focusManager);
-    });
-
-    it('should maintain state across both references', () => {
-      const manager = getFocusManager();
-      manager.focusNode('test-node', 'default');
-
-      expect(focusManager.editingNodeId).toBe('test-node');
-      expect(manager.editingNodeId).toBe('test-node');
     });
   });
 

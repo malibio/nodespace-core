@@ -19,7 +19,6 @@ import {
   type NodeManagerEvents
 } from '$lib/services/reactive-node-service.svelte';
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
-import { getFocusManager as _getFocusManager } from '$lib/services/focus-manager.svelte';
 import type { Node } from '$lib/types';
 import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
@@ -1568,9 +1567,7 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
   it('createNode with focusNewNode=false keeps focus on original node', () => {
     service.createNode('reference', 'Test', 'text', undefined, false, undefined, false);
 
-    // Focus manager should be called with original node
-    // Note: getFocusManager is mocked, so we can't verify this directly
-    // but the code path is exercised
+    // Focus manager should be called with original node; code path is exercised
     expect(events.nodeCreated).toHaveBeenCalled();
   });
 

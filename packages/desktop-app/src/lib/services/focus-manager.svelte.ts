@@ -49,11 +49,6 @@
 
 import type { CursorPosition } from '$lib/actions/position-cursor';
 
-export interface ArrowNavigationContext {
-  direction: 'up' | 'down';
-  pixelOffset: number;
-}
-
 export interface FocusState {
   nodeId: string | null;
   cursorPosition: CursorPosition | null;
@@ -196,7 +191,3 @@ export const focusManager = {
     };
   }
 };
-
-export function getFocusManager() {
-  return focusManager;
-}
