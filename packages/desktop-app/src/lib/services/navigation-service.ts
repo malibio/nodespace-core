@@ -77,10 +77,10 @@ export class NavigationService {
     if (!node) {
       // Not in store, fetch from backend (handles virtual dates automatically)
       log.debug(`Node ${nodeId} not in store, fetching from backend...`);
-      const { getNode } = await import('./tauri-commands');
+      const { backendAdapter } = await import('./backend-adapter');
 
       try {
-        const fetchedNode = await getNode(nodeId);
+        const fetchedNode = await backendAdapter.getNode(nodeId);
         if (!fetchedNode) {
           log.error(`Node ${nodeId} not found in backend`);
           return null;

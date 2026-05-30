@@ -34,7 +34,7 @@ import { waitForPendingMoveOperations, trackMoveOperation } from './pending-oper
 const log = createLogger('ReactiveNodeService');
 // Schema defaults extraction removed in Issue #690 simplification
 // TODO: Re-add schema defaults if needed via backendAdapter.getSchema() + SchemaNodeHelpers
-import { moveNode as moveNodeCommand } from './tauri-commands';
+import { backendAdapter } from './backend-adapter';
 import type { InsertPosition } from '$lib/services/backend-adapter';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
@@ -414,7 +414,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             for (const child of children) {
               // Move child to be under the new node in database (with OCC)
               // Backend returns updated child with new version
-              const updatedChild = await moveNodeCommand(child.id, child.version, nodeId, null);
+              const updatedChild = await backendAdapter.moveNode(child.id, child.version, nodeId, null);
               // Sync child's local version from backend response
               sharedNodeStore.updateNode(
                 child.id,
@@ -943,7 +943,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         // Now safe to move the node (with OCC)
         // Backend returns updated node with new version
-        const updatedNode = await moveNodeCommand(nodeId, freshNode.version, targetParentId, null);
+        const updatedNode = await backendAdapter.moveNode(nodeId, freshNode.version, targetParentId, null);
 
         // Sync local version from backend response
         sharedNodeStore.updateNode(
@@ -1138,7 +1138,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const outdentPosition: InsertPosition = oldParentId
           ? { type: 'after', siblingId: oldParentId }
           : { type: 'end' };
-        const updatedNode = await moveNodeCommand(nodeId, freshNode.version, newParentId, outdentPosition);
+        const updatedNode = await backendAdapter.moveNode(nodeId, freshNode.version, newParentId, outdentPosition);
 
         // Sync local version from backend response
         sharedNodeStore.updateNode(
@@ -1156,7 +1156,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           const freshSibling = sharedNodeStore.getNode(siblingId);
           if (freshSibling) {
             // Backend returns updated sibling with new version
-            const updatedSibling = await moveNodeCommand(siblingId, freshSibling.version, nodeId, null);
+            const updatedSibling = await backendAdapter.moveNode(siblingId, freshSibling.version, nodeId, null);
             // Sync sibling's version from backend response
             sharedNodeStore.updateNode(
               siblingId,
@@ -1269,7 +1269,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
       // Use moveNodeCommand to properly update the has_child edge in the backend (with OCC)
       const childVersion = child.version;
-      moveNodeCommand(child.id, childVersion, newParentForChild, insertPosition)
+      backendAdapter.moveNode(child.id, childVersion, newParentForChild, insertPosition)
         .then((updatedChild) => {
           // Sync child's local version from backend response
           sharedNodeStore.updateNode(

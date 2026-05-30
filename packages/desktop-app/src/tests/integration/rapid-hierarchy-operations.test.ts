@@ -19,10 +19,32 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Node } from '$lib/types';
 
-// Mock tauri-commands - must be before imports that use it
-vi.mock('$lib/services/tauri-commands', () => ({
-  moveNode: vi.fn().mockResolvedValue(undefined),
-  getNode: vi.fn().mockResolvedValue(null)
+// Mock backend-adapter - must be before imports that use it
+vi.mock('$lib/services/backend-adapter', () => ({
+  backendAdapter: {
+    moveNode: vi.fn().mockResolvedValue(undefined),
+    getNode: vi.fn().mockResolvedValue(null),
+    createNode: vi.fn().mockResolvedValue('mock-id'),
+    updateNode: vi.fn().mockResolvedValue(null),
+    deleteNode: vi.fn().mockResolvedValue({ deleted: true }),
+    getChildren: vi.fn().mockResolvedValue([]),
+    getChildrenTree: vi.fn().mockResolvedValue(null),
+    getDescendants: vi.fn().mockResolvedValue([]),
+    createMention: vi.fn().mockResolvedValue(undefined),
+    deleteMention: vi.fn().mockResolvedValue(undefined),
+    getOutgoingMentions: vi.fn().mockResolvedValue([]),
+    getIncomingMentions: vi.fn().mockResolvedValue([]),
+    getMentioningContainers: vi.fn().mockResolvedValue([]),
+    queryNodes: vi.fn().mockResolvedValue([]),
+    mentionAutocomplete: vi.fn().mockResolvedValue([]),
+    createContainerNode: vi.fn().mockResolvedValue('mock-container-id'),
+    updateTaskNode: vi.fn().mockResolvedValue(null),
+  },
+  insertPosition: {
+    beginning: () => ({ type: 'beginning' }),
+    end: () => ({ type: 'end' }),
+    after: (siblingId: string) => ({ type: 'after', siblingId }),
+  },
 }));
 
 // Mock reactive-structure-tree - must be before imports that use it
@@ -44,10 +66,10 @@ import {
   calculateOutdentInsertOrderPure
 } from '$lib/services/reactive-node-service.svelte';
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
-import * as tauriCommands from '$lib/services/tauri-commands';
+import { backendAdapter } from '$lib/services/backend-adapter';
 
 // Get the mocked function
-const mockMoveNode = vi.mocked(tauriCommands.moveNode);
+const mockMoveNode = vi.mocked(backendAdapter.moveNode);
 
 describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
   let service: ReactiveNodeService;
