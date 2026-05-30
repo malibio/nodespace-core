@@ -4,6 +4,7 @@
 //! Each function accepts typed inputs, coordinates service calls (collection resolution,
 //! OCC auto-fetch, lifecycle management, search post-filtering), and returns typed outputs.
 
+pub mod collection_ops;
 pub mod context_ops;
 pub mod node_ops;
 pub mod rel_ops;
