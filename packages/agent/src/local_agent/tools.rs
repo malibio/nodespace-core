@@ -975,9 +975,11 @@ impl GraphToolExecutor {
         let content = params.content.unwrap_or_default();
 
         let input = node_ops::CreateNodeInput {
+            id: None,
             node_type: params.node_type,
             content,
             parent_id: params.parent_id,
+            position: nodespace_core::services::InsertPositionOwned::End,
             properties,
             collection: None,
             lifecycle_status: None,

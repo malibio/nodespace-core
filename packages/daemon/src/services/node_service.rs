@@ -17,6 +17,7 @@ use nodespace_core::models::{
     Node, NodeQuery, NodeUpdate, TaskNodeUpdate, TaskPriority, TaskStatus,
 };
 use nodespace_core::ops::{
+    node_ops,
     search_ops::{self, SearchSemanticInput},
     OpsError,
 };
@@ -79,7 +80,6 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
 
         let properties = parse_properties(&req.properties).map_err(properties_error)?;
-        let collection_path = empty_to_none(req.collection);
         let parent_id_opt = empty_to_none(req.parent_id);
 
         use crate::nodespace::create_node_request::Position as CreatePos;
@@ -90,54 +90,28 @@ impl GrpcNodeService for NodeServiceImpl {
             None => InsertPositionOwned::End,
         };
 
-        let node_id = self
-            .node_service
-            .create_node_with_parent(CreateNodeParams {
-                id: empty_to_none(req.id),
-                node_type: req.node_type,
-                content: req.content,
-                parent_id: parent_id_opt.clone(),
-                position,
-                properties,
-            })
-            .await
-            .map_err(service_error_to_status)?;
-
-        // Add to collection if a path was supplied (mirrors node_ops::create_node).
-        let collection_id = if let Some(path) = &collection_path {
-            let store = self.node_service.store();
-            let collection_service = CollectionService::new(store, &self.node_service);
-            let resolved = collection_service
-                .add_to_collection_by_path(&node_id, path)
-                .await
-                .map_err(service_error_to_status)?;
-            Some(resolved.leaf_id().to_string())
-        } else {
-            None
+        let input = node_ops::CreateNodeInput {
+            id: empty_to_none(req.id),
+            node_type: req.node_type,
+            content: req.content,
+            parent_id: parent_id_opt.clone(),
+            position,
+            properties,
+            collection: empty_to_none(req.collection),
+            lifecycle_status: empty_to_none(req.lifecycle_status),
         };
 
-        // Optionally update lifecycle status to non-default value.
-        if let Some(status) = empty_to_none(req.lifecycle_status) {
-            if status != "active" {
-                let update = NodeUpdate {
-                    lifecycle_status: Some(status),
-                    ..Default::default()
-                };
-                // Auto-fetch version: use -1 sentinel? Use update_node with current node version.
-                let current = fetch_node(&self.node_service, &node_id).await?;
-                self.node_service
-                    .update_node(&node_id, current.version, update)
-                    .await
-                    .map_err(service_error_to_status)?;
-            }
-        }
+        let output = node_ops::create_node(&self.node_service, input)
+            .await
+            .map_err(ops_error_to_status)?;
 
-        let node = fetch_node(&self.node_service, &node_id).await?;
+        let node = fetch_node(&self.node_service, &output.node_id).await?;
         let node_type = node.node_type.clone();
         let parent_id = parent_id_opt.unwrap_or_default();
+        let collection_id = output.collection_id;
 
         Ok(Response::new(NodeResponse {
-            node_id: node_id.clone(),
+            node_id: output.node_id,
             node_type,
             parent_id,
             collection_id: collection_id.clone().unwrap_or_default(),
@@ -174,51 +148,27 @@ impl GrpcNodeService for NodeServiceImpl {
             None => None,
         };
 
-        let update = NodeUpdate {
+        let input = node_ops::UpdateNodeInput {
+            node_id: req.node_id,
+            version: req.version,
             node_type: empty_to_none(req.node_type),
             content: req.content,
             properties,
-            title: None,
+            add_to_collection: empty_to_none(req.add_to_collection),
+            remove_from_collection: empty_to_none(req.remove_from_collection),
             lifecycle_status: empty_to_none(req.lifecycle_status),
         };
 
-        // Auto-fetch version if not supplied (matches the prior ops-layer behaviour).
-        let version = match req.version {
-            Some(v) => v,
-            None => fetch_node(&self.node_service, &req.node_id).await?.version,
-        };
-
-        let node = self
-            .node_service
-            .update_node(&req.node_id, version, update)
+        let output = node_ops::update_node(&self.node_service, input)
             .await
-            .map_err(service_error_to_status)?;
+            .map_err(ops_error_to_status)?;
 
-        // add_to_collection / remove_from_collection are handled out-of-band so we
-        // preserve the original ops-layer behaviour without forcing the update
-        // path through node_ops (which would silently drop several fields).
-        let mut collection_id: Option<String> = None;
-        if let Some(path) = empty_to_none(req.add_to_collection) {
-            let store = self.node_service.store();
-            let collection_service = CollectionService::new(store, &self.node_service);
-            let resolved = collection_service
-                .add_to_collection_by_path(&req.node_id, &path)
-                .await
-                .map_err(service_error_to_status)?;
-            collection_id = Some(resolved.leaf_id().to_string());
-        }
-        if let Some(cid) = empty_to_none(req.remove_from_collection) {
-            let store = self.node_service.store();
-            let collection_service = CollectionService::new(store, &self.node_service);
-            collection_service
-                .remove_from_collection(&req.node_id, &cid)
-                .await
-                .map_err(service_error_to_status)?;
-        }
-
+        let node = fetch_node(&self.node_service, &output.node_id).await?;
         let node_type = node.node_type.clone();
+        let collection_id = output.collection_added;
+
         Ok(Response::new(NodeResponse {
-            node_id: node.id.clone(),
+            node_id: output.node_id,
             node_type,
             parent_id: String::new(),
             collection_id: collection_id.clone().unwrap_or_default(),
@@ -232,36 +182,26 @@ impl GrpcNodeService for NodeServiceImpl {
     ) -> Result<Response<DeleteNodeResponse>, Status> {
         let req = request.into_inner();
 
-        let version = match req.version {
-            Some(v) => v,
-            None => {
-                // Auto-fetch behaviour: if node missing, return existed=false idempotently.
-                match self
-                    .node_service
-                    .get_node(&req.node_id)
-                    .await
-                    .map_err(service_error_to_status)?
-                {
-                    Some(n) => n.version,
-                    None => {
-                        return Ok(Response::new(DeleteNodeResponse {
-                            node_id: req.node_id,
-                            existed: false,
-                        }))
-                    }
-                }
-            }
+        let input = node_ops::DeleteNodeInput {
+            node_id: req.node_id,
+            version: req.version,
         };
 
-        let result = self
-            .node_service
-            .delete_node(&req.node_id, version)
-            .await
-            .map_err(service_error_to_status)?;
+        // node_ops::delete_node handles auto-fetch; map NotFound to existed=false.
+        let output = match node_ops::delete_node(&self.node_service, input).await {
+            Ok(o) => o,
+            Err(OpsError::NotFound { id }) => {
+                return Ok(Response::new(DeleteNodeResponse {
+                    node_id: id,
+                    existed: false,
+                }));
+            }
+            Err(e) => return Err(ops_error_to_status(e)),
+        };
 
         Ok(Response::new(DeleteNodeResponse {
-            node_id: req.node_id,
-            existed: result.existed,
+            node_id: output.node_id,
+            existed: output.existed,
         }))
     }
 
@@ -1541,5 +1481,201 @@ fn parse_optional_timestamp(
                 .map_err(|e| format!("Invalid RFC3339 timestamp for {}: {}", field_name, e))?;
             Ok(Some(Some(parsed)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nodespace_core::db::SqliteStore;
+    use nodespace_core::ops::node_ops;
+    use nodespace_core::services::NodeService as CoreNodeService;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    async fn make_service() -> (Arc<NodeServiceImpl>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let core_svc = Arc::new(CoreNodeService::new(&mut store).await.unwrap());
+        let svc = Arc::new(NodeServiceImpl::new(core_svc, None));
+        (svc, tmp)
+    }
+
+    /// Creating a node via the gRPC handler (with collection + lifecycle_status) must
+    /// produce the same persisted state as calling node_ops::create_node directly.
+    #[tokio::test]
+    async fn create_node_rpc_parity_with_node_ops() {
+        let (svc, _tmp) = make_service().await;
+
+        // --- via RPC handler ---
+        let rpc_req = Request::new(crate::nodespace::CreateNodeRequest {
+            id: String::new(),
+            node_type: "text".to_string(),
+            content: "parity-test".to_string(),
+            parent_id: String::new(),
+            collection: "test-collection".to_string(),
+            lifecycle_status: "archived".to_string(),
+            properties: "{}".to_string(),
+            position: None,
+        });
+        let rpc_resp = svc.create_node(rpc_req).await.unwrap().into_inner();
+        let rpc_node_id = rpc_resp.node_id.clone();
+
+        // Assert collection membership was set
+        assert!(
+            !rpc_resp.collection_id.is_empty(),
+            "RPC handler must populate collection_id"
+        );
+        // Assert lifecycle_status is reflected in returned NodeData
+        let rpc_node_data = rpc_resp.node_data.unwrap();
+        assert_eq!(
+            rpc_node_data.lifecycle_status, "archived",
+            "RPC handler must apply lifecycle_status"
+        );
+
+        // --- via node_ops directly (same NodeService, fresh second node) ---
+        let ops_input = node_ops::CreateNodeInput {
+            id: None,
+            node_type: "text".to_string(),
+            content: "parity-test".to_string(),
+            parent_id: None,
+            position: nodespace_core::services::InsertPositionOwned::End,
+            properties: serde_json::json!({}),
+            collection: Some("test-collection".to_string()),
+            lifecycle_status: Some("archived".to_string()),
+        };
+        let ops_output = node_ops::create_node(&svc.node_service, ops_input)
+            .await
+            .unwrap();
+
+        // Both nodes should be in a collection and have lifecycle_status=archived
+        assert!(
+            ops_output.collection_id.is_some(),
+            "ops must populate collection_id"
+        );
+        let ops_node = svc
+            .node_service
+            .get_node(&ops_output.node_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ops_node.lifecycle_status, "archived");
+
+        // Both nodes must be distinct (idempotency: each call creates a new node)
+        assert_ne!(rpc_node_id, ops_output.node_id);
+    }
+
+    /// update_node via RPC with no version supplied must auto-fetch and not return VersionConflict.
+    #[tokio::test]
+    async fn update_node_rpc_auto_fetch_version() {
+        let (svc, _tmp) = make_service().await;
+
+        // Create a node first
+        let create_req = Request::new(crate::nodespace::CreateNodeRequest {
+            id: String::new(),
+            node_type: "text".to_string(),
+            content: "original".to_string(),
+            parent_id: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            properties: "{}".to_string(),
+            position: None,
+        });
+        let created = svc.create_node(create_req).await.unwrap().into_inner();
+        let node_id = created.node_id;
+
+        // Update without sending version — handler must auto-fetch
+        let update_req = Request::new(crate::nodespace::UpdateNodeRequest {
+            node_id: node_id.clone(),
+            content: Some("updated".to_string()),
+            node_type: String::new(),
+            properties: None,
+            version: None, // omit version — triggers auto-fetch path
+            add_to_collection: String::new(),
+            remove_from_collection: String::new(),
+            lifecycle_status: String::new(),
+        });
+        let updated = svc.update_node(update_req).await.unwrap().into_inner();
+        assert_eq!(updated.node_data.unwrap().content, "updated");
+    }
+
+    /// update_node with add_to_collection then remove_from_collection must transition membership.
+    #[tokio::test]
+    async fn update_node_rpc_collection_add_then_remove() {
+        let (svc, _tmp) = make_service().await;
+
+        // Create a node
+        let create_req = Request::new(crate::nodespace::CreateNodeRequest {
+            id: String::new(),
+            node_type: "text".to_string(),
+            content: "membership-test".to_string(),
+            parent_id: String::new(),
+            collection: String::new(),
+            lifecycle_status: String::new(),
+            properties: "{}".to_string(),
+            position: None,
+        });
+        let created = svc.create_node(create_req).await.unwrap().into_inner();
+        let node_id = created.node_id;
+
+        // Add to collection via update (include a content change so NodeUpdate is non-empty)
+        let add_req = Request::new(crate::nodespace::UpdateNodeRequest {
+            node_id: node_id.clone(),
+            content: Some("membership-test-v2".to_string()),
+            node_type: String::new(),
+            properties: None,
+            version: None,
+            add_to_collection: "membership-coll".to_string(),
+            remove_from_collection: String::new(),
+            lifecycle_status: String::new(),
+        });
+        let added = svc.update_node(add_req).await.unwrap().into_inner();
+        let collection_id = added.collection_id.clone();
+        assert!(
+            !collection_id.is_empty(),
+            "add_to_collection must return collection_id"
+        );
+
+        // Verify membership via core
+        let store = svc.node_service.store();
+        let coll_svc = CollectionService::new(store, &svc.node_service);
+        let members_before = coll_svc.get_node_collections(&node_id).await.unwrap();
+        assert!(
+            members_before.contains(&collection_id),
+            "node must be in collection after add"
+        );
+
+        // Remove from collection via update (include a content change so NodeUpdate is non-empty)
+        let remove_req = Request::new(crate::nodespace::UpdateNodeRequest {
+            node_id: node_id.clone(),
+            content: Some("membership-test-v3".to_string()),
+            node_type: String::new(),
+            properties: None,
+            version: None,
+            add_to_collection: String::new(),
+            remove_from_collection: collection_id.clone(),
+            lifecycle_status: String::new(),
+        });
+        svc.update_node(remove_req).await.unwrap();
+
+        let members_after = coll_svc.get_node_collections(&node_id).await.unwrap();
+        assert!(
+            !members_after.contains(&collection_id),
+            "node must not be in collection after remove"
+        );
+    }
+
+    /// Deleting a missing node via RPC returns existed=false (idempotent).
+    #[tokio::test]
+    async fn delete_node_rpc_missing_node_returns_existed_false() {
+        let (svc, _tmp) = make_service().await;
+
+        let req = Request::new(crate::nodespace::DeleteNodeRequest {
+            node_id: "nonexistent-node-id".to_string(),
+            version: None,
+        });
+        let resp = svc.delete_node(req).await.unwrap().into_inner();
+        assert!(!resp.existed);
     }
 }
