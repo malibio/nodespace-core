@@ -9,7 +9,7 @@ NodeSpace is a local-first knowledge graph that stores notes, tasks, and structu
 **Built-in node types:**
 - `text` — freeform notes, documents, findings, summaries
 - `task` — structured to-do items; carry status (`todo`/`in_progress`/`done`) and priority
-- `date` — daily anchor nodes (e.g. "2026-05-30"); the temporal spine of the graph. Attach time-sensitive findings under the relevant date node so they're retrievable by day.
+- `date` — daily container nodes (e.g. "2026-05-30"); each day has one. Attach time-sensitive findings under the relevant date node so they're retrievable by day.
 
 **Hierarchy is first-class edges, not nesting.** A node has one parent edge. Children are ordered via fractional ordering — siblings have a stable position without gap-numbering. Moving or reordering a node is an edge operation (change the parent or sibling position), not a recreate-and-delete.
 
@@ -19,9 +19,9 @@ NodeSpace is a local-first knowledge graph that stores notes, tasks, and structu
 
 Use NodeSpace as a working memory across sessions:
 
-1. **Session start** — run the preflight, then search for prior context before you begin. (`nodespace search "topic"`)
-2. **During the session** — save discoveries, decisions, and summaries as you go. Don't wait until the end.
-3. **Session end** — anything worth remembering next time should be stored. NodeSpace persists across sessions; your context window does not.
+1. **Search at session start** — run the preflight, then search for prior context before you begin. (`nodespace search "topic"`)
+2. **Save as you go** — save discoveries, decisions, and summaries during the session. Don't wait until the end.
+3. **It persists across sessions** — your context window does not. Anything worth remembering next time should be stored.
 
 Date nodes make temporal retrieval reliable: if a finding is time-bound, attach it under today's date node so future searches can scope by day.
 
