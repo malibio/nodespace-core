@@ -1201,114 +1201,59 @@ impl NodeService {
         Ok(rows_affected)
     }
 
-    /// Delete a node with cascade and optimistic concurrency control
+    /// Delete a node and its entire `has_child` subtree atomically with OCC.
     ///
-    /// This is the primary delete API that:
-    /// 1. Verifies node exists
-    /// 2. Recursively deletes all children (cascade)
-    /// 3. Deletes the node with version check (OCC)
-    /// 4. Returns detailed error on version conflict
+    /// The target node's version is checked at `expected_version`. Descendants are removed
+    /// unconditionally inside the same transaction — a conflict or failure leaves the subtree
+    /// fully intact. One `NodeDeleted` event is emitted per deleted node after commit.
     ///
-    /// # Arguments
-    ///
-    /// * `node_id` - The node ID to delete
-    /// * `expected_version` - Version for optimistic concurrency control
-    ///
-    /// # Returns
-    ///
-    /// `DeleteResult` indicating whether the node existed
-    ///
-    /// # Errors
-    ///
-    /// Returns error with current node state on version conflict,
-    /// or database errors on failure.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use nodespace_core::services::NodeService;
-    /// # use nodespace_core::db::SqliteStore;
-    /// # use std::path::PathBuf;
-    /// # use std::sync::Arc;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut db = Arc::new(SqliteStore::new(PathBuf::from("./test.db")).await?);
-    /// # let service = NodeService::new(&mut db).await?;
-    /// let result = service.delete_node("node-id", 5).await?;
-    /// println!("Node existed: {}", result.existed);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Returns `DeleteResult` with `existed=true` and `deleted_count` (target + all descendants)
+    /// on success, or `existed=false` when the target node was already gone.
     pub async fn delete_node(
         &self,
         node_id: &str,
         expected_version: i64,
     ) -> Result<crate::models::DeleteResult, NodeServiceError> {
-        // 1. Check if node exists
-        if self
-            .store
-            .get_node(node_id)
-            .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
-            .is_none()
-        {
-            // Node doesn't exist - return false immediately (idempotent delete)
-            return Ok(crate::models::DeleteResult { existed: false });
-        }
-
-        // 1b. Capture root ID BEFORE deletion (Issue #729 - root-aggregate model)
-        // After deletion, we can't traverse up to find the root
+        // Capture root before deletion for embedding queue (Issue #729).
         let root_id_for_embedding = self.get_root_id(node_id).await.ok();
 
-        // 2. Cascade delete all children recursively
-        let children = self.get_children(node_id).await?;
-        for child in children {
-            // Recursively call delete for each child using Box::pin to avoid infinite future size
-            Box::pin(self.delete_node(&child.id, child.version)).await?;
+        let (existed, deleted_nodes) = self
+            .store
+            .delete_subtree_atomic(node_id, expected_version, self.client_id.clone())
+            .await
+            .map_err(|e| {
+                let msg = e.to_string();
+                // Parse version_conflict sentinel: "version_conflict:<id>:<expected>:<actual>"
+                if let Some(rest) = msg.strip_prefix("version_conflict:") {
+                    let parts: Vec<&str> = rest.splitn(3, ':').collect();
+                    if parts.len() == 3 {
+                        let exp: i64 = parts[1].parse().unwrap_or(expected_version);
+                        let act: i64 = parts[2].parse().unwrap_or(0);
+                        return NodeServiceError::version_conflict(node_id, exp, act);
+                    }
+                }
+                NodeServiceError::query_failed(msg)
+            })?;
+
+        if !existed {
+            return Ok(crate::models::DeleteResult {
+                existed: false,
+                deleted_count: 0,
+            });
         }
 
-        // 3. Delete with version check (optimistic concurrency control)
-        let rows_affected = self
-            .delete_with_version_check(node_id, expected_version)
-            .await?;
-
-        // 4. Handle version conflict
-        if rows_affected == 0 {
-            // Node might have been deleted or modified by another client
-            match self
-                .store
-                .get_node(node_id)
-                .await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
-            {
-                Some(current) => {
-                    // Node exists but version mismatch - return conflict error
-                    return Err(NodeServiceError::version_conflict(
-                        node_id,
-                        expected_version,
-                        current.version,
-                    ));
-                }
-                None => {
-                    // Node was already deleted by another client - idempotent
-                    return Ok(crate::models::DeleteResult { existed: false });
-                }
-            }
-        }
-
-        // 5. Queue root for embedding regeneration (Issue #729 - root-aggregate model)
-        // Only queue if the deleted node was NOT the root itself (root deletion removes embedding)
+        // Queue root for embedding regeneration when a non-root node was deleted.
         #[cfg(feature = "nlp")]
         if let Some(root_id) = root_id_for_embedding {
             if root_id != node_id {
-                // Deleted a child node - root's aggregate embedding needs updating
                 self.queue_root_for_embedding(&root_id).await;
             }
-            // If we deleted the root itself, no need to queue - embeddings will be orphaned
-            // and should be cleaned up by the embedding processor
         }
 
-        Ok(crate::models::DeleteResult { existed: true })
+        Ok(crate::models::DeleteResult {
+            existed: true,
+            deleted_count: deleted_nodes.len() as u64,
+        })
     }
 
     /// Bump a node's version without changing any content.

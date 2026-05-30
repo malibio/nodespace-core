@@ -516,12 +516,12 @@ impl NodeUpdate {
 /// ```rust
 /// use nodespace_core::models::DeleteResult;
 ///
-/// // Node existed and was deleted
-/// let result = DeleteResult { existed: true };
+/// // Node existed and was deleted (leaf node)
+/// let result = DeleteResult { existed: true, deleted_count: 1 };
 /// assert!(result.existed);
 ///
 /// // Node didn't exist (idempotent success)
-/// let result = DeleteResult { existed: false };
+/// let result = DeleteResult { existed: false, deleted_count: 0 };
 /// assert!(!result.existed);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -531,17 +531,25 @@ pub struct DeleteResult {
     /// - `true`: Node existed and was deleted
     /// - `false`: Node didn't exist (idempotent no-op)
     pub existed: bool,
+    /// Total number of nodes removed (target + all descendants).
+    pub deleted_count: u64,
 }
 
 impl DeleteResult {
-    /// Create a DeleteResult indicating the node existed
+    /// Create a DeleteResult indicating the node existed (single leaf node).
     pub fn existed() -> Self {
-        Self { existed: true }
+        Self {
+            existed: true,
+            deleted_count: 1,
+        }
     }
 
-    /// Create a DeleteResult indicating the node didn't exist
+    /// Create a DeleteResult indicating the node didn't exist.
     pub fn not_found() -> Self {
-        Self { existed: false }
+        Self {
+            existed: false,
+            deleted_count: 0,
+        }
     }
 }
 

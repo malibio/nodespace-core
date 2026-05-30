@@ -142,7 +142,9 @@ pub async fn configure_skill() -> Result<(), String> {
     if result.success {
         Ok(())
     } else {
-        Err(result.error.unwrap_or_else(|| "Skill installation failed".to_string()))
+        Err(result
+            .error
+            .unwrap_or_else(|| "Skill installation failed".to_string()))
     }
 }
 

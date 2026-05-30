@@ -78,6 +78,7 @@ pub struct DeleteNodeInput {
 pub struct DeleteNodeOutput {
     pub node_id: String,
     pub existed: bool,
+    pub deleted_count: u64,
 }
 
 /// A single filter condition
@@ -363,6 +364,7 @@ pub async fn delete_node(
     Ok(DeleteNodeOutput {
         node_id: input.node_id,
         existed: result.existed,
+        deleted_count: result.deleted_count,
     })
 }
 

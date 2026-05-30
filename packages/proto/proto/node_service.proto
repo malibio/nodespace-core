@@ -186,6 +186,7 @@ message DeleteNodeRequest {
 message DeleteNodeResponse {
   string node_id = 1;
   bool existed = 2;
+  uint64 deleted_count = 3;
 }
 
 // ---------------------------------------------------------------------------

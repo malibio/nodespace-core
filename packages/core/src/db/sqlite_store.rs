@@ -743,7 +743,12 @@ impl SqliteStore {
     pub async fn delete_node(&self, id: &str, source: Option<String>) -> Result<DeleteResult> {
         let node = match self.get_node(id).await? {
             Some(n) => n,
-            None => return Ok(DeleteResult { existed: false }),
+            None => {
+                return Ok(DeleteResult {
+                    existed: false,
+                    deleted_count: 0,
+                })
+            }
         };
 
         // FK CASCADE handles relationship and embedding deletion
@@ -763,16 +768,142 @@ impl SqliteStore {
             playbook_context: None,
         });
 
-        Ok(DeleteResult { existed: true })
+        Ok(DeleteResult {
+            existed: true,
+            deleted_count: 1,
+        })
     }
 
-    pub async fn delete_node_cascade_atomic(
+    /// Atomically delete a node and its entire `has_child` subtree in a single transaction.
+    ///
+    /// **OCC contract:** Version-checks only the target node at `expected_version`. Descendants
+    /// are removed unconditionally inside the same transaction. A target version mismatch rolls
+    /// back the entire transaction — no partial deletion is possible.
+    ///
+    /// **Event emission:** Emits one `NodeDeleted` notification per deleted node (target +
+    /// every descendant) after the commit, so the frontend store reconciles each removal.
+    ///
+    /// Returns `(existed, deleted_nodes)` where `deleted_nodes` contains the target and all
+    /// descendants that were deleted (empty vec when target didn't exist).
+    pub async fn delete_subtree_atomic(
         &self,
         node_id: &str,
+        expected_version: i64,
         source: Option<String>,
-    ) -> Result<DeleteResult> {
-        // FK CASCADE on schema.sql handles relationships and embeddings automatically
-        self.delete_node(node_id, source).await
+    ) -> Result<(bool, Vec<Node>)> {
+        // Collect the target + all descendants before mutating.
+        let target = match self.get_node(node_id).await? {
+            Some(n) => n,
+            None => return Ok((false, vec![])),
+        };
+
+        // OCC check on target before entering the transaction.
+        if target.version != expected_version {
+            return Err(anyhow::anyhow!(
+                "version_conflict:{}:{}:{}",
+                node_id,
+                expected_version,
+                target.version
+            ));
+        }
+
+        // Walk has_child recursively to collect the full descendant set.
+        let mut id_rows = self.db.query(
+            r#"WITH RECURSIVE subtree(node_id) AS (
+                SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                UNION ALL
+                SELECT r.out_node FROM relationship r
+                JOIN subtree s ON r.in_node = s.node_id
+                WHERE r.relationship_type = 'has_child'
+            )
+            SELECT DISTINCT node_id FROM subtree"#,
+            libsql::params![node_id.to_string()],
+        ).await.context("Failed to collect subtree descendants")?;
+
+        let mut all_ids: Vec<String> = vec![node_id.to_string()];
+        while let Some(row) = id_rows.next().await? {
+            all_ids.push(row.get(0)?);
+        }
+
+        // Fetch all node records (needed for post-commit notifications).
+        let placeholders: Vec<String> = (1..=all_ids.len()).map(|i| format!("?{}", i)).collect();
+        let fetch_sql = format!(
+            "SELECT * FROM node WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let fetch_params: Vec<libsql::Value> = all_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut node_rows = self
+            .db
+            .query(&fetch_sql, fetch_params)
+            .await
+            .context("Failed to fetch subtree nodes for deletion")?;
+        let mut nodes_to_delete: Vec<Node> = Vec::new();
+        while let Some(row) = node_rows.next().await? {
+            nodes_to_delete.push(Self::row_to_node(&row)?);
+        }
+
+        // Single-transaction delete — FK CASCADE cleans relationship and embedding rows.
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin subtree delete transaction")?;
+
+        // Re-check target version inside the transaction to close the TOCTOU window.
+        let check_sql = "SELECT version FROM node WHERE id = ?1";
+        let mut check_rows = tx
+            .query(check_sql, libsql::params![node_id.to_string()])
+            .await
+            .context("Failed to re-check target version")?;
+        let actual_version: i64 = match check_rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => {
+                // Node disappeared between pre-check and transaction — idempotent.
+                return Ok((false, vec![]));
+            }
+        };
+        if actual_version != expected_version {
+            return Err(anyhow::anyhow!(
+                "version_conflict:{}:{}:{}",
+                node_id,
+                expected_version,
+                actual_version
+            ));
+        }
+
+        let del_placeholders: Vec<String> =
+            (1..=all_ids.len()).map(|i| format!("?{}", i)).collect();
+        let del_sql = format!(
+            "DELETE FROM node WHERE id IN ({})",
+            del_placeholders.join(", ")
+        );
+        let del_params: Vec<libsql::Value> = all_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        tx.execute(&del_sql, del_params)
+            .await
+            .context("Failed to delete subtree nodes")?;
+
+        tx.commit()
+            .await
+            .context("Failed to commit subtree delete transaction")?;
+
+        // Emit one NodeDeleted notification per deleted node after commit.
+        for node in &nodes_to_delete {
+            self.notify(StoreChange {
+                operation: StoreOperation::Deleted,
+                node: node.clone(),
+                source: source.clone(),
+                previous_node: None,
+                playbook_context: None,
+            });
+        }
+
+        Ok((true, nodes_to_delete))
     }
 
     pub async fn delete_with_version_check(
