@@ -17,13 +17,19 @@ use nodespace_core::models::{
     Node, NodeQuery, NodeUpdate, TaskNodeUpdate, TaskPriority, TaskStatus,
 };
 use nodespace_core::ops::{
+    collection_ops::{
+        self, AddNodeToCollectionByPathInput, AddNodeToCollectionInput, CreateCollectionInput,
+        FindCollectionByPathInput, GetAllCollectionsInput, GetCollectionByNameInput,
+        GetCollectionMembersInput, GetCollectionMembersRecursiveInput, GetNodeCollectionsInput,
+        RemoveNodeFromCollectionInput, RenameCollectionInput,
+    },
     node_ops,
     search_ops::{self, SearchSemanticInput},
     OpsError,
 };
 use nodespace_core::services::{
-    CollectionService, CreateNodeParams, InsertPosition, InsertPositionOwned, NodeAccessor,
-    NodeEmbeddingService, NodeService as CoreNodeService, NodeServiceError,
+    InsertPosition, InsertPositionOwned, NodeAccessor, NodeEmbeddingService,
+    NodeService as CoreNodeService, NodeServiceError,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::ReceiverStream;
@@ -884,22 +890,19 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         _request: Request<GetAllCollectionsRequest>,
     ) -> Result<Response<CollectionListResponse>, Status> {
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        let entries = collection_service
-            .get_all_collections_with_counts()
-            .await
-            .map_err(service_error_to_status)?;
+        let output =
+            collection_ops::get_all_collections(&self.node_service, GetAllCollectionsInput)
+                .await
+                .map_err(ops_error_to_status)?;
 
-        let collections = entries
+        let collections = output
+            .collections
             .into_iter()
-            .map(
-                |(node, member_count, parent_collection_ids)| CollectionInfo {
-                    node: Some(node_to_proto(node, None, None)),
-                    member_count: member_count as u32,
-                    parent_collection_ids,
-                },
-            )
+            .map(|e| CollectionInfo {
+                node: Some(node_to_proto(e.node, None, None)),
+                member_count: e.member_count as u32,
+                parent_collection_ids: e.parent_collection_ids,
+            })
             .collect();
 
         Ok(Response::new(CollectionListResponse { collections }))
@@ -910,24 +913,26 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<CollectionMembersRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        let members = collection_service
-            .get_collection_members(&req.collection_id)
-            .await
-            .map_err(service_error_to_status)?;
+        let output = collection_ops::get_collection_members(
+            &self.node_service,
+            GetCollectionMembersInput {
+                collection_id: req.collection_id,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
 
-        let collection_id = req.collection_id.clone();
-        let nodes: Vec<NodeData> = members
+        let nodes: Vec<NodeData> = output
+            .members
             .into_iter()
-            .map(|n| node_to_proto(n, None, Some(collection_id.clone())))
+            .map(|n| node_to_proto(n, None, Some(output.collection_id.clone())))
             .collect();
         let count = nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
             nodes,
             count,
-            collection_id: req.collection_id,
+            collection_id: output.collection_id,
         }))
     }
 
@@ -936,32 +941,26 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<CollectionMembersRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
+        let output = collection_ops::get_collection_members_recursive(
+            &self.node_service,
+            GetCollectionMembersRecursiveInput {
+                collection_id: req.collection_id,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
 
-        let member_ids = collection_service
-            .get_collection_members_recursive(&req.collection_id)
-            .await
-            .map_err(service_error_to_status)?;
-
-        let nodes_map = store
-            .get_nodes_by_ids(&member_ids)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to batch fetch nodes: {}", e)))?;
-
-        // Preserve ordering from member_ids; filter out missing entries.
-        let collection_id = req.collection_id.clone();
-        let nodes: Vec<NodeData> = member_ids
+        let nodes: Vec<NodeData> = output
+            .members
             .into_iter()
-            .filter_map(|id| nodes_map.get(&id).cloned())
-            .map(|n| node_to_proto(n, None, Some(collection_id.clone())))
+            .map(|n| node_to_proto(n, None, Some(output.collection_id.clone())))
             .collect();
         let count = nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
             nodes,
             count,
-            collection_id: req.collection_id,
+            collection_id: output.collection_id,
         }))
     }
 
@@ -970,14 +969,16 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<NodeCollectionsRequest>,
     ) -> Result<Response<CollectionIdsResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        let ids = collection_service
-            .get_node_collections(&req.node_id)
-            .await
-            .map_err(service_error_to_status)?;
+        let output = collection_ops::get_node_collections(
+            &self.node_service,
+            GetNodeCollectionsInput {
+                node_id: req.node_id,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
         Ok(Response::new(CollectionIdsResponse {
-            collection_ids: ids,
+            collection_ids: output.collection_ids,
         }))
     }
 
@@ -986,12 +987,15 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<AddNodeToCollectionRequest>,
     ) -> Result<Response<Empty>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        collection_service
-            .add_to_collection(&req.node_id, &req.collection_id)
-            .await
-            .map_err(service_error_to_status)?;
+        collection_ops::add_node_to_collection(
+            &self.node_service,
+            AddNodeToCollectionInput {
+                node_id: req.node_id,
+                collection_id: req.collection_id,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
         Ok(Response::new(Empty {}))
     }
 
@@ -1000,14 +1004,17 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<AddNodeToCollectionByPathRequest>,
     ) -> Result<Response<CollectionIdResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        let resolved = collection_service
-            .add_to_collection_by_path(&req.node_id, &req.collection_path)
-            .await
-            .map_err(service_error_to_status)?;
+        let output = collection_ops::add_node_to_collection_by_path(
+            &self.node_service,
+            AddNodeToCollectionByPathInput {
+                node_id: req.node_id,
+                collection_path: req.collection_path,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
         Ok(Response::new(CollectionIdResponse {
-            collection_id: resolved.leaf_id().to_string(),
+            collection_id: output.collection_id,
         }))
     }
 
@@ -1016,12 +1023,15 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<RemoveNodeFromCollectionRequest>,
     ) -> Result<Response<Empty>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        collection_service
-            .remove_from_collection(&req.node_id, &req.collection_id)
-            .await
-            .map_err(service_error_to_status)?;
+        collection_ops::remove_node_from_collection(
+            &self.node_service,
+            RemoveNodeFromCollectionInput {
+                node_id: req.node_id,
+                collection_id: req.collection_id,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
         Ok(Response::new(Empty {}))
     }
 
@@ -1030,14 +1040,16 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<FindCollectionByPathRequest>,
     ) -> Result<Response<OptionalNodeResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        let result = collection_service
-            .find_collection_by_path(&req.collection_path)
-            .await
-            .map_err(service_error_to_status)?;
+        let output = collection_ops::find_collection_by_path(
+            &self.node_service,
+            FindCollectionByPathInput {
+                collection_path: req.collection_path,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
 
-        let node_response = result.map(|n| {
+        let node_response = output.collection.map(|n| {
             let node_type = n.node_type.clone();
             let node_id = n.id.clone();
             NodeResponse {
@@ -1058,14 +1070,14 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<GetCollectionByNameRequest>,
     ) -> Result<Response<OptionalNodeResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
-        let result = collection_service
-            .get_collection_by_name(&req.name)
-            .await
-            .map_err(service_error_to_status)?;
+        let output = collection_ops::get_collection_by_name(
+            &self.node_service,
+            GetCollectionByNameInput { name: req.name },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
 
-        let node_response = result.map(|n| {
+        let node_response = output.collection.map(|n| {
             let node_type = n.node_type.clone();
             let node_id = n.id.clone();
             NodeResponse {
@@ -1086,42 +1098,19 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<CreateCollectionRequest>,
     ) -> Result<Response<CollectionIdResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
+        let output = collection_ops::create_collection(
+            &self.node_service,
+            CreateCollectionInput {
+                name: req.name,
+                description: req.description,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
 
-        // Reject duplicate names (matches Tauri command pre-check).
-        if collection_service
-            .get_collection_by_name(&req.name)
-            .await
-            .map_err(service_error_to_status)?
-            .is_some()
-        {
-            return Err(Status::already_exists(format!(
-                "Collection '{}' already exists",
-                req.name
-            )));
-        }
-
-        let properties = if req.description.is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::json!({ "description": req.description })
-        };
-
-        let collection_id = self
-            .node_service
-            .create_node_with_parent(CreateNodeParams {
-                id: None,
-                node_type: "collection".to_string(),
-                content: req.name,
-                parent_id: None,
-                position: InsertPositionOwned::End,
-                properties,
-            })
-            .await
-            .map_err(service_error_to_status)?;
-
-        Ok(Response::new(CollectionIdResponse { collection_id }))
+        Ok(Response::new(CollectionIdResponse {
+            collection_id: output.collection_id,
+        }))
     }
 
     async fn rename_collection(
@@ -1129,34 +1118,18 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<RenameCollectionRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
         let req = request.into_inner();
-        let store = self.node_service.store();
-        let collection_service = CollectionService::new(store, &self.node_service);
+        let output = collection_ops::rename_collection(
+            &self.node_service,
+            RenameCollectionInput {
+                collection_id: req.collection_id,
+                new_name: req.new_name,
+                version: req.version,
+            },
+        )
+        .await
+        .map_err(ops_error_to_status)?;
 
-        // Reject if another collection already uses this name.
-        if let Some(existing) = collection_service
-            .get_collection_by_name(&req.new_name)
-            .await
-            .map_err(service_error_to_status)?
-        {
-            if existing.id != req.collection_id {
-                return Err(Status::already_exists(format!(
-                    "Collection '{}' already exists",
-                    req.new_name
-                )));
-            }
-        }
-
-        let update = NodeUpdate {
-            content: Some(req.new_name),
-            ..Default::default()
-        };
-
-        let node = self
-            .node_service
-            .update_node(&req.collection_id, req.version, update)
-            .await
-            .map_err(service_error_to_status)?;
-
+        let node = output.node;
         let node_type = node.node_type.clone();
         let node_id = node.id.clone();
         Ok(Response::new(NodeResponse {
@@ -1388,6 +1361,7 @@ fn relationship_to_proto(
 fn ops_error_to_status(err: OpsError) -> Status {
     match err {
         OpsError::NotFound { id } => Status::not_found(format!("Not found: {}", id)),
+        OpsError::AlreadyExists { id } => Status::already_exists(format!("Already exists: {}", id)),
         OpsError::VersionConflict {
             node_id,
             expected,
@@ -1485,7 +1459,7 @@ mod tests {
     use super::*;
     use nodespace_core::db::SqliteStore;
     use nodespace_core::ops::node_ops;
-    use nodespace_core::services::NodeService as CoreNodeService;
+    use nodespace_core::services::{CollectionService, NodeService as CoreNodeService};
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -1636,7 +1610,7 @@ mod tests {
         // Verify membership via core
         let store = svc.node_service.store();
         let coll_svc = CollectionService::new(store, &svc.node_service);
-        let members_before = coll_svc.get_node_collections(&node_id).await.unwrap();
+        let members_before: Vec<String> = coll_svc.get_node_collections(&node_id).await.unwrap();
         assert!(
             members_before.contains(&collection_id),
             "node must be in collection after add"
@@ -1655,7 +1629,7 @@ mod tests {
         });
         svc.update_node(remove_req).await.unwrap();
 
-        let members_after = coll_svc.get_node_collections(&node_id).await.unwrap();
+        let members_after: Vec<String> = coll_svc.get_node_collections(&node_id).await.unwrap();
         assert!(
             !members_after.contains(&collection_id),
             "node must not be in collection after remove"
