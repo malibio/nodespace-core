@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { loadSettings } from '$lib/stores/settings';
+    import { get } from 'svelte/store';
+    import { loadSettings, settingsInitialCategory } from '$lib/stores/settings';
     import SettingsSidebar from './settings-sidebar.svelte';
     import DatabaseSettings from './sections/database-settings.svelte';
     import DisplaySettings from './sections/display-settings.svelte';
@@ -9,7 +10,10 @@
     import ModelManager from './model-manager.svelte';
     import IntegrationsSettings from './sections/integrations-settings.svelte';
 
-    let activeCategory = $state('database');
+    const initial = get(settingsInitialCategory);
+    settingsInitialCategory.set(null);
+
+    let activeCategory = $state(initial ?? 'database');
 
     onMount(() => {
         loadSettings();

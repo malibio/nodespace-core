@@ -14,6 +14,9 @@ export interface AppSettings {
 
 export const appSettings = writable<AppSettings | null>(null);
 
+/** Set before opening the settings tab to pre-select a category (e.g. 'integrations'). */
+export const settingsInitialCategory = writable<string | null>(null);
+
 export async function loadSettings(): Promise<void> {
     try {
         const settings = await invoke<AppSettings>('get_settings');

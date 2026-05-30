@@ -149,8 +149,13 @@ pub fn run() {
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
+            let open_integrations = MenuItemBuilder::new("Integrations...")
+                .id("open_integrations")
+                .build(app)?;
+
             let db_separator = PredefinedMenuItem::separator(app)?;
             let settings_separator = PredefinedMenuItem::separator(app)?;
+            let integrations_separator = PredefinedMenuItem::separator(app)?;
 
             let import_submenu = SubmenuBuilder::new(app, "Import")
                 .items(&[&import_folder])
@@ -179,6 +184,8 @@ pub fn run() {
                     &import_submenu,
                     &settings_separator,
                     &open_settings,
+                    &integrations_separator,
+                    &open_integrations,
                 ])
                 .build()?;
 
@@ -320,6 +327,7 @@ pub fn run() {
             let new_database_id = MenuId::new("new_database");
             let open_database_id = MenuId::new("open_database");
             let open_settings_id = MenuId::new("open_settings");
+            let open_integrations_id = MenuId::new("open_integrations");
 
             if *event.id() == toggle_sidebar_id {
                 // Emit an event to the frontend
@@ -346,6 +354,10 @@ pub fn run() {
             } else if *event.id() == open_settings_id {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.emit("menu-open-settings", ());
+                }
+            } else if *event.id() == open_integrations_id {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.emit("menu-open-integrations", ());
                 }
             } else if *event.id() == quit_id {
                 // Request exit through Tauri's event loop instead of std::process::exit(0)
@@ -444,13 +456,16 @@ pub fn run() {
             commands::agent_session::terminate_session,
             commands::agent_session::list_sessions,
             commands::agent_session::check_agent_availability,
-            // First-launch onboarding wizard (Issue #1180, #1199)
+            // First-launch onboarding wizard + Settings integrations panel (Issue #1180, #1181, #1199)
             commands::onboarding::check_onboarding_status,
             commands::onboarding::configure_path,
+            commands::onboarding::remove_from_path,
             commands::onboarding::configure_skill,
             commands::onboarding::complete_onboarding,
             commands::onboarding::install_skill,
+            commands::onboarding::remove_skill,
             commands::onboarding::get_skill_setup_status,
+            commands::onboarding::get_integrations_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
