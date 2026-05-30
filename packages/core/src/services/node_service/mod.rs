@@ -1063,6 +1063,13 @@ impl NodeService {
         &self.behaviors
     }
 
+    /// Resolve the behavior for a node type, falling back to CustomNodeBehavior.
+    pub(crate) fn behavior_for(&self, node_type: &str) -> Arc<dyn crate::behaviors::NodeBehavior> {
+        self.behaviors
+            .get(node_type)
+            .unwrap_or_else(|| Arc::new(crate::behaviors::CustomNodeBehavior::new(node_type)))
+    }
+
     /// Check if a node type is embeddable according to its behavior (Issue #1018)
     ///
     /// Uses `NodeBehavior::get_embeddable_content()` on a probe node to determine
@@ -1610,15 +1617,10 @@ impl NodeService {
                 .ok_or_else(|| NodeServiceError::invalid_parent(parent_id))?;
 
             // Enforce container rule: reject moves into non-container node types
-            let parent_behavior = self
-                .behaviors
-                .get(&parent_node.node_type)
-                .unwrap_or_else(|| {
-                    std::sync::Arc::new(crate::behaviors::CustomNodeBehavior::new(
-                        &parent_node.node_type,
-                    ))
-                });
-            if !parent_behavior.can_have_children() {
+            if !self
+                .behavior_for(&parent_node.node_type)
+                .can_have_children()
+            {
                 return Err(NodeServiceError::not_a_container(
                     parent_id,
                     &parent_node.node_type,

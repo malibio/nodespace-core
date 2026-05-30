@@ -290,15 +290,10 @@ impl NodeService {
                 .await?
                 .ok_or_else(|| NodeServiceError::invalid_parent(parent_id.as_str()))?;
 
-            let parent_behavior = self
-                .behaviors
-                .get(&parent_node.node_type)
-                .unwrap_or_else(|| {
-                    std::sync::Arc::new(crate::behaviors::CustomNodeBehavior::new(
-                        &parent_node.node_type,
-                    ))
-                });
-            if !parent_behavior.can_have_children() {
+            if !self
+                .behavior_for(&parent_node.node_type)
+                .can_have_children()
+            {
                 return Err(NodeServiceError::not_a_container(
                     parent_id.as_str(),
                     &parent_node.node_type,
@@ -1426,6 +1421,27 @@ impl NodeService {
                 })?;
 
             // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
+        }
+
+        // Enforce container rule: the (now-existent) parent must accept children
+        {
+            let parent_node = self
+                .store
+                .get_node(parent_id)
+                .await
+                .map_err(|e| {
+                    NodeServiceError::query_failed(format!("Failed to fetch parent: {}", e))
+                })?
+                .ok_or_else(|| NodeServiceError::invalid_parent(parent_id))?;
+            if !self
+                .behavior_for(&parent_node.node_type)
+                .can_have_children()
+            {
+                return Err(NodeServiceError::not_a_container(
+                    parent_id,
+                    &parent_node.node_type,
+                ));
+            }
         }
 
         // Upsert the node (update if exists, create if not)

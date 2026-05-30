@@ -21,6 +21,7 @@ import {
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { Node } from '$lib/types';
 import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { waitForPendingMoveOperations } from '$lib/services/pending-operations';
 
 // Mock backend-adapter to avoid backend calls in tests
 vi.mock('$lib/services/backend-adapter', () => ({
@@ -1498,15 +1499,23 @@ describe('ReactiveNodeService - Indent/Outdent Node', () => {
     const { backendAdapter } = await import('$lib/services/backend-adapter');
     const moveNodeMock = vi.mocked(backendAdapter.moveNode);
 
+    // Capture depth before indent
+    const depthBefore = service.getUIState('sibling')?.depth ?? 0;
+
     // Simulate daemon rejecting with a validation error (e.g., NotAContainer → InvalidArgument)
     moveNodeMock.mockRejectedValueOnce(
       new Error('Validation failed: Node cannot have children')
     );
 
-    // Attempt indent — optimistic update fires, then backend rejects, triggering rollback
+    // indentNode fires optimistic update then returns; the move runs as a background promise
     await service.indentNode('sibling');
+    // Drain the background move operation so the rollback branch executes
+    await waitForPendingMoveOperations();
 
-    // hierarchyChanged is called at least once (optimistic update + rollback)
+    // Rollback must restore the original depth
+    const depthAfter = service.getUIState('sibling')?.depth ?? 0;
+    expect(depthAfter).toBe(depthBefore);
+    // hierarchyChanged must have fired at least twice (optimistic + rollback)
     expect(events.hierarchyChanged).toHaveBeenCalled();
   });
 
